@@ -113,23 +113,6 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
-// LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
-type LostReason string
-
-const (
-	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-	// and kept for the ended-run grace.
-	LostEnded LostReason = "ended"
-	// LostReboot is an interactive run whose agent container exited under it
-	// (a host reboot, a Docker Desktop restart, a long suspend) but still
-	// exists: kept with its files and its proxy stopped.
-	LostReboot LostReason = "reboot"
-	// LostOutage is an interactive run whose run token lapsed because the
-	// control plane was unreachable past the token's life: its proxy is stopped
-	// so it has no egress, and its agent is left running.
-	LostOutage LostReason = "outage"
-)
-
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -284,6 +267,12 @@ type AgentRun struct {
 	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// ContainmentError is set while a kept run's stop could not be confirmed
+	// (its proxy, or its agent, may still be up): the latest stop error, and
+	// ContainmentErrorAt the first failure. The lease sweep retries the stop
+	// every pass and clears both once it lands (#1060, migration 0088).
+	ContainmentError   string     `json:"containment_error,omitempty"`
+	ContainmentErrorAt *time.Time `json:"containment_error_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and
@@ -300,6 +289,14 @@ type AgentRun struct {
 	// one otherwise. Empty for a run with no human creator (admin token, local
 	// mode) or created before migration 0080.
 	UserType string `json:"user_type,omitempty"`
+	// Preset and PresetVersion name the launch preset (and the version of it)
+	// this run was expanded from. Empty / 0 for a run sent as an explicit spec
+	// and for every run created before migration 0087.
+	Preset        string `json:"preset,omitempty"`
+	PresetVersion int    `json:"preset_version,omitempty"`
+	// OperatorOwned is identity.Claims.OperatorOwned, stored (migration 0089)
+	// so dispatch and a revive's re-mint read what create decided.
+	OperatorOwned bool `json:"-"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -374,72 +371,6 @@ const (
 	GrantEnvSecret GrantKind = "env_secret"
 )
 
-// SubscriptionOAuthSecret is a SENTINEL secret name (NOT a stored secret). An
-// api_key injection grant carrying it resolves at inject time to the operator's
-// LIVE Anthropic subscription OAuth token (from the resident ~/.claude), not a
-// value in the secret store — so subscription runs are credentialed proxy-side
-// like api-key runs, the sandbox holding only the inert sentinel. It also serves
-// as the durable "this profile uses subscription LLM auth" marker on a recorded
-// profile (the resident ~/.claude mount that would otherwise signal subscription
-// is never synthesized). Shared here so api + recordmode + UI agree on the name.
-const SubscriptionOAuthSecret = "anthropic-subscription-oauth"
-
-// ManagedOAuthSecret is a SENTINEL secret name (NOT a stored secret) that works
-// exactly like SubscriptionOAuthSecret at the injection sink (host-pinned to
-// api.anthropic.com, forced Authorization: Bearer, value masked), but resolves
-// to the Wardyn-MANAGED subscription token: a long-lived `claude setup-token`
-// OAuth token the operator captured via the container-login flow and Wardyn
-// persisted (see internal/api/harnesscred.go). This is what lets a COMPOSE/
-// containerized deployment — whose distroless wardynd has no host ~/.claude to
-// read — credential a subscription run proxy-side without ever making the token
-// resident in the sandbox. Distinct from SubscriptionOAuthSecret only in its
-// SOURCE (managed store vs resident host ~/.claude), so the audit trail names
-// which one credentialed a run.
-const ManagedOAuthSecret = "anthropic-managed-oauth"
-
-// AWSSSOAccessTokenSecret is a SENTINEL secret name (NOT a stored secret) that
-// works exactly like the two OAuth sentinels above at the injection sink
-// (host-pinned, forced header, masked), and resolves to the run's OWN captured
-// AWS IAM Identity Center access token -- the credential an `aws sso login`
-// captured into wardynd's secret store as a whole blob, not as a value under
-// this name.
-//
-// It is what makes Phase B (0.7.6) possible: portal.sso.<region>
-// GetRoleCredentials is `authtype:none`, so the proxy can carry the session as
-// the x-amz-sso_bearer_token HEADER and the sandbox never holds the token. The
-// resolver is internal/api's resolveAWSSSOInjection, which additionally
-// re-derives the credential's scope from the roster and refuses any drift from
-// the snapshot the grant was authored with.
-//
-// Deliberately NOT in sinkReservedSecret. That guard refuses names an api_key
-// grant must never resolve; this name's ENTIRE purpose is to be resolved
-// through that sink, host-pinned, exactly as bedrock-api-key is (see
-// internal/api/secrets.go, which explains why that one is excluded too). And
-// nothing is stored under it: a secrets-API Put of this name would be a value
-// the sentinel arm never reads.
-const AWSSSOAccessTokenSecret = "aws-sso-access-token"
-
-// ADOEntraAccessTokenSecret is a SENTINEL secret name (NOT a stored secret),
-// the fourth of them, and it resolves to an Azure DevOps access token minted
-// from the RUN OWNER's own captured Entra sign-in (internal/api's
-// resolveADOInjection). Nothing is stored under this name: the credential in
-// the store is the person's refresh token, held in the reserved
-// `wardyn-harness-ado-<row>-oauth` blob, and the access token exists only for
-// the moment it is handed to the run's proxy sidecar.
-//
-// THE TOKEN DOES NOT BOUND THE RUN, and no reader of this name may assume it
-// does. Measured against a real tenant, Entra issues an Azure DevOps token
-// carrying EVERY scope the person consented to whatever subset is requested,
-// so what holds a run to its granted capabilities is Wardyn's own capability
-// check in front of the resource — the proxy — not the credential. The
-// granted scope string the authority reports is recorded on the audit row
-// because a token is opaque and that string is the only honest evidence of
-// what the credential can do.
-//
-// Deliberately NOT in sinkReservedSecret, for AWSSSOAccessTokenSecret's
-// reason: being resolved at that sink, host-pinned, is the whole point.
-const ADOEntraAccessTokenSecret = "azure-devops-entra-access-token"
-
 // GrantSpec is a credential scope description. The broker enforces the
 // invariant: a minted credential's scope is exactly the approved scope —
 // never wider (no scope-widening between request and mint).
@@ -460,6 +391,7 @@ type GrantSpec struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 	// RequiresApproval forces a human approval to mint (vs auto-mint on policy).
 	RequiresApproval bool `json:"requires_approval"`
+	OwnerOnly        bool `json:"owner_only,omitempty"` // stored secret from the run owner's own row only, never the operator's
 }
 
 // CredentialGrant records what a run is ELIGIBLE for. Eligibility is not
@@ -896,7 +828,20 @@ type APIToken struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	Token           string     `json:"token,omitempty"` // plaintext, create response ONLY
+	// MintedBy is the admin who minted this token for its owner
+	// (POST /people/{principal}/tokens); empty when the owner minted it.
+	MintedBy string `json:"minted_by,omitempty"`
+	Token    string `json:"token,omitempty"` // plaintext, create response ONLY
+}
+
+// Person is an identity an admin created or confirmed before its first sign-in
+// (migration 0090), keyed by the identity provider's subject.
+type Person struct {
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	CreatedBy       string     `json:"created_by"`
+	CreatedAt       time.Time  `json:"created_at"`
+	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
 }
 
 // CapabilitySubjectType names WHO a capability grant is written against
@@ -971,29 +916,4 @@ type CapabilityGrant struct {
 	Effect      CapabilityEffect      `json:"effect"`
 	CreatedAt   time.Time             `json:"created_at"`
 	CreatedBy   string                `json:"created_by,omitempty"`
-}
-
-// RoleMapping is one console-managed (Getting Started -> People) row of
-// migration 0051's role_mappings table: "value maps to role". This is the
-// STORE'S wire type, carrying id/timestamps/provenance — distinct on purpose
-// from internal/auth/oidc's own RoleMapping (just Value/Role), which stays
-// dependency-free of this package (see that type's doc comment) the same way
-// oidc.SessionRevocations keeps oidc dependency-free of store; the API layer
-// converts between the two, mirroring however SessionRevocations bridges
-// store -> oidc today.
-//
-// Value is expected already canonical (trimmed, lowercased, ASCII) by the API
-// write boundary that owns writes to this table — see the migration comment.
-//
-// UserType is the row's user type when Role is the user tier (migration
-// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
-// row, and on a user row written before types existed, which reads as the
-// built-in "standard".
-type RoleMapping struct {
-	ID        uuid.UUID `json:"id"`
-	Value     string    `json:"value"`
-	Role      string    `json:"role"`
-	UserType  string    `json:"user_type,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by,omitempty"`
 }

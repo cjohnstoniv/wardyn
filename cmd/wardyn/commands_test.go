@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1707,7 +1708,9 @@ func TestRecordSynthesizeCmd_JSON(t *testing.T) {
 		t.Fatalf("record synthesize --json returned error: %v", err)
 	}
 	got := srv.last()
-	want := "/api/v1/runs/" + runID.String() + "/profile"
+	// /profile/synthesize is the 0.8 name (issue #658); pkg/client.SynthesizeProfile
+	// calls it directly, /profile stays mounted server-side only as a chi alias.
+	want := "/api/v1/runs/" + runID.String() + "/profile/synthesize"
 	if got.method != http.MethodPost || got.path != want {
 		t.Errorf("got %s %s, want POST %s", got.method, got.path, want)
 	}
@@ -1761,6 +1764,68 @@ func TestSecretListCmd(t *testing.T) {
 	got := srv.last()
 	if got.method != http.MethodGet || got.path != "/api/v1/secrets" {
 		t.Errorf("got %s %s, want GET /api/v1/secrets", got.method, got.path)
+	}
+}
+
+// TestSecretListCmd_MineShown pins #1107: a member with one own secret must
+// see it. The fake server's response shape here is the real one
+// (handleListSecrets: {"names":[...],"mine":[...]}) — before the fix,
+// ListSecretsPage decoded only `names`, so bobs-personal-key never reached
+// the CLI at all.
+func TestSecretListCmd_MineShown(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string][]string{
+		"names": {"anthropic-api-key"},
+		"mine":  {"bobs-personal-key"},
+	})
+
+	var buf strings.Builder
+	root := rootCmd()
+	root.SetArgs([]string{"secret", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetIn(strings.NewReader(""))
+	root.SetOut(&buf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("secret list returned error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "bobs-personal-key") {
+		t.Fatalf("output %q does not show the caller's own secret", out)
+	}
+	if !strings.Contains(out, "bobs-personal-key\t(mine)") {
+		t.Errorf("output %q does not mark bobs-personal-key as (mine)", out)
+	}
+	if !strings.Contains(out, "anthropic-api-key\t(operator)") {
+		t.Errorf("output %q does not mark anthropic-api-key as (operator)", out)
+	}
+}
+
+func TestSecretListCmd_JSON_ServerShape(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string][]string{
+		"names": {"anthropic-api-key"},
+		"mine":  {"bobs-personal-key"},
+	})
+
+	var buf strings.Builder
+	root := rootCmd()
+	root.SetArgs([]string{"secret", "list", "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetIn(strings.NewReader(""))
+	root.SetOut(&buf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("secret list --json returned error: %v", err)
+	}
+	var got struct {
+		Names []string `json:"names"`
+		Mine  []string `json:"mine"`
+	}
+	if err := json.Unmarshal([]byte(buf.String()), &got); err != nil {
+		t.Fatalf("decode --json output: %v (%q)", err, buf.String())
+	}
+	if !slices.Equal(got.Names, []string{"anthropic-api-key"}) {
+		t.Errorf("names = %v, want [anthropic-api-key]", got.Names)
+	}
+	if !slices.Equal(got.Mine, []string{"bobs-personal-key"}) {
+		t.Errorf("mine = %v, want [bobs-personal-key] — the caller's own secret must survive --json too", got.Mine)
 	}
 }
 
@@ -2190,7 +2255,7 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 	}
 }
 
-// TestUnknownSubcommandUnderEveryGroupIsAnError is F009: `wardyn secret ste`
+// TestUnknownSubcommandUnderEveryGroupIsAnError: `wardyn secret ste`
 // printed help on STDOUT and exited 0, so a mistyped subcommand reported
 // SUCCESS to a script, a CI step, or a pasted instruction. Wardyn sells the exit
 // code as the contract (README, docs/CI.md's exit-code taxonomy,
@@ -2263,7 +2328,7 @@ func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
 // help on stdout and exits 0. That is the half of the contract subcommandGroup
 // must not break — the compat note covers the typo path only.
 func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
-	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "subscription", "sessions", "device", "source", "ssh-key", "site-config", "drive", "approvals"} {
+	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "subscription", "sessions", "device", "source", "ssh-key", "site-config", "drive", "preset", "approvals"} {
 		t.Run(group, func(t *testing.T) {
 			root := rootCmd()
 			var out, errOut strings.Builder

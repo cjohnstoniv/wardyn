@@ -20,7 +20,7 @@ import (
 // anyRunLive answers GetRun with a RUNNING run for ANY id.
 //
 // It exists because internalAuth now asks the store whether the run behind a
-// presented token is still alive (B2-F3, refuseTerminalRun), so a double that
+// presented token is still alive (refuseTerminalRun), so a double that
 // serves an /internal/* route has to be able to answer that one question. It is
 // embedded rather than copied into each double so "this fake has a live run"
 // reads as one fact in one place, and so a double that wants a DIFFERENT answer
@@ -76,8 +76,6 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 	}
 }
 
-// TestInternalAuth_TerminalRunIsRefusedAtEveryDoor is B2-F3.
-//
 // internalAuth verified signature, expiry, audience and the revocation list —
 // but revokeRunCascade is best-effort (Identity.RevokeRun's error is audited and
 // swallowed, Broker.RevokeRun is audit-only), so a run that went terminal while
@@ -110,7 +108,7 @@ func TestInternalAuth_TerminalRunIsRefusedAtEveryDoor(t *testing.T) {
 	}
 }
 
-// TestInternalAuth_TailUploadsLandInsideTheGrace is B2-F3's asserted exemption.
+// TestInternalAuth_TailUploadsLandInsideTheGrace is the asserted exemption.
 // wardyn-rec, wardyn-scan and wardyn-aws-sso all PUT their artifact as the run
 // finishes, racing the completion watcher that flips the state — so a gate with
 // no grace would discard exactly the recordings and scan facts the run existed
@@ -140,6 +138,118 @@ func TestInternalAuth_TailUploadsLandInsideTheGrace(t *testing.T) {
 				t.Fatalf("code = %d, want 403 — the grace is for the tail uploads alone; body=%s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// keptRunStore serves one run kept by its end or a loss, marked `age` ago:
+// RUNNING unless state says otherwise, updated `updatedAge` ago.
+type keptRunStore struct {
+	store.Store
+	runID      uuid.UUID
+	reason     types.LostReason
+	age        time.Duration
+	state      types.RunState
+	updatedAge time.Duration
+}
+
+func (s keptRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if id != s.runID {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	state := s.state
+	if state == "" {
+		state = types.RunRunning
+	}
+	lostAt := time.Now().UTC().Add(-s.age)
+	return types.AgentRun{ID: id, State: state, LostAt: &lostAt, LostReason: s.reason,
+		UpdatedAt: time.Now().UTC().Add(-s.updatedAge)}, nil
+}
+
+// TestInternalAuth_KeptRunIsRefusedAtEveryDoor is #1176: a run its lease ended
+// (or one lost to a reboot or an outage) is still RUNNING, and its token is not
+// revoked, so before this gate refused it the stopped proxy's token could still
+// mint and resolve injections until its TTL lapsed. Every door refuses it; the
+// tail uploads alone keep their grace, counted from the mark, and lose it
+// after. UpdatedAt is fresh on purpose: the grace must not be measured from it.
+func TestInternalAuth_KeptRunIsRefusedAtEveryDoor(t *testing.T) {
+	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	for _, reason := range []types.LostReason{types.LostEnded, types.LostReboot, types.LostOutage} {
+		for _, age := range []time.Duration{time.Second, terminalUploadGrace + time.Minute} {
+			h := newHarness(t)
+			runID, grantID := uuid.New(), uuid.New()
+			cfg := baseTestConfig(h, keptRunStore{runID: runID, reason: reason, age: age})
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.RecordingStore = &fakeRecordingStore{}
+			cfg.Approvals = h.approvals
+			cfg.Broker = h.broker
+			srv := New(cfg)
+			tok := h.mintRunToken(t, runID)
+			inGrace := age < terminalUploadGrace
+			for _, d := range internalDoors(runID, grantID) {
+				t.Run(string(reason)+"/"+age.String()+"/"+d.name, func(t *testing.T) {
+					w := do(t, srv, d.method, d.path, tok, d.body)
+					refused := w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "lost")
+					if graced[d.name] && inGrace {
+						if refused {
+							t.Fatalf("a tail upload inside the grace was refused: %s", w.Body.String())
+						}
+						return
+					}
+					if !refused {
+						t.Fatalf("code = %d body=%s, want 403 saying the run is lost", w.Code, w.Body.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestInternalAuth_KeptThenTerminalRunIsRefusedAsTerminal: a kept run keeps
+// its lost mark when it is later killed or torn down (only a revive clears
+// it), so the gate must answer the terminal state first, auditing
+// run_terminal with run_state as documented, never run_kept. Its tail-upload
+// grace is the terminal one, from updated_at, not from the old mark.
+func TestInternalAuth_KeptThenTerminalRunIsRefusedAsTerminal(t *testing.T) {
+	h := newHarness(t)
+	runID, grantID := uuid.New(), uuid.New()
+	cfg := baseTestConfig(h, keptRunStore{runID: runID, reason: types.LostEnded, age: time.Hour,
+		state: types.RunKilled, updatedAge: time.Second})
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.RecordingStore = &fakeRecordingStore{}
+	cfg.Approvals = h.approvals
+	cfg.Broker = h.broker
+	srv := New(cfg)
+	tok := h.mintRunToken(t, runID)
+
+	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	for _, d := range internalDoors(runID, grantID) {
+		t.Run(d.name, func(t *testing.T) {
+			w := do(t, srv, d.method, d.path, tok, d.body)
+			if graced[d.name] {
+				if w.Code == http.StatusForbidden && (strings.Contains(w.Body.String(), "run is terminal") || strings.Contains(w.Body.String(), "run is lost")) {
+					t.Fatalf("a tail upload inside the terminal grace was refused by the gate: %s", w.Body.String())
+				}
+				return
+			}
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "terminal") {
+				t.Fatalf("code = %d body=%s, want 403 saying the run is terminal", w.Code, w.Body.String())
+			}
+		})
+	}
+	var terminal, kept int
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != "authz.denied" {
+			continue
+		}
+		switch {
+		case strings.Contains(string(ev.Data), `"reason":"run_terminal"`) && strings.Contains(string(ev.Data), `"run_state":"KILLED"`):
+			terminal++
+		case strings.Contains(string(ev.Data), `"run_kept"`):
+			kept++
+		}
+	}
+	if terminal == 0 || kept != 0 {
+		t.Errorf("authz.denied rows: run_terminal/KILLED %d, run_kept %d; want run_terminal only", terminal, kept)
 	}
 }
 

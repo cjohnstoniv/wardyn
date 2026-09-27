@@ -68,17 +68,11 @@ var safeBaselineDomains = map[string]bool{
 	"api.anthropic.com":                 true,
 	"api.openai.com":                    true,
 	"generativelanguage.googleapis.com": true,
-	// VCS + package registries. This set is kept in sync with the egress hosts
-	// the workspace scanner's filename-keyed marker table (internal/
-	// workspacescan/markers.go) can attach — those are all standard registries
-	// an onboarded workspace legitimately unions into a run, so a scan-derived
-	// egress addition never reads as "custom" medium-risk egress.
-	//
-	// (Option C): GitHub is now reached via the git-broker (routed through
-	// wardyn-proxy, never in a run's allowed_domains), so the github entries below
-	// are effectively dead for scoring — a GitHub clone no longer surfaces as a
-	// proposed egress domain. They are retained as a defensive low-risk baseline in
-	// case a github host ever appears in a proposal.
+	// VCS + package registries, kept in sync with the workspace scanner's
+	// marker table so a scan-derived egress addition never reads as "custom".
+	// GitHub is reached via the git-broker, never in allowed_domains, so these
+	// entries are effectively dead for scoring but retained as a defensive
+	// baseline.
 	"github.com":                    true,
 	"api.github.com":                true,
 	"codeload.github.com":           true,
@@ -180,13 +174,9 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
-	// Brokered git: branch-namespace confinement. ON by default, and the
-	// reason an agent cannot rewrite main — the broker forwards a push only
-	// when every ref it updates lives under refs/heads/wardyn/<run-id>/.
-	// Turning it off is an unambiguous widening that Clamp already treats as a
-	// privilege (it is forced false unless the operator's ceiling sets it), so
-	// it must be graded here too — the one surface built to show a human what
-	// a run may do.
+	// Branch-namespace confinement (ON by default) is why an agent cannot
+	// rewrite main; turning it off is a privilege Clamp already forces false
+	// by default, so it must be graded here too.
 	if spec.GitPushAnyBranch {
 		add("git_push_any_branch", "true", RiskHigh,
 			"Branch-namespace confinement is OFF: this run's brokered pushes may update ANY branch the granted "+
@@ -194,29 +184,20 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 				"The grant's own GitHub ruleset is what still bounds which repos it can touch.", "2")
 	}
 
-	// push_rules content rules require the git BROKER to read the pushed pack —
-	// the SSH transport has no broker seam (see the ssh_key case in gradeGrant
-	// above), so a policy that sets push_rules while ssh_key is this run's ONLY
-	// git-capable grant is legal but structurally unenforceable. A WARNING, not
-	// a launch refusal: the operator should be told, not blocked — a stored
-	// policy predating this field, or a run using ssh_key for something other
-	// than the confined push path, must still be free to launch.
-	//
-	// PushRulesSpec.IsSet, not a bare != nil: an all-zero-but-non-nil push_rules
-	// (composer.Clamp can hand back "push_rules":{} inherited from an empty
-	// operator ceiling — see clampPushRules) carries no actual rule, so keying
-	// off != nil here would warn about rules that do not exist.
+	// push_rules needs the git BROKER to read the pushed pack; the SSH
+	// transport has no broker seam, so push_rules set while ssh_key is the
+	// only git-capable grant is legal but unenforceable — a warning, not a
+	// launch refusal. IsSet(), not a bare != nil: Clamp can hand back an
+	// all-zero "push_rules":{} that carries no actual rule.
 	if spec.PushRules.IsSet() && pushRulesUnenforceable(spec.EligibleGrants) {
 		add("push_rules", "set", RiskMedium,
 			"push_rules is set, but this run's only git-capable grant is ssh_key — the SSH transport has no broker seam, so these content rules cannot be enforced.", "2")
 	}
 
 	// On a git_pat forge other than github.com the broker cannot read what a
-	// push left unchanged (the forge reader is GitHub-only), so a path the pack
-	// does not carry can never be cleared: every deny_paths entry reaching one
-	// the repository already holds refuses EVERY push, touched or not. Legal and
-	// fail-closed, so a warning — but the author must hear it before the first
-	// push rather than from it.
+	// push left unchanged (forge reader is GitHub-only), so a deny_paths entry
+	// reaching a path the repo already holds refuses EVERY push. Legal and
+	// fail-closed, so a warning before the first push rather than from it.
 	if spec.PushRules != nil && len(spec.PushRules.DenyPaths) > 0 {
 		for _, h := range nonGitHubPATHosts(spec.EligibleGrants) {
 			add("push_rules", "deny_paths on "+h, RiskMedium,
@@ -295,12 +276,9 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 }
 
 // pushRulesUnenforceable reports whether ssh_key is the ONLY git-capable grant
-// among the ones eligible — github_token and git_pat are the two lanes the git
-// broker (and so a future push_rules inspector) actually sees; ssh_key's
-// transport bypasses it entirely (same rationale as gradeGrant's ssh_key
-// case). A run with neither git_pat nor github_token eligible grades no
-// warning here: it is not "ssh_key is the reason", it is "no git grant at
-// all", a different (and already-graded-elsewhere) situation.
+// among the ones eligible — its transport bypasses the broker entirely. A run
+// with neither git_pat nor github_token eligible grades no warning here: that
+// is "no git grant at all", a different situation.
 func pushRulesUnenforceable(grants []types.GrantSpec) bool {
 	sawSSH, sawBrokered := false, false
 	for _, g := range grants {
@@ -315,10 +293,8 @@ func pushRulesUnenforceable(grants []types.GrantSpec) bool {
 }
 
 // nonGitHubPATHosts returns, sorted and de-duplicated, the hosts of the
-// git_pat grants that name a forge other than github.com — the lanes where the
-// broker's push_rules reader has no forge to consult. A scope that does not
-// parse names no host, so it grades nothing here (validatePolicySpec refuses it
-// at write time).
+// git_pat grants that name a forge other than github.com, where the broker's
+// push_rules reader has no forge to consult.
 func nonGitHubPATHosts(grants []types.GrantSpec) []string {
 	var hosts []string
 	for _, g := range grants {
@@ -370,31 +346,19 @@ func grantIsWriteCapable(g types.GrantSpec) bool {
 	case types.GrantCloudSTS:
 		return true
 	default:
-		// git_pat/ssh_key grade High in gradeGrant but are deliberately
-		// NOT write-capable here — their scope carries no read/write flag, and an
-		// unconditional CC3 floor (RequiredConfinementFloor) would block every SCM
-		// clone on KVM-less hosts. Add a `readonly` bool to those scopes and floor
-		// only declared-write grants if that ever changes.
+		// git_pat/ssh_key grade High in gradeGrant but are deliberately NOT
+		// write-capable here: an unconditional CC3 floor would block every
+		// SCM clone on KVM-less hosts.
 		return false
 	}
 }
 
-// RequiredConfinementFloor returns the DETERMINISTIC minimum confinement class a
-// run's BLAST RADIUS requires — independent of what the model proposed or the
-// operator picked. A run that holds POWERFUL credentials is itself a high-value
-// compromise target: if a prompt-injected agent escapes the sandbox, it takes
-// those credentials (and your host) with it. Such a run must therefore run in the
-// STRONGEST sandbox (Vault / CC3) so an escape is contained. "Powerful" means the
-// run can mutate external/production systems or authenticate to third-party
-// services:
-//   - a WRITE-CAPABLE grant (cloud STS, or a GitHub token with write/admin), or
-//   - an api_key to a host OUTSIDE the safe coding-agent baseline — i.e. a
-//     database, deploy API, or other third-party production credential (the
-//     agent's own model/VCS api_keys are baseline and do NOT floor).
-//
-// Returns "" when no floor above the policy default applies. Enforced BOTH in the
-// composer proposal and (defense-in-depth) at run.create, where a host that can't
-// provide CC3 then fails closed rather than running the workload under-confined.
+// RequiredConfinementFloor returns the DETERMINISTIC minimum confinement class
+// a run's BLAST RADIUS requires, independent of what the model or operator
+// picked: a run holding a write-capable grant or an api_key to a non-baseline
+// host is a high-value compromise target and must run in CC3 so an escape is
+// contained. Returns "" when no floor applies. Enforced both in the composer
+// proposal and (defense-in-depth) at run.create.
 func RequiredConfinementFloor(spec types.RunPolicySpec) types.ConfinementClass {
 	for _, g := range spec.EligibleGrants {
 		if grantIsWriteCapable(g) || apiKeyToNonBaselineHost(g) {
@@ -404,11 +368,9 @@ func RequiredConfinementFloor(spec types.RunPolicySpec) types.ConfinementClass {
 	return ""
 }
 
-// apiKeyToNonBaselineHost reports whether an api_key grant targets a host OUTSIDE
-// the safe coding-agent baseline (the agent's own model/VCS endpoints) — i.e. a
-// credential to a third-party / production service (a database, deploy API, SaaS).
-// An unparseable/empty host is treated as baseline (no floor) — the floor keys off
-// a POSITIVE signal, never an absence.
+// apiKeyToNonBaselineHost reports whether an api_key grant targets a host
+// outside the safe coding-agent baseline. An unparseable/empty host is
+// treated as baseline (no floor) — the floor keys off a positive signal.
 func apiKeyToNonBaselineHost(g types.GrantSpec) bool {
 	if g.Kind != types.GrantAPIKey || len(g.Scope) == 0 {
 		return false

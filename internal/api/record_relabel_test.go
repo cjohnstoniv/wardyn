@@ -32,7 +32,7 @@ func seedRecordedSession(t *testing.T, ws *types.Workspace, key, label string) {
 	ws.RecordResults = blob
 }
 
-// TestRecordWorkspace_DifferentLabelUnderTheSameSlugIsRefused pins B3-F4:
+// TestRecordWorkspace_DifferentLabelUnderTheSameSlugIsRefused pins this:
 // recordSessionKey slugs "build & test" and "Build/Test" to the SAME key
 // (build-test), and the launch write is an unconditional per-key upsert — so
 // naming a second session with different punctuation silently destroyed the

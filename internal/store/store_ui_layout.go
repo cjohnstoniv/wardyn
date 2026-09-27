@@ -16,21 +16,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RunLayoutStore is the run-cockpit widget-layout persistence surface. Like
-// Pager (pagination.go) and RunWatcherLeaser (store_watcher.go), it is
-// deliberately NOT part of the Store interface: the control plane has ~30
-// test doubles that embed store.Store and override a handful of methods, so
-// widening Store would route a layout read/write to each fake's embedded
-// nil interface instead of a real implementation — breaking every one of
-// those doubles for a feature they have nothing to do with. The api layer
-// type-asserts s.cfg.Store to RunLayoutStore and degrades when it is absent
-// (GET returns the empty/default shape, PUT 501s) rather than widening
-// Store; production is always PG, which has it.
+// RunLayoutStore is the run-cockpit widget-layout persistence surface.
+// Deliberately NOT part of the Store interface: ~30 test doubles embed
+// store.Store, and widening it would break every one for a feature they have
+// nothing to do with. The api layer type-asserts s.cfg.Store to
+// RunLayoutStore and degrades when absent (GET returns the default shape,
+// PUT 501s); production is always PG, which has it.
 type RunLayoutStore interface {
-	// GetRunLayout returns principal's saved layout for preset, or
-	// ErrNotFound when nothing has been saved yet — the api layer treats
-	// that as the empty/default shape, not an error (a human who has never
-	// customized the cockpit does not get a failure).
+	// GetRunLayout returns ErrNotFound when nothing has been saved yet; the
+	// api layer treats that as the default shape, not an error.
 	GetRunLayout(ctx context.Context, principal, preset string) (types.RunLayout, error)
 	// PutRunLayout upserts principal's layout for preset and returns the
 	// stored row, including the server-assigned updated_at.
@@ -40,26 +34,20 @@ type RunLayoutStore interface {
 // Compile-time assertion: PG satisfies RunLayoutStore.
 var _ RunLayoutStore = PG{}
 
-// GetRunLayout reads the one (principal, preset) row scoped to principal.
-// Unlike GetSSHKeyByFingerprint's deliberately-unscoped pre-auth lookup, a
-// layout is never looked up by anything but its owner, so the WHERE carries
-// both key columns from the start.
+// GetRunLayout reads the one (principal, preset) row scoped to principal — a
+// layout is never looked up by anything but its owner.
 func (s PG) GetRunLayout(ctx context.Context, principal, preset string) (types.RunLayout, error) {
 	const q = `SELECT preset, layout, updated_at FROM ui_run_layouts WHERE principal = $1 AND preset = $2`
 	return scanRunLayout(s.Pool.QueryRow(ctx, q, principal, preset))
 }
 
-// PutRunLayout upserts principal's layout for preset. ON CONFLICT DO UPDATE,
-// keyed on the (principal, preset) primary key, makes this the single
-// idempotent write the "save layout" action needs — no read-then-decide
-// (insert vs update) round trip, and no lost-update race between two tabs
-// saving the same preset back to back.
+// PutRunLayout upserts principal's layout for preset. ON CONFLICT DO UPDATE
+// makes this one idempotent write with no read-then-decide round trip and no
+// lost-update race between two tabs saving the same preset back to back.
 func (s PG) PutRunLayout(ctx context.Context, principal, preset string, layout []types.RunLayoutWidget) (types.RunLayout, error) {
 	if layout == nil {
-		// json.Marshal(nil slice) emits the JSON literal `null`, not `[]` —
-		// store the same "empty, never nil" shape every List* read in this
-		// package promises (collect's doc comment, pagination.go), so a
-		// caller that reads back an explicitly-cleared layout gets [] too.
+		// json.Marshal(nil) emits `null`, not `[]` — keep the "empty, never
+		// nil" shape this package promises everywhere else.
 		layout = []types.RunLayoutWidget{}
 	}
 	raw, err := json.Marshal(layout)
@@ -89,9 +77,8 @@ func scanRunLayout(row pgx.Row) (types.RunLayout, error) {
 		return types.RunLayout{}, fmt.Errorf("store: unmarshal run layout: %w", err)
 	}
 	if l.Layout == nil {
-		// Defensive: the column's NOT NULL DEFAULT '[]'::jsonb means this
-		// should be unreachable, but a stray literal `null` must still not
-		// hand the caller a nil slice (see PutRunLayout's own guard).
+		// Defensive: should be unreachable given the column's NOT NULL
+		// DEFAULT '[]'::jsonb, but never hand the caller a nil slice.
 		l.Layout = []types.RunLayoutWidget{}
 	}
 	return l, nil

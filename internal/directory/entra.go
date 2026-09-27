@@ -25,16 +25,13 @@ import (
 const (
 	entraProvider = "entra"
 
-	// graphBaseURL / entraTokenURL are the production endpoints. Both are
-	// injected in tests via newEntra; they are not Config fields because an
-	// operator never varies them (sovereign clouds would be a connector
-	// variant, not a knob nobody sets correctly).
+	// graphBaseURL / entraTokenURL are the production endpoints, injected in
+	// tests via newEntra; not Config fields since an operator never varies them.
 	graphBaseURL     = "https://graph.microsoft.com/v1.0"
 	entraTokenURLFmt = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
 
-	// graphScope is the client-credentials scope: ".default" means "every
-	// APPLICATION permission already admin-consented for this app registration"
-	// — the consent is performed by a tenant admin in Entra, never by Wardyn.
+	// graphScope is the client-credentials scope: ".default" means every
+	// APPLICATION permission already admin-consented in Entra by a tenant admin.
 	graphScope = "https://graph.microsoft.com/.default"
 
 	// tokenRefreshMargin renews the app token this long before it actually
@@ -42,10 +39,8 @@ const (
 	tokenRefreshMargin = 60 * time.Second
 
 	// cacheTTL / cacheEntries bound the suggestion cache. A minute-stale
-	// suggestion is harmless (the admin still sees the name they picked, and
-	// the claim value they store is the one the directory reported), and the
-	// daemon is single-replica by construction, so an in-memory cache needs no
-	// coherence story and nothing is persisted.
+	// suggestion is harmless, and the daemon is single-replica by construction,
+	// so an in-memory cache needs no coherence story.
 	cacheTTL     = 60 * time.Second
 	cacheEntries = 256
 
@@ -55,11 +50,10 @@ const (
 )
 
 // EntraConfig carries the client-credentials app registration. This package
-// reads NO environment: the boot slice resolves the credentials (default = the
-// OIDC app registration, override = a dedicated least-privilege app) and passes
-// them in, so the fail-closed boot refusal for a PUBLIC OIDC client — which has
-// no secret and therefore cannot do client credentials at all — lives at boot
-// where it can actually refuse startup, not here where it could only 503.
+// reads NO environment: the boot slice resolves the credentials and passes
+// them in, so the fail-closed refusal for a PUBLIC OIDC client (no secret,
+// cannot do client credentials) lives at boot, where it can refuse startup,
+// not here where it could only 503.
 type EntraConfig struct {
 	TenantID     string
 	ClientID     string
@@ -74,10 +68,8 @@ type entraDirectory struct {
 	cache     *ttlCache
 
 	// approleDenied latches when Graph refuses the servicePrincipals read
-	// (Application.Read.All not granted). App Roles are best-effort by design —
-	// v1 is users + groups, roles when the tenant allows — so the denial marks
-	// the connector DEGRADED rather than failing the search: the App Role kind
-	// simply stops appearing and the field stays free text for roles.
+	// (Application.Read.All not granted): App Roles are best-effort, so this
+	// marks the connector DEGRADED rather than failing the search.
 	//
 	// ponytail: latched until restart. Re-consent in Entra needs a daemon
 	// restart to take effect; the alternative is re-probing a known-403 on every
@@ -86,12 +78,9 @@ type entraDirectory struct {
 }
 
 // NewEntra builds the Microsoft Graph connector. It returns ErrUnconfigured
-// when any credential is absent — that is the "feature is off" answer, not a
-// failure, and the caller wires no Directory at all in that case.
-//
-// It performs no network I/O: a tenant that is reachable at boot but not at
-// first search would fail either way, so there is nothing to gain by refusing
-// startup over it (unlike the credential SHAPE check, which boot does make).
+// when any credential is absent (the "feature is off" answer, not a failure)
+// and performs no network I/O: a tenant reachable at boot but not at first
+// search would fail either way.
 func NewEntra(cfg EntraConfig) (Directory, error) {
 	return newEntra(cfg, fmt.Sprintf(entraTokenURLFmt, url.PathEscape(strings.TrimSpace(cfg.TenantID))), graphBaseURL)
 }
@@ -101,30 +90,26 @@ func newEntra(cfg EntraConfig, tokenURL, graphBase string) (Directory, error) {
 		return nil, ErrUnconfigured
 	}
 	// The token source runs on a detached context (below), so the Timeout is
-	// the only thing bounding a hung token endpoint — the connector owns its
-	// client so that bound can never be absent.
+	// the only thing bounding a hung token endpoint.
 	hc := &http.Client{Timeout: httpTimeout}
 
-	// The token source is built once, over a DETACHED context carrying our HTTP
-	// client. Binding it to a request context instead would let one cancelled
-	// autocomplete keystroke poison the cached app token for every later search.
-	// The trade-off is that a token fetch does not observe the calling request's
-	// deadline — bounded instead by the client's own Timeout.
+	// Built once over a DETACHED context carrying our HTTP client: binding it to
+	// a request context instead would let one cancelled autocomplete keystroke
+	// poison the cached app token for every later search. Trade-off: a token
+	// fetch does not observe the calling request's deadline.
 	ccfg := &clientcredentials.Config{
 		ClientID:     strings.TrimSpace(cfg.ClientID),
 		ClientSecret: cfg.ClientSecret,
 		TokenURL:     tokenURL,
 		Scopes:       []string{graphScope},
-		// Entra's v2.0 token endpoint accepts client_secret as a form field, and
-		// pinning it avoids x/oauth2's AutoDetect probe — which tries HTTP Basic
-		// first and would make a cold token fetch cost TWO round trips.
+		// Pinning AuthStyleInParams avoids x/oauth2's AutoDetect probe, which
+		// tries HTTP Basic first and would cost a cold fetch two round trips.
 		AuthStyle: oauth2.AuthStyleInParams,
 	}
 	tokenCtx := context.WithValue(context.Background(), oauth2.HTTPClient, hc)
-	// ReuseTokenSourceWithExpiry re-uses the cached token until
-	// expiry-tokenRefreshMargin. It recognises the reuse wrapper
-	// clientcredentials already returns and retunes it in place, so this is one
-	// cache with our margin, not two nested ones.
+	// Re-uses the cached token until expiry-tokenRefreshMargin, retuning the
+	// reuse wrapper clientcredentials already returns rather than nesting a
+	// second one.
 	tokens := oauth2.ReuseTokenSourceWithExpiry(nil, ccfg.TokenSource(tokenCtx), tokenRefreshMargin)
 
 	return &entraDirectory{
@@ -192,8 +177,7 @@ type graphUser struct {
 func (d *entraDirectory) searchUsers(ctx context.Context, q string) ([]Entry, error) {
 	t := searchTerm(q)
 	v := url.Values{}
-	// $search on /users tokenizes the listed properties; matching mail and UPN
-	// as well as displayName is what makes typing an address work.
+	// Matching mail and UPN as well as displayName is what makes typing an address work.
 	v.Set("$search", fmt.Sprintf(`"displayName:%s" OR "mail:%s" OR "userPrincipalName:%s"`, t, t, t))
 	v.Set("$select", "displayName,mail,userPrincipalName")
 	v.Set("$top", strconv.Itoa(MaxResults))
@@ -235,10 +219,8 @@ type graphGroup struct {
 
 func (d *entraDirectory) searchGroups(ctx context.Context, q string) ([]Entry, error) {
 	v := url.Values{}
-	// Groups are the reason this feature exists: the `groups` claim carries the
-	// object GUID, so ClaimValue is the GUID while DisplayName stays the name.
-	// $search on /groups tokenizes ONLY displayName and description — there is
-	// no mail/alias leg to add here.
+	// The `groups` claim carries the object GUID, so ClaimValue is the GUID
+	// while DisplayName stays the name.
 	v.Set("$search", fmt.Sprintf(`"displayName:%s"`, searchTerm(q)))
 	v.Set("$select", "id,displayName")
 	v.Set("$top", strconv.Itoa(MaxResults))
@@ -277,12 +259,10 @@ type graphAppRole struct {
 }
 
 // searchAppRoles reads this app registration's own service principal and
-// filters its appRoles client-side — the roles are a handful of authored
-// entries, so there is no server-side query worth building.
-//
-// Best-effort by contract: without Application.Read.All the read is refused and
-// the App Role kind is simply ABSENT from results. That is not an error, it is
-// the documented v1 scope (users + groups always, roles when granted).
+// filters its appRoles client-side (a handful of authored entries, so no
+// server-side query is worth building). Best-effort by contract: without
+// Application.Read.All the read is refused and the App Role kind is simply
+// ABSENT from results, not an error.
 func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry, error) {
 	if d.approleDenied.Load() {
 		return nil, nil
@@ -297,8 +277,7 @@ func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry,
 			AppRoles []graphAppRole `json:"appRoles"`
 		} `json:"value"`
 	}
-	// $filter on appId is a plain query — no $search, so no ConsistencyLevel /
-	// $count pair is required or sent here.
+	// A plain $filter query — no $search, so no ConsistencyLevel/$count pair needed.
 	if err := d.graphGet(ctx, "approles", "/servicePrincipals", v, false, &body); err != nil {
 		var pe *ProviderError
 		if errors.As(err, &pe) && (pe.Status == http.StatusForbidden || pe.Status == http.StatusUnauthorized) {
@@ -342,11 +321,10 @@ func (d *entraDirectory) markAppRolesDenied(pe *ProviderError) {
 	}
 }
 
-// graphSearch is the ONLY way this connector issues a $search. It exists so the
-// required pair can never drift apart: Microsoft Graph rejects $search on
-// directory objects unless BOTH the `ConsistencyLevel: eventual` header AND
-// `$count=true` are present — omitting either one 400s. Setting them in one
-// place makes that structural rather than a rule each call site has to remember.
+// graphSearch is the ONLY way this connector issues a $search: Graph rejects
+// $search on directory objects unless BOTH the `ConsistencyLevel: eventual`
+// header AND `$count=true` are present, so setting them in one place makes the
+// pairing structural rather than a rule each call site must remember.
 func (d *entraDirectory) graphSearch(ctx context.Context, op, path string, v url.Values, out any) error {
 	return d.graphGet(ctx, op, path, v, true, out)
 }
@@ -376,9 +354,8 @@ func (d *entraDirectory) graphGet(ctx context.Context, op, path string, v url.Va
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Graph error bodies name the missing permission, which is the single
-		// most useful thing an operator can be told here — but they can also
-		// echo the query, so the excerpt is bounded.
+		// Graph error bodies name the missing permission, but can also echo the
+		// query, so the excerpt is bounded.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return &ProviderError{
 			Provider: entraProvider,
@@ -402,9 +379,8 @@ func retrieveStatus(err error) int {
 }
 
 // searchTerm strips the two characters that would break out of an OData
-// $search string literal. Stripping rather than escaping is deliberate: Graph's
-// $search grammar has no portable escape for a quote inside a term, and a
-// dropped character in an autocomplete prefix costs nothing.
+// $search string literal (stripped rather than escaped: Graph's $search
+// grammar has no portable escape for a quote inside a term).
 func searchTerm(q string) string {
 	return strings.NewReplacer(`"`, "", `\`, "").Replace(q)
 }
@@ -415,10 +391,7 @@ func odataQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
 // --- cache ---------------------------------------------------------------
 
 // ttlCache is a bounded cache with a per-entry TTL: an entry is served only
-// while fresh, and the map is flushed wholesale once it is full. Both bounds
-// matter — the TTL keeps suggestions from going stale across a directory
-// change, the size keeps a keystroke-per-request surface from growing without
-// limit.
+// while fresh, and the map is flushed wholesale once it is full.
 //
 // ponytail: the ceiling is the bound, not the eviction ORDER. At 256 entries /
 // 60 s every entry expires within a minute anyway, so flush-at-bound is

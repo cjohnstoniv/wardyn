@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,7 +43,7 @@ func (m mapKeyStore) Put(_ context.Context, name string, v []byte) error {
 func TestLoadHopTLS_RefusesPlaintextOnNonLocalInstall(t *testing.T) {
 	for _, u := range []string{"http://wardynd:8080", "http://wardyn.wardyn.svc.cluster.local:8080", "http://host.docker.internal:8080"} {
 		store := mapKeyStore{}
-		_, err := loadHopTLS(context.Background(), store, u)
+		_, err := loadHopTLS(context.Background(), unlocked(store), u)
 		if err == nil || !strings.Contains(err.Error(), "refusing to start") || !strings.Contains(err.Error(), "WARDYN_INTERNAL_LISTEN") {
 			t.Errorf("%s: boot must refuse, naming the fix; got %v", u, err)
 		}
@@ -53,7 +55,7 @@ func TestLoadHopTLS_RefusesPlaintextOnNonLocalInstall(t *testing.T) {
 
 func TestLoadHopTLS_LoopbackHTTPIsLocal(t *testing.T) {
 	store := mapKeyStore{}
-	hop, err := loadHopTLS(context.Background(), store, "http://127.0.0.1:8080")
+	hop, err := loadHopTLS(context.Background(), unlocked(store), "http://127.0.0.1:8080")
 	if err != nil || hop != nil {
 		t.Fatalf("loopback http is the local install: want (nil, nil), got (%v, %v)", hop, err)
 	}
@@ -64,11 +66,11 @@ func TestLoadHopTLS_LoopbackHTTPIsLocal(t *testing.T) {
 
 func TestLoadHopTLS_CAStableAcrossBoots_RotatedNearExpiry(t *testing.T) {
 	store := mapKeyStore{}
-	first, err := loadHopTLS(context.Background(), store, "https://wardynd:8443")
+	first, err := loadHopTLS(context.Background(), unlocked(store), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadHopTLS(context.Background(), store, "https://wardynd:8443")
+	second, err := loadHopTLS(context.Background(), unlocked(store), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestLoadHopTLS_CAStableAcrossBoots_RotatedNearExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	store[secretInternalCA] = stale
-	rotated, err := loadHopTLS(context.Background(), store, "https://wardynd:8443")
+	rotated, err := loadHopTLS(context.Background(), unlocked(store), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +102,7 @@ func TestLoadHopTLS_CAStableAcrossBoots_RotatedNearExpiry(t *testing.T) {
 // The listener serves the proxy's routes over TLS a pinned client verifies,
 // nothing else, and fails closed for a client pinned to another CA.
 func TestInternalListener_OnlyInternalRoutes_OverPinnedTLS(t *testing.T) {
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://127.0.0.1:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +153,7 @@ func TestInternalListener_BindFailureIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://wardynd:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,7 @@ func TestInternalListener_BindFailureIsFatal(t *testing.T) {
 // The listener's floor is TLS 1.3: a client capped at TLS 1.2 is refused even
 // when it pins the right CA.
 func TestInternalListener_RefusesTLS12Client(t *testing.T) {
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://127.0.0.1:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,5 +191,49 @@ func TestInternalListener_RefusesTLS12Client(t *testing.T) {
 	_, err = c.Get(srv.URL + "/healthz")
 	if err == nil || !strings.Contains(err.Error(), "protocol version") {
 		t.Fatalf("a TLS 1.2 client must be refused, got %v", err)
+	}
+}
+
+// The ingest pins this listener from the file wardynd publishes beside the
+// groundtruth token file: it must hold exactly the CA the listener's
+// certificate chains to, and must not appear on a local (loopback http)
+// install or one without a token file.
+func TestPublishHopCA_BesideTheGroundtruthToken(t *testing.T) {
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://127.0.0.1:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gtFile := filepath.Join(t.TempDir(), "token")
+	if err := publishHopCA(hop, gtFile); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(gtFile), hopCAFileName))
+	if err != nil {
+		t.Fatalf("no CA published beside the token file: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) || strings.Contains(string(b), "PRIVATE KEY") {
+		t.Fatalf("published file must be the CA certificate alone:\n%s", b)
+	}
+	leaf, err := x509.ParseCertificate(hop.server.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatalf("the listener's certificate does not chain to the published CA: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		hop *hopTLS
+		gt  string
+	}{"loopback http": {nil, filepath.Join(t.TempDir(), "token")}, "no token file": {hop, ""}} {
+		if err := publishHopCA(tc.hop, tc.gt); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if tc.gt != "" {
+			if _, err := os.Stat(filepath.Join(filepath.Dir(tc.gt), hopCAFileName)); !os.IsNotExist(err) {
+				t.Errorf("%s: published a CA file", name)
+			}
+		}
 	}
 }

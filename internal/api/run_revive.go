@@ -175,7 +175,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, reviveRefused(http.StatusBadGateway, "read the run's proxy config: "+err.Error())
 	}
-	cfg, re, rerr := reassertProxyCeiling(run, old, c)
+	cfg, err := s.loadRenderedProxyConfig(old)
+	if err != nil {
+		return reviveResult{}, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
+	}
+	re, rerr := reassertProxyCeiling(run, cfg, c)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -183,11 +187,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	retiring := cfg.RunToken
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "mint run identity: "+err.Error())
 	}
-	cfg.RunToken, cfg.ControlPlaneURL, cfg.ControlPlaneCAPEM = id.Token, s.cfg.ControlPlaneURL, s.cfg.ControlPlaneCAPEM
+	cfg.RunToken = id.Token
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())
@@ -208,7 +212,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
-	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason)
+	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()))
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, "claim the run for revive: "+err.Error())
 	}
@@ -289,18 +293,30 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 }
 
 // reviveEligible: a RUNNING run with a sandbox, inside its lease, that is live,
-// lost to an outage, or (startAgent) lost to a reboot. An ended run has passed
-// its end, and the bulk restart never starts a stopped agent.
+// lost to an outage, or (startAgent) lost to a reboot, or an interactive run
+// its own end stopped, extended since and still inside its files grace (#1061).
+// The bulk restart never starts a stopped agent. The claim re-checks the grace
+// and the end (store.EndedKept); this is the answer a person can act on.
 func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveError {
+	now := s.cfg.Now()
+	ended := run.LostReason == types.LostEnded
 	switch {
 	case run.State != types.RunRunning || run.SandboxRef == "":
 		return reviveRefused(http.StatusConflict, "run is not running (state="+string(run.State)+")")
-	case run.EndsAt != nil && !s.cfg.Now().Before(*run.EndsAt):
+	case ended && !s.endedFilesKept(run, now):
+		return reviveRefused(http.StatusConflict, "run has ended and its files are no longer kept; start a new run")
+	case run.EndsAt != nil && !now.Before(*run.EndsAt):
 		return reviveRefused(http.StatusConflict, "run has passed its end; extend it first")
+	case ended && !run.Interactive:
+		// A task run's agent is the task, started once by dispatch: starting
+		// its container again brings back the files and no agent.
+		return reviveRefused(http.StatusConflict, "run has ended and a task run's agent cannot be started again; start a new run")
 	case run.LostAt == nil, run.LostReason == types.LostOutage:
-	case run.LostReason == types.LostReboot && startAgent:
+	case (run.LostReason == types.LostReboot || ended) && startAgent:
 	case run.LostReason == types.LostReboot:
 		return reviveRefused(http.StatusConflict, "run was lost to a reboot and its agent is stopped; revive it from the run's page")
+	case ended:
+		return reviveRefused(http.StatusConflict, "run has ended and its agent is stopped; revive it from the run's page")
 	default:
 		return reviveRefused(http.StatusConflict, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
@@ -309,8 +325,9 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 
 // reviveNeedsAgentStart reports whether a revive must start run's agent
 // again, behind its new proxy, before it can be called live: always true for
-// a reboot, and true for an outage run only when the agent itself is not
-// running (F1.2, long-holds design rev 4 §4.1; Fable review).
+// a reboot or an end (both stop the agent), and true for an outage run only
+// when the agent itself is not running (F1.2, long-holds design rev 4 §4.1;
+// Fable review).
 //
 // stopLostSandbox (run_lost.go) stops an outage run's agent too, once its end
 // passes while it is still lost, but leaves lost_reason=outage —
@@ -325,7 +342,7 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 // actually stopped report success while the agent stays dead behind a proxy
 // that now claims it is live.
 func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) (bool, *reviveError) {
-	if run.LostReason == types.LostReboot {
+	if run.LostReason == types.LostReboot || run.LostReason == types.LostEnded {
 		return true, nil
 	}
 	if run.LostReason != types.LostOutage {
@@ -418,20 +435,16 @@ type reasserted struct {
 // map is non-empty (isBrokeredGitGrant). A running agent's env cannot change,
 // so emptying the map would hand the sandbox a GitHub installation token on
 // request. A revive whose ceiling denies a broker-managed host is refused.
-func reassertProxyCeiling(run types.AgentRun, old []byte, c ownerCeiling) (*proxy.Config, reasserted, *reviveError) {
-	cfg, err := proxy.LoadConfigBytes(old)
-	if err != nil {
-		return nil, reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
-	}
+func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
-		return nil, reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config names another run")
+		return reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config names another run")
 	}
 	var re reasserted
 	if len(c.deny) == 0 {
-		return cfg, re, nil
+		return re, nil
 	}
 	if len(cfg.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
-		return nil, re, reviveRefused(http.StatusConflict,
+		return re, reviveRefused(http.StatusConflict,
 			"the owner's governance profile now denies GitHub, which this run's git broker needs; start a new run")
 	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
@@ -450,23 +463,57 @@ func reassertProxyCeiling(run types.AgentRun, old []byte, c ownerCeiling) (*prox
 	}
 	slices.Sort(re.droppedLane)
 	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(h string) bool { return ceilingDenies(c.deny, h) })
-	return cfg, re, nil
+	return re, nil
+}
+
+// loadRenderedProxyConfig loads a run's rendered proxy config with its
+// control-plane hop (URL and CA) set to this deployment's current pair BEFORE
+// the strict loader validates it. A config rendered before the TLS hop names
+// an http control plane the loader now refuses, and every reader here (revive,
+// extend) hands the proxy the current pair anyway. Only those two fields change,
+// on the raw JSON object: every other field, an unknown one included, still
+// meets the loader as written, and the run id and the per-run MITM CA are read
+// back exactly as rendered.
+func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if fields == nil {
+		return nil, errors.New("parse config: not a JSON object")
+	}
+	for k, v := range map[string]string{"control_plane_url": s.cfg.ControlPlaneURL, "control_plane_ca_pem": s.cfg.ControlPlaneCAPEM} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		fields[k] = b
+	}
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.LoadConfigBytes(b)
 }
 
 // reloseRun is the fail-closed arm after a claim: the run's proxy is gone (or
 // was never replaced), or its agent did not start, so it is marked lost again
 // and its proxy stopped (a rebooted run's agent too), or torn down when it
 // cannot be kept. A rebooted run stays lost (reboot), so the next revive
-// starts its agent again.
+// starts its agent again. An ended run goes back to ended under its FIRST mark,
+// so a failed revive never restarts its files grace.
 func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) {
-	reason := types.LostOutage
-	if run.LostReason == types.LostReboot {
+	reason, at := types.LostOutage, s.cfg.Now()
+	switch run.LostReason {
+	case types.LostReboot:
 		reason = types.LostReboot
+	case types.LostEnded:
+		reason, at = types.LostEnded, *run.LostAt
 	}
 	run.LostAt, run.LostReason = nil, ""
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
-	if ok && lok && s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0) {
+	if ok && lok && s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0, at) {
 		return
 	}
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",

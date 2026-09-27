@@ -15,10 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// errNoRow is returned by Querier.QueryRow.Scan when no row matched. pgx
-// returns pgx.ErrNoRows; the fake returns this. We match on either via the
-// caller-supplied isNoRows or by string, but to stay dependency-light the
-// pgxAdapter translates pgx.ErrNoRows into errNoRow.
+// errNoRow is returned by Querier.QueryRow.Scan when no row matched (pgxAdapter translates pgx.ErrNoRows into it, dependency-light).
 var errNoRow = errors.New("broker: no row")
 
 // loadGrant reads a grant's spec and run id (no lock; routing pre-check only).
@@ -47,10 +44,8 @@ func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantS
 	return spec, runID, nil
 }
 
-// selectLiveCredentialApproval is the ONE spelling of ensureApproval's lookup:
-// the newest non-EXPIRED credential approval for a grant. The pre-insert read
-// and the post-insert re-select both run it, so a narrowing of the predicate
-// (the EXPIRED filter is one) can never land on only one of the two copies.
+// selectLiveCredentialApproval is ensureApproval's ONE lookup spelling
+// (newest non-EXPIRED approval), shared by the pre-insert read and post-insert re-select.
 const selectLiveCredentialApproval = `
 	SELECT id, state, requested_scope, minted_jti, reason
 	  FROM approvals
@@ -58,30 +53,12 @@ const selectLiveCredentialApproval = `
 	 ORDER BY requested_at DESC
 	 LIMIT 1`
 
-// ensureApproval finds the credential approval for a grant or creates a PENDING
-// one (requested_scope = the grant spec scope — exactly what the approver will
-// see). It returns the current approval state. Concurrency: migration
-// 0002_approval_uniqueness adds the partial unique index
-// approvals_pending_credential_uniq (one PENDING credential approval per
-// grant), so the SELECT-then-INSERT runs inside one tx with ON CONFLICT DO
-// NOTHING; a racing double-insert loses harmlessly and the re-select returns
-// the single winner.
-//
-// EXPIRED rows are SKIPPED by the lookup, which the pre-insert read
-// and the post-insert re-select run as ONE const, so the winner it returns is a
-// PENDING row by predicate rather than by relying on requested_at ordering to
-// sort the swept row below it. The approval sweeper (approval.ExpireStale) ages
-// out every stale PENDING approval, including this one; without the filter the
-// next mint attempt would re-find that EXPIRED row forever, MintForGrant would
-// map it to ErrApprovalDenied, and the run would stay permanently wedged with
-// no PENDING request left for a human to decide. An expiry is a sweep nobody decided
-// (types.ApprovalDecision), so re-raising a fresh PENDING is the honest
-// recovery. DENIED is a real human decision and stays terminal — it is
-// deliberately NOT skipped. CANCELLED is on the DENIED side of that line and is
-// likewise not skipped: the predicate is `state <> 'EXPIRED'`, so a cancelled
-// row is re-found and MintForGrant maps it to ErrApprovalDenied, which is the
-// honest answer — its run has ENDED, so unlike an expiry there is nothing left
-// to re-raise a fresh PENDING request for, and no human to decide it.
+// ensureApproval finds the credential approval for a grant or creates a
+// PENDING one (requested_scope = the grant spec scope), via the partial
+// unique index approvals_pending_credential_uniq (racing SELECT-then-INSERT,
+// ON CONFLICT DO NOTHING, re-select the winner). EXPIRED rows are skipped so
+// a swept approval re-raises as fresh PENDING; DENIED/CANCELLED are terminal
+// and stay mapped to ErrApprovalDenied.
 func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, spec types.GrantSpec) (types.ApprovalRequest, error) {
 	tx, err := b.db.BeginReadCommitted(ctx)
 	if err != nil {
@@ -106,10 +83,7 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 		_ = tx.Commit(ctx)
 		return ap, nil
 	case errors.Is(err, errNoRow):
-		// Create a PENDING approval whose requested_scope == grant spec scope.
-		// The partial unique index approvals_pending_credential_uniq (one
-		// PENDING credential approval per grant) makes a concurrent double-
-		// insert lose via DO NOTHING; the re-select below returns the winner.
+		// PENDING insert; a concurrent double-insert loses via DO NOTHING.
 		newID := uuid.New()
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO approvals (id, run_id, grant_id, kind, requested_scope, state)
@@ -136,10 +110,9 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 	}
 }
 
-// selectGrantApprovalForUpdate is the authoritative read inside the mint tx. It
-// locks the grant row (FOR UPDATE) joined LEFT to its credential approval so
-// the auto-mint path (no approval) and the gated path share one query. When
-// approvalHint is non-Nil the join is narrowed to that approval id.
+// selectGrantApprovalForUpdate is the authoritative read inside the mint tx:
+// FOR UPDATE-locks the grant row LEFT-joined to its credential approval
+// (narrowed to approvalHint if non-Nil), so auto-mint and the gated path share one query.
 func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalHint uuid.UUID) (grantApprovalRow, error) {
 	var (
 		r         grantApprovalRow
@@ -151,17 +124,9 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		mintedJTI *string
 		decScope  *string
 	)
-	// FOR UPDATE OF g locks the grant row, serializing concurrent mints for the
-	// same grant. It CANNOT also lock `a`: Postgres forbids FOR UPDATE on the
-	// nullable side of an outer join (the auto-mint path LEFT-JOINs no approval).
-	// This means single-use CANNOT rely on the a.minted_jti value scanned here: a
-	// contender that blocks on the g lock mid-tx resumes on its ORIGINAL statement
-	// snapshot and reads a stale minted_jti='' — EvalPlanQual re-checks only the
-	// locked tuple (g), never re-fetching the non-locked approval row on the
-	// nullable side. So the row.mintedJTI fast-path guard catches only contenders
-	// whose snapshot postdates the winner's commit; the lock-blocked-waiter case
-	// is caught ONLY by the rows-affected check on the conditional minted_jti
-	// UPDATE (broker.mint) — that check is the load-bearing single-use guarantee.
+	// FOR UPDATE OF g locks only the grant row (Postgres forbids locking the
+	// nullable side of an outer join); single-use instead relies on the
+	// rows-affected check on broker.mint's conditional minted_jti UPDATE.
 	const q = `
 		SELECT g.id, g.run_id, g.spec,
 		       a.id, a.run_id, a.state, a.requested_scope, a.minted_jti, a.decision_scope
@@ -204,8 +169,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		if mintedJTI != nil {
 			r.mintedJTI = *mintedJTI
 		}
-		// RAW, never Normalize()d — the per-run lease turns on this exact value
-		// and "" must stay "" all the way to leaseCoversRemint.
+		// RAW, never Normalize()d — "" must stay "" through leaseCoversRemint.
 		if decScope != nil {
 			r.decisionScope = types.ApprovalScope(*decScope)
 		}
@@ -213,17 +177,10 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 	return r, nil
 }
 
-// runRevoked reports whether the run has been revoked. The kill-switch cascade
-// (Identity.RevokeRun) INSERTs into identity_revocations; checking it inside the
-// mint tx fails a mint closed once a revocation is durably recorded. This is a
-// tightening, not a full race close: a revoke that commits during this tx (after
-// this read) still yields a <=1h token — the published minted-token residual.
-//
-// It matches ANY identity_revocations row for the run (run-level or a per-JTI
-// entry, both of which populate run_id), so a single-JTI revocation would block
-// all further mints for the run. That is deliberately fail-closed: if any
-// credential for a run was revoked, refusing new mints for that run is the safe
-// direction. (No per-JTI revoke caller exists today; run-level is the live path.)
+// runRevoked reports whether the run has been revoked (Identity.RevokeRun
+// inserts into identity_revocations), checked inside the mint tx so a
+// durably-recorded revocation fails the mint (not full race-closed: a revoke
+// committing after this read still yields one <=1h token). Matches ANY row, fail-closed.
 func runRevoked(ctx context.Context, tx Tx, runID uuid.UUID) (bool, error) {
 	var revoked bool
 	err := tx.QueryRow(ctx,
@@ -234,9 +191,8 @@ func runRevoked(ctx context.Context, tx Tx, runID uuid.UUID) (bool, error) {
 	return revoked, nil
 }
 
-// jsonScopeEqual reports whether two JSON scopes are semantically equal,
-// independent of key ordering or insignificant whitespace. This is the
-// no-widening comparison: the minted scope must be EXACTLY the approved scope.
+// jsonScopeEqual reports whether two JSON scopes are semantically equal (key
+// order/whitespace insensitive) — the no-widening check: minted must EXACTLY match approved.
 func jsonScopeEqual(a, b json.RawMessage) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return len(a) == len(b)

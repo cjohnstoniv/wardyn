@@ -6,9 +6,9 @@ package main
 // B1 (R3 scan-git fix wave): THREAT-MODEL.md 5.1a's coverage-gap bullet said
 // the primary inadvertent-leak paths (a fresh paste, a tool_result of a
 // just-read file) "are the last element and are covered" without disclosing
-// that the per-request scan_budget (F073) can leave the REST of that same
+// that the per-request scan_budget can leave the REST of that same
 // newest message unscanned once the budget is exhausted — the exact
-// overstated-coverage class F049 in this same lane exists to fix. This guard
+// overstated-coverage class this same lane exists to fix. This guard
 // fails if that caveat, or the budget size it must name, ever goes missing.
 
 import (
@@ -59,8 +59,8 @@ func TestThreatModelDocScanBudgetCaveatPresent(t *testing.T) {
 	if strings.Contains(bullet, "are the last element and are covered.") {
 		t.Fatal("5.1a's coverage-gap bullet still claims the primary inadvertent-leak paths " +
 			"\"are the last element and are covered\" with no caveat — the per-request scan_budget " +
-			"(F073) can leave the REST of that same newest message unscanned once exhausted, which is " +
-			"exactly the overstated-coverage class F049 in this lane exists to fix (B1)")
+			"can leave the REST of that same newest message unscanned once exhausted, which is " +
+			"exactly the overstated-coverage class this lane exists to fix (B1)")
 	}
 	wantMiB := strconv.Itoa(mib) + " MiB"
 	if !strings.Contains(bullet, wantMiB) || !strings.Contains(bullet, "goes unscanned too") {
@@ -77,7 +77,7 @@ func TestThreatModelDocScanBudgetCaveatPresent(t *testing.T) {
 // Round 4's claim was "the severity keep-back applies under `mode=block` ONLY;
 // under `mode=alert` findings past the cap are dropped regardless of severity"
 // — true of the code as it then stood, and the reason this guard exists. The
-// adversarial round found that behaviour is itself the defect (F075): alert
+// adversarial round found that behaviour is itself the defect: alert
 // mode's only product IS the alert, and 900 cheap low-severity findings evicted
 // the operator's high-severity one from it. internal/contentscan now applies
 // severity priority in EVERY mode — block mode GROWS the report to a hard
@@ -93,7 +93,7 @@ func TestThreatModelDocFindingsCapKeepBackAppliesInEveryMode(t *testing.T) {
 	src := readRepoFile(t, "internal/contentscan/contentscan.go")
 	if strings.Contains(src, "if e.mode == ModeBlock && severityRank(f.Severity) >= severityRank(e.blockMin)") {
 		t.Fatal("the findings-cap keep-back is gated on ModeBlock again — re-derive this doc claim " +
-			"(and F075's alert-mode pin) before trusting this guard")
+			"(and the alert-mode pin) before trusting this guard")
 	}
 	if !strings.Contains(src, "severityRank(kept[displace].Severity)") {
 		t.Fatal("the non-block displacement arm is gone from ScanRequest's truncation — the doc's " +
@@ -126,7 +126,7 @@ func TestThreatModelDocFindingsCapKeepBackAppliesInEveryMode(t *testing.T) {
 		}
 	}
 	// The BYTE bound is part of the same claim: the cap alone does not bound the
-	// decision log's size (F075's amplification finding).
+	// decision log's size (an amplification risk of its own).
 	if !strings.Contains(bullet, "field_path") || !strings.Contains(bullet, "sanitizePath") {
 		t.Fatal("5.1a's findings-cap bullet must also disclose the per-finding field_path bound " +
 			"(internal/contentscan/patterns.go, sanitizePath): the findings cap bounds the NUMBER of " +

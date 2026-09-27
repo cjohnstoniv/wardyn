@@ -52,13 +52,26 @@ export const MODEL_PROVIDERS = {
 /** A status carrying a provider block: each provider with the agents it is the
  *  default for, and this person's state for it (not_configured when omitted). */
 export function providerStatus(
-  rows: { provider: SetupModelProvider; defaultFor?: string[]; state?: string; deadline?: string }[],
+  rows: {
+    provider: SetupModelProvider;
+    defaultFor?: string[];
+    state?: string;
+    deadline?: string;
+    action?: string;
+    sourceRunId?: string;
+  }[],
   overrides: Partial<SetupStatus> = {},
 ): SetupStatus {
   return baseStatus({
     model_providers: rows.map((r) => ({ ...r.provider, default_for: r.defaultFor })),
     provider_access: rows.map(
-      (r): SetupProviderAccess => ({ provider: r.provider.id, state: r.state ?? "not_configured", deadline: r.deadline }),
+      (r): SetupProviderAccess => ({
+        provider: r.provider.id,
+        state: r.state ?? "not_configured",
+        deadline: r.deadline,
+        action: r.action,
+        source_run_id: r.sourceRunId,
+      }),
     ),
     ...overrides,
   });

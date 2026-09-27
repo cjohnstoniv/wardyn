@@ -45,9 +45,9 @@
 # Service name throughout and why this script reads the Service CIDR off the
 # apiserver rather than guessing it.
 #
-# The walk itself is a Playwright project — ui/e2e/live/sso-member.spec.ts,
-# ui/e2e/live/sso-member-recovery.spec.ts (0.7.5) and
-# ui/e2e/live/sso-reauth-hold.spec.ts (0.7.6) — driven through
+# The walk itself is a Playwright project — ui/e2e/walk/sso-member.spec.ts,
+# ui/e2e/walk/sso-member-recovery.spec.ts (0.7.5) and
+# ui/e2e/walk/sso-reauth-hold.spec.ts (0.7.6) — driven through
 # scripts/run-ui-e2e.sh in its LIVE mode: same runner, same per-spec reporting
 # and the same zero-executed check, pointed at this cluster instead of the
 # hermetic backend it otherwise boots. The THREE files run, one run-ui-e2e.sh
@@ -58,7 +58,7 @@
 # because its case K spends ten minutes of wall clock and every case in it makes
 # its own capture.
 #
-# Then the ROLE WALK (step 6): ui/e2e/live/sso-roles.spec.ts signs in every
+# Then the ROLE WALK (step 6): ui/e2e/walk/sso-roles.spec.ts signs in every
 # identity deploy/kind/sso/dex.yaml ships — admin, allowlist-only operator,
 # security admin, two members and one that matches no role — on this render and
 # again on auth.ssoOnly=true, and restores this render afterwards.
@@ -71,9 +71,16 @@
 # cluster-dependent lane uses.
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
+
+# One daemon everywhere (see deploy/kind/sso/overlay.sh): the cluster's node
+# container and every image this walk touches live on the daemon this picker
+# chooses, and run-ui-e2e.sh picks the same one for its own children.
+. "${ROOT}/scripts/lib/common.sh"
+
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
-  echo "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
-  exit 0
+  skip_lane "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
 fi
 
 # WARDYN_KIND_SSO_PROFILE=ado is a DIFFERENT walk on a different install: the
@@ -86,13 +93,6 @@ case "${WARDYN_KIND_SSO_PROFILE:-default}" in
   *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${WARDYN_KIND_SSO_PROFILE})" >&2; exit 1 ;;
 esac
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${ROOT}"
-
-# One daemon everywhere (see deploy/kind/sso/overlay.sh): the cluster's node
-# container and every image this walk touches live on the daemon this picker
-# chooses, and run-ui-e2e.sh picks the same one for its own children.
-. "${ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -609,7 +609,7 @@ code="$(curl -s -o "${EVIDENCE_DIR}/workspace-providers-put.json" -w '%{http_cod
 
 # ── 5. the walk ─────────────────────────────────────────────────────────────
 # run-ui-e2e.sh in LIVE mode: it skips the hermetic backend entirely and points
-# the `live` Playwright project at this cluster. One spec file, as always.
+# the `walk` Playwright project at this cluster. One spec file, as always.
 # ── 4c. THE PROVENANCE RECORD, IN TREE ──────────────────────────────────────
 #
 # W5 asks each walk to carry a MANIFEST.json naming the commit, the five image
@@ -709,27 +709,27 @@ kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -w \
   >"${EVIDENCE_DIR}/run-pod-volumes.txt" 2>/dev/null &
 pod_watch_pid=$!
 
-step "running the walk (ui/e2e/live/sso-member + sso-member-recovery + sso-reauth-hold)"
-export WARDYN_LIVE_SEEN_URL="${SEEN_URL}"
-export WARDYN_E2E_LIVE_BASE_URL="${BASE_URL}"
+step "running the walk (ui/e2e/walk/sso-member + sso-member-recovery + sso-reauth-hold)"
+export WARDYN_WALK_SEEN_URL="${SEEN_URL}"
+export WARDYN_E2E_WALK_BASE_URL="${BASE_URL}"
 export WARDYN_TEST_K8S=1
-export WARDYN_LIVE_ADMIN_TOKEN="${ADMIN_TOKEN}"
-export WARDYN_LIVE_FAKE_URL="${FAKE_URL}"
-export WARDYN_LIVE_PIN_ACCOUNT="${PIN_ACCOUNT}"
-export WARDYN_LIVE_PIN_ROLE="${PIN_ROLE}"
-export WARDYN_LIVE_SSO_START_URL="${SSO_START_URL}"
-export WARDYN_LIVE_SSO_REGION="${SSO_REGION}"
+export WARDYN_WALK_ADMIN_TOKEN="${ADMIN_TOKEN}"
+export WARDYN_WALK_FAKE_URL="${FAKE_URL}"
+export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
+export WARDYN_WALK_PIN_ROLE="${PIN_ROLE}"
+export WARDYN_WALK_SSO_START_URL="${SSO_START_URL}"
+export WARDYN_WALK_SSO_REGION="${SSO_REGION}"
 # The recovery spec's cold-start case manufactures a Pending run pod with a node
 # TAINT, and reads that pod's phase back to prove the hold was real. It needs
 # the cluster coordinates this script already holds — never its own guesses, or
 # a renamed cluster would make the 90 s assertion vacuous instead of red.
-export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
+export WARDYN_WALK_KUBE_CONTEXT="${CONTEXT}"
 # The RUNS namespace, not the release's: the pod that case reads is a run's
 # proxy pod, and run pods land in k8s.runsNamespace. Handing it ${NAMESPACE} made
 # the phase read come back empty for the whole hold — a red about a Pending pod
 # that was there all along, one namespace over.
-export WARDYN_LIVE_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
-export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
+export WARDYN_WALK_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
+export WARDYN_WALK_KUBE_NODE="${KIND_NODE}"
 # helpers.ts's SANDBOX_UP/LOGIN_DONE default to 300s, tuned on a developer box.
 # A GitHub-hosted runner (GITHUB_ACTIONS is set by every job, incl. the nightly
 # kind-sso-walk one — see docs/ENV.md) schedules the CNI, Postgres, the daemon,
@@ -738,8 +738,8 @@ export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
 # sign-in sandbox. Raise it there; a caller that already set either var wins,
 # and an operator running this by hand keeps the 300s default.
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  export WARDYN_LIVE_SANDBOX_UP_MS="${WARDYN_LIVE_SANDBOX_UP_MS:-720000}"
-  export WARDYN_LIVE_LOGIN_DONE_MS="${WARDYN_LIVE_LOGIN_DONE_MS:-720000}"
+  export WARDYN_WALK_SANDBOX_UP_MS="${WARDYN_WALK_SANDBOX_UP_MS:-720000}"
+  export WARDYN_WALK_LOGIN_DONE_MS="${WARDYN_WALK_LOGIN_DONE_MS:-720000}"
 fi
 # THREE specs, run in this order against this one cluster: sso-member-recovery
 # inherits the state sso-member leaves (a `live` member under the contradicting
@@ -827,7 +827,7 @@ fi
 echo
 
 # ── 6. THE ROLE WALK, on both chart renders ─────────────────────────────────
-# ui/e2e/live/sso-roles.spec.ts signs every Dex identity in and checks the role
+# ui/e2e/walk/sso-roles.spec.ts signs every Dex identity in and checks the role
 # it derives, the console it gets and three API tiers, plus the cross-member
 # existence oracle. It runs AFTER the AWS walk so it can change nothing that walk
 # depends on, then twice: on the render above (SSO + the admin token), and on
@@ -853,7 +853,7 @@ set_render() { # sso | sso-only
 roles_rc=0
 roles_leg() { # <render>
   curl -s "${BASE_URL}/healthz" >"${EVIDENCE_DIR}/roles-$1-healthz.json"
-  WARDYN_LIVE_ROLES_RENDER="$1" ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/roles-$1.log"
+  WARDYN_WALK_ROLES_RENDER="$1" ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/roles-$1.log"
   [[ "${PIPESTATUS[0]}" -eq 0 ]] || roles_rc=1
 }
 step "role walk, render: SSO + admin token"

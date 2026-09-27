@@ -5,21 +5,15 @@ package groundtruth
 
 import "strings"
 
-// SensitivePathFilter decides which file-write paths are worth recording. The
-// kernel sensor sees EVERY write; recording all of them would drown the audit
-// stream and add no signal. We record only writes to credential-shaped and
-// security-relevant paths — the locations an exfiltrating or self-persisting
-// agent actually touches.
+// SensitivePathFilter decides which file-write paths are worth recording.
+// The kernel sensor sees EVERY write; recording all of them would drown the
+// audit stream, so only credential-shaped and security-relevant paths are
+// recorded.
 //
-// This is an ALLOWLIST in the sense of "paths we allow into the audit stream",
-// not a security control: it is a noise filter on a DETECTION stream. A miss
-// here loses telemetry, never enforcement.
-//
-// HONEST RESIDUAL: matching is path-shape based. An agent that writes a
-// credential to an unconventional path evades the filter (but not the kernel,
-// which still saw it — the filter is what we chose to record). The
-// TracingPolicy on the sensor side narrows what the kernel even reports; this
-// is the second, in-process narrowing.
+// This is a noise filter on a DETECTION stream, not a security control: a
+// miss here loses telemetry, never enforcement. Matching is path-shape
+// based, so a credential written to an unconventional path evades the
+// filter (but not the kernel, which still saw it).
 
 // sensitivePrefixes match by absolute-path prefix.
 var sensitivePrefixes = []string{

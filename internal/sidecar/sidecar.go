@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package sidecar holds the small brokered-PUT plumbing shared by Wardyn's
-// in-sandbox result-uploader binaries (wardyn-scan, wardyn-aws-sso): validate
-// WARDYN_PROXY_URL/WARDYN_RUN_ID, build the brokered result URL, and PUT a
-// JSON body. No Authorization header is ever set here — the wardyn-proxy
-// holds and injects the run token, stripping any sandbox-supplied one. The PUT
-// goes DIRECT (Proxy: nil): the target is the run's own proxy, so it must never
-// be sent through the proxy named by the sandbox's HTTP_PROXY.
+// in-sandbox result-uploader binaries: validate WARDYN_PROXY_URL/
+// WARDYN_RUN_ID, build the brokered result URL, and PUT a JSON body. No
+// Authorization header is ever set here — the wardyn-proxy holds and
+// injects the run token. The PUT goes DIRECT (Proxy: nil): it must never be
+// sent through the proxy named by the sandbox's HTTP_PROXY.
 package sidecar
 
 import (
@@ -59,15 +58,12 @@ func Upload(url string, body []byte) error {
 
 // uploadClient builds the HTTP client every brokered PUT uses.
 //
-// Proxy: nil, not http.DefaultTransport (B11a-F13). The target is the run's own
-// wardyn-proxy — a known on-segment address — and every sandbox carries
-// HTTP_PROXY=$WARDYN_PROXY_URL, so DefaultTransport sent this control-plane PUT
-// back through whatever that names. On the default proxy URL that is the same
-// address and the bug is invisible; under `--proxy-url http://<other-host>:3128`
-// it named a different host, and the PUT that delivers a scan result or an SSO
-// token capture went down the egress lane to it instead of reaching the local
-// brokered route. This is also the wardyn-aws-sso half of the finding: that
-// binary's only control-plane call is Upload.
+// Proxy: nil, not http.DefaultTransport: every sandbox carries
+// HTTP_PROXY=$WARDYN_PROXY_URL, so DefaultTransport would send this
+// control-plane PUT back through the proxy it names instead of reaching the
+// run's own wardyn-proxy directly — invisible on the default proxy URL, but
+// under a custom `--proxy-url` the PUT would go down the egress lane to a
+// different host instead of the local brokered route.
 func uploadClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{Proxy: nil},

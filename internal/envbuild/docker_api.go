@@ -12,30 +12,21 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// docker_api.go — the Docker client seam Builder depends on, split out of
-// builder.go on its own so the interface and its real-client conformance pin
-// read as one cohesive unit, independent of the build-orchestration logic
-// that consumes it.
-
-// envbuilderDockerAPI is the narrow slice of the Docker client that Builder
-// needs. It mirrors the pattern in internal/runner/docker: the interface is
-// defined locally (not imported from that package) so the dep graph stays
-// clean while the same *client.Client satisfies both interfaces.
+// envbuilderDockerAPI is the narrow slice of the Docker client Builder needs.
+// The interface is defined locally (not imported from internal/runner/docker)
+// so the dep graph stays clean while *client.Client satisfies both.
 type envbuilderDockerAPI interface {
 	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
 	ImageBuild(ctx context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error)
-	// ImageInspect reads a local image's config; the wrap build uses it to read
-	// the base's ONBUILD triggers before using it as a FROM (see assertWrapSafeBase).
+	// ImageInspect reads the base's ONBUILD triggers before using it as a FROM.
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
-	// ImageRemove untags an image. Used best-effort to drop the per-build base
-	// tag once it has been wrapped into the output image (runBuildAndFinalize).
+	// ImageRemove best-effort drops the per-build base tag after wrapping.
 	ImageRemove(ctx context.Context, ref string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
-	// CopyToContainer streams a tar into a created (not-yet-started) container —
-	// the host-agnostic delivery for the generated build context: a bind mount
-	// names a HOST path, which a containerized wardynd's own /tmp is not.
+	// CopyToContainer is the host-agnostic delivery for the build context: a
+	// bind mount would name a HOST path, which a containerized wardynd lacks.
 	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)

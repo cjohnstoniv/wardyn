@@ -14,77 +14,40 @@ import (
 )
 
 // maxTolerableJWKSBytes bounds the JWKS document this package will read into
-// memory to inspect it. A real key set is a few hundred bytes per key and IdPs
-// publish single digits of them; a megabyte is four orders of magnitude of
-// headroom. A document ABOVE the cap is not rejected — it is streamed straight
-// through untouched, so an unusual-but-legitimate IdP behaves exactly as it did
-// before this file existed and only loses the per-key tolerance.
+// memory to inspect. A document above the cap is not rejected — it is streamed
+// straight through untouched, only losing the per-key tolerance.
 const maxTolerableJWKSBytes = 1 << 20
 
 // tolerantJWKSTransport makes ONE JWKS entry that this JOSE stack cannot parse
-// a skipped key instead of a total SSO outage.
+// a skipped key instead of a total SSO outage: go-oidc hands the whole document
+// to jose.JSONWebKeySet.UnmarshalJSON, which is all-or-nothing, so one bad entry
+// (e.g. a malformed Ed25519 key, since go-jose v4.1.5 correctly rejects those
+// instead of silently zero-padding them) locks every user out over a key Wardyn
+// never needed.
 //
-// THE FAILURE. go-oidc hands the whole JWKS document to
-// jose.JSONWebKeySet.UnmarshalJSON, which is all-or-nothing: one entry it
-// cannot decode fails the DECODE, so RemoteKeySet loads NO keys and every
-// id_token signature check fails. Every human is locked out of the console by
-// one key Wardyn never needed and cannot control — the IdP's key set is the
-// IdP's to publish. go-oidc v3.21.0 narrowed this to "unrepresentable kty/crv"
-// (Ed448, X448, an unknown kty) by filtering those before the JOSE stack sees
-// them, and quotes RFC 7517 section 5 as its reason:
-//
-//	Implementations SHOULD ignore JWKs within a JWK Set that use "kty" values
-//	that are not understood by them, THAT ARE MISSING REQUIRED MEMBERS, OR FOR
-//	WHICH VALUES ARE OUT OF THE SUPPORTED RANGES.
-//
-// It implements the first clause only. A malformed key of a SUPPORTED type —
-// clauses two and three: an EC key with a short "x", an RSA key missing "n", an
-// Ed25519 key whose "x" is not 32 bytes — still takes down the entire set. The
-// go-jose v4.1.5 bump this wave shipped for its seven upstream security fixes
-// MOVED malformed Ed25519 keys into that unprotected class (upstream #250,
-// "Reject malformed Ed25519 JWKs"): at v4.1.4 such an entry was silently
-// zero-padded and login survived, at v4.1.5 it fails the whole set. That
-// rejection is CORRECT — a wrong-length key is not a key — and reverting it
-// would reopen the supply-chain window. So the tolerance belongs here, on the
-// document, rather than in the version pin.
-//
-// THE FIX, and why it is a transport. Everything that decides whether a
-// signature is good — key selection by kid, the allowed-algorithm set, the
-// refresh-on-unknown-kid rotation path, the actual verification — stays inside
-// go-oidc and go-jose, untouched. This layer only sanitises the DOCUMENT they
-// are handed: it unmarshals each entry with the very same
-// jose.JSONWebKey.UnmarshalJSON go-oidc would use, and drops the entries that
-// call rejects. An entry go-jose refuses to parse can never verify anything, so
-// removing it cannot admit a signature that would otherwise have been refused —
-// the change is strictly "the surviving keys still work", never "more keys are
-// trusted". Re-implementing VerifySignature to get the same tolerance would
-// have put key selection and algorithm checking in Wardyn's hands, which is the
-// opposite trade.
-//
-// The surviving entries are re-emitted VERBATIM (json.RawMessage), never
-// re-marshalled: a round trip through jose.JSONWebKey would quietly drop
-// members it does not model, and the point is to change nothing about the keys
-// that are fine.
+// The fix sanitises only the DOCUMENT: it unmarshals each entry with the same
+// jose.JSONWebKey.UnmarshalJSON go-oidc would use and drops the ones that call
+// rejects. Key selection, algorithm checks and verification stay untouched in
+// go-oidc/go-jose, so this can only make surviving keys still work, never admit
+// a signature that would otherwise be refused. Surviving entries are re-emitted
+// VERBATIM (json.RawMessage) so nothing is lost to a re-marshal round trip.
 type tolerantJWKSTransport struct {
 	base http.RoundTripper
 }
 
 // RoundTrip fetches through base and, when the answer is a readable JWK Set,
-// returns it with the unparseable entries removed.
-//
-// Every early return hands back the response UNCHANGED, so any shape this
-// function is not sure about (a non-200, an oversized body, a document with no
-// "keys" member, a body that is not JSON) behaves exactly as it did before —
-// go-oidc's own decode produces its own error, and this layer is invisible.
+// returns it with the unparseable entries removed. Every early return hands
+// back the response UNCHANGED, so any shape this function is unsure about
+// (non-200, oversized body, no "keys" member, non-JSON body) behaves exactly
+// as it did before this layer existed.
 func (t *tolerantJWKSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil || resp == nil || resp.StatusCode != http.StatusOK || resp.Body == nil {
 		return resp, err
 	}
 
-	// Read only up to the cap. A body at or over it is put back in front of the
-	// unread remainder — original Close preserved — and streamed through, so an
-	// oversized key set is not turned into a new failure mode by this file.
+	// Read only up to the cap; an oversized body is put back in front of the
+	// unread remainder and streamed through untouched.
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxTolerableJWKSBytes+1))
 	if readErr != nil || len(body) > maxTolerableJWKSBytes {
 		resp.Body = struct {
@@ -97,11 +60,7 @@ func (t *tolerantJWKSTransport) RoundTrip(req *http.Request) (*http.Response, er
 
 	filtered, dropped := filterJWKS(body)
 	for _, d := range dropped {
-		// One line per dropped entry, per fetch. RemoteKeySet caches the key
-		// set and refetches only on rotation or an unknown kid, so this cannot
-		// become a per-request log. It names the entry and the reason because
-		// an operator seeing it needs to know their IdP is publishing a key
-		// nothing can use — the login working is not a reason to stay silent.
+		// One line per dropped entry, per fetch (RemoteKeySet caches and refetches rarely).
 		slog.Warn("oidc: skipping a JWKS entry this JOSE stack cannot parse; the remaining keys still verify logins",
 			"jwks_uri", req.URL.String(), "kid", d.kid, "kty", d.kty, "error", d.err)
 	}
@@ -119,16 +78,12 @@ type droppedJWK struct {
 }
 
 // filterJWKS returns body with every unparseable "keys" entry removed, plus
-// what was dropped. It returns body UNCHANGED (and nothing dropped) whenever it
-// cannot confidently rewrite the document: not an object, no "keys" member,
-// "keys" not an array, or NOTHING survived.
-//
-// The nothing-survived case is deliberate. Serving `{"keys":[]}` there would
-// replace go-jose's precise complaint ("invalid EC public key, wrong length for
-// x") with go-oidc's generic "failed to verify id token signature", and login
-// is equally broken either way — so the operator keeps the error that names the
-// key to go fix. This layer only ever converts a TOTAL outage into a partial
-// key set; it never invents a quieter total outage.
+// what was dropped. It returns body UNCHANGED (nothing dropped) whenever it
+// cannot confidently rewrite the document, or when NOTHING survived — serving
+// `{"keys":[]}` there would trade go-jose's precise error for go-oidc's generic
+// one while login stays equally broken, so the operator keeps the error that
+// names the key to fix. This only ever converts a total outage into a partial
+// key set, never a quieter total outage.
 func filterJWKS(body []byte) (out []byte, dropped []droppedJWK) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(body, &doc); err != nil {
@@ -145,10 +100,8 @@ func filterJWKS(body []byte) (out []byte, dropped []droppedJWK) {
 
 	kept := make([]json.RawMessage, 0, len(entries))
 	for _, e := range entries {
-		// The SAME call go-oidc's own decode makes on this entry, so this
-		// filter cannot drift from what the JOSE stack would have accepted:
-		// if it parses here it parses there, and if it does not, the whole
-		// set was going to fail.
+		// Same call go-oidc's own decode makes, so this filter cannot drift from
+		// what the JOSE stack would have accepted.
 		var k jose.JSONWebKey
 		if err := k.UnmarshalJSON(e); err != nil {
 			var hdr struct {
@@ -179,19 +132,12 @@ func filterJWKS(body []byte) (out []byte, dropped []droppedJWK) {
 
 // newTolerantJWKSClient returns the HTTP client the ID-token key set fetches
 // through: base's behaviour (including the split-horizon rewrite transport,
-// when one is configured) with the per-key JWKS tolerance layered on top.
-//
-// It is a COPY of base rather than a fresh client so a caller-supplied timeout,
-// cookie jar or redirect policy is not silently dropped — the only thing that
-// changes is the transport. base may be nil (production's default, no
-// split-horizon and no test injection), which is http.DefaultClient's
-// behaviour.
-//
-// The returned client is handed ONLY to gooidc.NewRemoteKeySet, which requests
-// nothing but the JWKS URL — so the filter never sees the discovery document,
-// the token endpoint or userinfo. filterJWKS is written to pass anything it
-// does not recognise through untouched anyway, but scoping the client is what
-// makes that a second line of defence rather than the only one.
+// when configured) with the per-key JWKS tolerance layered on top. It is a
+// COPY of base, not a fresh client, so a caller-supplied timeout, cookie jar
+// or redirect policy is preserved — only the transport changes. base may be
+// nil (production default), matching http.DefaultClient's behaviour. The
+// client is handed only to gooidc.NewRemoteKeySet, which requests nothing but
+// the JWKS URL, scoping this filter away from the discovery/token/userinfo docs.
 func newTolerantJWKSClient(base *http.Client) *http.Client {
 	c := &http.Client{}
 	if base != nil {

@@ -6,6 +6,7 @@
 import * as React from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   Building2,
   KeyRound,
@@ -28,9 +29,10 @@ import {
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 import { SIGNIN } from "../../lib/sign-in-copy";
-import { SIGNIN_HELP_REFUSALS } from "../../lib/people-access-copy";
+import { SIGNIN_HELP_REFUSALS } from "../../lib/sign-in-copy";
 import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
+import { appURL } from "../../lib/base-path";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
 // shell's 5s health poll: nothing here is live data, this only has to notice a
@@ -40,6 +42,13 @@ const SSO_POLL_MS = 10000;
 // #457: how many unanswered reads before the checking state says so out
 // loud (Q457-2) — see the `checking`/`unansweredReads` state below.
 const STILL_CHECKING_AFTER_READS = 3;
+
+// Shared with the in-place sign-in dialog (#483, wardyn/reauth-layer.tsx).
+export const TOKEN_LABEL = "Admin token";
+export const SSO_SIGN_IN = "Sign in with SSO";
+
+// The signed-out warning and the error box: one shape, two tones.
+const NOTE_BOX = "flex items-start gap-2 rounded-md border px-3 py-2 text-xs";
 
 // The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
@@ -81,11 +90,9 @@ function authErrorMessage(code: string): string {
 
 export function SignIn({
   onSignIn,
-  // X3-F7: why the gate reopened — App.tsx's onUnauthorized handler, for a
-  // mid-session expiry (a revoked token, a dead SSO session). Undefined on
-  // the ordinary mount-probe gate (never signed in this tab at all), which is
-  // why this is the INITIAL error state, not a separate alert slot: the same
-  // box submitToken's own failures render below.
+  // #483: a session this browser held was refused on load — an amber
+  // warning (it is news, not a failure of anything typed here), never the
+  // error box below. Undefined on a first visit and after a sign-out.
   reason,
 }: {
   onSignIn: () => void;
@@ -97,7 +104,7 @@ export function SignIn({
   // closes). Opt in to persist it to localStorage across restarts.
   const [remember, setRemember] = React.useState(false);
   const [loading, setLoading] = React.useState<"token" | null>(null);
-  const [error, setError] = React.useState<string | null>(reason ?? null);
+  const [error, setError] = React.useState<string | null>(null);
   // Whether this control plane has OIDC configured (so GET /auth/login exists).
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
@@ -275,6 +282,16 @@ export function SignIn({
             <p className="mt-1 text-sm text-muted-foreground">{SIGNIN.LEAD}</p>
           </div>
 
+          {reason && (
+            <div
+              role="status"
+              className={`mb-4 ${NOTE_BOX} border-warning/30 bg-warning-subtle text-warning`}
+            >
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>{reason}</span>
+            </div>
+          )}
+
           {/* #457 (Q457-1): before /healthz has answered even once, neither
               door is known to exist — no token field, no SSO button, no claim
               either way, just an honest "checking" row. After
@@ -302,7 +319,7 @@ export function SignIn({
                 className="space-y-2"
               >
                 <Label htmlFor="token" className="text-foreground">
-                  Admin token
+                  {TOKEN_LABEL}
                 </Label>
                 <div className="relative">
                   <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -351,7 +368,7 @@ export function SignIn({
           {error && (
             <div
               role="alert"
-              className="mt-3 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger"
+              className={`mt-3 ${NOTE_BOX} border-danger/30 bg-danger-subtle text-danger`}
             >
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <span>{error}</span>
@@ -380,9 +397,9 @@ export function SignIn({
               value a reader here cannot reach. */}
           {showSso && (
             <Button asChild variant="outline" className="w-full">
-              <a href="/auth/login">
+              <a href={appURL("/auth/login")}>
                 <Building2 className="size-4" />
-                Sign in with SSO
+                {SSO_SIGN_IN}
               </a>
             </Button>
           )}

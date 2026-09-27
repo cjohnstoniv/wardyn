@@ -8,6 +8,7 @@
 import { SERVER_OWNED_SITE_CONFIG_KEYS, type SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
 import { WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
+import { appURL } from "../base-path";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
 // if they asked for it on their next run, or null when they would mount
@@ -46,9 +47,10 @@ export interface Me {
   operator: boolean;
   security_operator: boolean;
   role: "admin" | "security_admin" | "user";
-  // The user type (0.8) this sign-in was given, with its display name. null
-  // for the admin token, local mode and API tokens, which carry none.
-  user_type?: { id: string; name: string } | null;
+  // The user type (0.8) this sign-in was given, with its display name and
+  // description. null for the admin token, local mode and API tokens, which
+  // carry none. description is omitted when the type has none (omitempty).
+  user_type?: { id: string; name: string; description?: string } | null;
   email: string;
   // The IdP's display-name claim — "" outside SSO or when the IdP sent none,
   // absent on a pre-0.7.1 daemon. Display only: the header reads name, then
@@ -375,7 +377,7 @@ export const health = {
       // every route is gated behind that (app-shell.tsx:128-158, App.tsx's
       // roleResolved). The catch below already turns a failure into {}, which
       // is exactly how the shell reads "control plane unreachable".
-      const res = await fetch("/healthz", {
+      const res = await fetch(appURL("/healthz"), {
         credentials: "include",
         signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
       });
@@ -415,7 +417,7 @@ export const health = {
       // would freeze at its LAST known value forever instead of degrading.
       // The signal alone suffices: readyz's own catch below already turns an
       // aborted fetch into {}, which is exactly the not-ready verdict.
-      const res = await fetch("/readyz", { credentials: "include", signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS) });
+      const res = await fetch(appURL("/readyz"), { credentials: "include", signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS) });
       if (!res.ok) return {};
       return (await res.json()) as { status?: string; postgres?: string };
     } catch {
@@ -443,7 +445,7 @@ export const health = {
     // button. The log line stays (it names the status); the BOOLEAN is what
     // App.tsx turns into words.
     try {
-      const res = await wfetch("/auth/logout", { method: "POST" });
+      const res = await wfetch("/auth/logout", { method: "POST", endsSession: true });
       if (!res.ok) {
         console.error(`logout: server returned HTTP ${res.status}; session may still be active`);
         return false;

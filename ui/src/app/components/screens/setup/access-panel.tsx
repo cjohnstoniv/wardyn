@@ -29,6 +29,7 @@ import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { AccessMapping, AccessResponse, AccessRole, AccessUserType } from "../../../lib/types";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
 import {
   AlertDialog,
@@ -510,6 +511,12 @@ function AddMappingForm({
 }) {
   const [value, setValue] = React.useState("");
   const [role, setRole] = React.useState<AccessRole>("admin");
+  // UT-7a: only meaningful at role "user", and only OFFERED once the org has
+  // a real choice to make — a single-option dropdown ("Standard user", and
+  // nothing else) is the plain toggle the design's own switch rule uses
+  // (user-types-design.md rev 4 §2.6: "a plain toggle with one type"). Empty
+  // means "let the server default to Standard user".
+  const [userType, setUserType] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<WriteErrorKind | null>(null);
   const [guardOpen, setGuardOpen] = React.useState(false);
@@ -529,9 +536,11 @@ function AddMappingForm({
       const res = await api.upsertMapping({
         value: value.trim(),
         role,
+        user_type: role === "user" && userType ? userType : undefined,
         acknowledge_access_change: acknowledge || undefined,
       });
       setValue("");
+      setUserType("");
       setGuardOpen(false);
       setAck(false);
       setTokensRevoked(res.tokensRevoked ?? null);
@@ -596,6 +605,26 @@ function AddMappingForm({
           </Button>
         </div>
       </div>
+      {/* Offered only at role "user", and only once there is a real choice
+          beyond Standard user — see userType's own doc comment above. */}
+      {role === "user" && (access.user_types ?? []).length > 1 && (
+        <div className="mt-4 max-w-xs">
+          <Field label={PEOPLE.FIELD_USER_TYPE} htmlFor="access-user-type">
+            <Select value={userType} onValueChange={setUserType}>
+              <SelectTrigger id="access-user-type">
+                <SelectValue placeholder={PEOPLE.TYPE_STANDARD} />
+              </SelectTrigger>
+              <SelectContent>
+                {(access.user_types ?? []).map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+      )}
       {error && <Note tone="red">{writeErrorNote(error)}</Note>}
       {/* R1-F112: the server demoted this value's role and revoked its
           outstanding tokens as part of the SAME write — the count only

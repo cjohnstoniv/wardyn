@@ -165,6 +165,9 @@ type Minted struct {
 	// Metadata carries kind-specific, non-secret context (e.g. github_token
 	// branch namespace, repos, clamped permissions).
 	Metadata map[string]string `json:"metadata,omitempty"`
+	// OwnerOnly carries an api_key grant's owner_only to the injection sink,
+	// which reads the value itself.
+	OwnerOnly bool `json:"-"`
 }
 
 // GitHubMinter mints a short-lived, down-scoped GitHub App installation token.
@@ -581,6 +584,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// cannot be written, roll the whole mint back rather than hand out an
 	// unrecorded credential.
 	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
+	mintEv.Data = withSecretScope(mintEv.Data, minted)
 	if leased {
 		// A lease widens what ONE human decision authorizes, so the stream must
 		// say which mints the human made and which the lease did — B2's own
@@ -674,17 +678,7 @@ func leaseCoversRemint(row grantApprovalRow) bool {
 // decode failure returns data unchanged rather than dropping the event: an
 // unmarked lease mint in the stream is bad, an absent one is worse.
 func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMessage {
-	var d map[string]any
-	if err := json.Unmarshal(data, &d); err != nil {
-		return data
-	}
-	d["lease"] = true
-	d["decision_scope"] = string(scope)
-	out, err := json.Marshal(d)
-	if err != nil {
-		return data
-	}
-	return out
+	return withDataField(withDataField(data, "lease", true), "decision_scope", string(scope))
 }
 
 // mintKind dispatches to the kind-specific minter. github_token scopes are

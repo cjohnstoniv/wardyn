@@ -48,7 +48,7 @@ import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
+import { useMemberLocalDirRoot, useUserDrive, useUserType } from "../../wardyn/operator-context";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
@@ -299,6 +299,7 @@ export function MemberGettingStarted() {
   const memberEpisodes = EPISODES.filter((e) => e.audience === "member");
   const coreEpisodes = EPISODES.filter((e) => e.path === "core");
 
+  const userType = useUserType();
   // M-6 (D5): the same two Demo.section groups the admin funnel used to walk
   // (setup/steps.ts's PHASES, before M-6), gated by the same precondition
   // that used to drop an unmet one from that walk (walkableDemos — needsModel
@@ -327,7 +328,7 @@ export function MemberGettingStarted() {
   return (
     <div className="mx-auto w-full max-w-[880px] px-6 py-8">
       <h1>{T.TITLE}</h1>
-      <p className="mt-2 text-muted-foreground">{T.SUBTITLE}</p>
+      <p className="mt-2 text-muted-foreground">{T.SUBTITLE(userType?.name, userType?.description)}</p>
 
       <div className="mt-8 space-y-4">
         <SectionCard title={T.SETUP_SUMMARY_TITLE}>

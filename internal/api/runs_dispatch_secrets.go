@@ -20,6 +20,7 @@ package api
 
 import (
 	"context"
+	"errors"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -188,14 +189,21 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		case sandboxEnv[name] != "":
 			skip = "the sandbox env already sets this variable; a grant may not override platform-authored env"
 		}
+		scope := ""
 		if skip == "" {
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
 			// rule as resolveLLMInspectionSecrets above, through the same
-			// chokepoint.
-			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), secretName)
-			if gerr != nil || len(val) == 0 {
+			// chokepoint — none for an owner_only grant.
+			owner := grantReadOwner(runIdentitySubject(ctx, run.CreatedBy), g.OwnerOnly, run.OperatorOwned)
+			gctx, row := secretstore.GrantRead(ctx, g.OwnerOnly)
+			val, gerr := s.cfg.Secrets.For(owner).Get(secretstore.WithPurpose(gctx, secretstore.PurposeDispatch), secretName)
+			scope = row.Scope()
+			switch {
+			case g.OwnerOnly && errors.Is(gerr, secretstore.ErrNotFound):
+				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
+			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
-			} else {
+			default:
 				sandboxEnv[name] = string(val)
 				resolvedNames = append(resolvedNames, name)
 				if s.cfg.MaskRegistry != nil {
@@ -204,6 +212,9 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			}
 		}
 		data := map[string]any{"name": name, "secret_name": secretName}
+		if scope != "" {
+			data["secret_scope"] = scope
+		}
 		outcome := "success"
 		if skip != "" {
 			outcome, data["reason"] = "failure", skip

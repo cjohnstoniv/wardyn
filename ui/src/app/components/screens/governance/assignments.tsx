@@ -54,12 +54,20 @@ import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Textarea } from "../../ui/textarea";
-import { Mono } from "../../wardyn/code-block";
+import { useUserTypeName } from "../../../lib/use-user-types";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
-import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText, type PickableSubjectType } from "../permissions";
+import {
+  SUBJECTS,
+  SUBJECT_LABEL,
+  Segmented,
+  UserTypeSubjectSelect,
+  subjectText,
+  SubjectName,
+  type PickableSubjectType,
+} from "../permissions";
 import { Note, question } from "./display";
 
 // What PREVIEW_RESULT's {matched} says — the matching row named in the table's
@@ -86,6 +94,7 @@ export function AssignmentsBlock({
   const [toRemove, setToRemove] = React.useState<GovernanceAssignment | null>(null);
   const [busy, setBusy] = React.useState(false);
   const profileName = (id: string) => snapshot.profiles.find((p) => p.id === id)?.name ?? id;
+  const typeName = useUserTypeName();
 
   const remove = async (a: GovernanceAssignment) => {
     setBusy(true);
@@ -100,7 +109,7 @@ export function AssignmentsBlock({
     }
   };
 
-  const confirm = toRemove ? GOV.UNASSIGN_CONFIRM(subjectText(toRemove), profileName(toRemove.profile_id)) : "";
+  const confirm = toRemove ? GOV.UNASSIGN_CONFIRM(subjectText(toRemove, typeName), profileName(toRemove.profile_id)) : "";
   const [confirmHead, confirmBody] = question(confirm);
 
   return (
@@ -134,7 +143,7 @@ export function AssignmentsBlock({
                             so the /permissions amber-allow / red-deny law does
                             not reach it. */}
                         <Chip tone="neutral">{SUBJECT_LABEL[a.subject_type] ?? a.subject_type}</Chip>
-                        {a.subject_type !== "all" && <Mono>{a.subject}</Mono>}
+                        <SubjectName g={a} typeName={typeName} />
                       </span>
                     </TableCell>
                     <TableCell>{profileName(a.profile_id)}</TableCell>
@@ -150,7 +159,7 @@ export function AssignmentsBlock({
                         size="sm"
                         disabled={disabled}
                         onClick={() => setToRemove(a)}
-                        aria-label={`${PERM.REMOVE} ${subjectText(a)}`}
+                        aria-label={`${PERM.REMOVE} ${subjectText(a, typeName)}`}
                       >
                         {PERM.REMOVE}
                       </Button>
@@ -262,22 +271,34 @@ function AddAssignmentForm({
           <div className="space-y-2">
             <Segmented
               value={subjectType}
-              onChange={(v) => setSubjectType(v)}
+              onChange={(v) => {
+                // A typed subject is no type id, and the reverse — see
+                // permissions.tsx's AddGrantForm.
+                if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                setSubjectType(v);
+              }}
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
             {/* Free text with suggestions ON TOP, never instead of: the kind
                 the segmented control already names is the kind the search asks
                 for, and with no directory configured this is the same plain
-                input it has always been (§I). */}
-            {subjectType !== "all" && (
-              <DirectoryCombobox
-                label={PERM.FIELD_WHO}
-                value={subject}
-                onChange={setSubject}
-                kind={subjectType}
-                disabled={disabled}
-              />
+                input it has always been (§I). A user type is the one kind
+                this is NOT true for (permissions.tsx's UserTypeSubjectSelect
+                doc comment) — it is a bounded, admin-authored set, so it gets
+                a closed picker instead. */}
+            {subjectType === "user_type" ? (
+              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+            ) : (
+              subjectType !== "all" && (
+                <DirectoryCombobox
+                  label={PERM.FIELD_WHO}
+                  value={subject}
+                  onChange={setSubject}
+                  kind={subjectType}
+                  disabled={disabled}
+                />
+              )
             )}
           </div>
         </Field>

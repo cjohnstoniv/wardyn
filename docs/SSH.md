@@ -37,7 +37,10 @@ owner check (below) will ever match against a run you created.
 registers the key against the shared, non-human `admin-token` principal, not
 any human's own identity. With OIDC configured, `POST` from a bare admin
 token now 422s for exactly this reason instead of silently writing a key
-that can never authorize anyone's run — use the console (above) instead:
+that can never authorize anyone's run — use the console (above) instead. A
+key already stored under a reserved principal (`admin-token`, the local
+operator seat, a `device:` name) is refused at the gateway while OIDC is
+configured; without OIDC it keeps working:
 
 ```sh
 curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
@@ -82,34 +85,53 @@ key belongs to, not just running the query.
 
 ### Revoking access during an incident
 
-Registered SSH keys are independent credentials. A per-user API token can
-register one through `wardyn ssh-key ensure`; revoking that token, or running
-`wardyn sessions revoke --sub '<subject-or-email>'` (including its `--all`
-alternative), does **not** remove the key or prevent SSH authentication with
-it. The SSH gateway does not consult the session-revocation cutoff.
-`WARDYN_SSH_ROLE_TTL` bounds only the admin override, not access to runs the
-key's principal owns.
+A per-user API token can register an SSH key through `wardyn ssh-key ensure`.
+Deleting that token alone leaves the key registered. Revoking the person's
+sessions with `wardyn sessions revoke --sub '<subject-or-email>'` also revokes
+their API tokens and removes their registered SSH keys. `--all` applies those
+three actions deployment-wide, including the calling admin's credentials.
+A registration already in flight cannot escape that cutoff: registration time
+is stamped before reading the request body, and SSH authentication and new
+channels check it against session revocation. A fresh sign-in can register a
+new key after the cutoff; revocation does not disable the account.
 
-Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-user-api-tokens-stop-sharing-the-admin-token):
+For incident response or offboarding:
 
-- Prevent further sign-in or key registration through the deployment's
-  identity/access controls when offboarding or containing a compromised account.
-- Inspect the person's registered keys. `wardyn ssh-key list --json` lists
-  only the caller's keys; the owner can remove them in **Account → SSH keys**
-  or with `DELETE /api/v1/me/ssh-keys/{fingerprint}`. Percent-encode the
-  fingerprint as one path segment. `wardyn ssh-key delete <fingerprint>` does
-  the same from the CLI. There is no admin API for another person's keys; an
-  operator with database access must identify that principal's keys and
-  remove their registrations directly, as in
-  [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
-- End access to affected sandboxes with `wardyn run kill <run-id>` and verify
-  teardown succeeded. Deleting a key prevents subsequent authentications;
-  it does not disconnect an already-authenticated SSH connection or stop it
-  opening more channels into the same running sandbox. Include foreign runs
-  reached through an admin override when determining which runs are affected.
+1. Prevent further sign-in or key registration through the deployment's
+   identity/access controls.
+2. Revoke the person's sessions and check the result. A `500` can mean the
+   named session cutoff succeeded but a token, canonical-subject cutoff or
+   SSH-key operation failed; the
+   `session.revoke` audit records `tokens_revoked` and `ssh_keys_deleted` for
+   the completed work. Resolve the failure and retry.
+3. To remove only SSH keys, an admin or `security_admin` can call
+   `DELETE /api/v1/people/{principal}/ssh-keys`. Percent-encode the principal
+   as one path segment. The route resolves a known subject or email and
+   returns `200` with `{"count": N}`. An unresolved email or ambiguous name is `422`;
+   a lookup or deletion failure is `500`. Owners can still remove individual
+   keys through **Account → SSH keys**, `wardyn ssh-key delete <fingerprint>`,
+   or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
+4. End existing access with `wardyn run kill <run-id>` and verify teardown
+   succeeded. Include foreign runs reached through an admin override. Key
+   deletion prevents new authentication and new `session` or `direct-tcpip`
+   channels on an established connection; an already-open shell, transfer or
+   forward continues until it closes or the run is torn down.
+5. Erase the person's stored credentials with
+   `DELETE /api/v1/people/{principal}/credentials` and follow the
+   [workspace and drive offboarding procedure](OPERATIONS.md#multi-user-who-can-change-what).
+   Disabling sign-in and deleting SSH keys do not erase stored model or forge
+   credentials or reclaim workspace data.
 
-The `ssh_key.add`, `ssh_key.delete`, and `ssh.authenticate` events help identify the
-registered keys and accessed runs; see [Audit actions](AUDIT-ACTIONS.md).
+The gateway rechecks the authenticated registration before each new channel.
+A missing, changed, cut-off or unreadable key is refused; an unreadable
+session cutoff also refuses access. Registering the same public
+key again does not restore an old connection. Admin override role, cap and
+freshness checks apply at this point too. `WARDYN_SSH_ROLE_TTL` still bounds
+only the admin override, not access to runs the key's principal owns.
+
+The `ssh_key.add`, `ssh_key.delete`, `session.revoke`, `ssh.authenticate` and
+`ssh.channel.reject` events identify registrations, completed revocations and
+refused access; see [Audit actions](AUDIT-ACTIONS.md).
 
 ## 2. Connect
 
@@ -404,11 +426,12 @@ already-registered key keeps its override only until whichever comes first —
 their own next login (re-stamping `role=user`), `role_checked_at` aging past
 `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
 key being deleted/re-registered.** An operator who wants the override gone
-immediately (rather than waiting out the TTL, or waiting for the demoted human
-to log in) has the same lever as before: delete that principal's key
-(`DELETE /me/ssh-keys/{fingerprint}`, self-service only — there is no admin
-view of another human's keys, so this means asking them, or an operator with
-direct store access, to remove it). Re-registration (delete, then re-`POST`)
+immediately can use `DELETE /people/{principal}/ssh-keys` as an admin or
+`security_admin`, or revoke the person's sessions to remove their tokens and
+keys together. Owners can remove individual keys through
+`DELETE /me/ssh-keys/{fingerprint}`. Existing channels still require teardown
+as described under [incident revocation](#revoking-access-during-an-incident).
+Re-registration (delete, then re-`POST`)
 still works too, and still re-stamps immediately; it is no longer the ONLY way
 to force a refresh, just the immediate one that does not wait on either a
 login or the TTL. There is still no in-place "update this key's role"

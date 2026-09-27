@@ -657,6 +657,34 @@ func TestListSecrets_Success(t *testing.T) {
 	}
 }
 
+// TestListSecretsScoped_DecodesMine pins #1107: the SDK must decode `mine`
+// alongside `names`, not just `names` (which ListSecretsPage/ListSecrets
+// still do, unchanged, for existing callers).
+func TestListSecretsScoped_DecodesMine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/secrets" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		checkAuth(t, r)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"names": []string{"anthropic-api-key"},
+			"mine":  []string{"bobs-personal-key"},
+		})
+	}))
+	defer srv.Close()
+
+	names, mine, err := newTestClient(srv).ListSecretsScoped(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(names) != 1 || names[0] != "anthropic-api-key" {
+		t.Errorf("got names %v, want [anthropic-api-key]", names)
+	}
+	if len(mine) != 1 || mine[0] != "bobs-personal-key" {
+		t.Errorf("got mine %v, want [bobs-personal-key] — the caller's own secret must decode", mine)
+	}
+}
+
 func TestSetSecret_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/secrets/anthropic-api-key" {

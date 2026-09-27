@@ -159,7 +159,7 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 		{"the values read", live.ID, &end, 600, true},
 		{"the same values again", live.ID, &end, 600, false},
 	} {
-		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromEnd, tc.fromWait, &later, 1200)
+		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromEnd, tc.fromWait, &later, 1200, nil)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
 		}
@@ -171,13 +171,150 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	if moved.EndsAt == nil || !moved.EndsAt.Equal(later) || moved.WaitBudgetSec != 1200 {
 		t.Errorf("run = ends %v wait %d; want %v and 1200", moved.EndsAt, moved.WaitBudgetSec, later)
 	}
-	if got, err := pg.SetRunEndAndWait(ctx, live.ID, &later, 1200, nil, 1200); err != nil || !got {
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, &later, 1200, nil, 1200, nil); err != nil || !got {
 		t.Fatalf("to No end: %v, %v; want true", got, err)
 	}
 	if moved, _ := pg.GetRun(ctx, live.ID); moved.EndsAt != nil {
 		t.Errorf("ends_at = %v, want NULL (no end)", moved.EndsAt)
 	}
-	if got, err := pg.SetRunEndAndWait(ctx, live.ID, nil, 1200, &end, 1200); err != nil || !got {
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, nil, 1200, &end, 1200, nil); err != nil || !got {
 		t.Errorf("from No end: %v, %v; want true — a NULL end compares as the value read", got, err)
+	}
+}
+
+// endedRun persists a RUNNING run whose end passed an hour ago and which the
+// lease ended a minute ago; it returns the run and when it ended.
+func endedRun(t *testing.T, ctx context.Context, pg store.PG, now time.Time) (types.AgentRun, time.Time) {
+	t.Helper()
+	end := now.Add(-time.Hour)
+	r := newRun(types.RunRunning)
+	r.EndsAt = &end
+	persistRun(t, ctx, pg.Pool, r)
+	endedAt := now.Add(-time.Minute)
+	if ok, err := pg.MarkRunEnded(ctx, r.ID, endedAt); err != nil || !ok {
+		t.Fatalf("MarkRunEnded = %v, %v", ok, err)
+	}
+	return r, endedAt
+}
+
+const testEndedGrace = 7 * 24 * time.Hour
+
+// keptAt is the ended condition for the mark lostAt, decided at at.
+func keptAt(lostAt, at time.Time) *store.EndedKept {
+	return &store.EndedKept{LostAt: lostAt, KeptAfter: at.Add(-testEndedGrace), Now: at}
+}
+
+// TestPG_EndedRunExtensionHonorsTheKeptMark pins #1061's extension write: a
+// run its own end stopped moves its end only under the ended condition, only
+// for the exact mark the caller read, and only while its files grace is live
+// as of the write; the mark itself stays, so the grace is not renewed. The
+// ended condition never lets a run that is not ended move.
+func TestPG_EndedRunExtensionHonorsTheKeptMark(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	r, endedAt := endedRun(t, ctx, pg, now)
+	later := now.Add(24 * time.Hour)
+
+	for _, tc := range []struct {
+		name  string
+		ended *store.EndedKept
+		want  bool
+	}{
+		{"without the ended condition", nil, false},
+		{"another mark", keptAt(endedAt.Add(time.Second), now), false},
+		{"the grace has run out", keptAt(endedAt, endedAt.Add(testEndedGrace)), false},
+		{"the mark read, inside the grace", keptAt(endedAt, now), true},
+	} {
+		got, err := pg.SetRunEndAndWait(ctx, r.ID, r.EndsAt, r.WaitBudgetSec, &later, r.WaitBudgetSec, tc.ended)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	got, err := pg.GetRun(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.EndsAt == nil || !got.EndsAt.Equal(later) || got.LostAt == nil || !got.LostAt.Equal(endedAt) ||
+		got.LostReason != types.LostEnded || got.State != types.RunRunning {
+		t.Errorf("run = ends %v lost %v %q state %s; want the new end and the SAME ended mark %v, still RUNNING",
+			got.EndsAt, got.LostAt, got.LostReason, got.State, endedAt)
+	}
+
+	live := newRun(types.RunRunning)
+	live.EndsAt = &later
+	persistRun(t, ctx, pool, live)
+	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, &later, live.WaitBudgetSec, &now, live.WaitBudgetSec, keptAt(endedAt, now)); err != nil || ok {
+		t.Errorf("a live run under the ended condition = %v, %v; want false", ok, err)
+	}
+}
+
+// TestPG_RunContainmentError pins migration 0088 (#1060): the error is set only
+// on a RUNNING kept run, refreshed with the first failure's time kept, read
+// back on the run, and cleared once — only the clear that found it set says so,
+// so the resolution is audited once. A revive's claim clears it too.
+func TestPG_RunContainmentError(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	end := now.Add(-time.Minute)
+	kept := newRun(types.RunRunning)
+	kept.EndsAt = &end
+	live := newRun(types.RunRunning)
+	for _, r := range []types.AgentRun{kept, live} {
+		persistRun(t, ctx, pool, r)
+	}
+	if _, err := pg.MarkRunEnded(ctx, kept.ID, now); err != nil {
+		t.Fatalf("MarkRunEnded: %v", err)
+	}
+	read := func(id uuid.UUID) types.AgentRun {
+		t.Helper()
+		r, err := pg.GetRun(ctx, id)
+		if err != nil {
+			t.Fatalf("GetRun: %v", err)
+		}
+		return r
+	}
+
+	for _, msg := range []string{"first", "second"} {
+		if err := pg.SetRunContainmentError(ctx, kept.ID, msg, now.Add(time.Duration(len(msg))*time.Second)); err != nil {
+			t.Fatalf("SetRunContainmentError(%s): %v", msg, err)
+		}
+		if err := pg.SetRunContainmentError(ctx, live.ID, msg, now); err != nil {
+			t.Fatalf("SetRunContainmentError(live): %v", err)
+		}
+	}
+	if r := read(kept.ID); r.ContainmentError != "second" || r.ContainmentErrorAt == nil || !r.ContainmentErrorAt.Equal(now.Add(5*time.Second)) {
+		t.Errorf("kept run = %q at %v; want the latest error at the first failure's time %v",
+			r.ContainmentError, r.ContainmentErrorAt, now.Add(5*time.Second))
+	}
+	if r := read(live.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
+		t.Errorf("live run = %q at %v; want nothing — only a kept run's containment is unresolved", r.ContainmentError, r.ContainmentErrorAt)
+	}
+
+	for i, want := range []bool{true, false} {
+		if got, err := pg.ClearRunContainmentError(ctx, kept.ID); err != nil || got != want {
+			t.Errorf("ClearRunContainmentError #%d = %v, %v; want %v", i+1, got, err, want)
+		}
+	}
+	if r := read(kept.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
+		t.Errorf("after the clear = %q at %v; want both NULL", r.ContainmentError, r.ContainmentErrorAt)
+	}
+
+	lost := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, lost)
+	if _, err := pg.MarkRunLost(ctx, lost.ID, types.LostOutage, now, 0); err != nil {
+		t.Fatalf("MarkRunLost: %v", err)
+	}
+	if err := pg.SetRunContainmentError(ctx, lost.ID, "boom", now); err != nil {
+		t.Fatalf("SetRunContainmentError(lost): %v", err)
+	}
+	if got, err := pg.MarkRunRevived(ctx, lost.ID, types.LostOutage, nil); err != nil || !got {
+		t.Fatalf("MarkRunRevived = %v, %v; want true", got, err)
+	}
+	if r := read(lost.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
+		t.Errorf("after a revive = %q at %v; want both NULL — the new proxy replaces the one it was about", r.ContainmentError, r.ContainmentErrorAt)
 	}
 }

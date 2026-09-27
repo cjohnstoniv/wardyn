@@ -287,7 +287,7 @@ const PER_USER_ROW: SetupHarnessTool = {
 };
 
 const REFUSAL =
-  "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+  "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
 
 /** The dispatch refusal's audit row: the sentence, its class, and the run's
  *  DECLARED lane. */

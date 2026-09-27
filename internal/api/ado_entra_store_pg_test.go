@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
@@ -134,5 +135,39 @@ func TestPG_ADOEntraStore_OwnerNamespaceFirstNoOperatorFallback(t *testing.T) {
 	// read it for, so it must not be answered from the operator namespace.
 	if _, found, err := s.readADOEntraBlob(ctx, "", rowID); err != nil || found {
 		t.Fatalf("an ownerless read resolved something: found=%v err=%v", found, err)
+	}
+}
+
+// An Azure DevOps sign-in records no expiry (credential-storage design §2.7):
+// Entra does not say when a refresh token stops working, and its access
+// token's expiry is not the sign-in's. So the daily sweep keeps it, however
+// long its access token has been expired, and only a definitive refusal or an
+// erase removes it.
+func TestPG_ADOSignInWithoutKnownExpiryIsRetainedUntilErased(t *testing.T) {
+	h, _ := newRunOwnerPGHarness(t)
+	s := h.srv
+	ctx := context.Background()
+	const owner, rowID = "dana-ado-pg", "ado-row-pg-d"
+	if err := s.storeADOEntraBlob(ctx, owner, rowID, adoEntraBlob{
+		RefreshToken: "danas-refresh-token", Scopes: []string{"vso.code"},
+		TenantID: "tenant-d", ClientID: "client-d", Subject: owner,
+		ExpiresAt: time.Now().Add(-48 * time.Hour),
+	}); err != nil {
+		t.Fatalf("store dana's sign-in: %v", err)
+	}
+
+	if n := s.SweepExpiredCredentials(ctx); n != 0 {
+		t.Fatalf("the sweep deleted %d credentials, want none", n)
+	}
+	if _, found, err := s.readADOEntraBlob(ctx, owner, rowID); err != nil || !found {
+		t.Fatalf("after the sweep: found=%v err=%v; want the sign-in kept", found, err)
+	}
+
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	if w := doSSO(t, s, http.MethodDelete, "/api/v1/people/"+owner+"/credentials", admin, ""); w.Code != http.StatusOK {
+		t.Fatalf("erase = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if _, found, err := s.readADOEntraBlob(ctx, owner, rowID); err != nil || found {
+		t.Fatalf("after the erase: found=%v err=%v; want it gone", found, err)
 	}
 }

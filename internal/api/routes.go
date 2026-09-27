@@ -50,9 +50,10 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		// A sign-in refused over its user type (ambiguous or unknown) is an
-		// auth.fail row; the oidc package stays audit-agnostic.
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
+		// A sign-in whose subject is a reserved principal is refused; that and
+		// one refused over its user type (ambiguous or unknown) are auth.fail
+		// rows. The oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -96,8 +97,9 @@ func (s *Server) routes() chi.Router {
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
-			//   mountUserDriveRoutes   (user_drives.go) split: 4 operatorOnly,
-			//       3 securityOps (issue #168)
+			//   mountUserDriveFamily   (user_drives_reclaim.go) — wraps
+			//       mountUserDriveRoutes (user_drives.go) split: 4 operatorOnly,
+			//       3 securityOps (issue #168) + the destroy verb, operatorOnly
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -107,7 +109,8 @@ func (s *Server) routes() chi.Router {
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			//   mountSecretRoutes (routes.go) split: the /secrets
-			//       self-service routes on r, the credential erase securityOps
+			//       self-service routes on r, the credential erase and the
+			//       credential inventory securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -226,6 +229,11 @@ func (s *Server) routes() chi.Router {
 			// may still hold one for a run THEY created (handleAttachTicket's
 			// getRunAuthorized gate; a foreign run 404s, no existence oracle).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
+			// The three lines above are each issue #658's pre-0.8 alias; their
+			// 0.8 names (mounted alongside, same handlers, kept one minor —
+			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
+			// function into mountRenamedRunRoutes, called once, below.
+			s.mountRenamedRunRoutes(r)
 
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
@@ -326,6 +334,9 @@ func (s *Server) routes() chi.Router {
 			// (mirrors /runs/preflight), not operator-only: a member may see the
 			// risk of a spec they cannot necessarily save.
 			r.Post("/policies/grade", s.handleGradePolicy)
+			// Launch presets (#1143): named bundles of run-create fields. See
+			// presets.go for the read/write split.
+			s.mountPresetRoutes(r, operatorOnly)
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token).
@@ -586,7 +597,9 @@ func (s *Server) routes() chi.Router {
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
 			// nothing to arrange.
-			s.mountUserDriveRoutes(operatorOnly, securityOps)
+			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
+			// (user_drives_reclaim.go) joins the family's two halves.
+			s.mountUserDriveFamily(operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule
@@ -680,6 +693,18 @@ func (s *Server) routes() chi.Router {
 	return r
 }
 
+// mountRenamedRunRoutes registers the 0.8 names for three routes issue #658
+// renamed for one consistent shape across the attach family and the
+// synthesize-a-profile verb — carved out of routes() purely for funlen. Each
+// is the SAME handler as its pre-0.8 alias (still mounted inline in routes(),
+// right above the r.Group this is called from), kept one minor; see
+// docs/sdk.md's "Renamed in 0.8" table.
+func (s *Server) mountRenamedRunRoutes(r chi.Router) {
+	r.Post("/runs/{id}/profile/synthesize", s.handleSynthesizeProfile)
+	r.Get("/runs/{id}/attach/holder", s.handleAttachHolder)
+	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
+}
+
 // mountRunLeaseRoutes registers a run's end/wait change, its kill and its
 // revive on r — carved out of routes() purely for funlen.
 func (s *Server) mountRunLeaseRoutes(r chi.Router) {
@@ -714,6 +739,8 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	s.mountPeopleRoutes(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys
@@ -754,7 +781,9 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 // names (still operator-only). Admin cross-principal reads/deletes go through
 // ?owner=; a PUT refuses it (K7-A). The LIST stays viewer-readable — names
 // only, never values. Erasing a person's credentials is on the security tier:
-// it only removes reach, and returns no credential material.
+// it only removes reach, and returns no credential material; so is the
+// inventory of who holds one for which model provider, its offboarding
+// companion (design K5-A), which returns metadata only.
 func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	if s.cfg.Secrets == nil {
 		return
@@ -763,6 +792,7 @@ func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
 	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the
@@ -790,6 +820,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// The value is the rest of the path: an image ref carries slashes.
 	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
 	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
+	// Explain (K4) reads this same table at a NAMED subject rather than the
+	// caller's own: still securityOps, never wider.
+	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

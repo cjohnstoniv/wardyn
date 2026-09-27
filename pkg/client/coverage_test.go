@@ -58,6 +58,15 @@ var (
 	_ client.HomeTemplate
 	_ client.DriveReclaim
 	_ client.CapabilitySubjectType
+	_ client.PresetsDocument
+	_ client.Preset
+	_ client.PresetRequest
+	_ client.GovernanceDocument
+	_ client.GovernanceProfile
+	_ client.GovernanceAssignment
+	_ client.GovernanceLimits
+	_ client.AutonomyRubric
+	_ client.AutonomyLevel
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -73,9 +82,11 @@ func routeFamilies() map[string][]string {
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
-		"secrets":     {"ListSecrets", "ListSecretsPage", "SetSecret", "DeleteSecret"},
+		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"drives":      {"GetDrives", "ApplyDrives"},
+		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
+		"governance":  {"GetGovernance", "ApplyGovernance"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},

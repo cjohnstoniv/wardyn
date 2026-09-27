@@ -61,7 +61,10 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if callerIsOwner && s.isOperator(ctx) {
 		return nil, nil
 	}
-	if !callerIsOwner && run.CreatedBy == adminTokenPrincipal {
+	// An operator-owned run (the admin token, local mode) has no person whose
+	// capabilities could have changed. Read from the run's recorded
+	// authentication, never created_by, which an IdP sub could spell alike.
+	if !callerIsOwner && run.OperatorOwned {
 		return nil, nil
 	}
 	rows, err := s.ownerProviderRows(ctx, repos)
@@ -396,7 +399,7 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 			return &ownerRefusal{status: http.StatusBadGateway, reason: "owner_unverifiable",
 				msg: "read the run's proxy config to re-check its owner's authority: " + err.Error()}
 		default:
-			if cfg, err = proxy.LoadConfigBytes(raw); err != nil {
+			if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
 				return &ownerRefusal{status: http.StatusConflict, reason: "owner_unverifiable",
 					msg: "the run's proxy config does not load: " + err.Error()}
 			}

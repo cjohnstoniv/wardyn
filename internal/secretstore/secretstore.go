@@ -86,7 +86,9 @@ type Store interface {
 	// The four methods above behave differently under a non-"" owner:
 	//   - Get first tries the owner's own row, then FALLS BACK to the
 	//     operator's ("") row — a member with no key of their own still
-	//     resolves the operator's, exactly as before For existed.
+	//     resolves the operator's, exactly as before For existed. A read
+	//     under GrantRead(ctx, true) (an owner_only grant) never falls back:
+	//     only the owner's own row ("" reads the operator's, its own).
 	//   - Put and Delete are scoped to the owner's row ONLY. They never read
 	//     or write the operator's row, and never fall back — a write always
 	//     means what it says.
@@ -232,6 +234,19 @@ type Expired struct {
 	Owner, Name string
 	ExpiresAt   time.Time
 }
+
+// ExpiredKept is one row a sweep found expired but could not delete. The
+// sweep's error joins one per such row, so its caller can name each.
+type ExpiredKept struct {
+	Owner, Name string
+	Err         error
+}
+
+func (e *ExpiredKept) Error() string {
+	return fmt.Sprintf("expired (owned_by=%q, name=%q) kept: %v", e.Owner, e.Name, e.Err)
+}
+
+func (e *ExpiredKept) Unwrap() error { return e.Err }
 
 // EraseReport is what EraseOwner removed.
 type EraseReport struct {

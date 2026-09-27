@@ -119,8 +119,11 @@ type preflightResponse struct {
 // by gate instead of wrapper by wrapper.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.refuseAdminViewLaunch(w, r) {
+		return
+	}
 	var req createRunRequest
-	if !decodeStrict(w, r, &req) {
+	if !s.decodeRunRequest(w, r, &req) {
 		return
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
@@ -331,6 +334,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// preflight dispatches nothing, so there is no dispatch for them to bind.
 	autonomy, _, _, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
 	if !ok {
+		return
+	}
+	// Host capacity, launch's last refusal and in the same place: the same 503,
+	// reason and Retry-After, so a busy host shows before the click. false:
+	// Review writes no audit row.
+	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", false)) {
 		return
 	}
 

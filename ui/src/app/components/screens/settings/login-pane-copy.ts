@@ -4,7 +4,7 @@
  */
 
 // The sign-in pane's strings that something OUTSIDE the browser bundle has to
-// read: the live kind walk (ui/e2e/live/*) asserts through them, and the Go
+// read: the live kind walk (ui/e2e/walk/*) asserts through them, and the Go
 // parity test (cmd/wardyn-aws-sso) pins SELFRUN_MARKER against the image's
 // banner. They live in a module with NO imports on purpose. harness-login-pane
 // reaches AttachTerminal, which imports xterm's stylesheet, and Playwright's

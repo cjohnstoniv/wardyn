@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -242,5 +243,38 @@ func TestPG_SSHKeys_CappedKeyStaysMemberAtLogin(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `UPDATE ssh_public_keys SET role = 'admin' WHERE fingerprint = $1`, capped.Fingerprint); err == nil {
 		t.Error("a hand-run UPDATE promoted a capped key to admin; the 0070 CHECK must refuse it")
+	}
+}
+
+func TestPG_SSHKeys_DeletePrincipalAndAll(t *testing.T) {
+	pool := throwawayDatabase(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	st := store.NewPG(pool)
+	for i, principal := range []string{"alice", "alice", "bob"} {
+		_, err := st.AddSSHKey(ctx, types.SSHPublicKey{
+			Fingerprint: fmt.Sprintf("SHA256:bulk-%d", i), Principal: principal,
+			PublicKey: "ssh-ed25519 test", Role: "user", CreatedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := st.DeleteSSHKeys(ctx, "alice"); err != nil || n != 2 {
+		t.Fatalf("delete alice=(%d,%v)", n, err)
+	}
+	if n, err := st.DeleteSSHKeys(ctx, "alice"); err != nil || n != 0 {
+		t.Fatalf("repeat delete=(%d,%v)", n, err)
+	}
+	if keys, err := st.ListSSHKeysByPrincipal(ctx, "bob"); err != nil || len(keys) != 1 {
+		t.Fatalf("bob keys=(%v,%v)", keys, err)
+	}
+	if n, err := st.DeleteSSHKeys(ctx, ""); err != nil || n != 1 {
+		t.Fatalf("delete all=(%d,%v)", n, err)
+	}
+	if n, err := st.DeleteSSHKeys(ctx, ""); err != nil || n != 0 {
+		t.Fatalf("repeat delete all=(%d,%v)", n, err)
 	}
 }

@@ -62,7 +62,7 @@ import (
 // The widened marker is read with the other three and carries no secret: it is
 // the fact that this redirect asked for more than a login, which is what lets a
 // refusal of the extras be retried without them.
-func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
+func (a *Authenticator) consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(stateCookieName)
 	if err != nil || stateCookie.Value == "" || stateParam != stateCookie.Value {
@@ -81,9 +81,9 @@ func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, veri
 	}
 	widenedCookie, werr := r.Cookie(widenedCookieName)
 	widened = werr == nil && widenedCookie.Value != ""
-	clearCookie(w, stateCookieName)
-	clearCookie(w, nonceCookieName)
-	clearCookie(w, pkceCookieName)
+	a.clearCookie(w, stateCookieName)
+	a.clearCookie(w, nonceCookieName)
+	a.clearCookie(w, pkceCookieName)
 	// The widened marker is NOT cleared here: the caller expires it only when
 	// one was presented (expireWidenedMarker), so an unwidened login's callback
 	// writes exactly the Set-Cookie headers it always did.
@@ -205,20 +205,28 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 }
 
 func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
-	a.callback(w, r, nil)
+	a.callback(w, r, nil, nil)
 }
 
-// CallbackHandlerWithDenials is CallbackHandler that also reports each sign-in
-// refused over a user type (DenialUserTypeAmbiguous, DenialUserTypeUnknown) to
-// onDenied, so internal/api can audit it as auth.fail. This package stays
-// store- and audit-agnostic, as it is for OnLogin.
-func (a *Authenticator) CallbackHandlerWithDenials(onDenied func(r *http.Request, reason string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, onDenied) }
+// DenialReservedPrincipal is the reason CallbackHandlerWithDenials reports a
+// sign-in refused because reserved said its subject names an identity that
+// is not a person. Not an auth_error code: the browser gets the generic
+// authErrorSignInRefused, since nothing the person does can clear it.
+const DenialReservedPrincipal = "reserved_principal"
+
+// CallbackHandlerWithDenials is CallbackHandler that refuses any subject
+// reserved reports true for (DenialReservedPrincipal), and reports each
+// sign-in refused over that or over a user type (DenialUserTypeAmbiguous,
+// DenialUserTypeUnknown) to onDenied, so internal/api can audit it as
+// auth.fail. This package stays store- and audit-agnostic, as it is for
+// OnLogin: which principals are reserved is internal/api's to say.
+func (a *Authenticator) CallbackHandlerWithDenials(reserved func(sub string) bool, onDenied func(r *http.Request, reason string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, reserved, onDenied) }
 }
 
-func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserTypeDenied func(*http.Request, string)) {
+func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserved func(string) bool, onDenied func(*http.Request, string)) {
 	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
-	nonce, verifier, widened, ok := consumeCallbackCookies(w, r)
+	nonce, verifier, widened, ok := a.consumeCallbackCookies(w, r)
 	if !ok {
 		return
 	}
@@ -265,9 +273,9 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
 	if exchangeErr != nil {
 		if isTransientOIDCErr(exchangeErr) {
-			redirectAuthError(w, r, authErrorOIDCTransient)
+			a.redirectAuthError(w, r, authErrorOIDCTransient)
 		} else {
-			redirectAuthError(w, r, authErrorOIDCConfig)
+			a.redirectAuthError(w, r, authErrorOIDCConfig)
 		}
 		return
 	}
@@ -294,6 +302,20 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
 		return
 	}
+	// (3b) A subject that names a non-person identity (the admin token, the
+	// local operator, a device) would be treated as that identity everywhere
+	// a principal is compared — refused before anything derives from it, so
+	// neither OnLogin nor the login-grant sink ever sees it.
+	if reserved != nil && reserved(idToken.Subject) {
+		slog.Warn("oidc: login denied — the identity provider's subject is reserved for a non-person Wardyn identity",
+			"sub", idToken.Subject, "issuer", a.cfg.IssuerURL)
+		if onDenied != nil {
+			onDenied(r, DenialReservedPrincipal)
+		}
+		a.clearCookie(w, sessionCookieName)
+		a.redirectAuthError(w, r, authErrorSignInRefused)
+		return
+	}
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		switch {
@@ -307,28 +329,28 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 			// never sends this claim.
 			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
 				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", "WARDYN_OIDC_EMAIL_DOMAINS")
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorEmailVerifiedAbsent)
+			a.clearCookie(w, sessionCookieName)
+			a.redirectAuthError(w, r, authErrorEmailVerifiedAbsent)
 			return
 		case !*cc.emailVerified:
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorEmailUnverified)
+			a.clearCookie(w, sessionCookieName)
+			a.redirectAuthError(w, r, authErrorEmailUnverified)
 			return
 		}
 		if !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorEmailDomain)
+			a.clearCookie(w, sessionCookieName)
+			a.redirectAuthError(w, r, authErrorEmailDomain)
 			return
 		}
 	}
 
 	// (5) Role derivation — deriveLogin. A refusal names its auth_error code.
-	d, denied := a.deriveLogin(r, idToken.Subject, cc, onUserTypeDenied)
+	d, denied := a.deriveLogin(r, idToken.Subject, cc, onDenied)
 	if denied != "" {
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
 		// (from before this re-login attempt) still valid in the browser.
-		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, denied)
+		a.clearCookie(w, sessionCookieName)
+		a.redirectAuthError(w, r, denied)
 		return
 	}
 	role, matches := d.Role, d.Matches
@@ -344,8 +366,8 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		slog.Warn("oidc: login denied — the IdP omitted a claim role derivation depends on (overage) and the default role would widen this session",
 			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
 			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(cc.claimNames))
-		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, authErrorClaimsOverage)
+		a.clearCookie(w, sessionCookieName)
+		a.redirectAuthError(w, r, authErrorClaimsOverage)
 		return
 	}
 	// The UNREADABLE half of the same question, kept as its own branch so each
@@ -360,8 +382,8 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		slog.Warn("oidc: login denied — the IdP sent a claim role derivation depends on in a shape this build cannot decode, and the default role would widen this session",
 			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
 			"env", "WARDYN_OIDC_DEFAULT_ROLE", "unreadable_claims", cc.unreadable)
-		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, authErrorClaimsOverage)
+		a.clearCookie(w, sessionCookieName)
+		a.redirectAuthError(w, r, authErrorClaimsOverage)
 		return
 	}
 	if len(matches) > 0 {
@@ -430,7 +452,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		return
 	}
 	http.SetCookie(w, cookie)
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
 
 // deriveLogin is CallbackHandler's step (5), role and user-type derivation —

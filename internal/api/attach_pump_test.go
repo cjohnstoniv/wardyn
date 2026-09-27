@@ -83,3 +83,35 @@ func TestAttachWS_KeystrokesDoNotUpdateTheRunRow(t *testing.T) {
 		t.Errorf("20 keystroke frames caused %d agent_runs UPDATEs; want 0 (the 30s keepalive owns the idle clock)", got-before)
 	}
 }
+
+// TestAttachWS_ShellExitSendsNormalClosure pins #1112: when the PTY session
+// ends (sess.Read returns io.EOF — a shell exit), the client must receive a
+// REAL close frame carrying StatusNormalClosure, not a bare connection drop.
+// Before the fix, attachPump cancelled the shared pump ctx first; that races
+// coder/websocket's own context-triggered teardown of the OTHER goroutine's
+// blocked c.Read(ctx) (which forcibly closes the raw connection with no close
+// frame the instant ctx is Done), so the client saw "failed to read frame
+// header: EOF" instead of a clean close.
+func TestAttachWS_ShellExitSendsNormalClosure(t *testing.T) {
+	srv, _, fr, _, run := holderTestServer(t)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+
+	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	readAttachMode(t, c)
+	waitFor(t, "the holder's session to open", func() bool { return fr.session(0) != nil })
+	sess := fr.session(0)
+
+	// Simulate the remote shell exiting normally: closing the pipe's write
+	// side makes sess.Read return io.EOF, exactly like a real PTY session
+	// ending.
+	_ = sess.w.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, _, err := c.Read(ctx); err == nil {
+		t.Fatal("client Read returned no error after the shell exited; want a close frame")
+	} else if got := websocket.CloseStatus(err); got != websocket.StatusNormalClosure {
+		t.Fatalf("close status = %v (%v), want StatusNormalClosure — the client must see a real close frame, not a bare drop", got, err)
+	}
+}
