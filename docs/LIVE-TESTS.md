@@ -230,8 +230,13 @@ this member's own `GET /me` principal; both are `run.CreatedBy`/the token
 `sub` read the same way outside local mode (see
 `BedrockWardynRunProvesPerUserSSO`'s own doc comment for the exact call
 chain), but this has not been independently confirmed against a live row —
-if a real deployment spells the two differently, this subtest will fail
-naming the mismatch rather than silently passing on the wrong identity.
+if a real deployment spells the two differently, this subtest FAILS rather
+than silently passing on the wrong identity. Its message does not print
+either value: a token `sub` can be email-shaped, and this suite prints no
+value it does not have to, the same reason `RunCreatedByIsMember` prints
+neither `created_by` nor the principal it compares against. Diagnosing a
+real mismatch means reading the two values yourself, off the run's own
+`run.bedrock.configure`/`credential.mint` audit rows and `GET /me`.
 
 ### Autonomy L0 (LL5)
 

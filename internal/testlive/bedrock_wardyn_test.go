@@ -44,13 +44,26 @@ func ssoMintEvent(t *testing.T, outcome, credentialSource, ownerSubject string) 
 	return types.AuditEvent{ID: uuid.New(), ActorType: types.ActorAgent, Action: "credential.mint", Outcome: outcome, Data: data}
 }
 
-// otherGrantMintEvent builds a successful credential.mint row for a
-// DIFFERENT grant entirely (e.g. a github_token) — no AWS-SSO-shaped scope at
-// all — the case R2's review named: "the minted flag today accepts a success
-// mint of ANY grant".
-func otherGrantMintEvent(t *testing.T) types.AuditEvent {
+// adoEntraMintEvent builds a successful credential.mint row for a DIFFERENT
+// grant entirely: the per-user Azure DevOps Entra token
+// (adoEntraScopeSnapshot, internal/api/runs_dispatch_ado_inject.go), which
+// carries the SAME two snapshot fields (owner_subject, credential_source)
+// the AWS SSO grant does, under secret_name
+// types.ADOEntraAccessTokenSecret — a REALISTIC collision, not a
+// github-token stub with no snapshot at all (round 3's review: a snapshot-
+// less fixture left the secret_name clause unpinned, since the
+// credential_source clause alone was enough to reject it either way).
+func adoEntraMintEvent(t *testing.T, ownerSubject string) types.AuditEvent {
 	t.Helper()
-	data, err := json.Marshal(map[string]any{"scope": map[string]any{"secret_name": "github-token"}})
+	data, err := json.Marshal(map[string]any{
+		"scope": map[string]any{
+			"secret_name": string(types.ADOEntraAccessTokenSecret),
+			"snapshot": map[string]any{
+				"owner_subject":     ownerSubject,
+				"credential_source": string(types.CredentialSourcePerUser),
+			},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +75,13 @@ const bedrockWardynTestMember = "member-sub"
 // TestBedrockWardynRunProvesPerUserSSO pins the LL3w audit check
 // hermetically: the per-user SSO lane, an allow-listed model and a
 // successful PER-USER mint owned by the member together pass; any one of
-// them missing must fail — including the case round 2's review named: a
-// mint whose scope snapshot says "shared" (the operator's captured session),
-// which must NOT be accepted as proof of this member's own capture.
+// them missing must fail — including the case round 2's review named (a
+// mint whose scope snapshot says "shared") and the case round 3's review
+// named (a REALISTIC other grant — a per-user Azure DevOps Entra mint for
+// the SAME member — that must not be mistaken for the AWS SSO one just
+// because it carries the same owner_subject/credential_source shape; a
+// snapshot-less "different grant" fixture would leave the secret_name clause
+// unpinned).
 func TestBedrockWardynRunProvesPerUserSSO(t *testing.T) {
 	good := []types.AuditEvent{
 		bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
@@ -95,9 +112,14 @@ func TestBedrockWardynRunProvesPerUserSSO(t *testing.T) {
 			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
 			ssoMintEvent(t, "success", "per_user", "someone-else-sub"),
 		}},
-		{"a credential row exists but it's a different grant entirely (github_token)", []types.AuditEvent{
+		{"a credential row exists but it's a different grant entirely (per-user Azure DevOps Entra token, same owner)", []types.AuditEvent{
 			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-			otherGrantMintEvent(t),
+			adoEntraMintEvent(t, bedrockWardynTestMember),
+		}},
+		{"SHARED SSO mint alongside a per-user Azure DevOps mint for the same member: still not per-user SSO", []types.AuditEvent{
+			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+			ssoMintEvent(t, "success", "shared", bedrockWardynTestMember),
+			adoEntraMintEvent(t, bedrockWardynTestMember),
 		}},
 		{"the per-user SSO mint exists but never succeeded", []types.AuditEvent{
 			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
