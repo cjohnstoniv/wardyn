@@ -274,6 +274,15 @@ const (
 	llmProviderPerUserDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person, and yours is not connected yet — agent-harness runs will be refused until you sign in to AWS."
 	// DRAFT (M2 canon pending)
 	llmProviderPerUserFix = "Sign in to AWS on the provider step (Settings → Model provider)."
+	// DRAFT (M2 canon pending) — the bearer twin of llmProviderPerUserDetail
+	// (#153, #320): under a per_user row whose roster mechanism is
+	// bedrock_bearer, signing in to AWS is not the remedy — storing a
+	// bedrock-api-key of their own is, so this says that instead. Same defect
+	// as bedrockPerUserDetail/bedrockPerUserMissingCredential, on the sibling
+	// llm_provider row.
+	llmProviderPerUserBearerDetail = "This deployment reaches models through AWS Bedrock with a bearer credential per person, and yours is not stored yet — agent-harness runs will be refused until you store your own Bedrock API key."
+	// DRAFT (M2 canon pending) — the bearer twin of llmProviderPerUserFix (#153, #320).
+	llmProviderPerUserBearerFix = "Store your own Bedrock API key (set it with `wardyn secret set bedrock-api-key`)."
 	// DRAFT (M2 canon pending)
 	llmProviderMechanismDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person. This request arrived on the shared admin token, which owns no sign-in — a person's own console session answers this row."
 	// bedrockUnenforcedPinDetail/Fix: the residual of the roster pin gap made audible
@@ -353,9 +362,17 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProv
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "info", Detail: llmProviderMechanismDetail}
 	}
 	if bedrock.configured() && bedrock.PerUser {
+		// PerUserBearer branches this the same way bedrockProviderRow does
+		// (#320): the roster row's own mechanism decides whether the remedy is
+		// signing in to AWS or storing a bearer, and naming the wrong one here
+		// is the same defect that row had.
+		detail, fix := llmProviderPerUserDetail, llmProviderPerUserFix
+		if bedrock.PerUserBearer {
+			detail, fix = llmProviderPerUserBearerDetail, llmProviderPerUserBearerFix
+		}
 		return SetupCheck{
 			ID: "llm_provider", Label: "LLM access", Status: "warn",
-			Detail: llmProviderPerUserDetail, Fix: llmProviderPerUserFix,
+			Detail: detail, Fix: fix,
 		}
 	}
 	if chk, ok := providerAccessLLMCheck(access); ok {

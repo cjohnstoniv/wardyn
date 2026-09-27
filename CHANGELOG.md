@@ -1987,7 +1987,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   bearer row now reads "a credential — your own Bedrock API key bearer (set it with `wardyn secret
   set bedrock-api-key`); this deployment gives each person their own, so storing one is what
   carries your runs — an AWS sign-in, a read-only ~/.aws mount and aws-access-key-id +
-  aws-secret-access-key cannot".
+  aws-secret-access-key cannot". The sibling `llm_provider` row (`llmProviderCheck`) carried the
+  same defect — it told any `per_user` caller with no provider connected to sign in to AWS
+  regardless of the row's mechanism — and now branches on `PerUserBearer` the same way.
 
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes

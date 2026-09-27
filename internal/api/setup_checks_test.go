@@ -846,6 +846,28 @@ func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *tes
 	}
 }
 
+// TestLLMProviderCheck_PerUserBearerNamesStoringABearer is #320's sibling
+// defect on the llm_provider row: a per_user row whose roster MECHANISM is
+// bedrock_bearer must never tell that caller to sign in to AWS — the row must
+// name storing a bearer as the remedy, the same split bedrockProviderRow
+// applies via PerUserBearer.
+func TestLLMProviderCheck_PerUserBearerNamesStoringABearer(t *testing.T) {
+	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, PerUserBearer: true}
+	got := llmProviderCheck("", b, nil)
+	if strings.Contains(got.Detail, "sign in to AWS") {
+		t.Errorf("detail = %q, must not tell a bearer-row caller to sign in to AWS", got.Detail)
+	}
+	if strings.Contains(got.Fix, "Sign in to AWS") {
+		t.Errorf("fix = %q, must not offer the sign-in remedy to a bearer-row caller", got.Fix)
+	}
+	if !strings.Contains(got.Fix, "wardyn secret set bedrock-api-key") {
+		t.Errorf("fix = %q, want it to name storing a bearer as the remedy", got.Fix)
+	}
+	if got.Detail != llmProviderPerUserBearerDetail || got.Fix != llmProviderPerUserBearerFix {
+		t.Errorf("detail/fix = %+v, want the per_user bearer DRAFT sentence verbatim", got)
+	}
+}
+
 // TestLLMProviderCheck_MechanismPrincipalIsInfo mirrors the Bedrock row's
 // info-not-warn rule for the same caller.
 func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
