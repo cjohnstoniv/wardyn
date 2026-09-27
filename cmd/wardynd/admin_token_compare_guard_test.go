@@ -25,6 +25,7 @@ var adminTokenCompare = regexp.MustCompile(`[!=]=\s*(adminTokenPrincipal|api\.Ad
 var adminTokenCompareAllowed = map[string]string{
 	"internal/api/reserved_principal.go|return p == adminTokenPrincipal || (op != \"\" && p == op) ||":                                                    "the reserved set itself",
 	"internal/api/approvals.go|if actorType == types.ActorSystem && principal == adminTokenPrincipal {":                                                   "break-glass, paired with the typed ActorSystem",
+	"internal/api/approvals_decidable.go|if actorType == types.ActorSystem && principal == adminTokenPrincipal {":                                        "#1197 L1b: mayDecide's read-only mirror of the same break-glass, paired with the typed ActorSystem",
 	"internal/api/harnesscred.go|mechanismCaller := s.cfg.OIDC != nil && runIdentitySubject(r.Context(), principalFromRequest(r)) == adminTokenPrincipal": "refuses the mechanism a per-user sign-in",
 	"internal/api/model_provider_credentials.go|if owner == \"\" || (s.cfg.OIDC != nil && owner == adminTokenPrincipal) {":                                "refuses the mechanism a credential of its own",
 	"internal/api/modelaccess.go|return sc.perUser && sc.owner == adminTokenPrincipal":                                                                    "marks the mechanism as holding no per-user credential",

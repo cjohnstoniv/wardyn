@@ -36,7 +36,7 @@ func adoScope(t *testing.T, grantID uuid.UUID) json.RawMessage {
 // this table is what proves the Go port is behaviour-identical to the TS
 // rule it replaces.
 func TestHold(t *testing.T) {
-	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	grantID := uuid.New()
 
 	cases := []struct {
@@ -183,7 +183,7 @@ func TestHold(t *testing.T) {
 // until-1ms, not held AT until (a request raised exactly window ago has
 // already timed out at the proxy — the boundary itself is not held).
 func TestHoldBoundary(t *testing.T) {
-	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	grantID := uuid.New()
 
 	for _, w := range []struct {
