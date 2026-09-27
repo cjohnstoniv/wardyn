@@ -2401,8 +2401,9 @@ is not supported.
 happens when the email already names another known subject, when the subject is
 already known under a different email, when the subject differs from a known
 one only by case, or when the subject is another person's email. It answers
-`422` for the reserved subjects `admin-token`, the local-mode operator, and
-`device:…`.
+`422` for the reserved subjects `admin-token`, the local-mode operator,
+`local:…` and `device:…`, in any case — the same set a sign-in is refused for
+(see "Some subjects never sign in").
 
 **What the minted token carries.** It gets the role and user type the person's
 sign-in would derive from their email. Their groups are unknown until they sign
