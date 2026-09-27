@@ -493,7 +493,10 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 // owner_known:false and the log can tell the two apart afterwards. The STATUS
 // is unchanged: refusing here would break the affordance.
 func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string) {
-	directory := s.knownPrincipals(ctx)
+	return resolvePrincipal(s.knownPrincipals(ctx), v)
+}
+
+func resolvePrincipal(directory []principalIdentity, v string) (owner string, known bool, refusal string) {
 	for _, p := range directory {
 		if p.principal == v {
 			return v, true, ""

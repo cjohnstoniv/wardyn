@@ -15,8 +15,13 @@
 //  2. The proxy admits ingress from exactly this run's agent selector, and every
 //     egress peer is an ipBlock that excludes the cloud-metadata address.
 //  3. The run token and the MITM CA private key reach the per-run Secret and
-//     nothing else: the proxy consumes them via secretKeyRef, and no inline
-//     EnvVar.Value on either pod carries the material. Same for the credential
+//     nothing else: the proxy consumes the config JSON as a FILE, staged by a
+//     nonroot init container off a Secret volume that projects only the
+//     config key, and NO EnvVar — inline or secretKeyRef — on any container
+//     of either pod carries the material (T-28, issue #688: a secret-backed
+//     env var still lands in the container's own process environment, which
+//     an env-var credential scanner or `kubectl exec ... env` can see, even
+//     though the pod SPEC itself is API-unreadable). Same for the credential
 //     half of the agent's own environment (SandboxSpec.SecretEnv), which
 //     secretEnvVars must deliver by reference — a pod spec is readable by any
 //     principal holding pods/get in the runs namespace.
@@ -41,6 +46,7 @@ package k8s
 import (
 	"context"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -264,10 +270,16 @@ func TestProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *testing.T) {
 	}
 }
 
-// TestProxySecretsLiveOnlyInTheSecret pins the secret boundary: the
-// run token and the MITM CA private key reach the per-run Secret, the proxy
-// pod consumes it via secretKeyRef (never an inline Value), and no inline env
-// on either pod carries those values.
+// TestProxySecretsLiveOnlyInTheSecret pins the secret boundary: the run token
+// and the MITM CA private key reach the per-run Secret, and NEITHER pod's
+// process environment ever carries the config JSON — not as an inline Value,
+// and not even by reference via secretKeyRef (T-28, issue #688: a
+// secret-backed env var still lands in the container's own process
+// environment, where an env-var credential scanner, `kubectl exec ... env`,
+// or /proc/<pid>/environ all see it — the pod SPEC being API-unreadable does
+// not help once the process is running). The main wardyn-proxy container
+// instead reads the config from a FILE, staged there by a nonroot init
+// container off a Secret volume that projects only the config key.
 func TestProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 	// ticket: F9
 	testfloor.Mark(t, "k8s")
@@ -296,26 +308,19 @@ func TestProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 
 	proxyPod := probeGetPod(t, cs, proxyPodName(spec.RunID))
 	agentPod := probeGetPod(t, cs, sb.Ref)
-	sawRef := false
-	for _, c := range proxyPod.Spec.Containers {
+
+	// NO container on the proxy pod — main OR init — carries a
+	// WARDYN_PROXY_CONFIG_JSON env at all any more, inline or by reference:
+	// the whole point of T-28 is that this variable no longer exists.
+	for _, c := range append(append([]corev1.Container{}, proxyPod.Spec.Containers...), proxyPod.Spec.InitContainers...) {
 		for _, e := range c.Env {
 			if e.Name == "WARDYN_PROXY_CONFIG_JSON" {
-				sawRef = true
-				if e.Value != "" {
-					t.Errorf("proxy pod WARDYN_PROXY_CONFIG_JSON has an inline Value (API-readable): %q", e.Value)
-				}
-				if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
-					e.ValueFrom.SecretKeyRef.Name != secretName(spec.RunID) || e.ValueFrom.SecretKeyRef.Key != proxyConfigSecretKey {
-					t.Errorf("proxy pod WARDYN_PROXY_CONFIG_JSON ValueFrom = %+v, want secretKeyRef{%s/%s}", e.ValueFrom, secretName(spec.RunID), proxyConfigSecretKey)
-				}
+				t.Errorf("container %s still carries a WARDYN_PROXY_CONFIG_JSON env (Value=%q ValueFrom=%+v); the config must reach the main container as a file, never an env var", c.Name, e.Value, e.ValueFrom)
 			}
 		}
 	}
-	if !sawRef {
-		t.Error("proxy pod has no WARDYN_PROXY_CONFIG_JSON env at all")
-	}
 	for _, pod := range []*corev1.Pod{proxyPod, agentPod} {
-		for _, c := range pod.Spec.Containers {
+		for _, c := range append(append([]corev1.Container{}, pod.Spec.Containers...), pod.Spec.InitContainers...) {
 			for _, e := range c.Env {
 				if strings.Contains(e.Value, token) || strings.Contains(e.Value, "PROBE-MITM-KEY") {
 					t.Errorf("pod %s container %s env %s carries a run secret inline: %q", pod.Name, c.Name, e.Name, e.Value)
@@ -323,12 +328,102 @@ func TestProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 			}
 		}
 	}
+
+	// The main container reads the config from a FILE (-config <path>),
+	// mounted read-only off the shared staged emptyDir — never the raw
+	// Secret volume, which the init container alone mounts.
+	mainC, ok := findContainer(proxyPod.Spec.Containers, proxyContainerName)
+	if !ok {
+		t.Fatalf("proxy pod has no %q container", proxyContainerName)
+	}
+	if got, want := mainC.Args, []string{"-config", proxyConfigStagedPath()}; !slices.Equal(got, want) {
+		t.Errorf("main proxy container Args = %v, want %v", got, want)
+	}
+	mainMount := mountFor(mainC.VolumeMounts, proxyConfigStagedVolumeName)
+	if mainMount == nil {
+		t.Fatalf("main proxy container has no VolumeMount for %q (the staged config emptyDir)", proxyConfigStagedVolumeName)
+	}
+	if !mainMount.ReadOnly {
+		t.Error("main proxy container's staged-config mount is not ReadOnly")
+	}
+	for _, vm := range mainC.VolumeMounts {
+		if vm.Name == proxyConfigSecretVolumeName {
+			t.Errorf("main proxy container mounts %q directly; only the init container may see the raw Secret volume", proxyConfigSecretVolumeName)
+		}
+	}
+
+	// The init container stages the config: same image, mounts the
+	// Secret-projected source read-only and the destination emptyDir
+	// writable, and its Args name the exact src/dst StageProxyConfig uses.
+	initC, ok := findContainer(proxyPod.Spec.InitContainers, stageProxyConfigInitName)
+	if !ok {
+		t.Fatalf("proxy pod has no %q init container", stageProxyConfigInitName)
+	}
+	if initC.Image != mainC.Image {
+		t.Errorf("init container image = %q, want the same proxy image as the main container %q", initC.Image, mainC.Image)
+	}
+	if got, want := initC.Args, []string{"-stage-config-src", proxyConfigSecretPath(), "-stage-config-dst", proxyConfigStagedPath()}; !slices.Equal(got, want) {
+		t.Errorf("init container Args = %v, want %v", got, want)
+	}
+	srcMount := mountFor(initC.VolumeMounts, proxyConfigSecretVolumeName)
+	if srcMount == nil {
+		t.Fatalf("init container has no VolumeMount for %q", proxyConfigSecretVolumeName)
+	}
+	if !srcMount.ReadOnly {
+		t.Error("init container's Secret-projected source mount is not ReadOnly")
+	}
+	dstMount := mountFor(initC.VolumeMounts, proxyConfigStagedVolumeName)
+	if dstMount == nil {
+		t.Fatalf("init container has no VolumeMount for %q", proxyConfigStagedVolumeName)
+	}
+	if dstMount.ReadOnly {
+		t.Error("init container's staged-config destination mount is ReadOnly; it must WRITE the staged file there")
+	}
+
+	// The Secret volume projects ONLY the config key, at a non-agent-facing
+	// mode — never the agent's SecretEnv or managed-file entries that share
+	// the same underlying Secret object.
+	secretVol, ok := findVolume(proxyPod.Spec.Volumes, proxyConfigSecretVolumeName)
+	if !ok || secretVol.Secret == nil {
+		t.Fatalf("proxy pod has no Secret volume %q", proxyConfigSecretVolumeName)
+	}
+	if secretVol.Secret.SecretName != secretName(spec.RunID) {
+		t.Errorf("Secret volume SecretName = %q, want %q", secretVol.Secret.SecretName, secretName(spec.RunID))
+	}
+	if n := len(secretVol.Secret.Items); n != 1 {
+		t.Fatalf("Secret volume projects %d items, want exactly 1 (the config key alone): %+v", n, secretVol.Secret.Items)
+	}
+	if item := secretVol.Secret.Items[0]; item.Key != proxyConfigSecretKey {
+		t.Errorf("Secret volume projects key %q, want %q", item.Key, proxyConfigSecretKey)
+	} else if item.Mode == nil || *item.Mode != 0o440 {
+		t.Errorf("Secret volume item mode = %v, want 0440", item.Mode)
+	}
+
+	// The staged volume is an in-memory emptyDir — no node-disk copy of the
+	// config, however briefly.
+	stagedVol, ok := findVolume(proxyPod.Spec.Volumes, proxyConfigStagedVolumeName)
+	if !ok || stagedVol.EmptyDir == nil {
+		t.Fatalf("proxy pod has no emptyDir volume %q", proxyConfigStagedVolumeName)
+	}
+	if stagedVol.EmptyDir.Medium != corev1.StorageMediumMemory {
+		t.Errorf("staged config emptyDir Medium = %q, want Memory", stagedVol.EmptyDir.Medium)
+	}
 	if proxyPod.Spec.AutomountServiceAccountToken == nil || *proxyPod.Spec.AutomountServiceAccountToken {
 		t.Error("proxy pod automounts a ServiceAccount token")
 	}
 	if agentPod.Spec.AutomountServiceAccountToken == nil || *agentPod.Spec.AutomountServiceAccountToken {
 		t.Error("agent pod automounts a ServiceAccount token")
 	}
+}
+
+// findVolume returns the Volume named name, if present.
+func findVolume(vols []corev1.Volume, name string) (corev1.Volume, bool) {
+	for _, v := range vols {
+		if v.Name == name {
+			return v, true
+		}
+	}
+	return corev1.Volume{}, false
 }
 
 // TestAgentEnvSecretsReachTheAgentOnlyByReference is property 3's agent half: a

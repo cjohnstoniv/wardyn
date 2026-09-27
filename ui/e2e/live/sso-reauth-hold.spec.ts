@@ -284,7 +284,6 @@ async function startInteractiveRun(page: Page, title: string): Promise<{ id: str
   await page.getByRole("combobox", { name: "Title" }).fill(title);
   await page.getByRole("radio", { name: /^Interactive/ }).click();
   await page.getByRole("button", { name: /^Launch/ }).click();
-  await page.getByRole("button", { name: "Open run" }).click();
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
@@ -602,12 +601,12 @@ test("J (launch door, spent session): a session retired at the portal is refused
     await page.getByRole("button", { name: /^Launch/ }).click();
 
     // The refusal is where the person is: the dialog, over New Run, with the
-    // renewal's own sentence under the rail — and no "Open run", because there
+    // renewal's own sentence under the rail — and no navigation, because there
     // is no run.
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 2 * MINUTE });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText(/can no longer be renewed/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open run" })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/runs\/new/);
 
     // Escape: nothing launched, the page never left, and the server's grade has
     // caught up with what the click learned.

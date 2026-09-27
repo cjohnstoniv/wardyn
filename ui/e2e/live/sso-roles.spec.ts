@@ -29,6 +29,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { GOVERNANCE } from "../../src/app/lib/governance-copy";
+import { PEOPLE } from "../../src/app/lib/people-access-copy";
 import { SIGNIN } from "../../src/app/lib/sign-in-copy";
 import { ADMIN_EMAIL, ADMIN_TOKEN, MEMBER_EMAIL, dexSignIn, me } from "./helpers";
 
@@ -118,10 +119,11 @@ for (const [email, want] of CAST) {
     expect(who.email).toBe(email);
     expect(who).toMatchObject({ role: want.role, operator: want.operator, security_operator: want.security });
 
-    // The console: a member is offered no admin screen; every other tier gets the
-    // full nav (app-shell.tsx's navItemsForRole) and each screen gates itself.
+    await page.goto(want.security ? "/admin/runs" : "/runs");
+    await expect(page.getByRole("link", { name: /^Runs/ })).toBeVisible();
     for (const label of ADMIN_NAV) {
-      await expect(page.getByRole("link", { name: new RegExp(`^${label}`) }), label).toHaveCount(want.role === "user" ? 0 : 1);
+      const offered = want.operator || (want.security && !["Secrets", "Recordings"].includes(label));
+      await expect(page.getByRole("link", { name: new RegExp(`^${label}`) }), label).toHaveCount(offered ? 1 : 0);
     }
 
     // The API: a super-admin route, a security route, a member route.
@@ -174,4 +176,75 @@ test(`[${RENDER}] one member cannot see or touch another member's workspace — 
   const admin = await as(ADMIN_EMAIL);
   expect(REACHED((await api(admin, "GET", own)).status), "an admin reaches a member's workspace").toBe(true);
   expect((await api(admin, "DELETE", `/api/v1/workspaces/${id}`)).status).toBeLessThan(300);
+});
+
+test(`[${RENDER}] mapping changes affect the next sign-in`, async ({ page, browser, baseURL }) => {
+  await dexSignIn(page, ADMIN_EMAIL);
+  const email = "stranger@wardyn.local";
+  const initial = await api(page, "GET", "/api/v1/access");
+  expect(initial.status, initial.text).toBe(200);
+  expect(JSON.parse(initial.text).mappings.some((row: { value: string }) => row.value === email)).toBe(false);
+
+  for (const [label, want] of [[PEOPLE.ROLE_USER, MEMBER], [PEOPLE.ROLE_SECURITY_ADMIN, SEC]] as const) {
+    let mappingID = "";
+    const context = await browser.newContext({ baseURL });
+    try {
+      await page.goto("/admin/setup?step=people");
+      await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
+      await page.getByLabel(PEOPLE.FIELD_VALUE, { exact: true }).fill(email);
+      await page.getByRole("button", { name: label, exact: true }).click();
+      const saved = page.waitForResponse((response) =>
+        response.url().endsWith("/api/v1/access/mappings") && response.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: PEOPLE.ADD_CTA, exact: true }).click();
+      const response = await saved;
+      expect(response.status(), await response.text()).toBe(201);
+      const mapping = await response.json();
+      mappingID = mapping.id;
+      expect(mappingID).toBeTruthy();
+      expect(mapping).toMatchObject({ value: email, role: want.role });
+      if (want.role === "user") expect(mapping.user_type).toBe("standard");
+      await expect(page.getByRole("button", { name: `${PEOPLE.DELETE} ${email}`, exact: true })).toBeVisible();
+
+      const signedIn = await context.newPage();
+      await dexSignIn(signedIn, email);
+      expect(await me(signedIn)).toMatchObject({
+        email, method: "sso", role: want.role, operator: want.operator, security_operator: want.security,
+        user_type: { id: "standard", name: PEOPLE.TYPE_STANDARD },
+      });
+      expect((await api(signedIn, "GET", "/api/v1/permissions")).status).toBe(want.security ? 200 : 403);
+
+      const removed = page.waitForResponse((response) =>
+        response.url().endsWith(`/api/v1/access/mappings/${mappingID}`) && response.request().method() === "DELETE",
+      );
+      await page.getByRole("button", { name: `${PEOPLE.DELETE} ${email}`, exact: true }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: PEOPLE.DELETE, exact: true }).click();
+      expect((await removed).status()).toBe(204);
+      mappingID = "";
+      await expect(page.getByRole("button", { name: `${PEOPLE.DELETE} ${email}`, exact: true })).toHaveCount(0);
+
+      // A fresh browser forces a new IdP callback, not reuse of the old cookie.
+      await context.clearCookies();
+      if (UNMAPPED_IS_MEMBER) {
+        await dexSignIn(signedIn, email);
+        expect(await me(signedIn)).toMatchObject({ role: "user", operator: false, security_operator: false });
+        expect((await api(signedIn, "GET", "/api/v1/permissions")).status).toBe(403);
+      } else {
+        await signedIn.goto("/");
+        await ssoControl(signedIn).click();
+        await signedIn.locator('input[type="password"]').waitFor({ timeout: 60_000 });
+        await signedIn.locator('input[type="text"], input[name="login"]').first().fill(email);
+        await signedIn.locator('input[type="password"]').fill(DEX_PASSWORD);
+        await signedIn.getByRole("button", { name: /log ?in/i }).click();
+        await expect(signedIn.getByText(SIGNIN.NO_ROLE)).toBeVisible({ timeout: 60_000 });
+        expect((await api(signedIn, "GET", "/api/v1/me")).status).toBe(401);
+      }
+    } finally {
+      await context.close();
+      if (mappingID) {
+        const removed = await api(page, "DELETE", `/api/v1/access/mappings/${mappingID}`);
+        expect(removed.status, removed.text).toBe(204);
+      }
+    }
+  }
 });

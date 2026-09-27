@@ -791,7 +791,6 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   // and the Initial prompt stays EMPTY — that is what keeps seed_auto_tools off
   // the wire and the run on the spike's shape (a).
   await page.getByRole("button", { name: /^Launch/ }).click();
-  await page.getByRole("button", { name: "Open run" }).click();
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
@@ -1179,17 +1178,12 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
     if (await start.isVisible().catch(() => false)) await start.click();
   });
 
-  // The relaunch fired from the door's completion: this deployment's launch
-  // carries advisories (egress narrowed, resources capped), so the screen
-  // HOLDS with "Open run" exactly as a hand launch does (helpers.ts's
-  // launchAgentRun) — a run that launched with no advisories would have
-  // navigated already. NOT "Running" (walk-3): the fake answers inference in
+  // The relaunch fired from the door's completion navigates straight to the
+  // run page, advisories and all (#125), exactly as a hand launch does
+  // (helpers.ts's launchAgentRun). NOT "Running" (walk-3): the fake answers inference in
   // seconds and the agent exits, so the run can be FINISHED before this spec
   // — which reaches the page only after signInThroughPane's capture poll — ever
   // looks; the witness is the run ROW and its trail below, never a state chip.
-  const openRun = page.getByRole("button", { name: "Open run" });
-  await expect(openRun.or(page.getByRole("heading", { name: "L launch door" }))).toBeVisible({ timeout: SANDBOX_UP });
-  if (await openRun.isVisible().catch(() => false)) await openRun.click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
   const runID = runIDFromURL(page);
   expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);

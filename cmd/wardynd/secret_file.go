@@ -5,10 +5,10 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"strings"
-	"syscall"
+
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 )
 
 // secretFileSetting pairs one secret-carrying boot setting with its _FILE
@@ -64,30 +64,14 @@ func resolveSecretFiles(settings []secretFileSetting) error {
 	return nil
 }
 
-// readSecretFile reads one _FILE value. Exactly one trailing line ending is
-// trimmed (what `echo` and most secret writers append); any other whitespace is
-// part of the value, as it would be in the env var. The mode is checked on the
-// OPENED descriptor, so the file checked is the file read.
+// readSecretFile reads one _FILE value under the shared mode rule
+// (cliutil.ReadSecretFile). Exactly one trailing line ending is trimmed (what
+// `echo` and most secret writers append); any other whitespace is part of the
+// value, as it would be in the env var.
 func readSecretFile(fileVar, path string) (string, error) {
-	f, err := os.Open(path)
+	raw, err := cliutil.ReadSecretFile(fileVar, path)
 	if err != nil {
-		return "", fmt.Errorf("refusing to start: %s=%q is unreadable: %w", fileVar, path, err)
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return "", fmt.Errorf("refusing to start: %s=%q is unreadable: %w", fileVar, path, err)
-	}
-	owner := -1
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		owner = int(st.Uid)
-	}
-	if err := checkSecretFileMode(fileVar, path, fi.Mode().Perm(), owner, os.Geteuid()); err != nil {
-		return "", err
-	}
-	raw, err := io.ReadAll(f)
-	if err != nil {
-		return "", fmt.Errorf("refusing to start: %s=%q is unreadable: %w", fileVar, path, err)
+		return "", fmt.Errorf("refusing to start: %w", err)
 	}
 	v := strings.TrimSuffix(string(raw), "\n")
 	v = strings.TrimSuffix(v, "\r")
@@ -95,27 +79,4 @@ func readSecretFile(fileVar, path string) (string, error) {
 		return "", fmt.Errorf("refusing to start: %s=%q is empty — the secret it names would silently fall back to unset", fileVar, path)
 	}
 	return v, nil
-}
-
-// checkSecretFileMode is the mode rule, split out so every delivery shape is
-// testable without chown. owner is the file's uid (-1 when unknown).
-//
-// Group- or world-WRITABLE is always refused: anyone in that set could swap the
-// secret before the next boot, and no supported delivery produces it.
-//
-// Other-READABLE is refused only on a file wardynd's own non-root uid owns — the
-// hand-made host file, which `chmod 640` fixes. It stays allowed everywhere a
-// supported mechanism produces it, which is why this differs from
-// WARDYN_DAEMON_PROXY_SECRET's 0600 rule: a Secret volume is root-owned 0440
-// (group-read added by the kubelet under the chart's fsGroup), a Secrets Store
-// CSI file is root-owned 0644 and reachable by a non-root reader only through
-// the other-read bit, and Vault Agent writes 0644 as its own uid by default.
-func checkSecretFileMode(fileVar, path string, perm os.FileMode, owner, euid int) error {
-	if perm&0o022 != 0 {
-		return fmt.Errorf("refusing to start: %s=%q is mode %04o — a group- or world-writable secret file lets someone else replace it; remove the write bits (chmod 640)", fileVar, path, perm)
-	}
-	if perm&0o004 != 0 && euid != 0 && owner == euid {
-		return fmt.Errorf("refusing to start: %s=%q is mode %04o and owned by wardynd's own uid %d — any local user can read it; chmod 640 it (under Vault Agent, set vault.hashicorp.com/agent-inject-perms-<name>: \"0440\")", fileVar, path, perm, euid)
-	}
-	return nil
 }

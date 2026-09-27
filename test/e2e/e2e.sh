@@ -34,14 +34,15 @@
 #   WARDYN_TEST_DOCKER=1 WARDYN_E2E_NO_BUILD=1 test/e2e/e2e.sh   # reuse images
 set -uo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "${REPO_ROOT}/scripts/lib/common.sh"   # skip_lane only; log/die are redefined below
+
 # ── guard ────────────────────────────────────────────────────────────────────
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "e2e: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent e2e suite (skipping)."
-  exit 0
+  skip_lane "e2e: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent e2e suite (skipping)."
 fi
 
 # ── config ─────────────────────────────────────────────────────────────────--
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.yaml"
 FIXTURE_DIR="${REPO_ROOT}/test/e2e/fixtures"
 COMPOSE=(docker compose -f "${COMPOSE_FILE}")

@@ -1123,7 +1123,7 @@ func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {
 				t.Errorf("%s cites %s, which could not be read: %v", ruleSource, m[1], err)
 				continue
 			}
-			bodies, perr := citedSymbolBodies(m[1], src)
+			bodies, _, _, perr := citedSymbolBodies(m[1], src)
 			if perr != nil {
 				t.Errorf("%s cites %s, which does not parse: %v", ruleSource, m[1], perr)
 				continue

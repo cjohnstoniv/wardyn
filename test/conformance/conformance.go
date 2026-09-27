@@ -117,6 +117,10 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 // testCapabilities asserts Capabilities invariants.
 //
 //   - Driver field must equal r.Name().
+//   - Every declared ConfinementClass must have a matching entry in Resolved
+//     (a driver that claims a class must also name the concrete substrate
+//     enforcing it — the "no gaps" half of invariant 5, alongside the silent-
+//     downgrade check below).
 //   - If ConfinementClasses is non-empty, CreateSandbox requesting the
 //     strongest (last) class must produce a sandbox whose EnforcedClass is >=
 //     the requested class (not silently downgraded).
@@ -132,6 +136,12 @@ func testCapabilities(t *testing.T, r runner.Runner, opts Options) {
 
 	if caps.Driver != r.Name() {
 		t.Errorf("Capabilities.Driver = %q, want %q (must match runner.Name())", caps.Driver, r.Name())
+	}
+
+	for _, c := range caps.ConfinementClasses {
+		if _, ok := caps.Resolved[c]; !ok {
+			t.Errorf("Capabilities.Resolved has no entry for declared class %q (a driver that claims a class must name the substrate that enforces it)", c)
+		}
 	}
 
 	if len(caps.ConfinementClasses) == 0 {

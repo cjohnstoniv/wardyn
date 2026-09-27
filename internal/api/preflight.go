@@ -119,6 +119,9 @@ type preflightResponse struct {
 // by gate instead of wrapper by wrapper.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.refuseAdminViewLaunch(w, r) {
+		return
+	}
 	var req createRunRequest
 	if !decodeStrict(w, r, &req) {
 		return

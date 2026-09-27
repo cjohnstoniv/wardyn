@@ -3,18 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
 import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../src/app/lib/workspace-providers-copy";
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy";
 
-// Member Getting Started (Phase 5) — same mockMemberRole splice
-// member-console.spec.ts uses (the seeded backend always authenticates as
-// admin server-side; only the CLIENT believes it is a member). This spec
-// proves the render: the six member sections replace the operator funnel at
-// /setup, the account menu drops Demos, and the video player streams nothing
-// until Watch is pressed. Server-side ownership scoping (creator-scoped
-// runs/secrets) is proven in Go, not here — the daemon-backed part of the
-// plan's invariant.
+// Real per-person identities; individual setup splices below exercise rendering
+// states the none runner cannot produce, without claiming backend acceptance.
 
 const MEMBER_SECTION_TITLES = [
   "What's set up for you",
@@ -25,9 +19,35 @@ const MEMBER_SECTION_TITLES = [
   "Connect your tools",
 ] as const;
 
-test.describe("member Getting Started (mocked /me role)", () => {
+test.describe("member Getting Started (real per-person token)", () => {
   test.beforeEach(async ({ page }) => {
-    await mockMemberRole(page);
+    await asRealMember(page);
+  });
+
+  test("real member sees redacted setup facts", async ({ page }) => {
+    const admin = await page.request.get("/api/v1/setup/status", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(admin.status()).toBe(200);
+    const operatorStatus = await admin.json();
+    expect(operatorStatus.checks.length).toBeGreaterThan(0);
+    expect(operatorStatus.secrets.present).toContain("e2e-test-secret");
+    expect(operatorStatus.runner.driver).toBe("none");
+
+    const response = await consoleAPI(page, "GET", "/api/v1/setup/status");
+    expect(response.status, response.text).toBe(200);
+    const status = JSON.parse(response.text);
+    expect(status).toMatchObject({ checks_redacted: true, checks: [], providers: [], secrets: { present: [] } });
+    expect(status.runner.driver ?? "").toBe("");
+    expect(status.runner.confinement_classes).toEqual(operatorStatus.runner.confinement_classes);
+    expect(status.bedrock.region ?? "").toBe("");
+    expect(status.bedrock.model ?? "").toBe("");
+    expect(response.text).not.toContain("e2e-test-secret");
+
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    await expect(page.getByText("Image builder", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 
   test("shows the six member sections, never the admin funnel", async ({ page }) => {
@@ -53,7 +73,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
   });
 
   // M-6 (D5): the demos the admin funnel used to walk now live here. This
-  // pins the section exists and offers a keyless demo for a mocked member
+  // pins the section exists and offers a keyless demo for a real member
   // role — the walkable/gated set itself (needsModel/needsSecret) is unit
   // coverage in member-getting-started.test.tsx, not re-proven per backend
   // state here.
@@ -381,10 +401,10 @@ test.describe("admin session at /setup and /admin/setup (unmocked — D1: the UR
 //
 // Browser-only: this is a ROUTE decision made from /me, so only a real
 // navigation with a security-admin /me proves it.
-test.describe("security admin at /setup (mocked /me role)", () => {
+test.describe("security admin at /setup (real per-person token)", () => {
   // ticket: R4/F034
   test.beforeEach(async ({ page }) => {
-    await mockSecurityAdminRole(page);
+    await asRealSecurityAdmin(page);
   });
 
   test("lands on the member Getting Started, never the deployer funnel", async ({ page }) => {

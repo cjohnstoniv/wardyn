@@ -51,6 +51,16 @@ func main() {
 	// anyway) — see substrate.ClassSupport.NetworkPolicy's doc. Not a normal
 	// proxy invocation: no config is loaded, nothing else in main runs.
 	egressCanary := flag.String("egress-canary", "", "internal: TCP-dial host:port, exit 0 on connect / 1 on refuse-or-timeout (k8s substrate canary only)")
+	// stageConfigSrc/stageConfigDst are the k8s substrate's init-container
+	// mode (T-28, issue #688): this binary, run once as an init container
+	// with the SAME image the sidecar itself uses, stages the proxy config
+	// JSON from a Secret-projected volume (src) into a shared in-memory
+	// emptyDir (dst) as an owner-only 0400 file, then exits. The main
+	// container mounts only dst, read-only, and reads it back via -config —
+	// no secret-backed environment variable ever reaches the sidecar's own
+	// process environment. See StageProxyConfig.
+	stageConfigSrc := flag.String("stage-config-src", "", "internal: read the proxy config JSON from this path and stage it (k8s init container only; requires -stage-config-dst)")
+	stageConfigDst := flag.String("stage-config-dst", "", "internal: destination path for -stage-config-src (k8s init container only)")
 	flag.Parse()
 
 	if *egressCanary != "" {
@@ -59,6 +69,18 @@ func main() {
 			os.Exit(1)
 		}
 		_ = conn.Close()
+		os.Exit(0)
+	}
+
+	if *stageConfigSrc != "" || *stageConfigDst != "" {
+		if *stageConfigSrc == "" || *stageConfigDst == "" {
+			slog.Error("wardyn-proxy: -stage-config-src and -stage-config-dst must both be set")
+			os.Exit(2)
+		}
+		if err := StageProxyConfig(*stageConfigSrc, *stageConfigDst); err != nil {
+			slog.Error("wardyn-proxy: stage config failed", slog.Any("err", err))
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 

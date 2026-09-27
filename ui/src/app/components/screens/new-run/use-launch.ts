@@ -45,8 +45,6 @@ export interface UseLaunchResult {
   /** The model provider that credential refusal names (#532), "" when it
    *  names none — the door the rail opens is THAT provider's (#543). */
   refusedProvider: string;
-  launchWarnings: string[];
-  launchedRunId: string | null;
   /** Resolves to the failure's sentence only when this screen had already
    *  unmounted by the time it came back — the relaunch after a sign-in the
    *  person started here and finished elsewhere (#146). The shell's strip
@@ -85,11 +83,6 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const [errorSeq, setErrorSeq] = React.useState(0);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   const [refusedProvider, setRefusedProvider] = React.useState("");
-  // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
-  const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
-  // Set ONLY while a launched run's advisories are on screen — the rail's
-  // "Open run" is what carries the member there, at their own pace.
-  const [launchedRunId, setLaunchedRunId] = React.useState<string | null>(null);
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
   // below. Independent loading/result/error state from Launch's: the two
   // actions can be in flight or have failed independently of one another.
@@ -137,25 +130,17 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     setCredentialRefused(false);
     setRefusedProvider("");
     setLaunching(true);
-    setLaunchWarnings([]);
-    setLaunchedRunId(null);
     try {
       const created: CreateRunResult = await runsApi.createRun(buildRunInput());
-      const warnings = created.warnings ?? [];
-      // §5c.8: a run that launched WITH advisories is never navigated away from
-      // on a clock. A 1.6s timer both raced every other way off this screen
-      // (Esc and the ghost "Runs" button each landed on /runs, then the timer
-      // yanked the member to /runs/:id) and gave a multi-line advisory a fixed
-      // beat nobody can finish reading. The screen HOLDS instead: the warnings
-      // stay listed in the rail and Launch becomes OPEN_RUN_CTA, which is the
-      // only thing that navigates. No timer.
-      if (warnings.length > 0) {
-        setLaunchWarnings(warnings);
-        setLaunchedRunId(created.id);
-        setLaunching(false); // nothing reads it once onOpenRun is set.
-      } else {
-        void navigate(`/runs/${encodeURIComponent(created.id)}`);
-      }
+      // #125: a launch that answers 2xx always navigates, in the same tick —
+      // no held screen, no timer (a timer both raced every other way off this
+      // screen — Esc and the ghost "Runs" button each land on /runs — and gave
+      // a multi-line advisory a fixed beat nobody can finish reading). Any
+      // advisory `warnings[]` ride along as router state for the run page to
+      // render; they are NOT persisted (the durable record is the run.create
+      // audit row's own clamp warnings), so they are gone the moment the
+      // member reloads that page.
+      void navigate(`/runs/${encodeURIComponent(created.id)}`, { state: { launchWarnings: created.warnings ?? [] } });
     } catch (e) {
       const server = getErrorMessage(e);
       // B9 renders the SERVER's sentence verbatim: with none, the strip says
@@ -221,8 +206,6 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     errorSeq,
     credentialRefused,
     refusedProvider,
-    launchWarnings,
-    launchedRunId,
     launch,
     preflighting,
     preflightResult,
