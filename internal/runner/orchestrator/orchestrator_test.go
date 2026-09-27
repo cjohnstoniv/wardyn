@@ -30,6 +30,7 @@ type fakeSubstrate struct {
 	drives     bool
 	managed    bool
 	diskEnf    types.StorageEnforcement
+	freeze     map[types.ConfinementClass]bool
 	refPrefix  string
 
 	mu                            sync.Mutex
@@ -50,6 +51,7 @@ func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error)
 		UserDrives:               f.drives,
 		ManagedFiles:             f.managed,
 		EphemeralDiskEnforcement: f.diskEnf,
+		Freeze:                   f.freeze,
 	}, nil
 }
 
@@ -490,5 +492,181 @@ func TestOrchestrator_EndSandbox(t *testing.T) {
 	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
 	if err := k8s.EndSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
 		t.Errorf("EndSandbox on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
+	}
+}
+
+// proxyStoppingSubstrate is a fakeSubstrate that can remove a proxy alone.
+type proxyStoppingSubstrate struct {
+	*fakeSubstrate
+	proxyStops []string
+}
+
+func (p *proxyStoppingSubstrate) StopProxy(_ context.Context, ref string) error {
+	p.rec(&p.proxyStops, ref)
+	return nil
+}
+
+// TestOrchestrator_StopProxy: a lost run's proxy removal reaches a substrate
+// that can do it and keeps the route; one that cannot (Kubernetes) answers
+// ErrEndUnsupported, which the control plane turns into a full teardown.
+func TestOrchestrator_StopProxy(t *testing.T) {
+	ctx := context.Background()
+	oci := &proxyStoppingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if err := o.StopProxy(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("StopProxy: %v", err)
+	}
+	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("KillSandbox after StopProxy: %v", err)
+	}
+	if len(oci.proxyStops) != 1 || len(oci.kills) != 1 {
+		t.Errorf("proxy stops %v kills %v; want the stop forwarded and the route kept", oci.proxyStops, oci.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.StopProxy(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("StopProxy on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
+	}
+}
+
+// revivingSubstrate is a fakeSubstrate that can replace a proxy in place.
+type revivingSubstrate struct {
+	*fakeSubstrate
+	replaced, started []string
+}
+
+func (r *revivingSubstrate) ProxyConfig(context.Context, string) ([]byte, error) {
+	return []byte(`{"run_token":"t"}`), nil
+}
+
+func (r *revivingSubstrate) EnsureProxyImage(context.Context) error { return nil }
+
+func (r *revivingSubstrate) ReplaceProxy(_ context.Context, ref string, _ []byte) error {
+	r.rec(&r.replaced, ref)
+	return nil
+}
+
+func (r *revivingSubstrate) StartSandbox(_ context.Context, ref string) error {
+	r.rec(&r.started, ref)
+	return nil
+}
+
+// TestOrchestrator_ProxyReviver: a revive reaches a substrate that can replace
+// a proxy in place and start a kept agent; one that cannot (Kubernetes)
+// answers ErrReviveUnsupported for every part.
+func TestOrchestrator_ProxyReviver(t *testing.T) {
+	ctx := context.Background()
+	oci := &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if cfg, err := o.ProxyConfig(ctx, "wardyn-agent-x"); err != nil || string(cfg) != `{"run_token":"t"}` {
+		t.Fatalf("ProxyConfig = %s, %v", cfg, err)
+	}
+	if err := o.ReplaceProxy(ctx, "wardyn-agent-x", nil); err != nil || len(oci.replaced) != 1 {
+		t.Fatalf("ReplaceProxy: %v, replaced %v", err, oci.replaced)
+	}
+	if err := o.EnsureProxyImage(ctx); err != nil {
+		t.Errorf("EnsureProxyImage: %v, want nil", err)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.EnsureProxyImage(ctx); err != nil {
+		t.Errorf("EnsureProxyImage on a substrate that cannot revive: %v, want nil (nothing to ensure)", err)
+	}
+	if _, err := k8s.ProxyConfig(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ProxyConfig on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+	if err := k8s.ReplaceProxy(ctx, "wardyn-agent-y", nil); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+	if err := o.StartSandbox(ctx, "wardyn-agent-x"); err != nil || len(oci.started) != 1 {
+		t.Errorf("StartSandbox: %v, started %v", err, oci.started)
+	}
+	if err := k8s.StartSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("StartSandbox on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+}
+
+// freezingSubstrate is a fakeSubstrate that can pause/resume the agent.
+type freezingSubstrate struct {
+	*fakeSubstrate
+	freezes, thaws []string
+}
+
+func (f *freezingSubstrate) FreezeSandbox(_ context.Context, ref string) error {
+	f.rec(&f.freezes, ref)
+	return nil
+}
+func (f *freezingSubstrate) ThawSandbox(_ context.Context, ref string) error {
+	f.rec(&f.thaws, ref)
+	return nil
+}
+
+// TestOrchestrator_FreezeSandbox: Freeze/Thaw reach the substrate that owns
+// the ref when it implements runner.Freezer, and the route survives (a later
+// kill still finds it). Two substrates and no RefStore, so there is no
+// sole-substrate fallback: a Freeze that dropped the route would fail the
+// kill. A substrate that does not implement Freezer (Kubernetes) answers
+// ErrFreezeUnsupported.
+func TestOrchestrator_FreezeSandbox(t *testing.T) {
+	ctx := context.Background()
+	vmm := &fakeSubstrate{name: "smolvm", classes: []types.ConfinementClass{types.CC3}, refPrefix: "vm-"}
+	oci := &freezingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}, refPrefix: "wardyn-agent-"}}
+	o := New(vmm, oci)
+	sb, err := o.CreateSandbox(ctx, specFor(types.CC1))
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if err := o.FreezeSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("FreezeSandbox: %v", err)
+	}
+	if err := o.ThawSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("ThawSandbox: %v", err)
+	}
+	if err := o.KillSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("KillSandbox after freeze/thaw: %v", err)
+	}
+	if len(oci.freezes) != 1 || len(oci.thaws) != 1 || len(oci.kills) != 1 || len(vmm.kills) != 0 {
+		t.Errorf("docker freezes %v thaws %v kills %v, smolvm kills %v; want each forwarded once to docker and the route kept",
+			oci.freezes, oci.thaws, oci.kills, vmm.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.FreezeSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrFreezeUnsupported) {
+		t.Errorf("FreezeSandbox on a substrate that cannot pause = %v, want ErrFreezeUnsupported", err)
+	}
+	if err := k8s.ThawSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrFreezeUnsupported) {
+		t.Errorf("ThawSandbox on a substrate that cannot pause = %v, want ErrFreezeUnsupported", err)
+	}
+}
+
+// TestCapabilities_FreezeAggregatesPerClass pins the per-class merge: each
+// class's Freeze comes from the substrate routing picks for it (the first to
+// list it), so a deployment whose docker substrate has verified only CC1
+// never reports Freeze=true for a class it did not claim, and a later
+// substrate's claim never vouches for runs routed elsewhere.
+func TestCapabilities_FreezeAggregatesPerClass(t *testing.T) {
+	oci := &fakeSubstrate{
+		name:     "docker",
+		classes:  []types.ConfinementClass{types.CC1, types.CC2},
+		resolved: map[types.ConfinementClass]string{types.CC1: "oci/runc", types.CC2: "oci/runsc"},
+		freeze:   map[types.ConfinementClass]bool{types.CC1: true, types.CC2: false},
+	}
+	caps, err := New(oci).Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if !caps.Freeze[types.CC1] || caps.Freeze[types.CC2] {
+		t.Errorf("Freeze = %v, want {CC1:true, CC2:false}", caps.Freeze)
+	}
+
+	// k8s lists CC1 first, with no Freeze entry: CC1 runs route there, so
+	// docker's later Freeze[CC1]=true must not be reported for them.
+	k8s := &fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}}
+	caps, err = New(k8s, oci).Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if caps.Freeze[types.CC1] {
+		t.Errorf("Freeze[CC1] = true, but CC1 routes to k8s, which cannot freeze (Freeze = %v)", caps.Freeze)
 	}
 }

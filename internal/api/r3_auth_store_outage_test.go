@@ -22,7 +22,7 @@ import (
 // hunting an attacker during a database incident.
 //
 // The COUNT IS PER REQUEST, not per audited row, and that is the half worth
-// leading with: the auth.failed limiter is 1/sec with a burst of 5, so a
+// leading with: the auth.fail limiter is 1/sec with a burst of 5, so a
 // counter reached only past the limiter would report a tenth of an outage —
 // measured, 50 requests produced 5 rows and 45 suppressions.
 func TestSessionRevocationOutageIsCounted(t *testing.T) {

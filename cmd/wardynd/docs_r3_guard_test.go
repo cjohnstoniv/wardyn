@@ -346,7 +346,7 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 // TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
 // doc to the shape GET /me actually returns.
 //
-// MEMBERS.md calls /me "the ground truth" and described the two-state contract
+// USERS.md calls /me "the ground truth" and described the two-state contract
 // the 0.7 fix superseded: user_drive null == nothing allocated. The fix exists
 // because null meant four different things, so the doc taught an external
 // consumer the exact wrong inference the fix was written to prevent — read
@@ -365,22 +365,22 @@ func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
 	me := methodBody(t, readSrc(t, "internal", "api", "me.go"), "handleMe")
 	for _, key := range []string{`body["user_drive"]`, `body["user_drive_denied_by_profile"]`, `body["user_drive_unavailable"]`} {
 		if !strings.Contains(me, key) {
-			t.Errorf("GET /me no longer writes %s — MEMBERS.md documents a three-key contract", key)
+			t.Errorf("GET /me no longer writes %s — USERS.md documents a three-key contract", key)
 		}
 	}
 
-	doc := readDoc(t, "docs/MEMBERS.md")
-	mustNotSay(t, doc, "docs/MEMBERS.md",
+	doc := readDoc(t, "docs/USERS.md")
+	mustNotSay(t, doc, "docs/USERS.md",
 		"`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the ground truth for what you have.",
 	)
-	mustSay(t, doc, "docs/MEMBERS.md",
+	mustSay(t, doc, "docs/USERS.md",
 		"`user_drive_denied_by_profile`",
 		"`user_drive_unavailable`",
 		"no longer means",
 	)
 	for _, tok := range tokens {
 		if !strings.Contains(doc, "`"+tok+"`") {
-			t.Errorf("docs/MEMBERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
+			t.Errorf("docs/USERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
 		}
 	}
 }
@@ -592,17 +592,17 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 }
 
 // TestAuditActionsDocNamesTheDroppedDecisionSummary (F067) pins the
-// egress.* row to the synthetic egress.decisions.dropped marker
+// egress.* row to the synthetic egress:dropped-decisions-<n> marker
 // droppedSummaryLog posts on buffer overflow — a Deny with an empty target
 // that lands as an ordinary egress.deny row.
 func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 	src := readSrc(t, "internal", "egress", "proxy", "decisions.go")
-	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n)`) {
-		t.Fatal("droppedSummaryLog no longer emits the egress.decisions.dropped:<n> marker — re-derive the doc row before trusting this guard")
+	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress:dropped-decisions-%d", n)`) {
+		t.Fatal("droppedSummaryLog no longer emits the egress:dropped-decisions-<n> marker — re-derive the doc row before trusting this guard")
 	}
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
 	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
-		"egress.decisions.dropped:<n>",
+		"egress:dropped-decisions-<n>",
 		"droppedSummaryLog",
 		"not a policy denial of an actual request",
 	)
@@ -775,12 +775,12 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 // unparsed body.
 func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 	body := funcBody(t, readSrc(t, "internal", "egress", "proxy", "llm_routes.go"), "scanSummaryFrom")
-	if !strings.Contains(body, `s.Action = "error"`) {
-		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "error" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
+	if !strings.Contains(body, `s.Action = "fail"`) {
+		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "fail" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
 	}
 
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
-	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.error`")
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.fail`")
 
 	comment := readSrc(t, "internal", "egress", "egress.go")
 	if i := strings.Index(comment, `Action     string        `+"`json:\"action\"`"); i < 0 {
@@ -790,8 +790,8 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 		if end := strings.Index(line, "\n"); end >= 0 {
 			line = line[:end]
 		}
-		if !strings.Contains(line, `"error"`) {
-			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"error\": %q", line)
+		if !strings.Contains(line, `"fail"`) {
+			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"fail\": %q", line)
 		}
 	}
 }

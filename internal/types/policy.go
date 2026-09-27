@@ -461,7 +461,7 @@ type LLMInspectionSpec struct {
 	// WorkspaceSecretNames instead. Populated ONLY by dispatch, in memory, on
 	// the ephemeral copy of the spec sent to the proxy; every other copy (the
 	// stored row, a policy read DTO, a compose/profile proposal, the
-	// run.policy.effective audit event) carries names only, values redacted to
+	// run.policy.resolve audit event) carries names only, values redacted to
 	// a count. NEVER logged. Values shorter than the masking floor are ignored.
 	WorkspaceSecretValues []string `json:"workspace_secret_values,omitempty"`
 	// DetectSecrets enables the known-secret detector (exact match against the

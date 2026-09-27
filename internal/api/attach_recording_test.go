@@ -22,7 +22,7 @@ import (
 // TestNewSessionRecorder_MasksAndPersists exercises the PIECE 3 recording
 // pipeline end-to-end (without a live attach): PTY output teed through the
 // recorder is (a) secret-masked, (b) serialized as asciicast v2, (c) persisted
-// under a per-run+session key, and (d) emits a session.recording audit event.
+// under a per-run+session key, and (d) emits a session.recording.write audit event.
 func TestNewSessionRecorder_MasksAndPersists(t *testing.T) {
 	store, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
@@ -80,24 +80,24 @@ func TestNewSessionRecorder_MasksAndPersists(t *testing.T) {
 		t.Errorf("non-secret output missing from cast:\n%s", cast)
 	}
 
-	// (d) a session.recording audit event was emitted, success, keyed.
+	// (d) a session.recording.write audit event was emitted, success, keyed.
 	var found bool
 	for _, ev := range audit.events {
-		if ev.Action == "session.recording" {
+		if ev.Action == "session.recording.write" {
 			found = true
 			if ev.Outcome != "success" {
-				t.Errorf("session.recording outcome = %q, want success", ev.Outcome)
+				t.Errorf("session.recording.write outcome = %q, want success", ev.Outcome)
 			}
 			if ev.Target != key {
-				t.Errorf("session.recording target = %q, want %q", ev.Target, key)
+				t.Errorf("session.recording.write target = %q, want %q", ev.Target, key)
 			}
 			if ev.RunID == nil || *ev.RunID != runID {
-				t.Errorf("session.recording run id = %v, want %s", ev.RunID, runID)
+				t.Errorf("session.recording.write run id = %v, want %s", ev.RunID, runID)
 			}
 		}
 	}
 	if !found {
-		t.Error("no session.recording audit event emitted")
+		t.Error("no session.recording.write audit event emitted")
 	}
 }
 
@@ -113,8 +113,8 @@ func TestNewSessionRecorder_NoStoreIsNoop(t *testing.T) {
 	}
 	finish(context.Background(), types.ActorHuman, "bob") // must not panic
 	for _, ev := range audit.events {
-		if ev.Action == "session.recording" {
-			t.Error("no session.recording event should be emitted without a store")
+		if ev.Action == "session.recording.write" {
+			t.Error("no session.recording.write event should be emitted without a store")
 		}
 	}
 }
@@ -134,8 +134,8 @@ func TestNewSessionRecorder_EmptySessionNotPersisted(t *testing.T) {
 		t.Error("an output-less session should not persist a cast")
 	}
 	for _, ev := range audit.events {
-		if ev.Action == "session.recording" {
-			t.Error("no session.recording event for an empty session")
+		if ev.Action == "session.recording.write" {
+			t.Error("no session.recording.write event for an empty session")
 		}
 	}
 }
@@ -407,8 +407,8 @@ func TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded(t *testing.T) {
 		t.Errorf("a cast was persisted for the harness-login run (%d bytes); it must never be recorded", len(body))
 	}
 	for _, ev := range audit.events {
-		if ev.Action == "session.recording" && ev.Outcome == "success" {
-			t.Error("session.recording/success emitted for the harness-login run — nothing should have been recorded")
+		if ev.Action == "session.recording.write" && ev.Outcome == "success" {
+			t.Error("session.recording.write/success emitted for the harness-login run — nothing should have been recorded")
 		}
 	}
 
@@ -472,17 +472,17 @@ func TestNewSessionRecorder_OversizeCastTruncatedNotLost(t *testing.T) {
 
 	var rec *types.AuditEvent
 	for i := range audit.events {
-		if audit.events[i].Action == "session.recording" {
+		if audit.events[i].Action == "session.recording.write" {
 			rec = &audit.events[i]
 		}
 	}
 	if rec == nil {
-		t.Fatal("no session.recording audit event for the truncated session")
+		t.Fatal("no session.recording.write audit event for the truncated session")
 	}
 	if rec.Outcome != "success" {
-		t.Errorf("session.recording outcome = %q, want success", rec.Outcome)
+		t.Errorf("session.recording.write outcome = %q, want success", rec.Outcome)
 	}
 	if !bytes.Contains(rec.Data, []byte(`"truncated":true`)) {
-		t.Errorf("session.recording data = %s, want truncated:true — a short cast must not pass for a whole one", rec.Data)
+		t.Errorf("session.recording.write data = %s, want truncated:true — a short cast must not pass for a whole one", rec.Data)
 	}
 }

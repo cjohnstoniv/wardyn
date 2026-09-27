@@ -20,6 +20,10 @@ import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { RUN_FACTS } from "../wardyn/copy/door";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
@@ -484,5 +488,41 @@ describe("SummaryHeader — the autonomy chip beside the barrier chip", () => {
     for (const meta of Object.values(AUTONOMY_META)) {
       expect(screen.queryByText(meta.label)).toBeNull();
     }
+  });
+});
+
+// #543 (design §5.7, decision 5): the run's model provider, a neutral chip in
+// the header's chip bar — named from the shell's /setup/status, and marked
+// removed once the provider is gone from it.
+describe("SummaryHeader — the run's model provider chip", () => {
+  const { gateway } = MODEL_PROVIDERS;
+  function withStatus(status: SetupStatus | null, run: AgentRun) {
+    renderHeader(
+      <ModelAccessProvider status={status} onRefresh={() => {}}>
+        <OperatorProvider operator={false}>
+          <SummaryHeader run={run} terminal={false} onKill={() => {}} />
+        </OperatorProvider>
+      </ModelAccessProvider>,
+    );
+  }
+
+  it("names the provider the run chose", () => {
+    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: gateway.id });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.name, false))).toBeInTheDocument();
+  });
+
+  it("a provider deleted since: (removed), by the id the run recorded", () => {
+    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: "old-gateway" });
+    expect(screen.getByText(RUN_FACTS.PROVIDER("old-gateway", true))).toBeInTheDocument();
+  });
+
+  it("claims nothing removed before /setup/status answers", () => {
+    withStatus(null, { ...runningInteractive, model_provider_id: gateway.id });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.id, false))).toBeInTheDocument();
+  });
+
+  it("a run under no provider block has no chip", () => {
+    withStatus(providerStatus([{ provider: gateway }]), runningInteractive);
+    expect(screen.queryByText(/^Model provider · /)).toBeNull();
   });
 });

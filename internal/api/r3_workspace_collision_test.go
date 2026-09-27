@@ -85,7 +85,7 @@ func TestWorkspaceCollisionNamesOnlyRunsTheCallerMaySee(t *testing.T) {
 				"sentence names its ids", warnings)
 		}
 		// The operator's record is complete regardless.
-		ev := lastAuditEvent(t, rec.events, "run.workspace.collision")
+		ev := lastAuditEvent(t, rec.events, "run.workspace.collide")
 		var data map[string]any
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatal(err)

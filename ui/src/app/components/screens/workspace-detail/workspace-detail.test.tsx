@@ -41,8 +41,17 @@ vi.mock("../../../lib/api/setup", () => ({
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+const getAvailabilityMock = vi.fn();
+vi.mock("../../../lib/api/permissions", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
+  return {
+    ...actual,
+    permissions: { ...actual.permissions, getAvailability: (...a: unknown[]) => getAvailabilityMock(...a) },
+  };
+});
 
 import { toast } from "sonner";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
@@ -108,6 +117,9 @@ function renderDetail(id = "ws-1", operator = true, securityOperator = operator)
 beforeEach(() => {
   vi.clearAllMocks();
   getSetupStatusMock.mockResolvedValue(setupStatus());
+  // Never settles by default, so the Availability card stays empty in every
+  // test that isn't about it.
+  getAvailabilityMock.mockReturnValue(new Promise(() => {}));
 });
 
 describe("WorkspaceDetailScreen — not found", () => {
@@ -349,6 +361,30 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
 
 // This screen never read useOperator at all — a viewer saw enabled
 // Delete/lane toggles/record controls that all 403 server-side.
+// UT-7b: GET /permissions/availability is securityOps, so the card (and its
+// read) is only there for a security admin or a super admin. A person who can
+// open their own workspace's page gets neither a card nor a 403.
+describe("WorkspaceDetailScreen — the Availability card", () => {
+  it("is absent, and never read, for a caller below the security tier", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail("ws-1", false);
+
+    await screen.findByText("Recorded sessions");
+    expect(screen.queryByText(AVAILABILITY.WORKSPACE_CARD_TITLE)).not.toBeInTheDocument();
+    expect(getAvailabilityMock).not.toHaveBeenCalled();
+  });
+
+  it("is there for a security admin, reading this workspace's own id", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getAvailabilityMock.mockResolvedValue({ kind: "workspace", value: "ws-1", restricted: false, allowed_by: [] });
+    renderDetail("ws-1", false, true);
+
+    expect(await screen.findByText(AVAILABILITY.WORKSPACE_CARD_TITLE)).toBeInTheDocument();
+    expect(await screen.findByText(AVAILABILITY.LABEL)).toBeInTheDocument();
+    expect(getAvailabilityMock).toHaveBeenCalledWith("workspace", "ws-1");
+  });
+});
+
 describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () => {
   it("disables the Sessions card's session controls, the Allowed hosts remove control, and the Denied hosts remove control", async () => {
     getWorkspaceMock.mockResolvedValue(

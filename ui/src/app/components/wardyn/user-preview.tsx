@@ -11,7 +11,7 @@
 //
 // The server does the clamping (internal/auth/oidc's contextWithPrincipal) and
 // grants the posture only where the model-access roster row is per_user
-// (/me's member_preview_available); nothing here gates anything.
+// (/me's user_preview_available); nothing here gates anything.
 
 import * as React from "react";
 import { EyeOff } from "lucide-react";

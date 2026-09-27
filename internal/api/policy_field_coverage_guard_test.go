@@ -70,7 +70,7 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 	"WorkspaceMounts": {validated: true, clamped: true,
 		why: "runner.ValidateMount plus the unique-target invariant; DROPPED entirely by the clamp — a host bind mount is operator-authored and must never arrive from a composer fed untrusted input"},
 	"WorkspaceRepos": {validated: true, clamped: false,
-		why: "B11b-F10, answered deliberately: runner.ValidateTarget plus the same unique-target invariant, and NOT dropped like its WorkspaceMounts sibling. A repo is cloned into the sandbox rather than bound to a host path, so it carries no host-filesystem authority to drop; the authority it does carry is the workspace ONBOARDING check, which narrowMemberInlinePolicy applies on the member lane"},
+		why: "B11b-F10, answered deliberately: runner.ValidateTarget plus the same unique-target invariant, and NOT dropped like its WorkspaceMounts sibling. A repo is cloned into the sandbox rather than bound to a host path, so it carries no host-filesystem authority to drop; the authority it does carry is the workspace ONBOARDING check, which narrowUserInlinePolicy applies on the member lane"},
 	"LLMInspection": {validated: true, clamped: true,
 		why: "mode/marker/sidecar-URL shape; replaced wholesale by the operator's configured mode, or cleared when the operator configures none"},
 	"UIApps": {validated: true, clamped: true,

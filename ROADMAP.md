@@ -138,7 +138,7 @@ shipped behavior; none is scheduled.
 - **Team mode as a packaged, sealed multi-user product** — as opposed to the
   RBAC that ships IN the control plane today (see
   [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what",
-  and [docs/MEMBERS.md](docs/MEMBERS.md) for what a member themself can do).
+  and [docs/USERS.md](docs/USERS.md) for what a member themself can do).
   Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6
   added capability grants over a user, an IdP group, or everyone (see
   CHANGELOG.md's `[0.6.0]` entry) — which is authorization detail on top of
@@ -162,7 +162,7 @@ shipped behavior; none is scheduled.
   never reads the human's role LIVE at connect time, unlike the web
   terminal's `requireOperator` gate — SSH carries no session for that gate to
   read — so a demotion can still ride an unexpired stamp for up to one TTL
-  window. Overrides are audited distinctly (`ssh.auth` carries
+  window. Overrides are audited distinctly (`ssh.authenticate` carries
   `override:true`), and the ceiling is documented, not silently assumed away,
   in `docs/SSH.md`'s Bounds section and `threatmodel/THREAT-MODEL.md`
   residual #15.
@@ -203,7 +203,7 @@ shipped behavior; none is scheduled.
   member may author an `inline_policy`, but its api_key/git_pat/ssh_key grant is
   clamped to grant KINDS the operator allows and then its {host, secret} pairing
   is dropped unless the operator eligible-listed that exact pairing
-  (`filterMemberGrants`, `internal/api/inline_policy.go` — the secret-exfil
+  (`filterUserGrants`, `internal/api/inline_policy.go` — the secret-exfil
   guard: a member must not pair an arbitrary stored secret with an allowlisted
   host). A run's real model-access grant is re-added at launch by
   `foldRunIntegration` (an operator integration) or `applyWorkspaceRequirements`
@@ -216,7 +216,7 @@ shipped behavior; none is scheduled.
   left no trace; 0.6 closed that: every drop now also records an
   `authz.denied` audit event with reason `grant_pairing_not_eligible`,
   aggregated one event per reason at launch (never on a preflight dry-run) and
-  carrying the pairings that went (`auditMemberPolicyDrops`, same file). No
+  carrying the pairings that went (`auditUserPolicyDrops`, same file). No
   preview lane disagrees with launch: preflight is the only one, and it
   resolves through the same `resolveRunPolicy` chokepoint and the same
   `resolveRunLLMAccess` verdict the create path uses (`internal/api/preflight.go`),
@@ -239,7 +239,7 @@ shipped behavior; none is scheduled.
   0.8/0.8.1 issue tracks any of these. Self-service reset, per-user
   uid/Kerberos/cifs `multiuser`, and a same-drive concurrent-run collision
   warning are current, documented non-goals, not gaps —
-  [docs/MEMBERS.md](docs/MEMBERS.md) ("there is no self-service reset: a drive
+  [docs/USERS.md](docs/USERS.md) ("there is no self-service reset: a drive
   you have poisoned is reclaimed by your admin with a documented command, so
   ask") and [docs/design/user-drives-prompt.md](docs/design/user-drives-prompt.md)'s
   "Do not design" list ("No Reset", "No share credentials, no per-user uid, no

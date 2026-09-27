@@ -25,6 +25,7 @@ import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, CornerDownLeft } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
+import { modelProviderSignIn } from "../../../lib/api/model-provider-signin";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { isTerminalRunState, type AgentRun } from "../../../lib/types";
 import { usePoll } from "../../../lib/use-poll";
@@ -159,12 +160,19 @@ export interface HarnessLoginPaneHandle {
 
 export function HarnessLoginPane({
   provider = "anthropic",
+  modelProvider,
   startURLManaged = false,
   onDone,
   onCancel,
   paneRef,
 }: {
   provider?: string;
+  // The model provider id this sign-in is for (#544): launch and paste go to
+  // /model-providers/{id}/sign-in instead of /setup/harness-*, the provider
+  // record supplies the access portal, and the door around the pane carries
+  // packet E's framing — so the pane starts at once (packet E draws no consent
+  // step) and drops its own title and blurb.
+  modelProvider?: string;
   // The ORG's access portal is already stored and the server will use it: this
   // sign-in runs under a per_user agent row (the member's Getting Started CTA,
   // and the admin's own sign-in on a per_user row of the Agents tab). The
@@ -187,7 +195,7 @@ export function HarnessLoginPane({
   paneRef?: React.Ref<HarnessLoginPaneHandle>;
 }) {
   const flow = loginFlow(provider);
-  const askStartUrl = !!flow.needsStartUrl && !startURLManaged;
+  const askStartUrl = !!flow.needsStartUrl && !startURLManaged && !modelProvider;
   // review-1 B1: every mount site passes an INLINE `onDone` — a fresh function
   // identity on every parent re-render. `completeCapture` must not list
   // `onDone` in its own deps: that puts a fresh `completeCapture` in the watch
@@ -199,7 +207,7 @@ export function HarnessLoginPane({
   React.useEffect(() => {
     onDoneRef.current = onDone;
   }, [onDone]);
-  const [phase, setPhase] = React.useState<Phase>(askStartUrl ? "prompt" : "intro");
+  const [phase, setPhase] = React.useState<Phase>(modelProvider ? "launching" : askStartUrl ? "prompt" : "intro");
   const [startUrl, setStartUrl] = React.useState("");
   const [runId, setRunId] = React.useState<string | null>(null);
   const [token, setToken] = React.useState("");
@@ -315,7 +323,9 @@ export function HarnessLoginPane({
     setImageFailed(false);
     setTabOpened(false);
     try {
-      const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
+      const id = modelProvider
+        ? (await modelProviderSignIn.startSignIn(modelProvider)).runId
+        : await harnessAuthApi.harnessLogin(provider, startUrl.trim());
       // The id comes first, the terminal later. Holding the id from t≈0 is what
       // makes Cancel able to kill a sandbox that is still coming up — P5 fixed
       // the POST not answering until dispatch was done, which let a timed-out
@@ -338,7 +348,17 @@ export function HarnessLoginPane({
       setRefused(e instanceof HttpError && e.status === 409);
       setPhase("error");
     }
-  }, [provider, startUrl, runId]);
+  }, [provider, modelProvider, startUrl, runId]);
+
+  // A provider door starts at once (packet E draws no consent step). A ref,
+  // not the phase: StrictMode re-runs this effect on the same instance, and a
+  // second launch is a second sign-in sandbox.
+  const autoStarted = React.useRef(false);
+  React.useEffect(() => {
+    if (!modelProvider || autoStarted.current) return;
+    autoStarted.current = true;
+    void launch();
+  }, [modelProvider, launch]);
 
   // startingSentenceOf is the substrate's sentence for this read, or "". The lead-in
 // below promises the reader words after it, so BOTH arms that use it check for
@@ -502,7 +522,8 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       setPhase("saving");
       setError("");
       try {
-        await harnessAuthApi.harnessCredentialPaste(provider, t);
+        if (modelProvider) await modelProviderSignIn.captureSignIn(modelProvider, runId ?? "", t);
+        else await harnessAuthApi.harnessCredentialPaste(provider, t);
         if (runId) await runsApi.killRun(runId).catch(() => {});
         setPhase("done");
         onDone();
@@ -512,7 +533,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         savedRef.current = false; // allow another attempt (auto or manual)
       }
     },
-    [provider, token, runId, onDone],
+    [provider, modelProvider, token, runId, onDone],
   );
 
   // confirmCapture is the PHASE half of the corroboration; the rule and the
@@ -540,13 +561,13 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       void runsApi.killRun(runId).catch(() => {});
     }
     setPhase("saving");
-    const { confirmed, unreachable } = await confirmCaptureWithServer(provider, runId);
+    const { confirmed, unreachable } = await confirmCaptureWithServer(provider, runId, modelProvider);
     if (confirmed) {
       completeCapture();
       return;
     }
     verifyFailSentenceRef.current = unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED;
-  }, [provider, runId, completeCapture]);
+  }, [provider, modelProvider, runId, completeCapture]);
 
   // Watch the login terminal: read the sign-in URL off it (the door's Open
   // button uses it, #628), then capture and save the printed token.
@@ -651,7 +672,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     const controller = new AbortController();
     watchAbortRef.current = controller;
     const wake = watchWakeRef.current;
-    void watchForCapture({ provider, runId, signal: controller.signal, wake }).then((confirmed) => {
+    void watchForCapture({ provider, runId, signal: controller.signal, wake, modelProvider }).then((confirmed) => {
       if (controller.signal.aborted) return;
       if (confirmed) {
         completeCaptureRef.current();
@@ -676,18 +697,21 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       // `cancel()`/completeCapture to read as though it were still live.
       if (watchAbortRef.current === controller) watchAbortRef.current = null;
     };
-  }, [watchEligible, flow.capture, provider, runId]);
+  }, [watchEligible, flow.capture, provider, modelProvider, runId]);
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">
-      <div className="flex items-center gap-2">
-        <KeyRound className="size-4 shrink-0 text-primary" />
-        <span className="text-sm font-medium text-foreground">{flow.title}</span>
-      </div>
+      {!modelProvider && (
+        <div className="flex items-center gap-2">
+          <KeyRound className="size-4 shrink-0 text-primary" />
+          <span className="text-sm font-medium text-foreground">{flow.title}</span>
+        </div>
+      )}
       {/* The blurb narrates the RUNNING flow ("Wardyn opened a sandbox…") — on
           the intro nothing has launched yet, so the expectations list speaks
-          instead and the blurb would be a lie. */}
-      {phase !== "intro" && (
+          instead and the blurb would be a lie. A provider door says it in
+          packet E's one cleanup line instead. */}
+      {phase !== "intro" && !modelProvider && (
         <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb(startURLManaged)}</p>
       )}
 

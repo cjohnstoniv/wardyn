@@ -42,7 +42,7 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 	})
 
 	t.Run("a root at / WARNs but is permitted", func(t *testing.T) {
-		// Allow-and-warn is MemberMountPolicy.bootWarnings' own posture: the
+		// Allow-and-warn is UserMountPolicy.bootWarnings' own posture: the
 		// operator may have chosen it deliberately, and should still be told.
 		roots, warns, err := ParseUserDriveHostRoots("/,/srv/homes")
 		if err != nil {
@@ -694,25 +694,25 @@ func TestDriveCommentsDoNotClaimTheSpecJSONIsAReachableDriveInput(t *testing.T) 
 func TestMountCeilingOverlapWarnings(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		member MemberMountPolicy
+		member UserMountPolicy
 		drives []string
 		want   string
 	}{
 		{
 			name:   "the same tree",
-			member: MemberMountPolicy{Roots: []string{"/srv/shares"}},
+			member: UserMountPolicy{Roots: []string{"/srv/shares"}},
 			drives: []string{"/srv/shares"},
 			want:   "both name",
 		},
 		{
 			name:   "a member root that HOLDS the share",
-			member: MemberMountPolicy{Roots: []string{"/srv"}},
+			member: UserMountPolicy{Roots: []string{"/srv"}},
 			drives: []string{"/srv/shares"},
 			want:   "which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry",
 		},
 		{
 			name:   "a member root INSIDE the share",
-			member: MemberMountPolicy{Roots: []string{"/srv/shares/projects"}},
+			member: UserMountPolicy{Roots: []string{"/srv/shares/projects"}},
 			drives: []string{"/srv/shares"},
 			want:   "which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry",
 		},
@@ -720,7 +720,7 @@ func TestMountCeilingOverlapWarnings(t *testing.T) {
 			// A per-principal override REPLACES the shared list, so it is a
 			// ceiling in its own right and overlaps on its own.
 			name: "a per-principal override",
-			member: MemberMountPolicy{
+			member: UserMountPolicy{
 				Roots:            []string{"/home/projects"},
 				RootsByPrincipal: map[string][]string{"alice@corp.example": {"/srv/shares"}},
 			},
@@ -757,7 +757,7 @@ func TestMountCeilingOverlapWarnings(t *testing.T) {
 		{"no member ceiling at all", nil, []string{"/srv/shares"}},
 	} {
 		t.Run("clean/"+tc.name, func(t *testing.T) {
-			if got := MountCeilingOverlapWarnings(MemberMountPolicy{Roots: tc.member}, tc.drives); len(got) != 0 {
+			if got := MountCeilingOverlapWarnings(UserMountPolicy{Roots: tc.member}, tc.drives); len(got) != 0 {
 				t.Errorf("warnings = %v, want none", got)
 			}
 		})

@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/nodump"
 )
 
 // egressCanaryTimeout bounds the TCP dial the -egress-canary flag performs.
@@ -34,6 +35,11 @@ import (
 const egressCanaryTimeout = 5 * time.Second
 
 func main() {
+	// First, before any credential is resolved: no core dump, no same-uid ptrace.
+	if err := nodump.Disable(); err != nil {
+		slog.Error("wardyn-proxy: fatal", slog.Any("err", err))
+		os.Exit(1)
+	}
 	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides WARDYN_PROXY_CONFIG_JSON)")
 	// egressCanary is the k8s substrate's boot-time NetworkPolicy-enforcement
 	// probe (see internal/runner/k8s): launched as a throwaway pod with this

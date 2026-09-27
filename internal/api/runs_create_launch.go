@@ -121,9 +121,9 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			Drive: l.driveMount,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
-			// roots immediately before ContainerCreate (memberMountPosture,
+			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
-			MemberMounts: s.memberMountPosture(l.wsRefs),
+			UserMounts: s.userMountPosture(l.wsRefs),
 		})
 	}
 }
