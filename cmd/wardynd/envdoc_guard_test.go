@@ -62,6 +62,10 @@ var envDocAllow = map[string]bool{
 	// enforce these stay documented; test scaffolding rather than operator
 	// config is why they are allowlisted rather than in the registry proper.
 	"WARDYN_E2E_ADDR": true, "WARDYN_E2E_UI_ADDR": true,
+	// #469: wardynd's internal TLS listener, and how many concurrent lanes
+	// run-ui-e2e.sh's default invocation runs — same shell-only situation as
+	// the pair above.
+	"WARDYN_E2E_INTERNAL_ADDR": true, "WARDYN_E2E_LANES": true,
 	// F063: the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
 	// run-ui-e2e.sh, screenshots.sh, test/e2e/e2e.sh) — none read by Go, so
 	// TestEnvDoc_E2EShellVarsAreDocumented below is what actually enforces these

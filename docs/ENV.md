@@ -493,8 +493,12 @@ instead. Unset, both behave as before; see nightly's
 gateway's second listener on the Playwright e2e backend, default `:8089`;
 `scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
 daemon itself enforces). `WARDYN_E2E_ADDR` is the backend's console listener,
-default `:8088`. `scripts/run-ui-e2e.sh` picks a free port for each of the two
-that is unset, so two runs on one host never share one.
+default `:8088`. `WARDYN_E2E_INTERNAL_ADDR` (default `:8443`) is wardynd's
+proxy-facing internal TLS listener (`-internal-listen`), which binds
+unconditionally whenever `-control-plane-url` is https (the daemon's own
+default) regardless of the two listeners above. `scripts/run-ui-e2e.sh` picks
+a free port for each of the three that is unset, so two runs — or, since #469,
+two concurrent lanes in one run — on one host never share one.
 
 The rest of the Playwright e2e backend's knobs (`scripts/e2e-backend.sh`,
 `scripts/run-ui-e2e.sh`, `scripts/screenshots.sh`, `test/e2e/e2e.sh`) are
@@ -519,6 +523,7 @@ until it landed, ten of these thirteen were undocumented and unenforced in
 | `WARDYN_E2E_ANTHROPIC_KEY` | string (credential) | (unset = skip) | `test/e2e/e2e.sh` only: when set, the real-LLM path records against a live Anthropic key at boot instead of skipping that leg. Credential-shaped — never commit a value, and it never appears in captured output |
 | `WARDYN_E2E_LIVE_BASE_URL` | string (URL) | (unset = hermetic) | `run-ui-e2e.sh` LIVE mode: run specs from `ui/e2e/live/` against an ALREADY-RUNNING external Wardyn at this URL — today the kind SSO cluster (`scripts/kind-sso-walk.sh`, which exports it) — instead of booting and re-seeding the hermetic `-runner none` backend. It also becomes `WARDYN_E2E_BASE_URL`, which is the `live` Playwright project's base URL. Unset (every other caller) leaves the default path byte-identical: the hermetic backend is built, brought up per spec and torn down as before. Every live spec ALSO self-skips without `WARDYN_TEST_K8S=1` |
 | `WARDYN_E2E_ALLOW_ALL_SKIPPED` | string (space-separated spec basenames) | (unset = none allowlisted) | `run-ui-e2e.sh` only (F061): names spec files allowed to report zero executed tests (every test in the file skipped) without failing the gate. Empty by default — a spec that skips its whole file is a red flag until named here on purpose |
+| `WARDYN_E2E_LANES` | int | `1` unset locally, `3` unset with `$CI` set | #469: `run-ui-e2e.sh`'s DEFAULT (no spec args, not LIVE mode) invocation only — how many isolated backends run specs concurrently, each claiming the next unclaimed spec from one shared list. Unset, the default is 1 on a plain dev box and 3 when `CI` is set — three concurrent backends triple one run's memory, which a shared box may not have headroom for; `ci.yml` also pins `WARDYN_E2E_LANES: 3` explicitly for its dedicated runner rather than rely on that default. Lane 0 reuses `WARDYN_E2E_ADDR`/`WARDYN_E2E_UI_ADDR`/`WARDYN_E2E_INTERNAL_ADDR`/`WARDYN_E2E_PG_DBNAME` as resolved above; lane i>0 asks the OS for its own free ADDR/UI_ADDR/INTERNAL_ADDR (never a fixed offset from another lane's — that is a guess, not a reservation) with database `<WARDYN_E2E_PG_DBNAME>_lane<i>`. Clamped to 1-3; an explicit spec list or LIVE mode always runs one lane, regardless of this setting |
 | `WARDYN_SCREENSHOTS` | bool | (unset = skip) | Set by `screenshots.sh` itself (never by hand): gates `ui/e2e/screenshots/docs.spec.ts` so a bare `pnpm e2e` never regenerates the doc PNGs — only `make screenshots` does |
 | `WARDYN_LOG_TAG` | string | `==>` | Console prefix for `scripts/lib/common.sh`'s `log()`. Set by the sourcing script itself (`e2e-backend.sh` → `[e2e]`, `run-ui-e2e.sh` → `[e2e-ui]`, `screenshots.sh` → `[screenshots]`), never by hand |
 
