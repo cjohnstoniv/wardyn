@@ -31,6 +31,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stub when it moved onto agent-base; agent-novnc always had it. The stub now implements mode 3
   itself: it prepares the workspace, writes the prep-done marker, and idles until TERM or INT.
 
+- **Cancelling a sign-in or run that is still starting now stops its sandbox create (#1182).** A kill
+  of a STARTING run left its in-flight sandbox create running until its own readiness wait expired
+  (up to about 3 minutes on Kubernetes), holding its pods and the node's room, so a retry could sit
+  "Waiting for a machine with room" and time out. The kill now cancels the create, and the
+  substrate's rollback removes what it had made. On Kubernetes the client rate limit is raised from
+  client-go's 5/10 per API group to one shared 50 QPS / burst 100 limiter, and a readiness wait that
+  times out under client-side throttling now names the pod's reason (for example
+  "Unschedulable … Insufficient cpu") instead of "client rate limiter Wait returned an error".
 - **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
   recovers a KILLED run whose kill tail never finished (#710).** That route is
   the sweep's only caller: it does not run at boot or on a timer, so recovery

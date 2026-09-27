@@ -800,6 +800,8 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
+	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
+	creates inflightCreates
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
 	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
