@@ -610,7 +610,6 @@ func finalizeBootFlags(f *bootFlags) {
 	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
-	return f
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted
