@@ -724,12 +724,22 @@ func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
 // ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
 // false under a per_user bedrock_sso row (which has no bearer lane of its
 // own to read). It decides one field too — see Bedrock.
+//
+// Secrets.Present keeps demoSecretNames' presence bits (#850): those are the
+// console demo catalog's own seed-secret names
+// (demo-catalog-secrets.ts's needsSecret values, e.g. "wardyn-demo-key"),
+// already public in the shipped client bundle — knowing one is stored says
+// nothing about the deployment's real credential posture, unlike a real
+// provider secret name. Without this, walkableDemos/stepOrder
+// (setup/steps.ts) never offer a demo whose secret an admin has in fact
+// stored, because their only signal is this same, otherwise fully redacted,
+// list.
 func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
-	st.Secrets = SetupSecrets{Present: []string{}}
+	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
 	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
 	// Rebuilt from an explicit field list, exactly like Runner two
 	// lines up — SetupBedrock passed through WHOLE, two fields after SCM/
@@ -802,6 +812,30 @@ func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) Setu
 		st.Harness = reduced
 	}
 	return st
+}
+
+// demoSecretNames are ui/src/app/components/screens/demos/demo-catalog-secrets.ts's
+// needsSecret values verbatim — the console demo catalog's own seed-secret
+// names, kept here as the one server-side spelling so a renamed or added demo
+// secret is a single-line diff in both places, not a drift risk.
+var demoSecretNames = map[string]bool{
+	"wardyn-demo-key":       true,
+	"wardyn-demo-api-token": true,
+	"wardyn-demo-pat":       true,
+	"wardyn-demo-ssh-key":   true,
+}
+
+// demoSecretPresence narrows a secret-name list to the ones demoSecretNames
+// lists — see redactSetupStatusForUser's own comment for why this subset
+// alone survives redaction.
+func demoSecretPresence(present []string) []string {
+	out := make([]string, 0, len(present))
+	for _, n := range present {
+		if demoSecretNames[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // setupProviders detects the resident coding-agent CLIs and returns them plus
