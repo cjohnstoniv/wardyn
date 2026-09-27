@@ -29,7 +29,7 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
+import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type SetupModelProvider, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard } from "./new-run-primitives";
 import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
@@ -39,6 +39,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
+import { DENIED } from "../../../lib/permissions-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
@@ -67,7 +68,14 @@ import {
   savedPolicyGone,
 } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
-import { agentLabel, initialWizardState, titleFromTask, type RunPrefill, type WizardState } from "./wizard-types";
+import {
+  agentLabel,
+  initialWizardState,
+  titleFromTask,
+  workspaceUnavailableToCaller,
+  type RunPrefill,
+  type WizardState,
+} from "./wizard-types";
 import { useLaunch } from "./use-launch";
 import { WhatToRunStep } from "./step-bodies";
 
@@ -144,6 +152,11 @@ export function NewRunScreen() {
   // SetupStatus.harnesses — absent while unfetched or failed, same "unknown
   // stays unknown" rule as llmReady above (AgentPicker's own fallback).
   const [harnesses, setHarnesses] = React.useState<SetupHarnessTool[] | undefined>(undefined);
+  // #922: SetupStatus.model_providers, THIS caller's own filtered list
+  // (capVisible(capModelProvider), #832/#1015) — the one member-safe signal
+  // for "is the chosen workspace's pinned model provider available to me".
+  // Read off the SAME /setup/status fetch above, never a second one.
+  const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> under the Title input.
   // Grouping is by EXACT string, so without this the operator has to retype a
   // title character-perfect for a run to ever join its family — the feature
@@ -219,6 +232,7 @@ export function NewRunScreen() {
         if (!alive) return;
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
+        setModelProviders(st.model_providers);
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
@@ -313,6 +327,13 @@ export function NewRunScreen() {
   // this screen's question, and a second general-purpose answer living
   // elsewhere is what drifts out of sync with the form it describes.
   const needsTask = !isAgent || state.mode === "batch";
+  // #922: the CHOSEN workspace, resolved the same way workspace-card.tsx's own
+  // per-reason advisory lines resolve it (state.workspaces[0] is the primary
+  // selection) — folded into ONE generic reason via workspaceUnavailableToCaller,
+  // never the picker's own more specific copy (that stays put, unchanged).
+  const pickedWorkspace = workspaces.find((w) => w.id === state.workspaces[0]?.workspaceId);
+  const workspaceUnavailable =
+    !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders);
   // #1197 L2: Title dropped out of this chain — the server never required
   // one (runs_create_validate.go's own doc comment), only the console did,
   // and the console default now derives one from the task instead of asking.
@@ -328,7 +349,9 @@ export function NewRunScreen() {
         ? RUN.POLICY_GONE
         : useSaved && !state.selectedPolicyId
           ? "Pick a saved policy, or write a custom one."
-          : null;
+          : workspaceUnavailable
+            ? DENIED.WORKSPACE_NOT_AVAILABLE
+            : null;
 
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).

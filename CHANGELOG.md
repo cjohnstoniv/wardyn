@@ -10,15 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- **The person side of "Available to" names the consequence, in the console, before Launch (#922).**
-  New Run's workspace picker and a workspace's own page (its "Start a run" button) now say
-  `This workspace isn't available to you.` when the workspace itself carries no allow for the
-  caller, or when it is pinned to a model provider the caller's own filtered
+- **The person side of "Available to" disables Launch, in the console, before the server ever has to
+  refuse (#922).** New Run's own Launch button is now disabled with
+  `This workspace isn't available to you.` when the chosen workspace itself carries no allow for
+  the caller, or is pinned to a model provider the caller's own filtered
   `/setup/status.model_providers` doesn't carry — the sentence never names the resource, since the
-  console has no member-safe way to learn a restricted value's own name. The Workspaces list shows
-  the same line under a pinned workspace's Model column. Advisory only, same as the existing
-  "Not granted" workspace-picker annotation; the server's own launch-time refusal is still the real
-  gate.
+  console has no member-safe way to learn a restricted value's own name. The workspace picker's own
+  per-reason advisory lines, a workspace's own page ("Start a run"), and the Workspaces list's Model
+  column carry the same signal. The git-provider-pinned case (`Uses Azure DevOps (contoso), which
+  isn't available to you.`) is not built — `GET /me/scm-access` only covers per-user Azure DevOps
+  rows, so absence there is ambiguous for a shared-PAT row or a GitHub App; tracked as a follow-up.
 
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one

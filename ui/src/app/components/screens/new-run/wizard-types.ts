@@ -25,6 +25,7 @@ import type {
   ConfinementClass,
   CreateRunInput,
   FirstUseMode,
+  MeCapabilities,
   Workspace,
   WorkspaceMount,
   WorkspaceRepo,
@@ -33,6 +34,7 @@ import type {
   WorkspaceSourceInput,
 } from "../../../lib/types";
 import { effectiveWorkspaceRequirements } from "../../../lib/types";
+import { capabilityAllowed } from "../../../lib/capabilities";
 // review U-01: the ONE place both clone doors (run header, Runs-list kebab)
 // turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
 // below. lib/api must not import from components/ (audit.ts's own comment),
@@ -127,6 +129,24 @@ export function workspaceModelProviderUnavailable(
   const ref = ws.llm_cred?.provider_ref;
   if (!ref || !modelProviders) return false;
   return !modelProviders.some((p) => p.id === ref);
+}
+
+// #922: the STRONGER answer New Run's own Launch button needs, folding both
+// person-side "isn't available to you" reasons into one boolean — an
+// ungranted workspace (capabilityAllowed's existing "workspace" narrowing) or
+// one pinned to a model provider the caller's own filtered list doesn't carry
+// (workspaceModelProviderUnavailable, above). Deliberately NOT reused by
+// workspace-card.tsx's own per-reason advisory lines — those keep their more
+// specific, already-shipped copy (DENIED.WORKSPACE_BODY /
+// DENIED.WORKSPACE_NOT_AVAILABLE) unchanged; this is the single generic
+// canon sentence (DENIED.WORKSPACE_NOT_AVAILABLE) the `problem` chain shows
+// when EITHER reason applies to the currently CHOSEN workspace.
+export function workspaceUnavailableToCaller(
+  ws: Workspace,
+  caps: MeCapabilities | null,
+  modelProviders: { id: string }[] | undefined,
+): boolean {
+  return !capabilityAllowed(caps, "workspace", ws.id) || workspaceModelProviderUnavailable(ws, modelProviders);
 }
 
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor

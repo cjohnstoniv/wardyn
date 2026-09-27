@@ -4,9 +4,11 @@
  */
 
 // #922 (UT-7c) — the person side of "Available to", against a real backend:
-// a git provider (Azure DevOps) restricted to one user type.
+// a git provider (Azure DevOps) restricted to one user type, and New Run's
+// own Launch button for a workspace-kind restriction.
 //
-// Two pins, one family, real writes and real refusals (never page.route):
+// Two pins on the git-provider family, one family, real writes and real
+// refusals (never page.route):
 //   1. "A user-type session sees no ADO repos" — a restricted type's every
 //      attempt to bring in a repo on the restricted org is refused; the type
 //      actually listed succeeds. There is no repo-BROWSING surface in the
@@ -27,7 +29,8 @@
 // ado-launch-door.spec.ts's own comment) — neither pin here touches that
 // surface.
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
+import { DENIED } from "../src/app/lib/permissions-copy";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -172,5 +175,94 @@ test.describe("Available to — a person's git provider (#922)", () => {
     await expect(page.getByText(serverSentence)).toBeVisible();
     // The dialog stays open on the refusal — nothing was created.
     await expect(dialog).toBeVisible();
+  });
+});
+
+// New Run's own Launch button, the half this file's earlier round held back
+// (new-run-screen.tsx's `problem` derivation was DO NOT TOUCH while #1228/
+// #1229 — the shared TierPicker/barrier lanes — were still open; both landed
+// on main via batch 08-13, 37ba7e78a). This exercises the "workspace itself
+// carries no allow" reason (capabilityAllowed's existing "workspace" kind,
+// now ALSO wired to Launch, not just the picker's own advisory line) — a
+// REAL backend capability restriction, not the model-provider half
+// (workspace-card.test.tsx / new-run-screen-form.test.tsx already pin that
+// one as a component test, same reasoning as available-to.spec.ts's own
+// "component test, not e2e" note for wire-shaped states).
+test.describe("Available to — New Run's Launch button (#922)", () => {
+  test.describe.configure({ mode: "serial" });
+  const WORKSPACE_KIND_TYPE = "e2e-922-nr-listed";
+  let workspaceId = "";
+  let grantId = "";
+  let originalEnforcement: Record<string, boolean> = {};
+
+  test.beforeAll(async ({ request }) => {
+    const created = await request.post("/api/v1/workspaces", {
+      headers: auth,
+      data: { name: "e2e-922-nr-workspace", sources: [{ type: "ephemeral", target: "/home/agent/work" }] },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    workspaceId = (await created.json()).id;
+
+    const madeType = await request.post("/api/v1/user-types", {
+      headers: auth,
+      data: { id: WORKSPACE_KIND_TYPE, name: "E2E New Run listed" },
+    });
+    expect([201, 409], await madeType.text()).toContain(madeType.status());
+    const granted = await request.post("/api/v1/permissions/grants", {
+      headers: auth,
+      data: { subject_type: "user_type", subject: WORKSPACE_KIND_TYPE, capability: "workspace", value: workspaceId, effect: "allow" },
+    });
+    expect(granted.status(), await granted.text()).toBe(201);
+    grantId = (await granted.json()).id;
+
+    // The "workspace" KIND's own enforcement switch (permissions.tsx's older,
+    // kind-wide control — distinct from UT-10's per-VALUE restricted bit):
+    // GET /me/capabilities carries the caller's own allow rows but no
+    // per-value restricted signal (#1018-adjacent gap, documented in this
+    // PR's body), so the client's capabilityAllowed only reads "denied" once
+    // the KIND itself is enforced. A real admin enabling it, merged onto
+    // whatever this deployment already enforces — never a blind replacement
+    // (PutCapabilityEnforcement is a full-document PUT).
+    const before = await request.get("/api/v1/permissions", { headers: auth });
+    originalEnforcement = (await before.json()).enforcement ?? {};
+    const put = await request.put("/api/v1/permissions/enforcement", {
+      headers: { ...auth, "If-Match": before.headers()["etag"] ?? "" },
+      data: { ...originalEnforcement, workspace: true },
+    });
+    expect(put.status(), await put.text()).toBe(200);
+  });
+
+  test.afterAll(async ({ request }) => {
+    const before = await request.get("/api/v1/permissions", { headers: auth });
+    await request.put("/api/v1/permissions/enforcement", {
+      headers: { ...auth, "If-Match": before.headers()["etag"] ?? "" },
+      data: originalEnforcement,
+    });
+    if (grantId) await request.delete(`/api/v1/permissions/grants/${grantId}`, { headers: auth });
+    if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`, { headers: auth });
+  });
+
+  test("a caller with no allow for the workspace: Launch is disabled with the canon sentence", async ({ page }) => {
+    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw("standard")]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("combobox", { name: "Workspace" }).click();
+    await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
+
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeDisabled();
+    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
+  });
+
+  test("the listed type: Launch stays enabled, the sentence never renders", async ({ page }) => {
+    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw(WORKSPACE_KIND_TYPE)]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("combobox", { name: "Workspace" }).click();
+    await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
+
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeEnabled();
+    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
   });
 });
