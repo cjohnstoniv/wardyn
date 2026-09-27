@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -23,6 +24,23 @@ import (
 func hostAt(avail int, load1 float64) *hostcapacity.Guard {
 	return hostcapacity.New(hostcapacity.Limits{MinAvailableMiB: 8192, MaxLoad1: 100},
 		func() (int, float64, error) { return avail, load1, nil })
+}
+
+// hostCapacityRefusals returns the host_capacity.refuse rows, failing on any
+// that is not a daemon-authored denial.
+func hostCapacityRefusals(t *testing.T, rec *recRecorder) []types.AuditEvent {
+	t.Helper()
+	var rows []types.AuditEvent
+	for _, ev := range rec.snapshot() {
+		if ev.Action != "host_capacity.refuse" {
+			continue
+		}
+		if ev.Outcome != "denied" || ev.ActorType != types.ActorSystem || ev.Actor != "wardynd" || ev.RunID != nil {
+			t.Fatalf("host_capacity.refuse row = %+v, want a wardynd denial with no run id", ev)
+		}
+		rows = append(rows, ev)
+	}
+	return rows
 }
 
 // hostCapacityStore records every state write a launcher could make before its
@@ -66,6 +84,15 @@ func TestHostCapacityCreateRun(t *testing.T) {
 	if st.created.ID != uuid.Nil {
 		t.Fatal("over limits: a run row was written")
 	}
+	rows := hostCapacityRefusals(t, h.audit)
+	var data map[string]string
+	if len(rows) == 1 {
+		_ = json.Unmarshal(rows[0].Data, &data)
+	}
+	if len(rows) != 1 || rows[0].Target != "runs" ||
+		data["reason"] != "mem_available_mib=4096 < 8192, load1=150.00 > 100" || data["requested_by"] != adminTokenPrincipal {
+		t.Fatalf("over limits: host_capacity.refuse rows = %+v, want one for runs", rows)
+	}
 }
 
 // TestHostCapacityLaunchersRefuseBeforeState drives the four server-authored
@@ -85,12 +112,12 @@ func TestHostCapacityLaunchersRefuseBeforeState(t *testing.T) {
 		t.Fatal("aws-sso harness login convention missing")
 	}
 	ws := types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned}
-	for name, launch := range map[string]func() error{
-		"source scan": func() error {
+	for door, launch := range map[string]func() error{
+		"source_scan": func() error {
 			_, err := srv.launchSourceScanRun(ctx, "alice@example.com", types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: "https://github.com/acme/widgets.git"})
 			return err
 		},
-		"harness login": func() error {
+		"harness_login": func() error {
 			_, _, err := srv.launchHarnessLoginRun(ctx, "alice@example.com", hl, loginTarget{startURL: perUserPortal})
 			return err
 		},
@@ -98,15 +125,20 @@ func TestHostCapacityLaunchersRefuseBeforeState(t *testing.T) {
 			_, _, err := srv.launchRecordRun(ctx, "alice@example.com", ws, "build", "build", false)
 			return err
 		},
-		"site-config probe": func() error {
+		"site_config_probe": func() error {
 			_, _, err := srv.runSiteConfigProbe(ctx, "alice@example.com", "true", nil, nil, nil)
 			return err
 		},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(door, func(t *testing.T) {
+			before := len(hostCapacityRefusals(t, h.audit))
 			var refused hostcapacity.ErrRefused
 			if err := launch(); !errors.As(err, &refused) {
 				t.Fatalf("err = %v, want hostcapacity.ErrRefused", err)
+			}
+			if rows := hostCapacityRefusals(t, h.audit)[before:]; len(rows) != 1 || rows[0].Target != door ||
+				!strings.Contains(string(rows[0].Data), `"requested_by":"alice@example.com"`) {
+				t.Fatalf("host_capacity.refuse rows = %+v, want one for %s", rows, door)
 			}
 			if st.created.ID != uuid.Nil || st.claims != 0 || len(h.broker.revoked) != 0 {
 				t.Fatalf("refused launch touched state: row = %v, claims = %d, revoked = %v", st.created.ID, st.claims, h.broker.revoked)

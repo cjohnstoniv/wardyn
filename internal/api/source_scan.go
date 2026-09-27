@@ -193,7 +193,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if aerr := s.admitLauncherRepo(ctx, src.Locator); aerr != nil {
 		return types.AgentRun{}, aerr
 	}
-	if herr := s.cfg.HostCapacity.Admit(); herr != nil {
+	if herr := s.admitHostCapacity(ctx, actor, "source_scan"); herr != nil {
 		return types.AgentRun{}, herr
 	}
 	// Detach from request cancellation before the durable launch work (the

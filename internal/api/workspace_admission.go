@@ -382,9 +382,9 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 }
 
 // recordLaunchRefusals are the ORG-POLICY refusals a record session must clear
-// before it claims anything: the agent roster (recordRosterRefusal), provider
-// admission, and (review follow-up N4) the per-user Azure DevOps gate, all
-// over the workspace's repo sources. They travel together because they are
+// before it claims anything: host capacity (admitHostCapacity), the agent
+// roster (recordRosterRefusal), provider admission, and (review follow-up N4)
+// the per-user Azure DevOps gate, all over the workspace's repo sources. They travel together because they are
 // one question — may this session start on this deployment? — and because
 // they share every property that decides WHERE the check goes: a bare error, not
 // routed through abort(); sited before the CAS claim so a refusal costs no state;
@@ -392,8 +392,8 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 //
 // ONE call site rather than three because launchRecordRun sits at the funlen
 // ratchet, which is what its own comment there asks the next lane to do.
-func (s *Server) recordLaunchRefusals(ctx context.Context, ws types.Workspace, agent string) error {
-	if err := s.cfg.HostCapacity.Admit(); err != nil {
+func (s *Server) recordLaunchRefusals(ctx context.Context, actor string, ws types.Workspace, agent string) error {
+	if err := s.admitHostCapacity(ctx, actor, "record"); err != nil {
 		return err
 	}
 	if rerr := s.recordRosterRefusal(ctx, agent); rerr != nil {
