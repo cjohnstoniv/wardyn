@@ -222,6 +222,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the published 0.7.11 image over a converted store to pin it, and `TestPG_UpgradeFrom_0_7_12`
   upgrades a database as 0.7.12 left it (its `0065_secret_envelope_v1` backport included) and
   checks that a second boot changes nothing.
+- **A non-interactive `--workspace` launch under a declared mechanism is refused at create and
+  Review, not after it boots (#767).** `POST /runs`/`/runs/preflight` never set `run.WorkspaceID`
+  from a launch's `workspace_id` — that column is the trusted scan/verify/record linkage. But the
+  create-time mechanism gate and its model-access advisory read the request's own `workspace_id` as
+  that same scan signal, so a non-interactive `wardyn run --workspace <id>` skipped the gate: a
+  launch whose lane did not satisfy the org's declared mechanism got a 201, booted, and only then
+  failed — dispatch already checked it and failed it closed. Review showed no refusal, and its
+  advisory and residency grade described the run as getting no model credential when it is a model
+  run. Both create-time checks now ask the same question dispatch does for this door.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

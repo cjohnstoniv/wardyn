@@ -193,13 +193,12 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
 		return runProviderChoice{}, false
 	}
-	// Not llmMechanismGateApplies: that reads workspace_id without interactive
-	// as a scan, but this door never sets run.WorkspaceID (seedRequestWorkspace),
-	// so dispatch runs such a body as a model run — exactly what the CLI's
-	// --workspace and the console send. Both ids are nil for every run this
-	// door creates.
+	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is
+	// llmMechanismGateApplies' own predicate, shared here (#767 step 2) so this
+	// door and that one can never again ask a different question of the same
+	// request.
 	_, needsModel := agentLLMProvider(req.Agent)
-	if !needsModel || req.Task == harnessLoginTask || !isModelRun(req.TaskMode, nil, nil, req.Interactive) {
+	if !needsModel || !createDoorIsModelRun(req) {
 		if req.ModelProvider != "" {
 			writeError(w, http.StatusBadRequest, mpRunNoModel)
 			return runProviderChoice{}, false
