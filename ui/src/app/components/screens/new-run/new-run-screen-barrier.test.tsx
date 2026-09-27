@@ -161,6 +161,84 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
     }
     expect(screen.queryByText(/isn't installed on this host/)).not.toBeInTheDocument();
   });
+
+  // #1200 review P2-7 — "unknown" must not mean "offer a tier the ACTIVE
+  // FLOOR already forbids": with a CC3 floor authored and the host probe
+  // inconclusive, the picker still has to fall back to the floor's own
+  // allowed set (allowedFromFloor), not the unfiltered ORDERED_CLASSES.
+  it("a known floor still hides what it forbids even while host availability is unknown", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    fireEvent.change(box, {
+      target: {
+        value: JSON.stringify({
+          allowed_domains: [],
+          first_use_approval: "always_deny",
+          min_confinement_class: "CC3",
+        }),
+      },
+    });
+    // Vault is the ONLY tier the floor allows, so the control collapses to
+    // its decided row — never a 3-tier radiogroup with Fence/Wall offered.
+    expect(await screen.findByText(RUN.BARRIER_ONLY_QUALIFIER)).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Wall" })).toBeNull();
+  });
+});
+
+// #1200 review P2-1/P2-2/P2-8 — a NON-operator member (renderScreen/
+// renderClone above are both operator:true, which is exactly the gap the
+// review's mutation table found: M4a — turning off the governance
+// fold-in survived every pre-existing New Run vitest case, caught only by
+// e2e). This proves the fold-in itself at the unit level, both directions.
+function renderAsMember() {
+  return render(
+    <MemoryRouter>
+      <OperatorProvider operator={false}>
+        <NewRunScreen />
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("NewRunScreen — a member's governance ceiling folds into the Barrier control (P2-8)", () => {
+  it("a Vault floor, with Vault installed, collapses to the decided row naming the admin", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC3",
+      governance_profile_name: "vault-required",
+    });
+    renderAsMember();
+    expect(await screen.findByText(/Vault · set by your admin/)).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
+  });
+
+  it("a Vault floor this host cannot build shows the requirement card, never a silent Wall fallback", async () => {
+    mockConfinementClasses = ["CC1", "CC2"];
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC3",
+      governance_profile_name: "vault-required",
+    });
+    renderAsMember();
+    expect(
+      await screen.findByText(/Your admin requires Vault, and this host can't run it/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Wall · set by your admin/)).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Wall" })).toBeNull();
+  });
+
+  // Review P2-2(a): an ADMIN is never clamped, even with a floored deployment
+  // default — this is the false-hide the pre-review build introduced.
+  it("an ADMIN's inline policy is never clamped to the deployment default — Fence stays offered", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2" });
+    renderScreen(); // operator:true
+    expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
+    expect(screen.queryByText(/set by your admin/)).toBeNull();
+  });
 });
 
 // B4b — a clone, MOUNTED.
@@ -237,11 +315,18 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
   // decides, rather than this screen silently substituting a guess. #1200:
   // Fence is now the ONLY tier this host can build, so the picker collapses
   // to its own decided row rather than naming Vault as disabled.
+  //
+  // Review P2-1: this caller is an OPERATOR (renderClone's own
+  // OperatorProvider) with no governance profile at all — the decided line
+  // must be the NEUTRAL "only barrier this run can use" sentence, never
+  // "set by your admin" (nobody's admin narrowed anything here; the HOST
+  // itself only has one tier).
   it("falls back and defers to the server when this host cannot build the cloned tier", async () => {
     mockConfinementClasses = ["CC1"];
     renderClone();
     await screen.findByRole("button", { name: /Launch run/ });
-    expect(await screen.findByText(/Fence · set by your admin/)).toBeInTheDocument();
+    expect(await screen.findByText(RUN.BARRIER_ONLY_QUALIFIER)).toBeInTheDocument();
+    expect(screen.queryByText(/set by your admin/)).toBeNull();
     expect(screen.queryByRole("radio", { name: "Vault" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /Launch run/ }));

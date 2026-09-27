@@ -113,7 +113,15 @@ export function barrierRequirementReason(
   effectiveFloor: ConfinementClass,
   unavailable: ConfinementClass[],
   belowFloor: ConfinementClass[],
+  // #1200 review P2-6 — the SAME honest /dev/kvm reason
+  // environment-step.tsx's own picker computes (vaultIncompatibleReason),
+  // passed in by the caller when it has a SetupStatus to compute it from.
+  // Preferred over the generic "isn't installed" line whenever the missing
+  // tier IS Vault, since that's the one case with a comparable hardware fact
+  // to name instead of a bare "not installed".
+  vaultReason?: string,
 ): string {
+  if (effectiveFloor === "CC3" && vaultReason) return vaultReason;
   if (unavailable.includes(effectiveFloor)) {
     return `${CC_META[effectiveFloor].label} isn't installed on this host.`;
   }

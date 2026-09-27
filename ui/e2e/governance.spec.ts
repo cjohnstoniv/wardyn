@@ -715,8 +715,10 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    // Review P2-6: the governance-sourced wording, not the generic one —
+    // this member's floor IS the governance ceiling's doing.
     await expect(
-      page.getByText(/This run's floor requires Vault, and this host can't run it/),
+      page.getByText(/Your admin requires Vault, and this host can't run it/),
     ).toBeVisible();
     // Never the false claim that Wall (the strongest tier this host DOES
     // have) is what the member gets.

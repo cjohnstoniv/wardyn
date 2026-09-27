@@ -48,7 +48,7 @@ import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { allowedFromFloor, visibleTiers } from "../../wardyn/tier-picker";
+import { TierPicker, allowedFromFloor, visibleTiers } from "../../wardyn/tier-picker";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { useMemberLocalDirRoot, useUserDrive, useUserType } from "../../wardyn/operator-context";
@@ -384,27 +384,30 @@ export function MemberGettingStarted() {
             </div>
           ) : (
             <>
+              {/* #1200 review P2-4 — the blocked case renders the SAME
+                  requirement card every other TierPicker consumer shows for
+                  T-9 (a runner exists, but nothing it can build is allowed
+                  under this member's governance floor), never a hover-only
+                  tooltip (invisible on touch and to most AT) behind a
+                  non-canon "blocked" chip. It sits below the chip row, not
+                  inside it — the card is a block, not a pill. */}
+              {barrierBlocked && (
+                <TierPicker
+                  className="mb-2"
+                  tiers={[]}
+                  selected={null}
+                  onSelect={() => {}}
+                  requirementNote={TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE(
+                    CC_META[govFloor ?? "CC1"].label,
+                    `${CC_META[govFloor ?? "CC1"].label} isn't installed on this host.`,
+                  )}
+                />
+              )}
               <div className="flex flex-wrap gap-2">
-                {barrierBlocked ? (
-                  // T-9 — a runner exists, but nothing it can build is
-                  // allowed under this member's governance floor. Named, not
-                  // silently substituted with the strongest INSTALLED tier
-                  // (which would hide the reason nothing launches).
-                  <Chip
-                    tone="danger"
-                    title={TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE(
-                      CC_META[govFloor ?? "CC1"].label,
-                      `${CC_META[govFloor ?? "CC1"].label} isn't installed on this host.`,
-                    )}
-                  >
-                    {T.BARRIER_CHIP("blocked")}
+                {!barrierBlocked && visibleBarrier && (
+                  <Chip tone="neutral">
+                    {T.BARRIER_CHIP(CC_META[visibleBarrier].label)}
                   </Chip>
-                ) : (
-                  visibleBarrier && (
-                    <Chip tone="neutral">
-                      {T.BARRIER_CHIP(CC_META[visibleBarrier].label)}
-                    </Chip>
-                  )
                 )}
                 {ownKeyCounts ? (
                   <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>

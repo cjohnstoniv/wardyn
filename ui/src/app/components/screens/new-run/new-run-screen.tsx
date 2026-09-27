@@ -29,7 +29,7 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
+import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type SetupStatus, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard } from "./new-run-primitives";
 import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
@@ -52,7 +52,8 @@ import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
-import { TierPicker } from "../../wardyn/tier-picker";
+import { TierPicker, allowedFromFloor } from "../../wardyn/tier-picker";
+import { vaultIncompatibleReason } from "../setup/environment-step";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
@@ -164,6 +165,11 @@ export function NewRunScreen() {
   // in both cases the Barrier control falls back to the authored floor alone,
   // never a floor it could not confirm.
   const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
+  // #1200 review P2-6 — this host's platform facts (the /dev/kvm probe),
+  // read off the same /setup/status call, so the T-9 requirement card can
+  // name the SAME honest reason environment-step.tsx's own picker computes
+  // (vaultIncompatibleReason) instead of a generic "isn't installed".
+  const [platform, setPlatform] = React.useState<SetupStatus["platform"] | undefined>(undefined);
   // The Workspace card's drive block: this caller's allocation (nil-means-none)
   // and the door beside it ("" means open), read off the shell's ONE GET /me
   // rather than a second one of this screen's own — app-shell's useMeta already
@@ -202,6 +208,7 @@ export function NewRunScreen() {
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
         if (st.unreachable) return;
+        setPlatform(st.platform);
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
         // No runner AT ALL (environment-step.tsx's own noDriver fold — a
         // member's redacted Driver:"" WITH classes is a withheld NAME, not
@@ -327,12 +334,37 @@ export function NewRunScreen() {
   // successful parse's. Both paths refuse to launch below it server-side.
   const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
 
-  // #1200 — the floor that actually binds: whichever of the authored policy's
-  // own floor and the governance ceiling's ranks HIGHER (combineFloors —
-  // composer.Clamp raises a weaker authored floor to the ceiling's, never the
-  // other way). A Barrier control that only read `floor` could offer a tier
-  // the server then 422s at launch.
-  const effectiveFloor = combineFloors(floor, govFloor);
+  // #1200 review P2-2 — govFloor binds ONLY where the server would actually
+  // clamp to it, mirrored exactly from the two doors that decide that:
+  //   - an OPERATOR is never clamped at all (effectiveCeiling's own
+  //     short-circuit, internal/api/governance.go; an admin's inline policy
+  //     specifically, inline_policy.go's "admin ⇒ no clamp");
+  //   - the INLINE (custom) lane clamps every non-operator unconditionally —
+  //     even unassigned, since the deployment default IS the ceiling then;
+  //   - the SAVED-POLICY lane clamps only when a NAMED profile is assigned
+  //     (governanceProfile present) — an unassigned member's saved policy is
+  //     not raised to the deployment default at all (inline_policy.go:310's
+  //     `ceiling.Profile != nil`).
+  // Folding it unconditionally (the pre-review build) hid tiers the server
+  // would have let an admin, or an unassigned member's saved policy, use.
+  const govFloorApplies = !operator && (!useSaved || !!governanceProfile);
+  const boundGovFloor = govFloorApplies ? govFloor : undefined;
+
+  // #1200 — the floor that actually binds: whichever of the authored
+  // policy's own floor and the (now correctly gated) governance ceiling's
+  // ranks HIGHER (combineFloors — composer.Clamp raises a weaker authored
+  // floor to the ceiling's, never the other way). A Barrier control that
+  // only read `floor` could offer a tier the server then 422s at launch.
+  const effectiveFloor = combineFloors(floor, boundGovFloor);
+
+  // #1200 review P2-1 — whether the GOVERNANCE ceiling is what actually
+  // removed a tier, as opposed to this host simply having one tier
+  // installed, or the run's OWN authored policy floor doing the narrowing.
+  // Only this case gets TierPicker's "set by your admin" line and the
+  // governance-sourced requirement wording — ranking "at or above" (not
+  // strictly above) the authored floor, since a tie is still the ceiling's
+  // doing (it would have bound here even without an authored floor at all).
+  const governanceBinding = !!boundGovFloor && (!floor || rank(boundGovFloor) >= rank(floor));
 
   // The Barrier control's per-tier state — see barrierReasons.
   const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, effectiveFloor);
@@ -674,28 +706,44 @@ export function NewRunScreen() {
 
               {/* #1200 — the shared TierPicker: only what THIS run can
                   actually use (installed ∧ at-or-above the active floor,
-                  which folds in the governance ceiling — see
-                  combineFloors). A tier the floor forbids or the host can't
-                  build is DROPPED, never shown disabled (the global rule
-                  every user-facing picker now follows); the ONE qualifying
-                  case collapses to TierPicker's own decided row, and NONE
-                  qualifying shows the T-9 requirement card instead of a
-                  fully-disabled Seg. */}
+                  which folds in the governance ceiling ONLY where the server
+                  would clamp to it — see govFloorApplies). A tier the floor
+                  forbids or the host can't build is DROPPED, never shown
+                  disabled (the global rule every user-facing picker now
+                  follows); the ONE qualifying case collapses to TierPicker's
+                  own decided row, and NONE qualifying shows the T-9
+                  requirement card instead of a fully-disabled Seg. Review
+                  P2-1/P2-3: decidedLine/pickOneNote override TierPicker's
+                  defaults, which both assume a governance floor and a
+                  browser-persisted pick — neither true of this screen's
+                  non-governance decided case or its per-run choice. */}
               <div className="border-t border-border pt-3">
                 <div className="text-sm font-medium text-foreground">Barrier</div>
                 <TierPicker
                   className="mt-2"
-                  tiers={qualifying ?? ORDERED_CLASSES}
+                  // P2-7: an UNKNOWN probe (qualifying: null) must not offer
+                  // a tier the active floor already forbids — it falls back
+                  // to the floor's own allowed set, not the unfiltered
+                  // ORDERED_CLASSES, and only to that when there is no floor
+                  // either.
+                  tiers={qualifying ?? allowedFromFloor(effectiveFloor) ?? ORDERED_CLASSES}
                   selected={cc}
                   onSelect={(id) => {
                     setCcTouched(true);
                     patch({ confinementClass: id });
                   }}
+                  decidedLine={governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
+                  pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
                   requirementNote={
                     qualifying && qualifying.length === 0 && effectiveFloor
-                      ? TIER_PICKER.REQUIREMENT_LINE(
+                      ? (governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
                           CC_META[effectiveFloor].label,
-                          barrierRequirementReason(effectiveFloor, unavailable, belowFloor),
+                          barrierRequirementReason(
+                            effectiveFloor,
+                            unavailable,
+                            belowFloor,
+                            platform && vaultIncompatibleReason(platform),
+                          ),
                         )
                       : undefined
                   }

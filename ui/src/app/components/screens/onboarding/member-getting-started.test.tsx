@@ -217,41 +217,9 @@ describe("MemberGettingStarted", () => {
     expect(screen.getByText(MEMBER.GS_BODY("walled"))).toBeInTheDocument();
   });
 
-  // #1200 — the barrier chip is installed ∧ allowed (visibleTiers), never
-  // the strongest INSTALLED tier alone: a floor this member's admin set
-  // narrows what the chip may claim, the same rule every other picker follows.
-  describe("the barrier chip respects the governance floor (T-9)", () => {
-    it("a Wall-only floor drops Fence from the chip's own candidates, showing the strongest ALLOWED tier", async () => {
-      getSetupStatusMock.mockResolvedValue(
-        status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),
-      );
-      getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2", governance_profile_name: "walled" });
-      renderPage();
-      expect(await screen.findByText("Barrier · Wall")).toBeInTheDocument();
-      expect(screen.queryByText("Barrier · Fence")).not.toBeInTheDocument();
-    });
-
-    it("a floor this host can't build at all shows a blocked chip, never silently the strongest installed tier", async () => {
-      getSetupStatusMock.mockResolvedValue(
-        status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),
-      );
-      getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
-      renderPage();
-      expect(await screen.findByText("Barrier · blocked")).toBeInTheDocument();
-      // Never the false claim "Wall" — the strongest tier the HOST has, but
-      // not one this member's ceiling allows.
-      expect(screen.queryByText("Barrier · Wall")).not.toBeInTheDocument();
-    });
-
-    it("no floor at all shows the strongest installed tier, unrestricted", async () => {
-      getSetupStatusMock.mockResolvedValue(
-        status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),
-      );
-      getDefaultPolicyMock.mockResolvedValue({});
-      renderPage();
-      expect(await screen.findByText("Barrier · Wall")).toBeInTheDocument();
-    });
-  });
+  // #1200 — the barrier chip's OWN governance-floor filtering (installed ∧
+  // allowed) is pinned in member-getting-started-barrier.test.tsx, split out
+  // to stay under the file-size gate.
 
   // UT-7a: the subtitle introduces the caller's own type off /me.user_type.
   it("introduces the caller's user type with its description", async () => {

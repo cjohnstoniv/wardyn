@@ -42,4 +42,26 @@ describe("barrierRequirementReason", () => {
       "Every barrier installed on this host is below Wall.",
     );
   });
+
+  // #1200 review P2-6 — Vault gets the SAME honest /dev/kvm reason
+  // environment-step.tsx's own picker computes, not a generic "isn't
+  // installed", whenever the caller has one to pass.
+  it("prefers the caller's vault reason over the generic line, for Vault only", () => {
+    expect(barrierRequirementReason("CC3", ["CC3"], [], "no /dev/kvm here.")).toBe(
+      "no /dev/kvm here.",
+    );
+    // Never applied to a non-Vault floor.
+    expect(barrierRequirementReason("CC2", ["CC2"], [], "no /dev/kvm here.")).toBe(
+      "Wall isn't installed on this host.",
+    );
+  });
+
+  it("falls back to the generic line when no vault reason was given (undefined or empty)", () => {
+    expect(barrierRequirementReason("CC3", ["CC3"], [], undefined)).toBe(
+      "Vault isn't installed on this host.",
+    );
+    expect(barrierRequirementReason("CC3", ["CC3"], [], "")).toBe(
+      "Vault isn't installed on this host.",
+    );
+  });
 });

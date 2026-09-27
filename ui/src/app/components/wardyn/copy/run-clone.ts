@@ -32,6 +32,12 @@ export const RUN = {
   // silently contradicted.
   SAVED_POLICY_GOVERNS: (barrier: string, egress: string) =>
     `The stored spec governs this run — barrier floor ${barrier}, ${egress}. Your attached workspace mounts into it; nothing else on this page is merged.`,
+  // #1200 review P2-1 — restored: exactly one installed+allowed tier does
+  // NOT mean an admin set a floor (a Fence-only host with no governance
+  // profile lands here too). TierPicker's decidedLine override renders this
+  // instead of the default "set by your admin" line whenever the sole
+  // survivor is NOT the governance ceiling's doing.
+  BARRIER_ONLY_QUALIFIER: "— the only barrier this run can use.",
   // An inconclusive host probe never blocks launch and does not leave every
   // tier guessably selectable either: an untouched pick sends no
   // confinement_class at all, so the server's own read decides.

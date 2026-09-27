@@ -115,10 +115,9 @@ export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
 // Docker/k8s-shaped guidance stays local to ColumnState below; this is only
 // the WHY, which is driver-independent (the KVM fact is about the physical
 // host either way).
-export function vaultIncompatibleReason(status: SetupStatus): string {
-  const kvmProbed = typeof status.platform.kvm === "boolean";
-  const kvm =
-    status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
+export function vaultIncompatibleReason(platform: SetupStatus["platform"]): string {
+  const kvmProbed = typeof platform.kvm === "boolean";
+  const kvm = platform.kvm ?? !(platform.wsl || /darwin|mac/i.test(platform.os));
   if (kvm) return "";
   return kvmProbed
     ? "Vault needs KVM virtualization and this host doesn't expose /dev/kvm. If wardynd is containerized (the compose quick-start), bind-mount /dev/kvm into it and Re-check; on WSL2 enable nested virtualization; on a laptop/desktop enable virtualization in firmware. Only a genuinely KVM-less host stays incompatible."
@@ -269,7 +268,7 @@ export function EnvironmentStep({
     status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
   // "" only when kvm is true (no incompatibility to name) — tierState below
   // is what actually gates whether this ever renders.
-  const reasonForIncompatibleVault = vaultIncompatibleReason(status);
+  const reasonForIncompatibleVault = vaultIncompatibleReason(status.platform);
 
   const tierState = (cc: ConfinementClass): TierState => {
     if (available.has(cc)) return "ready";
