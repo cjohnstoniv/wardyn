@@ -21,18 +21,14 @@ type childState struct {
 }
 
 // Fanout multiplexes a single audit event stream to multiple audit.Sink
-// children. Per-child failures are isolated: an error from one child is logged
-// (and counted) but never propagates to sibling sinks or to the caller.
-//
-// Emit returns nil unless ALL children fail, in which case it returns the last
-// observed error. This preserves the recorder's ability to detect a total
-// fan-out failure while satisfying the isolation requirement.
+// children; a per-child error is logged and counted but never propagates to
+// siblings or the caller. Emit returns nil unless ALL children fail, in which
+// case it returns the last observed error.
 type Fanout struct {
 	children []*childState
 }
 
-// NewFanout creates a Fanout over the supplied sinks. Each sink in children
-// is wrapped in its own childState with an independent drop counter.
+// NewFanout creates a Fanout over the supplied sinks.
 func NewFanout(children ...audit.Sink) *Fanout {
 	cs := make([]*childState, len(children))
 	for i, s := range children {
@@ -44,12 +40,9 @@ func NewFanout(children ...audit.Sink) *Fanout {
 // Name implements audit.Sink.
 func (f *Fanout) Name() string { return "fanout" }
 
-// Emit delivers ev to every child sink concurrently (one goroutine per child).
-// Per-child panics are recovered; errors are logged and counted. Emit blocks
-// until every child has returned.
-//
-// If every child returns an error Emit returns the last error seen; if at
-// least one child succeeds Emit returns nil.
+// Emit delivers ev to every child sink concurrently, recovering per-child
+// panics, and blocks until all have returned. Returns nil unless every child
+// failed, in which case it returns the last error seen.
 func (f *Fanout) Emit(ctx context.Context, ev types.AuditEvent) error {
 	results := make(chan error, len(f.children))
 
@@ -90,22 +83,13 @@ func (f *Fanout) Emit(ctx context.Context, ev types.AuditEvent) error {
 	return nil
 }
 
-// dropper is implemented by sinks that track their own drop counter for events
-// lost asynchronously (after Emit returns), e.g. WebhookSink and SyslogSink
-// buffer in the background, so overflow and retry-exhaustion losses never
-// surface as an Emit error.
+// dropper is implemented by sinks (webhook, syslog) that track their own drop
+// counter for events lost asynchronously, after Emit has already returned nil.
 type dropper interface{ Drops() int64 }
 
-// Drops returns the total drop count for the named child sink. Returns -1 if no
-// child with that name is found.
-//
-// The total aggregates two independent sources of loss:
-//   - the fanout-local counter, incremented when the child's Emit returns an
-//     error (synchronous failure), and
-//   - the child's own Drops() counter, if it implements dropper — buffering
-//     sinks (webhook, syslog) drop asynchronously and report nil from Emit, so
-//     without this their losses would be structurally invisible (Drops was
-//     always 0 for them).
+// Drops returns the total drop count for the named child sink (fanout-local
+// sync failures plus the child's own dropper count, if it has one), or -1 if
+// no child with that name is found.
 func (f *Fanout) Drops(name string) int64 {
 	for _, cs := range f.children {
 		if cs.sink.Name() == name {
@@ -120,11 +104,7 @@ func (f *Fanout) Drops(name string) int64 {
 }
 
 // DropsByName returns the total drop count per child sink name, aggregating
-// across children that share a name (an operator may configure two webhooks).
-// It is the prod caller Drops() lacked: cmd/wardynd wires it to the api Server so
-// wardyn_audit_sink_drops_total{sink} surfaces on /metrics — a SIEM sink silently
-// shedding events past its 4096 buffer or after retry exhaustion was visible only
-// in ERROR logs before. Empty when the fanout has no children.
+// across children sharing a name, for the wardyn_audit_sink_drops_total metric.
 func (f *Fanout) DropsByName() map[string]int64 {
 	out := make(map[string]int64, len(f.children))
 	for _, cs := range f.children {
@@ -138,10 +118,8 @@ func (f *Fanout) DropsByName() map[string]int64 {
 }
 
 // Close closes every child sink that implements io.Closer, returning the first
-// error encountered (after attempting to close all of them). Buffering sinks
-// (webhook, syslog) block in Close until their final batch has been flushed, so
-// calling Fanout.Close on graceful shutdown ensures the last events are drained
-// and awaited rather than abandoned.
+// error after attempting all of them. Buffering sinks block in Close until
+// their final batch is flushed.
 func (f *Fanout) Close() error {
 	var firstErr error
 	for _, cs := range f.children {
@@ -159,13 +137,8 @@ func (f *Fanout) Close() error {
 	return firstErr
 }
 
-// panicErr converts a recovered panic value to an error: one that is already an
-// error is returned as-is, anything else is wrapped with its %v rendering.
-//
-// The assertion is on error itself, not a local `interface{ Error() string }` —
-// same method, same set as error, so nothing can satisfy the one and not the
-// other, and a second `e.(error)` assertion after it could never fail. One
-// assertion says what two would do.
+// panicErr converts a recovered panic value to an error, returning it as-is if
+// it already is one, else wrapping its %v rendering.
 func panicErr(v any) error {
 	if e, ok := v.(error); ok {
 		return e

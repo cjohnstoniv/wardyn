@@ -18,29 +18,23 @@ import (
 
 const userTypeCols = `id, name, description, priority, built_in, created_at, updated_at, created_by`
 
-// userTypeRowRefs counts the subject rows that name user type $1: capability
-// grants, governance assignments and drive grants. ONE expression, read by
-// both UserTypeReferences and DeleteUserType, so the count a 409 reports and
-// the predicate the delete honours cannot disagree.
+// userTypeRowRefs counts the subject rows naming user type $1 (capability
+// grants, governance assignments, drive grants); shared by UserTypeReferences
+// and DeleteUserType so the 409 count and the delete predicate cannot disagree.
 const userTypeRowRefs = `(
 	(SELECT count(*) FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
 
-// userTypeRowRefsExist is userTypeRowRefs' boolean twin, read by CreateUserType
-// alone: a subject row can outlive the type it names (userTypeSubjectExists'
-// own check-then-insert race against a concurrent DeleteUserType), and that
-// orphan would silently rebind to a later type created with the same id. This
-// refuses to recreate an id any subject row still names, so the id stays dead
-// until an operator clears the orphan rows themselves.
+// userTypeRowRefsExist is userTypeRowRefs' boolean twin: CreateUserType uses
+// it to refuse recreating an id that an orphaned subject row still names.
 const userTypeRowRefsExist = `(
 	EXISTS (SELECT 1 FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
 
 // userTypeTokenStamps counts the unrevoked API tokens stamped with user type
-// $1 (migration 0082). A snapshot column, so no foreign key holds the type:
-// this count, in the handler's 409 and in the DELETE's own predicate, does.
+// $1. A snapshot column with no foreign key, so this count is what holds the type.
 const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = $1 AND revoked_at IS NULL)`
 
 // ListUserTypes returns every type: the built-in first, then by priority
@@ -56,10 +50,9 @@ func (s PG) GetUserType(ctx context.Context, id string) (types.UserType, error) 
 	return scanUserType(s.Pool.QueryRow(ctx, q, id))
 }
 
-// CreateUserType inserts a custom type. ErrConflict when the id or the name is
-// taken, or the id is still named by an orphaned subject row (see
-// userTypeRowRefsExist). built_in is never written: the only built-in row is
-// the seeded one.
+// CreateUserType inserts a custom type (built_in is never set here).
+// ErrConflict when the id or name is taken, or the id is still named by an
+// orphaned subject row.
 func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error) {
 	const q = `
 		INSERT INTO user_types (id, name, description, priority, created_by)
@@ -75,9 +68,8 @@ func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserTyp
 	return out, uniqueConflict(err)
 }
 
-// UpdateUserType rewrites a type's name, description and priority; the id,
-// built_in and creation provenance never change. ErrNotFound when no row has
-// the id, ErrConflict when the name is taken.
+// UpdateUserType rewrites a type's name, description and priority; id and
+// built_in never change. ErrNotFound when missing, ErrConflict on name clash.
 func (s PG) UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error) {
 	const q = `
 		UPDATE user_types
@@ -107,12 +99,11 @@ func (s PG) UserTypeTokenStamps(ctx context.Context, id string) (int, error) {
 	return n, nil
 }
 
-// DeleteUserType removes a custom type that nothing names. ErrNotFound when no
-// row has the id; ErrConflict when the row is built in, still named by a
-// subject row or an unrevoked token stamp, or held by a foreign key (a later
-// role_mappings.user_type is ON DELETE RESTRICT). The reference check rides
-// the DELETE itself, so a row written between the caller's own check and this
-// statement still refuses.
+// DeleteUserType removes a custom type that nothing names. ErrNotFound when
+// no row has the id; ErrConflict when it is built in, still referenced, or
+// held by a foreign key (role_mappings.user_type is ON DELETE RESTRICT). The
+// reference check rides the DELETE itself, so a row written between the
+// caller's check and this statement still refuses.
 func (s PG) DeleteUserType(ctx context.Context, id string) error {
 	tag, err := s.Pool.Exec(ctx,
 		`DELETE FROM user_types WHERE id = $1 AND NOT built_in AND `+userTypeRowRefs+` = 0 AND `+userTypeTokenStamps+` = 0`, id)

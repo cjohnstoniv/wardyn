@@ -12,45 +12,37 @@ package workspacescan
 // The generated devcontainer only ever promises fields envbuilder actually
 // consumes: a base (`image`, or a `build.dockerfile` naming the generated
 // Dockerfile) plus a `features` object of official ghcr.io/devcontainers/features/*
-// refs (cross-checked against envbuilder's devcontainer-spec-support). One
-// feature is selected per detected language; languages with no official core
-// feature (Elixir, Dart, ...) are simply left off the image and surface via
-// the profile's NeedsReview elsewhere.
+// refs. One feature is selected per detected language; languages with no
+// official core feature are simply left off the image and surface via the
+// profile's NeedsReview elsewhere.
 //
 // The standard agent tool set (genStandardTools — claude-code today) is baked
 // UNCONDITIONALLY into every generated devcontainer, independent of which
-// integrations (if any) a workspace names: it's standard tooling, like the
-// shipped deploy/images/claude-code convention image. The bake is a generated
+// integrations a workspace names — standard tooling, like the shipped
+// deploy/images/claude-code convention image. The bake is a generated
 // .devcontainer/Dockerfile (genAgentToolDockerfile) that devcontainer.json
-// points `build.dockerfile` at, so its RUN steps are layers of the image
-// kaniko builds and PUSHES. Two mechanisms were tried and rejected against a
-// real build, in this order:
+// points `build.dockerfile` at, so its RUN steps are layers kaniko builds and
+// PUSHES. Two mechanisms were tried and rejected against a real build:
 //
 //   - a devcontainer lifecycle hook (onCreate/postCreate): envbuilder runs
-//     lifecycle scripts AFTER executor.DoBuild + DoPush, so nothing they do
-//     reaches the image Wardyn delivers (the pushed base, which stage 2 wraps
-//     FROM — internal/envbuild/builder.go finalizeImage, docs/ENVBUILD.md
-//     "Two-stage build"), and the runner boots that finalized tag directly
-//     with no devcontainer CLI, so they never run at run time either. They
-//     also run as the base image's unprivileged remoteUser, where a
-//     root-needing install fails the whole build.
-//   - the tool vendor's own devcontainer FEATURE
-//     (ghcr.io/anthropics/devcontainer-features/claude-code): correct
-//     mechanism, wrong engine. That feature is an npm install and needs the
-//     node feature beside it; envbuilder implements NEITHER `installsAfter`
-//     nor `overrideFeatureInstallOrder` (verified against the binary), and it
-//     ran claude-code's install.sh before node's, which hard-FAILED the build
-//     ("Node.js and npm are required but could not be installed"). Feature
-//     ordering is not a contract this engine offers, so a feature that
-//     depends on another feature cannot be used here.
+//     lifecycle scripts AFTER DoBuild+DoPush, so nothing they do reaches the
+//     pushed image (internal/envbuild/builder.go finalizeImage), and the
+//     runner boots that finalized tag with no devcontainer CLI, so they never
+//     run at run time either — and they run as the unprivileged remoteUser,
+//     where a root-needing install fails the whole build.
+//   - the tool vendor's own devcontainer FEATURE: correct mechanism, wrong
+//     engine — that feature needs the node feature beside it, and envbuilder
+//     implements NEITHER `installsAfter` nor `overrideFeatureInstallOrder`
+//     (verified against the binary), so it ran claude-code's install before
+//     node's and hard-FAILED the build. Feature ordering isn't a contract this
+//     engine offers.
 //
 // A Dockerfile RUN has neither problem: kaniko snapshots it into the pushed
-// image, it runs as root, it runs BEFORE any feature (so it depends on none),
-// and it stays inside the hardened, resource-capped build container rather
-// than on the host daemon (which is why this is not done in stage-2 finalize,
-// whose whole trust story is "FROM + COPY, no untrusted RUN").
+// image, it runs as root, it runs BEFORE any feature, and it stays inside the
+// hardened build container rather than the host daemon (why this isn't done
+// in stage-2 finalize, whose trust story is "FROM + COPY, no untrusted RUN").
 //
-// Symbols here are gen-prefixed to stay clear of the other new files in this
+// Symbols here are gen-prefixed to stay clear of the other files in this
 // package (ai.go); they never touch scan.go/markers.go/profile.go.
 
 import (
@@ -63,26 +55,22 @@ import (
 )
 
 // genDevcontainerPath is the single file GenerateDevcontainer emits, at the
-// canonical location envbuilder discovers by default (no ENVBUILDER_DEVCONTAINER_DIR
-// needed).
+// canonical location envbuilder discovers by default.
 const genDevcontainerPath = ".devcontainer/devcontainer.json"
 
 // genDockerfilePath is the second file, always emitted: it carries the
-// standard-tooling RUN layers (genAgentToolDockerfile over genStandardTools).
-// It sits beside devcontainer.json, which is also the build context
-// devcontainer.json's `build` block resolves `dockerfile` against.
+// standard-tooling RUN layers (genAgentToolDockerfile over genStandardTools),
+// beside devcontainer.json, which is also the build context its `build` block
+// resolves `dockerfile` against.
 const genDockerfilePath = ".devcontainer/Dockerfile"
 
 // EnvAsCodeDockerfilePath exports genDockerfilePath for callers outside this
 // package that need to single the generated Dockerfile out from
-// EmitEnvAsCode's output — namely internal/api/workspace_envcode.go's
-// writeEnvAsCode, which refuses to overwrite a PRE-EXISTING file at this path.
-// Unlike every other emitted key (devcontainer.json/AGENTS.md/the artifact
-// redirect stubs, all Wardyn's own narrow, regenerate-on-demand output), a
-// Dockerfile at .devcontainer/Dockerfile is exactly where an operator would
-// already have hand-authored their own, for reasons that have nothing to do
-// with Wardyn — so it is the one emitted file "write into the directory" must
-// not silently clobber.
+// EmitEnvAsCode's output — internal/api/workspace_envcode.go's writeEnvAsCode,
+// which refuses to overwrite a PRE-EXISTING file at this path. Unlike every
+// other emitted key, a Dockerfile at .devcontainer/Dockerfile is exactly where
+// an operator would already have hand-authored their own, so it's the one
+// emitted file "write into the directory" must not silently clobber.
 const EnvAsCodeDockerfilePath = genDockerfilePath
 
 // genBaseImage is the universal devcontainer base. Language toolchains are
@@ -132,22 +120,13 @@ func featuresFor(langs []string) map[string]map[string]any {
 // deploy/images/claude-code/Dockerfile's CLAUDE_INSTALL=native RUN block,
 // flattened onto one RUN (kaniko supports no heredoc) and reading the
 // architecture from `dpkg --print-architecture` rather than a buildx
-// TARGETARCH. "stable" resolves to a concrete version exactly as that
-// Dockerfile's default ARG CLAUDE_CODE_VERSION=stable does. It needs only
-// curl + dpkg + coreutils from the base image, so it depends on no
-// devcontainer feature — which matters, because this RUN executes BEFORE any
-// feature and envbuilder offers no way to order the two. Reachable because
-// the compose stack's WARDYN_ENVBUILD_BUILD_NETWORK default (the dedicated
-// wardyn-envbuild bridge — deploy/compose/docker-compose.yaml, never "host")
-// still gives the build container normal outbound internet; air-gapped is a
-// documented limitation, not special-cased here.
+// TARGETARCH. It needs only curl + dpkg + coreutils from the base image, so it
+// depends on no devcontainer feature — which matters, since this RUN executes
+// BEFORE any feature and envbuilder offers no way to order the two.
 //
-// codex-cli is deliberately absent: it has NO Wardyn-verified public
-// native-download contract (deploy/images/codex-cli/Dockerfile: native install
-// is staged-only, "fails loudly... rather than guessing a URL"), and its npm
-// lane would need a Node runtime this stage does not have. So it is not
-// bakeable today — the image is built without it, never with a guessed URL or
-// a false claim that it is there.
+// codex-cli is deliberately absent: no Wardyn-verified public native-download
+// contract, and its npm lane would need a Node runtime this stage doesn't
+// have — not bakeable today, built without it rather than with a guessed URL.
 //
 // Dockerfile note: RUN is not one of the instructions the builder performs
 // environment replacement on, so the $plat/$ver/$sum shell variables below
@@ -176,15 +155,12 @@ var genAgentToolInstalls = map[string]string{
 var genStandardTools = []string{"claude-code"}
 
 // genAgentToolDockerfile returns the .devcontainer/Dockerfile that bakes tools
-// into the image, or "" when nothing in tools is bakeable (including the
-// no-tools case) — callers must then emit no Dockerfile at all and leave
-// devcontainer.json on the plain `image` base. baseImage is the FROM line;
-// "" falls back to genBaseImage (WSPIPE-9 — a non-recommended base pick's own
-// image, not the universal convention one, when baseOrBuild's caller names it).
+// into the image, or "" when nothing in tools is bakeable — callers must then
+// emit no Dockerfile at all and leave devcontainer.json on the plain `image`
+// base. baseImage is the FROM line; "" falls back to genBaseImage.
 //
 // Every RUN leads with "set -eu" so a failed install fails the BUILD rather
-// than silently producing an image that claims a tool it does not carry: that
-// inventory honesty is the whole point of this feature.
+// than silently producing an image that claims a tool it does not carry.
 func genAgentToolDockerfile(tools []string, baseImage string) string {
 	var b strings.Builder
 	for _, t := range tools {
@@ -202,24 +178,21 @@ func genAgentToolDockerfile(tools []string, baseImage string) string {
 }
 
 // genDevcontainer is the minimal devcontainer.json shape we emit. Struct field
-// order controls JSON key order (image or build, then features, then
-// containerEnv); the features/containerEnv maps' own keys are sorted by
-// encoding/json, so the whole document is deterministic. ContainerEnv is only
-// populated by EmitEnvAsCode (GenerateDevcontainer leaves it unset — the
-// envbuilder-built image's runs already get the fidelity env from dispatch's
-// sandboxEnv, so it would be a no-op there).
+// order controls JSON key order; the features/containerEnv maps' own keys are
+// sorted by encoding/json, so the whole document is deterministic.
+// ContainerEnv is only populated by EmitEnvAsCode (GenerateDevcontainer leaves
+// it unset — the envbuilder-built image's runs already get the fidelity env
+// from dispatch's sandboxEnv).
 //
-// Image and Build are mutually exclusive, which is why both are omitempty:
-// with nothing to bake we name the base image directly, and with something to
-// bake we point at the generated Dockerfile (whose own FROM is that same base).
+// Image and Build are mutually exclusive, both omitempty: with nothing to
+// bake we name the base image directly; with something to bake we point at
+// the generated Dockerfile (whose own FROM is that same base).
 //
 // There is deliberately NO lifecycle-command field. postCreateCommand was
 // always refused (a scan-DETECTED, never-verified SetupCommand must not
 // auto-run unattended — those stay prose-only in AGENTS.md, genAgentsMD), and
-// onCreateCommand is refused too: it cannot bake anything into the image
-// Wardyn delivers, and it would run as the base image's unprivileged
-// remoteUser, where a root-needing install fails the whole build (see the
-// package comment).
+// onCreateCommand is refused too: it can't bake anything into the delivered
+// image, and it runs as the unprivileged remoteUser (see the package comment).
 type genDevcontainer struct {
 	Image        string                    `json:"image,omitempty"`
 	Build        *genBuild                 `json:"build,omitempty"`
@@ -239,12 +212,11 @@ type genBuild struct {
 // same base), and returns the extra files to emit alongside it. baseRef is
 // the workspace's OWN resolved base (a registry/custom/byo pick's Image; ""
 // for "recommended"/nil, which keeps the universal genBaseImage default) —
-// WITHOUT it, EmitEnvAsCode described the generic devcontainer base
-// regardless of what Wardyn actually boots for that workspace (WSPIPE-9).
-// GenerateDevcontainer is reached only for the recommended/derived build, so
-// it always passes "".
+// WITHOUT it, EmitEnvAsCode described the generic base regardless of what
+// Wardyn actually boots for that workspace (WSPIPE-9). GenerateDevcontainer
+// is reached only for the recommended/derived build, so it always passes "".
 // Shared by EmitEnvAsCode and GenerateDevcontainer so the committable export
-// and the image Wardyn builds can never drift on what they carry.
+// and the image Wardyn builds can never drift.
 func baseOrBuild(dc *genDevcontainer, baseRef string) map[string]string {
 	dockerfile := genAgentToolDockerfile(genStandardTools, baseRef)
 	if dockerfile == "" {
@@ -266,29 +238,24 @@ func baseOrBuild(dc *genDevcontainer, baseRef string) map[string]string {
 // deliberately. Returned as path -> content.
 //
 // artifactBases maps an artifact ecosystem (npm|pip|cargo|maven|go|nuget) to the
-// operator's corporate registry base URL (from the persisted site-config,
-// URL-ONLY — never a token). The caller (api.artifactBaseURLs) derives this
-// from the Ecosystem-tier subset of types.SiteConfig.EgressRedirects, already
-// skipping every NETWORK-ONLY row (Ecosystem "") — this function only ever
-// sees an ecosystem that actually wants a config file. When non-empty, the
-// matching per-tool config files (and go's containerEnv) are merged in so a
-// committed workspace pulls from the corporate mirror; pass nil when no
-// redirect is configured.
+// operator's corporate registry base URL (URL-ONLY — never a token), derived
+// by the caller from the Ecosystem-tier subset of
+// types.SiteConfig.EgressRedirects, already skipping every NETWORK-ONLY row.
+// When non-empty, the matching per-tool config files (and go's containerEnv)
+// are merged in; pass nil when no redirect is configured.
 //
-// baseRef is the workspace's OWN resolved base-image ref (a registry/custom/
-// byo pick's Image), or "" for "recommended"/nil — see baseOrBuild.
+// baseRef is the workspace's OWN resolved base-image ref, or "" for
+// "recommended"/nil — see baseOrBuild.
 func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef string) (map[string]string, error) {
 	var dc genDevcontainer
 	extra := baseOrBuild(&dc, baseRef)
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
-	// GOTMPDIR: dispatch's sandboxEnv (runs_dispatch.go) sets this for every
-	// Wardyn-governed run because the sandbox /tmp is noexec and `go test`
-	// compiles+execs its test binaries into $TMPDIR. Workspace-folder-relative
-	// (not a home-dir guess) so it works under any base image's remoteUser; a
-	// Go workspace built from this exported env-as-code keeps the fix even
-	// outside a Wardyn sandbox. See the AGENTS.md note for the mkdir caveat.
+	// GOTMPDIR: dispatch's sandboxEnv sets this for every Wardyn-governed run
+	// because the sandbox /tmp is noexec and `go test` compiles+execs its test
+	// binaries into $TMPDIR. Workspace-folder-relative (not a home-dir guess)
+	// so it works under any base image's remoteUser.
 	if slices.Contains(p.Languages, "Go") {
 		dc.ContainerEnv = map[string]string{"GOTMPDIR": "${containerWorkspaceFolder}/.gotmp"}
 	}
@@ -322,9 +289,8 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef 
 // genAgentsMD documents the detected environment + setup commands in the
 // emerging AGENTS.md convention, so an agent (Wardyn's or a competitor's) knows
 // how to build/test the repo. Setup commands come from p.SetupCommands — a
-// scan-time DETECTED heuristic (deriveSetupCommands), never verified — so they
-// are prose for a human/agent to review and run deliberately, not something
-// this generator or a devcontainer postCreateCommand ever auto-executes.
+// scan-time DETECTED heuristic, never verified — so they are prose for a
+// human/agent to review and run deliberately, never auto-executed.
 func genAgentsMD(p WorkspaceProfile) string {
 	var b strings.Builder
 	b.WriteString("# AGENTS.md\n\n")
@@ -350,8 +316,8 @@ func genAgentsMD(p WorkspaceProfile) string {
 		b.WriteString("## Backing services\n\n" + strings.Join(p.ServicesNeeded, ", ") + "\n\n")
 	}
 	// Environment fidelity notes: the toolchain-fidelity fixes Wardyn's own
-	// sandbox applies at dispatch time (runs.go sandboxEnv) that this exported
-	// devcontainer can't fully replicate outside Wardyn.
+	// sandbox applies at dispatch time that this exported devcontainer can't
+	// fully replicate outside Wardyn.
 	if slices.Contains(p.Languages, "Go") || slices.Contains(p.PackageManagers, "maven") {
 		b.WriteString("## Environment fidelity notes\n\n")
 		if slices.Contains(p.Languages, "Go") {
@@ -376,9 +342,8 @@ func genAgentsMD(p WorkspaceProfile) string {
 // plus the standard agent-tool install (genStandardTools), baked
 // unconditionally. A .devcontainer/Dockerfile is always emitted alongside it
 // and devcontainer.json points `build.dockerfile` at that instead of naming
-// the base directly (see genAgentToolInstalls). The returned map is path ->
-// file content; it is safe to feed straight to the envbuilder local-context
-// build (BuildFromDevcontainerFiles).
+// the base directly. The returned map is path -> file content; safe to feed
+// straight to the envbuilder local-context build.
 //
 // Pure: no I/O, no clock, no randomness. p.Languages is already sorted+deduped
 // by DeriveProfile, so iterating it and letting encoding/json sort the features
@@ -386,9 +351,8 @@ func genAgentsMD(p WorkspaceProfile) string {
 func GenerateDevcontainer(p WorkspaceProfile) (files map[string]string, err error) {
 	var dc genDevcontainer
 	// Always "" (the universal genBaseImage default): this path is reached
-	// only for the recommended/derived build (resolveWorkspaceImage falls
-	// through to it precisely when the workspace names no explicit base
-	// image), which by definition has no OTHER base to resolve.
+	// only for the recommended/derived build, which by definition has no
+	// OTHER base to resolve.
 	out := baseOrBuild(&dc, "")
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features

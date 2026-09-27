@@ -11,12 +11,10 @@ import (
 )
 
 // Bedrock data-plane refusals AFTER dispatch: AWS answered a model call the
-// proxy allowed and relayed, but refused it — an AWS Organizations SCP or IAM
-// deny (403 AccessDeniedException) or a quota throttle (429
-// ThrottlingException). The proxy never alters or retries these (the agent's
-// SDK already retries a throttle); it only names the class on the decision row
-// so the control plane can say why a run died of it. See
-// internal/api/bedrock_dataplane_fault.go for the reader.
+// proxy allowed and relayed, but refused it — an SCP/IAM deny (403
+// AccessDeniedException) or a quota throttle (429 ThrottlingException). The
+// proxy never alters or retries these; it only names the class on the
+// decision row so the control plane can say why a run died of it.
 const (
 	bedrockFaultAccessDenied = "AccessDeniedException"
 	bedrockFaultThrottling   = "ThrottlingException"
@@ -26,11 +24,9 @@ const (
 )
 
 // bedrockUpstreamFault returns the value for the decision row's UpstreamFault.
-// path is the UPSTREAM request path: every bedrock-runtime operation addresses
-// /model/<id>/<op>, which is also what lets a WARDYN_BEDROCK_BASE_URL endpoint
-// (a VPC host isBedrockHost does not recognise) count. The class is read off
-// the status and x-amzn-ErrorType header only — REST-JSON puts it there, with
-// an optional ":<namespace>" suffix — so the body is never touched.
+// path is the UPSTREAM request path: every bedrock-runtime operation
+// addresses /model/<id>/<op>. The class is read off the status and
+// x-amzn-ErrorType header only, so the body is never touched.
 func (p *Proxy) bedrockUpstreamFault(host, path string, resp *http.Response) string {
 	if !strings.HasPrefix(path, "/model/") {
 		return ""

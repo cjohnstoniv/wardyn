@@ -142,10 +142,8 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	default:
 		p.Confidence = ConfidenceHigh
 	}
-	// B11b-F9: dropping suspected secrets is a review trigger on its own. It
-	// does NOT lower Confidence — the profile's build-system reading is exactly
-	// as good as it was; what is incomplete is the leak list, and NeedsReview is
-	// the field that says "a human has to look at this".
+	// Dropping suspected secrets is a review trigger on its own; it does NOT
+	// lower Confidence, since only the leak list is incomplete.
 	if leaksTruncated {
 		p.NeedsReview = true
 	}
@@ -160,13 +158,10 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 func CollectFacts(root string) ScanFacts {
 	var facts ScanFacts
 	st := &collectState{facts: &facts} // carries per-scan content-lane budgets
-	// Canonicalise BEFORE the walk (B11b-F1). WalkDir lstats the root like any
-	// other entry, so a locator that is itself a symlink — ~/work -> /mnt/d/work,
-	// a macOS /tmp, a WSL drive shortcut — took the "never follow a symlink" arm
-	// on the FIRST callback and the whole scan ended there: zero manifests,
-	// nothing truncated, nothing unrecognized, therefore Confidence=high and
-	// NeedsReview=false. A directory full of code came back as a confident
-	// "nothing here", while dispatch went on to bind-mount the RESOLVED tree.
+	// Canonicalise BEFORE the walk: WalkDir lstats the root like any other
+	// entry, so a locator that is itself a symlink (~/work -> /mnt/d/work, a
+	// WSL drive shortcut) would take the "never follow a symlink" arm on the
+	// first callback and return a false-confident empty profile.
 	root = gitremote.ResolveRoot(root)
 	seen := map[string]struct{}{} // dedup guard for ManifestsFound
 
@@ -353,12 +348,10 @@ func contextHashOf(m map[string]string) string {
 
 // readCapped reads at most maxFileBytes from p, failing safe to nil.
 //
-// gitremote.OpenRegular, not os.Open (B11b-F1 cross-lane): this walk runs on an
-// HTTP handler goroutine with no ctx, over a tree whose contents the scanned
-// party controls, so a FIFO named after any file the scan reads blocked open(2)
-// forever and wedged the request. io.ReadFull, not a single Read: Read is
-// documented to return fewer bytes than the buffer holds, which truncated the
-// sample at an arbitrary boundary.
+// gitremote.OpenRegular, not os.Open: this walk runs on an HTTP handler
+// goroutine with no ctx over an untrusted tree, so a FIFO named after any file
+// read would block open(2) forever. io.ReadFull, not a single Read, since Read
+// may return fewer bytes than the buffer holds.
 func readCapped(p string) []byte {
 	f, err := gitremote.OpenRegular(p)
 	if err != nil {

@@ -8,20 +8,13 @@ import (
 	"slices"
 )
 
-// ModelProviders is the org's model-provider CONFIGURATION: which kinds of model
-// credential this deployment supports, where each one sends requests, and which
-// harnesses may use it, with settings per harness. It is a sub-object of the
-// SiteConfig singleton on the WorkspaceProviders/AgentProviders doctrine (no
-// DDL, MDM-deliverable), and it is configuration ONLY: no credential lives on a
-// record. Every person, admins included, supplies their own.
-//
-// THE ZERO VALUE IS TODAY, and that is load-bearing: with no block, run create
-// and dispatch keep the existing lane-resolution path byte for byte, so an
-// upgraded install behaves exactly as it did before the block existed.
-//
-// Validation lives in internal/api (validateModelProviders): which harness a
-// kind can drive is the harness catalog's knowledge, which this package cannot
-// see. This file is types and closed enums only.
+// ModelProviders is the org's model-provider CONFIGURATION: which kinds of
+// model credential this deployment supports, where each one sends requests,
+// and which harnesses may use it. Configuration ONLY: no credential lives on
+// a record, every person supplies their own. The zero value is load-bearing —
+// with no block, run create and dispatch keep the existing lane-resolution
+// path byte for byte. Validation lives in internal/api (validateModelProviders);
+// this file is types and closed enums only.
 type ModelProviders struct {
 	Providers []ModelProvider `json:"providers,omitempty"`
 }
@@ -93,9 +86,8 @@ type ModelProvider struct {
 	// ID is the admin's slug ("corp-gateway") — what the CLI, a workspace pin
 	// and a run name. Unique within the block.
 	ID string `json:"id"`
-	// UID is SERVER-OWNED: minted on the provider's first write and carried by
-	// ID after that, never reissued once the provider is deleted. Every person's
-	// own credential for this provider is keyed by it, so a submitted value is
+	// UID is SERVER-OWNED: minted on first write, never reissued once deleted.
+	// Every person's own credential is keyed by it, so a submitted value is
 	// ignored rather than trusted.
 	UID string `json:"uid,omitempty"`
 	// Name is what people see when they choose it ("Corp gateway").
@@ -135,9 +127,8 @@ type ProviderAuth struct {
 }
 
 // BedrockSettings is a Bedrock kind's region, optional data-plane address, and
-// (bedrock_sso only) the org-level sign-in setup that makes each person's AWS
-// sign-in one click. The start URL and the pin are ADMIN-OWNED: a sign-in
-// proposes, the provider disposes.
+// (bedrock_sso only) the org-level sign-in setup. The start URL and the pin
+// are ADMIN-OWNED: a sign-in proposes, the provider disposes.
 type BedrockSettings struct {
 	Region       string `json:"region,omitempty"`
 	BaseURL      string `json:"base_url,omitempty"`

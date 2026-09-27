@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package recordingtest provides a reusable conformance suite for any
-// recording.Store implementation. A blessed default and any future alternate
-// (e.g. an object-storage backend) are held to the identical contract. Keys
-// are process-unique (uuid-suffixed) so the suite is safe to run against a
-// SHARED backing store too — e.g. a pg-backed Store pointed at a table a
-// concurrent test run also uses — the same convention secretstoretest uses.
+// recording.Store implementation, holding a blessed default and any future
+// alternate to the identical contract. Keys are process-unique (uuid-suffixed)
+// so the suite is safe to run against a shared backing store too.
 package recordingtest
 
 import (
@@ -22,8 +20,7 @@ import (
 
 // RunConformance exercises the recording.Store contract. newStore must return
 // a usable store on each call (it need not be empty; the suite uses
-// process-unique keys — e.g. fs over a t.TempDir(), or a pg store over a
-// shared table).
+// process-unique keys).
 func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 	ctx := context.Background()
 	uniq := func(p string) string { return "conformance-" + p + "-" + uuid.NewString() }
@@ -70,12 +67,8 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 	})
 
 	t.Run("rejects_invalid_keys", func(t *testing.T) {
-		// Key validation is part of the CONTRACT, not an fs implementation
-		// detail: a key one backend stores and another rejects means flipping
-		// WARDYN_RECORDING_STORE silently changes which recordings exist. The
-		// dot-dot/separator cases are meaningless to a TEXT primary key, but
-		// they must be refused with the same "recording: invalid run id" error
-		// rather than quietly stored.
+		// Key validation is part of the CONTRACT, not an fs detail: every
+		// backend must refuse these with the same "invalid run id" error.
 		s := newStore(t)
 		for _, key := range []string{"", "../etc/passwd", "../../etc/shadow", "run/../../secret", "run\x00bad", "/abs/path"} {
 			if err := s.SaveCast(ctx, key, bytes.NewReader([]byte("x"))); err == nil {
@@ -88,8 +81,7 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 	})
 
 	t.Run("named_isolation", func(t *testing.T) {
-		// A bare-runID batch cast and a "<runID>~<suffix>" attach cast must not
-		// clobber each other.
+		// A bare-runID batch cast and a "<runID>~<suffix>" attach cast must not clobber each other.
 		s := newStore(t)
 		runID := uniq("run")
 		if err := s.SaveCast(ctx, runID, bytes.NewReader([]byte("batch"))); err != nil {
@@ -110,11 +102,7 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 	})
 
 	t.Run("stat_and_tail", func(t *testing.T) {
-		// StatAndTail must answer size/tail without a caller ever
-		// calling OpenCast — both backends compute the size and slice the tail
-		// on their own side (fs Seek, pg substring/octet_length), never by
-		// reading the payload into Go and slicing there, so this only proves
-		// the CONTRACT (right size, right tail bytes), not the mechanism.
+		// Proves the CONTRACT (right size, right tail bytes), not the mechanism.
 		s := newStore(t)
 		if _, _, err := s.StatAndTail(ctx, uniq("nope"), 16); err != recording.ErrNotFound {
 			t.Fatalf("StatAndTail(missing) = %v, want ErrNotFound", err)

@@ -1,12 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Sandbox ref -> substrate routing rows (migration 0021). This is the Postgres
-// implementation of the orchestrator's RefStore seam: the orchestrator
-// write-throughs each created sandbox's ref and owning-substrate NAME here so a
-// control-plane restart can rehydrate lifecycle routing (Exec/Wait/Attach/
-// Status/Stop/Kill — i.e. the kill switch) in multi-substrate deployments.
-// Kept out of store.go on purpose (it sits at a lint size boundary).
+// Sandbox ref -> substrate routing rows (migration 0021): the Postgres
+// RefStore, letting a control-plane restart rehydrate lifecycle routing in
+// multi-substrate deployments.
 package store
 
 import (

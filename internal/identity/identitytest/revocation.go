@@ -11,9 +11,8 @@ import (
 )
 
 // MemRevocationStore is an in-memory identity.RevocationStore for tests. It
-// lives here, beside the conformance suite, rather than in the embedded
-// provider: every caller is a _test.go, so keeping it in a production package
-// compiled a test double into wardynd.
+// lives here rather than the embedded provider so a test double isn't
+// compiled into wardynd.
 type MemRevocationStore struct {
 	mu         sync.RWMutex
 	revokedJTI map[string]struct{}

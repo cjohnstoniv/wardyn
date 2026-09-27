@@ -21,18 +21,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// k8sPollInterval paces every bounded poll in this package (canary terminal
-// state, proxy podIP, ephemeral-container exit) — mirrors the docker driver's
-// pollInterval. canaryWaitTimeout is generous: a canary pod's image (the
-// wardyn-proxy image, shared with the real proxy sidecar) may need a cold
-// pull the first time a node runs it.
+// k8sPollInterval paces every bounded poll in this package. canaryWaitTimeout
+// is generous: a canary pod's image may need a cold pull on a node's first run.
 const (
 	k8sPollInterval   = 200 * time.Millisecond
 	canaryWaitTimeout = 3 * time.Minute
-	// podIPWaitTimeout bounds CreateSandbox's wait for the proxy pod's CNI-
-	// assigned IP (needed for the agent pod's hostAliases entry). Shorter than
-	// canaryWaitTimeout: by CreateSandbox time the proxy image has normally
-	// already been pulled once (by the boot-time canary or a prior run).
+	// podIPWaitTimeout bounds CreateSandbox's wait for the proxy pod's
+	// CNI-assigned IP. Shorter than canaryWaitTimeout: by then the proxy
+	// image has normally already been pulled once.
 	podIPWaitTimeout = 90 * time.Second
 )
 
@@ -40,9 +36,8 @@ const (
 type canaryVerdict int
 
 const (
-	// canaryIndeterminate means a non-network failure (ImagePullBackOff,
-	// scheduling, crash before Running, or phase A itself failing to prove
-	// baseline apiserver reachability) — never a NetworkPolicy verdict.
+	// canaryIndeterminate means a non-network failure — never a
+	// NetworkPolicy verdict.
 	canaryIndeterminate canaryVerdict = iota
 	// canaryEnforced means phase B's deny-all NetworkPolicy blocked the
 	// canary's connect: this cluster's CNI enforces NetworkPolicy.
@@ -50,31 +45,24 @@ const (
 	// canaryUnenforced means phase B's canary connected DESPITE the deny-all
 	// NetworkPolicy: this cluster's CNI does not enforce it.
 	canaryUnenforced
-	// canaryAcknowledged means phase A itself failed in exactly the shape an
-	// ambient (platform-applied, not Wardyn's) default-deny NetworkPolicy
-	// produces — the canary pod reached Running and its own connect exited 1
-	// (refused) — and the operator has explicitly accepted that via
-	// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 (Driver.Config.AckAmbientDefaultDeny).
-	// Phase B is deliberately SKIPPED in this case: behind an existing
-	// ambient default-deny, phase B's own additive deny-all policy can only
-	// ever also exit 1, proving nothing about whether Wardyn's netpol would
-	// work absent the platform's baseline — running it would be theater, not
-	// evidence. Never proof of enforcement (see ClassSupport.NetworkPolicy's
-	// doc) — only an acknowledged, unverified risk.
+	// canaryAcknowledged means phase A failed in the shape an ambient
+	// (platform-applied) default-deny NetworkPolicy produces, and the operator
+	// explicitly accepted that via WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1.
+	// Phase B is SKIPPED: behind an existing ambient default-deny it could
+	// only also exit 1, proving nothing. Never proof of enforcement — only
+	// an acknowledged, unverified risk.
 	canaryAcknowledged
 )
 
 // terminalWaitingReasons are ContainerStateWaiting.Reason values that will
 // never resolve on their own — detecting them lets an INDETERMINATE verdict
 // return promptly instead of running out the full canaryWaitTimeout. Not
-// exhaustive (the timeout is the general-purpose safety net for anything
-// else, including a stuck-Pending scheduling failure); this is the fast path
-// for the common cases.
+// exhaustive; the timeout is the general-purpose safety net for the rest.
 //
-// The list itself moved to runner.TerminalWaitingReasons, which is tagless: the
-// control plane decides on the same six strings (a terminal startup reason is
-// the one detail that outlives a FAILED run) and cannot import a `k8s`-tagged
-// symbol. This name stays because it is what this package's poll loops read.
+// The list itself lives in runner.TerminalWaitingReasons, which is tagless
+// (the control plane needs the same strings and cannot import a
+// `k8s`-tagged symbol). This name stays because it is what this package's
+// poll loops read.
 var terminalWaitingReasons = runner.TerminalWaitingReasons
 
 // canaryPhaseResult is one canary phase's outcome. err non-nil means the
@@ -97,29 +85,19 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 		return canaryIndeterminate, fmt.Errorf("egress canary: %w: %w", a.err, errCanaryIndeterminate)
 	}
 	if !a.reachedRunning || a.exitCode != 0 {
-		// B1: a pod that reached RUNNING and then exited exactly 1 is the one
-		// shape phase A can produce that is NOT a non-network failure — it is
-		// what an ambient (platform-applied) default-deny NetworkPolicy looks
-		// like from here too. An operator who has confirmed that IS this
-		// cluster's baseline (not a Wardyn misconfiguration) can say so via
-		// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 rather than being permanently
-		// refused boot with no override at all. Any other shape (never reached
-		// Running, or a different exit code) stays indeterminate regardless —
-		// the ack is scoped exactly to the one shape it actually explains.
+		// A pod that reached RUNNING and then exited exactly 1 is the one
+		// shape phase A can produce that looks like an ambient
+		// (platform-applied) default-deny NetworkPolicy rather than a
+		// non-network failure; the ack is scoped exactly to that shape.
 		if d.cfg.AckAmbientDefaultDeny && a.reachedRunning && a.exitCode == 1 {
 			return canaryAcknowledged, nil
 		}
-		// Phase A applies NO NetworkPolicy of its own — a failure here is
+		// Phase A applies NO NetworkPolicy of its own, so a failure here is
 		// indistinguishable from a namespace that ALREADY carries a
-		// default-deny NetworkPolicy from something else (a cluster-wide
-		// policy, another operator's baseline). That combination permanently
-		// refuses boot even though per-run confinement would work fine once
-		// Wardyn's own allow-rules are in place; naming it saves an operator
-		// from chasing a phantom cluster/CNI bug (see deploy/helm/wardyn/README.md
-		// "Kubernetes runner substrate"). The remediation must NOT be "add an
-		// allow policy for wardyn.managed=true": allows are additive and BOTH
-		// the agent and proxy pods carry that label (naming.go wardynLabels),
-		// so such a policy widens every run past sandbox.go's per-run deny.
+		// default-deny NetworkPolicy from something else. The remediation
+		// must NOT be "add an allow policy for wardyn.managed=true": allows
+		// are additive and both agent and proxy pods carry that label, so
+		// it would widen every run past sandbox.go's per-run deny.
 		return canaryIndeterminate, fmt.Errorf("egress canary phase A (no NetworkPolicy) did not confirm baseline apiserver "+
 			"reachability (reached_running=%v exit_code=%d) — if this namespace already has a default-deny NetworkPolicy from "+
 			"elsewhere (unrelated to Wardyn), that is the likely cause: use a namespace with no ambient default-deny, or exempt "+
@@ -145,11 +123,8 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 	case 1:
 		return canaryEnforced, nil
 	default:
-		// The -egress-canary flag only ever exits 0 (connected) or 1
-		// (refused/timeout) — see cmd/wardyn-proxy/main.go. Any OTHER
-		// non-zero code (128 = exec format/StartError shapes, a signal
-		// death, ...) is not evidence of either verdict; treat it the same
-		// as any other non-network failure.
+		// The -egress-canary flag only ever exits 0 or 1; any other code is
+		// not evidence of either verdict.
 		return canaryIndeterminate, fmt.Errorf("egress canary phase B (deny-all NetworkPolicy) exited %d, neither the expected 0 (connected) nor 1 (blocked): %w", b.exitCode, errCanaryIndeterminate)
 	}
 }
@@ -161,13 +136,9 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	ns := d.cfg.Namespace
 	suffix := uuid.New().String()
 	podName := "wardyn-egress-canary-" + suffix
-	// labelRun carries THIS canary invocation's own unique suffix (reused
-	// as both the pod's label and — below — the deny-all netpol's selector).
-	// Without it, two wardynd instances booting concurrently in the same
-	// namespace would share the SAME labelManaged+labelComponent pair, so
-	// instance A's phase-B deny-all netpol would ALSO match instance B's
-	// phase-A pod (which is supposed to see NO policy at all), corrupting
-	// its baseline-reachability verdict.
+	// labelRun carries THIS canary invocation's own unique suffix, so two
+	// wardynd instances booting concurrently don't share a selector — instance
+	// A's phase-B deny-all netpol must never match instance B's phase-A pod.
 	labels := map[string]string{labelManaged: "true", labelComponent: componentCanary, labelRun: suffix}
 
 	if denyAll {
@@ -253,11 +224,8 @@ func (d *Driver) waitCanaryTerminal(ctx context.Context, podName string) (reache
 		return false, nil
 	})
 	if pollErr != nil {
-		// A genuine timeout (as opposed to the fast-path Waiting-reason
-		// error above, or ctx being cancelled by the caller) surfaces as
-		// context.DeadlineExceeded from the internal deadline context
-		// wait.PollUntilContextTimeout creates — name the remedy, since
-		// "timed out" alone gives an operator nothing to act on.
+		// A genuine timeout surfaces as context.DeadlineExceeded — name the
+		// remedy, since "timed out" alone gives an operator nothing to act on.
 		if errors.Is(pollErr, context.DeadlineExceeded) {
 			return reachedRunning, 0, fmt.Errorf("timed out after %s waiting for the canary pod to reach a terminal state (reached_running=%v) — pre-pull the wardyn-proxy image onto this cluster's nodes, or check scheduling capacity (node resources, taints/tolerations): %w",
 				canaryWaitTimeout, reachedRunning, pollErr)
@@ -267,10 +235,9 @@ func (d *Driver) waitCanaryTerminal(ctx context.Context, podName string) (reache
 	return reachedRunning, exitCode, nil
 }
 
-// canaryResources is the egress canary's cgroup envelope: it does nothing but
-// dial a TCP socket and exit, so a minimal, fixed footprint (independent of
-// any run's spec.Resources — there is no run yet at construction time) is
-// always correct.
+// canaryResources is the egress canary's cgroup envelope: it does nothing
+// but dial a TCP socket and exit, so a minimal, fixed footprint is always
+// correct.
 func canaryResources() corev1.ResourceRequirements {
 	list := corev1.ResourceList{
 		corev1.ResourceCPU:    *resource.NewMilliQuantity(50, resource.DecimalSI),

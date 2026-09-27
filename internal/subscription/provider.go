@@ -4,13 +4,12 @@
 // Package subscription yields the operator's LIVE Anthropic subscription OAuth
 // access token from the resident ~/.claude credentials, so the egress proxy can
 // inject a fresh token per request instead of the sandbox holding a COPY that
-// goes stale (access-token expiry + refresh-token rotation lock the copy out).
+// goes stale.
 //
 // Single-owner discipline: only the resident `claude` binary ever refreshes and
-// rotates the token (it owns the atomic write-back and coordinates with the
-// operator's other claude sessions). This provider only ever READS the file, and
-// on the rare near-expiry path DELEGATES the refresh to `claude` — it never
-// reimplements Anthropic's undocumented OAuth refresh_token flow.
+// rotates the token. This provider only ever READS the file, and on the rare
+// near-expiry path DELEGATES the refresh to `claude` — it never reimplements
+// Anthropic's undocumented OAuth refresh_token flow.
 package subscription
 
 import (
@@ -29,19 +28,16 @@ import (
 )
 
 const (
-	// defaultRefreshMargin: treat a token expiring within this window as needing
-	// a refresh. Kept slightly wider than the proxy injector's re-resolve margin
-	// so that when the injector asks at expiresAt-margin, this provider still
-	// sees "within margin" and returns a freshly-refreshed token (no thrash).
+	// defaultRefreshMargin: treat a token expiring within this window as
+	// needing a refresh. Kept slightly wider than the proxy injector's
+	// re-resolve margin so the two never thrash against each other.
 	defaultRefreshMargin = 10 * time.Minute
 	// defaultRefreshTimeout bounds the delegated `claude` refresh invocation.
 	defaultRefreshTimeout = 120 * time.Second
 	// refreshNegativeTTL is how long a FAILED delegated refresh is remembered,
-	// so callers piling up behind it are told the same answer instead of each
-	// spending its own `claude` turn. Short on purpose: an operator who fixes
-	// their sign-in must not wait out a cache. It bounds only the FAILURE arm —
-	// a success needs no timer, because the refreshed token is on disk and the
-	// re-read under the lock sees it.
+	// so callers piling up behind it get the same answer instead of each
+	// spending its own `claude` turn. Bounds only the FAILURE arm — a success
+	// needs no timer, since the re-read under the lock sees the fresh token.
 	refreshNegativeTTL = 30 * time.Second
 )
 
@@ -54,10 +50,9 @@ type Token struct {
 // Provider yields the operator's current Anthropic subscription access token.
 type Provider interface {
 	Current(ctx context.Context) (Token, error)
-	// Peek returns the resident token WITHOUT refreshing or delegating to `claude`
-	// (read-only). It is for status/provenance surfaces that must not trigger a
-	// refresh side effect; unlike Current it does NOT reject an expired token — the
-	// expiry is returned for the caller to interpret against its own clock.
+	// Peek returns the resident token WITHOUT refreshing or delegating to
+	// `claude` — for status/provenance surfaces that must not trigger a
+	// refresh side effect. Unlike Current, it does NOT reject an expired token.
 	Peek() (Token, error)
 }
 
@@ -111,10 +106,9 @@ func New(cfg Config) (Provider, error) {
 }
 
 // Current returns the live subscription access token. It piggybacks on the
-// resident token when it is comfortably unexpired (the common case — the
-// operator's own `claude` keeps it fresh); otherwise it delegates a refresh to
-// the resident `claude` and re-reads. Fails closed if no valid token can be
-// obtained (never returns an expired token).
+// resident token when comfortably unexpired; otherwise it delegates a refresh
+// to the resident `claude` and re-reads. Fails closed (never returns an
+// expired token).
 func (p *provider) Current(ctx context.Context) (Token, error) {
 	tok, err := p.read()
 	if err == nil && tok.Value != "" && tok.ExpiresAt.After(p.now().Add(p.margin)) {
@@ -170,23 +164,13 @@ func (p *provider) read() (Token, error) {
 	return Token{Value: o.AccessToken, ExpiresAt: time.UnixMilli(o.ExpiresAt)}, nil
 }
 
-// refreshOnce is the single-flight in front of delegateRefresh (B11a-F7).
-//
-// The egress proxy single-flights per HOST (inject.go's reMu), so the stampede
-// it does not cover is the CROSS-proxy one: N runs each POST /internal/injection
-// inside the 10-minute margin and arrive here as N concurrent refreshes. Each
-// would spawn its own `claude -p ok`, and the sharp end of that is not the
-// wasted turns — it is N processes writing the ONE resident
-// ~/.claude/.credentials.json, whose atomic write-back `claude` owns and
-// coordinates only with itself.
-//
-// Two things make one refresh serve everyone. The mutex serializes them, and the
-// re-read UNDER the lock is what turns serialization into single-flight: by the
-// time a waiter gets in, the winner has already written the fresh token back, so
-// the waiter returns without spending a turn. The negative cache covers the
-// other arm — when the refresh FAILS nothing lands on disk, so every waiter's
-// re-read still sees a stale token and would go on to spend its own (failing,
-// and on the timeout arm 120-second) turn.
+// refreshOnce is the single-flight in front of delegateRefresh: N runs
+// arriving here as N concurrent refreshes would each spawn its own `claude
+// -p ok`, all writing the ONE resident ~/.claude/.credentials.json. The
+// mutex serializes them, and the re-read UNDER the lock turns serialization
+// into single-flight (a waiter sees the winner's fresh token instead of
+// spending its own turn). The negative cache covers the failure arm, where
+// nothing lands on disk for the re-read to see.
 //
 // ponytail: a mutex rather than golang.org/x/sync/singleflight — the waiters
 // here WANT to re-read the file the winner wrote rather than share its return
@@ -213,13 +197,9 @@ func (p *provider) refreshOnce() error {
 // effect (claude owns the write-back). ANTHROPIC_API_KEY is scrubbed so claude
 // uses the subscription session, never an API key.
 func (p *provider) delegateRefresh() error {
-	// Bind the refresh subprocess to a FRESH background context, NOT the caller's
-	// request ctx. The caller here is the /internal/injection HTTP handler, whose
-	// client (wardyn-proxy) times out at seconds; deriving the subprocess deadline
-	// from that request ctx meant a client give-up SIGKILLed `claude` mid
-	// credential-write (corrupting the resident token) and made the full
-	// refreshTO budget unreachable. Detached, the refresh runs to completion up to
-	// refreshTO regardless of whether the original caller is still waiting.
+	// Bind to a FRESH background context, NOT the caller's request ctx: a
+	// client give-up on the short-lived HTTP caller would otherwise SIGKILL
+	// `claude` mid credential-write, corrupting the resident token.
 	ctx, cancel := context.WithTimeout(context.Background(), p.refreshTO)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p.claudeBin, //nolint:gosec // operator-configured CLI path
