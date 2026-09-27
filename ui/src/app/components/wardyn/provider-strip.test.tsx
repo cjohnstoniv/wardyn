@@ -69,6 +69,22 @@ describe("B1–B5: one provider needs the person", () => {
     expect(screen.getByText(/^Your AWS sign-in for Bedrock \(prod\) lapses in /)).toBeInTheDocument();
   });
 
+  // #993: the server grades a session for another account/role than the
+  // provider pins expired_signin with an action naming both pairs; the strip
+  // said only "no longer works" and dropped it.
+  it("shows the server action for a pin-contradicted AWS session", () => {
+    const action =
+      "Your stored AWS session is for account 999999999999 / role Wrong; this row now allows 123456789012 / BedrockUser — sign in again.";
+    const { unmount } = strip(providerStatus([{ provider: bedrock, state: "expired_signin", action }]));
+    expect(screen.getByText("Your AWS sign-in for Bedrock (prod) no longer works.")).toBeInTheDocument();
+    expect(screen.getByText(action)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+    unmount();
+    // A plain dead session's action is the button's own label: never printed as prose.
+    strip(providerStatus([{ provider: bedrock, state: "expired_signin", action: AGENTS.SIGN_IN_AWS }]));
+    expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
+  });
+
   it("B4: a default token not added, for both agents it serves; a key reads 'key'", async () => {
     const { unmount } = strip(providerStatus([{ provider: gateway, defaultFor: ["claude-code", "codex-cli"] }]));
     expect(screen.getByText(BANNER.B4("Claude Code and Codex CLI", "Corp gateway", true))).toBeInTheDocument();
@@ -131,7 +147,7 @@ describe("B8, and where the strip is silent", () => {
 describe("providerStripLine — the kind/state table", () => {
   it("draws nothing for an expiring sign-in with no deadline to name", () => {
     expect(
-      providerStripLine({ provider: bedrock, state: "expiring", deadline: "", defaultFor: [] }, ""),
+      providerStripLine({ provider: bedrock, state: "expiring", deadline: "", action: "", defaultFor: [] }, ""),
     ).toBeNull();
   });
 });

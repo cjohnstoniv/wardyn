@@ -124,6 +124,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   files longer; both writes are conditional on the exact ended mark and a live grace, and the claim
   re-checks the grace and the new end, so an expiry or a kill that lands first wins. The bulk
   restart still refuses it, and a task run's revive is refused.
+- **A model provider's sign-in is confirmed from the stored credential, and the strip keeps a
+  pin-contradicted session's action (#993).** `provider_access` rows now carry `source_run_id`, the
+  sign-in run the caller's own stored AWS or Claude capture for that provider came from, stamped by
+  the server. The console confirms a provider sign-in by that stamp, so a capture whose audit row was
+  only spooled no longer ends in "The sandbox reported a capture the server does not have", and a
+  row naming another run is refused. A session for another account/role than the provider pins now
+  shows the server's action naming both pairs on the provider strip, as the legacy strip did.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
