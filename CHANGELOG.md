@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **`git_pat`/`ssh_key` grants refuse a `wardyn-provider-*` secret name at write time (#1048).**
+  Those two kinds return a stored secret's raw value into the sandbox, so they need the same
+  wider reserved-name guard `env_secret`/`llm_inspection` already used (`nameSinkReservedSecret`)
+  — they were checking the narrower `sinkReservedSecret` instead, which does not cover a
+  per-person model-provider `-key` name (deliberately, for the `api_key` sink's own legitimate use
+  of it). The broker's own mint guard (`reservedBrokerSecret`) already refused it, so nothing
+  leaked; a policy naming one used to fail at clone time inside the run instead of getting a 400
+  up front. `env_secret`'s `secret_name` and `llm_inspection.workspace_secret_names` now also
+  refuse a name that does not match the secret-name format (`secretNameRE`) at write time, instead
+  of silently resolving one fewer value at dispatch.
+
 ### Added
 
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin

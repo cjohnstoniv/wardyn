@@ -32,15 +32,45 @@ func llmInspectionInline(secretName string) string {
 	return `"min_confinement_class":"CC1","llm_inspection":{"mode":"alert","detect_secrets":true,"workspace_secret_names":["` + secretName + `"]}`
 }
 
-// TestProviderSecretNames_RefusedAtWrite: each suffix, both lanes, both doors a
+// gitPATInline and sshKeyInline are #1048's added lanes: both return the raw
+// secret VALUE into the sandbox (unlike env_secret's proxy-side env-var
+// delivery and llm_inspection's proxy-side scan copy, both return the same
+// way), so both must refuse a wardyn-provider-*-key name at write time too —
+// they used to check only the narrower sinkReservedSecret, which does not
+// cover a provider -key name (the provider arm legitimately names one at the
+// api_key sink, so that guard stays narrow there on purpose).
+func gitPATInline(secretName string) string {
+	return `"min_confinement_class":"CC1","eligible_grants":[{"kind":"git_pat","scope":{"host":"github.com","secret_name":"` + secretName + `"}}]`
+}
+
+func sshKeyInline(secretName string) string {
+	return `"min_confinement_class":"CC1","eligible_grants":[{"kind":"ssh_key","scope":{"host":"github.com","key_secret_ref":"` + secretName + `"}}]`
+}
+
+// TestProviderSecretNames_RefusedAtWrite: each suffix, every lane, both doors a
 // run policy is written through — create (POST /runs) and Review (POST
 // /runs/preflight) — and an ordinary name still passes both.
 func TestProviderSecretNames_RefusedAtWrite(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Store = createRunUnconfiguredStore{}
+	// git_pat/ssh_key (unlike env_secret/llm_inspection) refuse write with 422
+	// "requires a secret store" the moment ANY grant needs one at all
+	// (validateInlineSecretRefs) — before this even reaches the ordinary-name
+	// case below, so a secrets store with the ordinary name already Put is
+	// needed to exercise their write-time path past that gate.
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"corp-api-token": []byte("ordinary-value-0123456789")}}
 	h.srv.router = h.srv.routes()
 
-	lanes := map[string]func(string) string{"env_secret": envSecretInline, "llm_inspection": llmInspectionInline}
+	lanes := map[string]func(string) string{
+		"env_secret":     envSecretInline,
+		"llm_inspection": llmInspectionInline,
+		"git_pat":        gitPATInline,
+		"ssh_key":        sshKeyInline,
+	}
+	// ssh_key's write-time refusal deliberately does not name which of
+	// key_secret_ref/known_hosts_secret_ref was reserved (policy.go), unlike
+	// every other lane here — so its body assertion below is 400 alone.
+	namesTheOffender := map[string]bool{"env_secret": true, "llm_inspection": true, "git_pat": true, "ssh_key": false}
 	doors := map[string]string{"create": "/api/v1/runs", "review": "/api/v1/runs/preflight"}
 	body := func(inline string) string {
 		return `{"agent":"claude-code","repo":"ephemeral","task":"echo hi","task_mode":"exec","inline_policy":{` + inline + `}}`
@@ -49,8 +79,8 @@ func TestProviderSecretNames_RefusedAtWrite(t *testing.T) {
 		for door, path := range doors {
 			for _, name := range providerSecretNames {
 				w := do(t, h.srv, http.MethodPost, path, adminToken, body(inline(name)))
-				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), name) {
-					t.Errorf("%s via %s naming %q: code=%d body=%s, want a 400 naming it", lane, door, name, w.Code, w.Body.String())
+				if w.Code != http.StatusBadRequest || (namesTheOffender[lane] && !strings.Contains(w.Body.String(), name)) {
+					t.Errorf("%s via %s naming %q: code=%d body=%s, want a 400", lane, door, name, w.Code, w.Body.String())
 				}
 			}
 			// The ordinary name gets past validation: Review answers 200, and
@@ -111,5 +141,36 @@ func TestProviderSecretNames_RefusedAtDispatch(t *testing.T) {
 	h.srv.resolveLLMInspectionSecrets(context.Background(), run, spec)
 	if got := spec.LLMInspection.WorkspaceSecretValues; len(got) != 1 || got[0] != "ordinary-value-0123456789" {
 		t.Fatalf("llm_inspection resolved %v, want only the ordinary secret's value", got)
+	}
+}
+
+// TestSecretNameFormat_RefusedAtWrite (#1048): env_secret's secret_name and
+// llm_inspection's workspace_secret_names never went through secretNameRE, so
+// an impossible name passed write time and just covered one fewer value at
+// dispatch — silently, with no reason surfaced to the author. Both now refuse
+// 400 at write, naming the bad value, for the same four malformed shapes
+// secretNameRE (`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`) was always meant to
+// exclude: upper-case, a leading space, a unicode hyphen (not ASCII `-`), and a
+// path.
+func TestSecretNameFormat_RefusedAtWrite(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Store = createRunUnconfiguredStore{}
+	h.srv.router = h.srv.routes()
+
+	badNames := []string{"UPPER-CASE", " leading-space", "a‐b", "a/b/c"}
+	lanes := map[string]func(string) string{"env_secret": envSecretInline, "llm_inspection": llmInspectionInline}
+	doors := map[string]string{"create": "/api/v1/runs", "review": "/api/v1/runs/preflight"}
+	body := func(inline string) string {
+		return `{"agent":"claude-code","repo":"ephemeral","task":"echo hi","task_mode":"exec","inline_policy":{` + inline + `}}`
+	}
+	for lane, inline := range lanes {
+		for door, path := range doors {
+			for _, name := range badNames {
+				w := do(t, h.srv, http.MethodPost, path, adminToken, body(inline(name)))
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "not a valid secret name") {
+					t.Errorf("%s via %s naming %q: code=%d body=%s, want a 400 refusing the format", lane, door, name, w.Code, w.Body.String())
+				}
+			}
+		}
 	}
 }
