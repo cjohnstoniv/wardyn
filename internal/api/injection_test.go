@@ -690,7 +690,8 @@ func TestValidateInlineSecretRefs_SentinelHostPin(t *testing.T) {
 // were both uncovered.
 func TestInternalInjection_SentinelSuccessForcesBearerAndMasks(t *testing.T) {
 	const live = "oauth-live-token-value"
-	exp := time.Now().Add(30 * time.Minute).UTC().Truncate(time.Millisecond)
+	// Sooner than the stored-key lease, so it is the one advertised (subscriptionLease).
+	exp := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Millisecond)
 
 	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
 		h := sentinelHarness(t, liveOAuthProvider{value: live, expires: exp})

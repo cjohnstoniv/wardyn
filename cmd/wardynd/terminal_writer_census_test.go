@@ -139,9 +139,10 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 }
 
 // writesTerminalState reports whether call is a run-state write whose TARGET is
-// one of the terminal states — the two primitives every transition goes through
-// (internal/api's casRunState, and the reaper's guarded UpdateRunStateIfIdle) —
-// or a finalize helper handed a terminal state.
+// one of the terminal states — the three primitives every transition goes
+// through (internal/api's casRunState, its StopKeptRunIf sibling for a kept
+// run's atomic-mark CAS (F04), and the reaper's guarded UpdateRunStateIfIdle)
+// — or a finalize helper handed a terminal state.
 func writesTerminalState(call *ast.CallExpr) bool {
 	name := ""
 	switch fn := call.Fun.(type) {
@@ -151,7 +152,7 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		name = fn.Sel.Name
 	}
 	switch name {
-	case "casRunState", "UpdateRunStateIfIdle", "reconcileFinalize":
+	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize":
 	default:
 		return false
 	}

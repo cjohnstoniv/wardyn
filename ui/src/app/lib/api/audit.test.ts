@@ -61,6 +61,14 @@ describe("egressFromAudit", () => {
     expect(d.domain).toBe("—");
   });
 
+  // C-02 (#1062): egress.pending is egress.hold's pre-0.8 name
+  // (docs/AUDIT-ACTIONS.md's "Renamed in 0.8"). A row written under it before
+  // the upgrade is never rewritten, so it must still project as held.
+  it("projects the pre-0.8 egress.pending action as held, same as egress.hold", () => {
+    const [d] = egressFromAudit([ev({ action: "egress.pending", target: "pkg.example.com:443" })]);
+    expect(d.decision).toBe("pending");
+  });
+
   // A tool call the run's own tool_rules answered rides an egress.allow/deny
   // event whose TARGET is the control plane (emitLocalDecision logs against
   // controlPlaneURL). It rendered in the Egress tile as a deny against
@@ -140,15 +148,15 @@ describe("demoAuditRows", () => {
   });
 });
 
-// listAudit's `action` param — run-detail issues a SECOND, filtered
-// fetch (?run_id=&action=session.recording.write) so the recording picker's index
+// listAudit's `filter` param — run-detail issues SECOND, filtered fetches
+// (?run_id=&action=... or ?run_id=&action_prefix=...) so a narrow index
 // doesn't compete with every other action for the shared 1000-row cap on a
 // chatty run's (oldest-first) audit trail.
-describe("listAudit — action filter reaches the wire", () => {
+describe("listAudit — action/action_prefix filter reaches the wire", () => {
   // ticket: W21-S1-5
   afterEach(() => vi.unstubAllGlobals());
 
-  it("sends ?run_id=&action= together, and omits action entirely when unset", async () => {
+  it("sends ?run_id=&action= together, and omits both entirely when unset", async () => {
     // A fresh Response per call — a body stream can only be read once, and
     // this test drives two separate listAudit() calls against the same mock.
     const fetchMock = vi.fn().mockImplementation(
@@ -156,15 +164,32 @@ describe("listAudit — action filter reaches the wire", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await audit.listAudit("run_1", "session.recording.write");
+    await audit.listAudit("run_1", { action: "session.recording.write" });
     const url1 = String(fetchMock.mock.calls[0][0]);
     expect(url1).toContain("run_id=run_1");
     expect(url1).toContain("action=session.recording.write");
+    expect(url1).not.toContain("action_prefix=");
 
     await audit.listAudit("run_1");
     const url2 = String(fetchMock.mock.calls[1][0]);
     expect(url2).toContain("run_id=run_1");
     expect(url2).not.toContain("action=");
+  });
+
+  // C-02 (#1062): the recording picker's index fetch must carry action_prefix
+  // (not action), so both session.recording and session.recording.write rows
+  // come back in one request.
+  it("sends ?action_prefix= for a prefix filter, not ?action=", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await audit.listAudit("run_1", { actionPrefix: "session.recording" });
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("run_id=run_1");
+    expect(url).toContain("action_prefix=session.recording");
+    expect(url).not.toContain("&action=");
   });
 });
 

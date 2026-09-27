@@ -46,7 +46,6 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 		return nil, nil
 	}
 	client := federation.NewClient(orgURL)
-	var enrolled *types.DeviceEnrolResponse
 	raw, err := loadOrCreateSecret(ctx, secrets, secretOrgDeviceCredential,
 		func(b []byte) bool {
 			c, ok := parseOrgCredential(b)
@@ -61,33 +60,40 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 			if err != nil {
 				return nil, fmt.Errorf("refusing to start: enrolment at WARDYN_ORG_URL failed: %w", err)
 			}
-			enrolled = &resp
 			return json.Marshal(federation.Credential{DeviceID: resp.DeviceID, Token: resp.Token,
-				EnrolmentTokenSHA256: federation.TokenSHA256(enrolToken)})
+				EnrolmentTokenSHA256: federation.TokenSHA256(enrolToken), ResetPending: true, Name: resp.Name})
 		})
 	if err != nil {
 		return nil, err
 	}
-	// Put-then-Reset: loadOrCreateSecret only returns nil once the new
-	// credential is durably stored, so the revoked mark from a prior enrolment
-	// clears no earlier than that. Clearing it first (inside generate, before
-	// Put) would leave the gate open with no new credential behind it if Put
-	// then failed. A Reset failure here refuses the boot — the laptop keeps
-	// refusing on the old mark rather than starting in an unknown state.
-	if enrolled != nil {
+	cred, _ := parseOrgCredential(raw)
+	// ResetPending is durable in the credential itself (set true only by a
+	// fresh generate, above), so this resumes on the next boot even if the
+	// process died between the Put that stored it and finishing the steps
+	// below — without spending the enrolment token again (loadOrCreateSecret
+	// found a valid credential and never called generate) and without ever
+	// re-running for a credential whose reset already completed (ResetPending
+	// is false from then on, so a later genuine revocation of this identity is
+	// never cleared by a restart).
+	if cred.ResetPending {
 		if err := st.ResetFederation(ctx); err != nil {
 			return nil, fmt.Errorf("refusing to start: reset federation state after enrolment: %w", err)
 		}
-	}
-	cred, _ := parseOrgCredential(raw)
-	if enrolled != nil {
-		slog.Info("wardynd: enrolled with the organisation", "device_id", cred.DeviceID, "name", enrolled.Name)
-		data, _ := json.Marshal(map[string]any{"name": enrolled.Name})
+		slog.Info("wardynd: enrolled with the organisation", "device_id", cred.DeviceID, "name", cred.Name)
+		data, _ := json.Marshal(map[string]any{"name": cred.Name})
 		if err := rec.Record(ctx, types.AuditEvent{
 			ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: federation.AuditActor,
 			Action: "device.local.enrol", Target: cred.DeviceID.String(), Outcome: "success", Data: data,
 		}); err != nil {
 			return nil, fmt.Errorf("record device.local.enrol: %w", err)
+		}
+		cred.ResetPending = false
+		persisted, merr := json.Marshal(cred)
+		if merr != nil {
+			return nil, fmt.Errorf("marshal device credential: %w", merr)
+		}
+		if err := secrets.Put(ctx, secretOrgDeviceCredential, persisted); err != nil {
+			return nil, fmt.Errorf("refusing to start: persist reset completion: %w", err)
 		}
 	}
 	fwd := federation.NewForwarder(client, st, cred, rec)

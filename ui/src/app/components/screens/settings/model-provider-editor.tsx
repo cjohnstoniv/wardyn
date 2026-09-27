@@ -21,6 +21,7 @@ import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
@@ -39,6 +40,12 @@ import { Button, buttonVariants } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../ui/dialog";
 import { Input } from "../../ui/input";
+import {
+  AvailabilityControl,
+  AvailabilityDraft,
+  writeAvailability,
+  type AvailabilityDraftValue,
+} from "../../wardyn/availability-control";
 import { Mono } from "../../wardyn/code-block";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
@@ -84,14 +91,26 @@ export interface ModelProviderEditorProps {
 type Confirm = "address" | "remove" | null;
 
 export function ModelProviderEditor({
-  list,
-  editing,
+  list: listProp,
+  editing: editingProp,
   harnesses,
   defaultFor = [],
   subscriptionAvailable = true,
   onClose,
   onSaved,
 }: ModelProviderEditorProps) {
+  // A new provider asks who gets it (#923 decision 4): the choice is held
+  // here, and Save writes it once the provider exists. If that list write is
+  // refused, the editor stays open on the saved provider, with the snapshot
+  // the save answered, so a further Save is an edit and not a stale create.
+  const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
+  const [partial, setPartial] = React.useState<{ list: ModelProvidersList; provider: ModelProvider; message: string } | null>(
+    null,
+  );
+  const list = partial?.list ?? listProp;
+  const editing = partial?.provider ?? editingProp;
+  // Once the create landed, closing must re-read even without another save.
+  const close = partial ? onSaved : onClose;
   const [draft, setDraft] = React.useState<ProviderDraft | null>(() => (editing ? draftFrom(editing, harnesses) : null));
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
@@ -108,14 +127,12 @@ export function ModelProviderEditor({
     setSaving(true);
     setRefused(null);
     try {
-      await modelProviders.putModelProviders(doc, list.etag);
-      onSaved();
-      return true;
+      return await modelProviders.putModelProviders(doc, list.etag);
     } catch (e) {
       if (e instanceof HttpError && e.status === 400) setRefused(e.message);
       else if (e instanceof HttpError && e.status === 412) setStale(JSON.stringify(doc, null, 2));
       else toast.error(getErrorMessage(e));
-      return false;
+      return null;
     } finally {
       setSaving(false);
     }
@@ -126,7 +143,23 @@ export function ModelProviderEditor({
   const save = async () => {
     const next = candidate();
     const rows = editing ? stored.map((p) => (p.id === editing.id ? next : p)) : [...stored, next];
-    if (await write(rows)) toast.success(PROVIDER_EDITOR.SAVED_TOAST);
+    const snap = await write(rows);
+    if (!snap) return;
+    if (!editing) {
+      try {
+        await writeAvailability("model_provider", next.id, audience);
+      } catch (e) {
+        const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
+        setPartial({ list: { ...snap, connected: list.connected }, provider, message: getErrorMessage(e) });
+        return;
+      }
+    }
+    toast.success(PROVIDER_EDITOR.SAVED_TOAST);
+    onSaved();
+  };
+
+  const remove = async () => {
+    if (await write(stored.filter((p) => p.id !== editing?.id))) onSaved();
   };
 
   // How many people hold a credential for it — what rule 8 would delete (E9).
@@ -152,7 +185,7 @@ export function ModelProviderEditor({
   const blockedFor = defaultFor[0] && (harnesses.find((h) => h.id === defaultFor[0])?.display ?? defaultFor[0]);
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && close()}>
       {/* The kind step has no description line; say so rather than let Radix
           point aria-describedby at nothing. */}
       <DialogContent {...(!draft && { "aria-describedby": undefined })}>
@@ -172,7 +205,34 @@ export function ModelProviderEditor({
           />
         ) : (
           <form className="space-y-4" onSubmit={onSubmit}>
+            {partial && (
+              <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
+                <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
+                <span>{partial.message}</span>
+                <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
+              </div>
+            )}
             <ProviderFields draft={draft} setDraft={setDraft} harnesses={harnesses} />
+            {/* After Use with, above the footer (#923 editors.html section 2). An
+                existing provider's list writes at once, never through Save. */}
+            <div className="border-t border-border pt-4">
+              {editing ? (
+                <AvailabilityControl
+                  kind="model_provider"
+                  value={editing.id}
+                  onlyHint={AVAILABILITY.MODEL_PROVIDER_ONLY_HINT}
+                  note={AVAILABILITY.MODEL_PROVIDER_NOTE}
+                />
+              ) : (
+                <AvailabilityDraft
+                  draft={audience}
+                  onChange={setAudience}
+                  disabled={busy}
+                  onlyHint={AVAILABILITY.MODEL_PROVIDER_ONLY_HINT}
+                  note={AVAILABILITY.MODEL_PROVIDER_NOTE}
+                />
+              )}
+            </div>
             {refused && (
               <div role="alert" className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
                 <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE_ONE}</b>
@@ -187,7 +247,7 @@ export function ModelProviderEditor({
                 </Button>
               )}
               <span className="grow" />
-              <Button type="button" variant="ghost" onClick={onClose}>
+              <Button type="button" variant="ghost" onClick={close}>
                 {PROVIDER_EDITOR.CANCEL}
               </Button>
               <Button type="submit" disabled={busy}>
@@ -222,7 +282,7 @@ export function ModelProviderEditor({
                 <AlertDialogAction
                   className={buttonVariants({ variant: "destructive" })}
                   disabled={!!blockedFor}
-                  onClick={() => void write(stored.filter((p) => p.id !== editing?.id))}
+                  onClick={() => void remove()}
                 >
                   {PROVIDER_EDITOR.REMOVE}
                 </AlertDialogAction>
