@@ -591,7 +591,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
-	"PATCH /api/v1/runs/{id}":                 {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	// The title (#1197 L2): owner-or-admin, the SAME tier as GET /runs/{id}
+	// above (a rename is a display-field write, not a lease or take-over) —
+	// see run_title.go's doc comment.
+	"PATCH /api/v1/runs/{id}/title":           {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
@@ -1229,9 +1233,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// 23 since #658 added the three 0.8 route names (attach/ticket,
 		// attach/holder, profile/synthesize) ALONGSIDE the dash/bare aliases
 		// they replace — both registrations are still classOwner, so the probe
-		// count grows by exactly the three new patterns (20 -> 23).
-		if probed != 23 {
-			t.Errorf("probed %d classOwner routes, want 23 — a route that left classOwner takes its tier "+
+		// count grows by exactly the three new patterns (20 -> 23); 24 since
+		// #1197 L2 added PATCH /runs/{id}/title.
+		if probed != 24 {
+			t.Errorf("probed %d classOwner routes, want 24 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

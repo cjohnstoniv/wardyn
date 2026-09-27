@@ -11,10 +11,11 @@
 // every fact this bar carries fits in one row's width down at `lg` (1024px).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Check, Clock, Link as LinkIcon, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
+import { Check, Clock, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { AgentBadge, AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
@@ -80,6 +81,7 @@ export function SummaryHeader({
   linkCopied = false,
   onKill,
   onClone,
+  onRename,
 }: {
   run: AgentRun;
   terminal: boolean;
@@ -116,8 +118,19 @@ export function SummaryHeader({
   // so it belongs here instead. Optional so the header stays renderable
   // without a parent that owns navigation (the unit tests below).
   onClone?: () => void;
+  // Rename (#1197 L2): owner only (this component's own `owned` check below),
+  // absent for anyone else — same optional-prop shape as onClone, so the
+  // header stays renderable with no parent that owns the write.
+  onRename?: (title: string) => void;
 }) {
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
+  // Rename's inline edit mode. Deliberately kept OUT of the h1 area: that
+  // element's own min-width (160px) is an enforced floor another test
+  // measures directly (runs.spec.ts's width loop), so the edit affordance
+  // lives in the action cluster on the right instead of wrapping the h1 in a
+  // new flex item that would change what that floor is measured against.
+  const [renaming, setRenaming] = React.useState(false);
+  const [draftTitle, setDraftTitle] = React.useState("");
   // Claim "attachable" only under the SAME owner-or-admin predicate
   // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
   // && !owned`) — otherwise a member sees this chip promise attachability and
@@ -419,6 +432,66 @@ export function SummaryHeader({
                     : RUN_COCKPIT.waiting(pendingApprovalCount)}
             </span>
           </Chip>
+        )}
+        {/* Rename (#1197 L2): owner only, any run state — unlike Clone below,
+            not gated on `terminal`. The inline form replaces the button in
+            place rather than opening a dialog; Escape-to-cancel is Cancel's
+            job, not a keydown handler, since the mock's own stub carries the
+            same two-button shape. */}
+        {onRename && owned && (
+          renaming ? (
+            <form
+              className="flex h-7 shrink-0 items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                onRename(draftTitle);
+                setRenaming(false);
+              }}
+            >
+              <label htmlFor="run-rename-title" className="sr-only">
+                Title
+              </label>
+              <Input
+                id="run-rename-title"
+                autoFocus
+                maxLength={200}
+                className="h-7 w-40"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+              />
+              <Button type="submit" size="sm" className="h-7">
+                Save
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7"
+                onClick={() => setRenaming(false)}
+              >
+                Cancel
+              </Button>
+            </form>
+          ) : (
+            // Icon-only, like the copy-link button above: this bar is
+            // already at its width floor (the header's own extensive
+            // comments document xl=1280 as the tightest single-row budget),
+            // and a labelled button here reproduced regression 1 (Kill's
+            // right edge pushed off-screen at 1280 — runs.spec.ts's width
+            // loop). title/aria-label carry the same word a label would.
+            <button
+              type="button"
+              onClick={() => {
+                setDraftTitle(runHeadline(run));
+                setRenaming(true);
+              }}
+              title={RUN_COCKPIT.rename}
+              aria-label={RUN_COCKPIT.rename}
+              className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Pencil className="size-4" />
+            </button>
+          )
         )}
         {/* Tab order clone -> kill: outline, never the header's one
             danger slot, and Kill stays disabled (not hidden) rather than

@@ -8,6 +8,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **A run's title is now renameable, and no longer required to launch one (#1197 L2).**
+  `PATCH /runs/{id}/title` lets the run's owner (or an admin) change its title in any run state,
+  audited as `run.title.set` with the old and new values. New Run's Title field is optional and
+  prefills from the task's own first line (up to 80 characters, cut at a word boundary) until the
+  operator edits it by hand; the "Runs that share a title are grouped together" hint is gone, since
+  exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
+  owner, showing a "Renamed" toast and the new title in place, with no reload.
+
 ### Changed
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and

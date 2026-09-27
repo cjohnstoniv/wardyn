@@ -126,6 +126,13 @@ export const RUN_COCKPIT = {
   loadError: "Couldn't load right now.",
   filesTruncated: "Showing a partial list — more files changed than are shown here.",
 
+  // --- Rename (#1197 L2) ---
+  // Canon strings, design.md §2.1's "Rename (run page)" row — byte-exact,
+  // including the toast: it says only the TITLE changed, since the agent's
+  // task is the fact a rename could otherwise be misread as touching.
+  rename: "Rename",
+  renamed: "Renamed. Only the title changed; the agent's task is the same.",
+
   // --- Command bar ---
   // The pending-approval chip. Two forms, because they are two different facts:
   // an approval merely queued vs. one that is HOLDING the sandbox right now

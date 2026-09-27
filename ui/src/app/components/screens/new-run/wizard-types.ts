@@ -404,6 +404,22 @@ export function cloneFromAudit(run: ClonableRun, events: AuditEvent[]): RunPrefi
   return runPrefill(run, createRequestFromAudit(events));
 }
 
+// The New Run title's default, while the operator hasn't typed one of their
+// own (#1197 L2, design.md §3.4): the task's own first line, cut at a WORD
+// BOUNDARY within 80 characters — never mid-word, and never past a line break
+// the task itself chose. The server never required a title (runs_create_
+// validate.go's own doc comment); this is the console's default, not a
+// second validation rule.
+const MAX_PREFILLED_TITLE_LEN = 80;
+
+export function titleFromTask(task: string): string {
+  const firstLine = task.split("\n", 1)[0].trim();
+  if (firstLine.length <= MAX_PREFILLED_TITLE_LEN) return firstLine;
+  const cut = firstLine.slice(0, MAX_PREFILLED_TITLE_LEN);
+  const wordBoundary = cut.lastIndexOf(" ");
+  return (wordBoundary > 0 ? cut.slice(0, wordBoundary) : cut).trim();
+}
+
 /**
  * A fresh wizard, optionally overlaid with a prefill (B4b's clone). The overlay
  * is applied WHOLE over the defaults rather than merged field-by-field: every

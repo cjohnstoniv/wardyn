@@ -315,14 +315,15 @@ describe("NewRunScreen — the form matches the run mode", () => {
 // Before this, the screen had NO client-side validation at all: an empty form
 // launched, and the server's answer arrived after the fact.
 describe("NewRunScreen — Launch says what it is waiting for", () => {
-  it("is disabled without a title, and says so", async () => {
+  // #1197 L2: the server never required a title (runs_create_validate.go's
+  // own doc comment) — only this screen did. Now it doesn't either: Launch is
+  // enabled by default (interactive mode needs no task), and a title is never
+  // the thing blocking it.
+  it("does not require a title", async () => {
     renderScreen();
     const launch = await screen.findByRole("button", { name: /Launch run/ });
-    expect(launch).toBeDisabled();
-    expect(screen.getByText("Give this run a title.")).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
     expect(launch).toBeEnabled();
+    expect(screen.queryByText("Give this run a title.")).not.toBeInTheDocument();
   });
 
   it("still waits for the task on an autonomous run", async () => {
@@ -335,6 +336,42 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
 
     await user.type(screen.getByLabelText("Task"), "fix the flaky test");
     expect(launch).toBeEnabled();
+  });
+});
+
+// #1197 L2: the Title default tracks the task's own first line until the
+// operator writes one themselves — wizard-types.test.ts pins the word-boundary
+// cut in isolation; these prove it is actually WIRED into the screen.
+describe("NewRunScreen — Title tracks the task until edited", () => {
+  it("prefills the title from the task's first line as it's typed", async () => {
+    renderScreen();
+    // Default mode is interactive: the task field is the optional boot seed.
+    const seed = await screen.findByLabelText("Initial prompt (optional)");
+    await user.type(seed, "Refactor the payments module");
+    expect(screen.getByLabelText("Title")).toHaveValue("Refactor the payments module");
+  });
+
+  it("stops tracking once the operator edits the title by hand", async () => {
+    renderScreen();
+    const seed = await screen.findByLabelText("Initial prompt (optional)");
+    await user.type(seed, "Refactor the payments module");
+    const title = screen.getByLabelText("Title");
+    expect(title).toHaveValue("Refactor the payments module");
+
+    await user.clear(title);
+    await user.type(title, "My own title");
+    await user.type(seed, " and the retry path");
+    expect(title).toHaveValue("My own title");
+  });
+
+  it("stops tracking once the operator clears the title, and does not re-derive it", async () => {
+    renderScreen();
+    const seed = await screen.findByLabelText("Initial prompt (optional)");
+    await user.type(seed, "Refactor the payments module");
+    const title = screen.getByLabelText("Title");
+    await user.clear(title);
+    await user.type(seed, " more");
+    expect(title).toHaveValue("");
   });
 });
 
@@ -536,18 +573,15 @@ describe("NewRunScreen — the keyboard contract", () => {
   });
 });
 
-// The one validation-error state. aria-invalid is what paints it — the Input
-// primitive owns the ring, and this screen must never hand-paint one.
-describe("NewRunScreen — the title's error state", () => {
-  it("stays quiet until the operator has been in the field and left it empty", async () => {
+// #1197 L2: Title dropped its required-field error state along with the
+// requirement itself — leaving it empty, then blurring, is no longer wrong.
+describe("NewRunScreen — Title has no error state", () => {
+  it("never marks aria-invalid, even empty and blurred", async () => {
     renderScreen();
     const title = await screen.findByLabelText("Title");
     expect(title).not.toHaveAttribute("aria-invalid");
 
     fireEvent.blur(title);
-    await waitFor(() => expect(title).toHaveAttribute("aria-invalid", "true"));
-
-    await user.type(title, "Refund flow");
     expect(title).not.toHaveAttribute("aria-invalid");
   });
 });
