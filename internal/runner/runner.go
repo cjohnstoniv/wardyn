@@ -523,11 +523,12 @@ var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended 
 // sidecar and leave its agent running (a run lost to a control-plane outage,
 // long-holds design rev 4 §4 row 2). The agent keeps its processes and files
 // but has no network path, because the proxy was its only one. The stopped
-// proxy is kept, not removed: its rendered config is what ProxyReviver reads
-// back, and teardown removes it with the rest of the sandbox. Idempotent on
-// a missing or already-stopped proxy; an unresolvable ref is an error, never a
-// success that left the proxy up. A graceful stop that fails escalates to a
-// kill; a proxy that survives both is an error, with the agent stopped too
+// proxy is removed, not kept: nothing a revive needs lives in it (the control
+// plane stores the run's proxy config, #1176), and a stopped container would
+// hold nothing but its own leftovers. Idempotent on a missing or
+// already-stopped proxy; an unresolvable ref is an error, never a success that
+// left the proxy up. A graceful stop that fails escalates to a kill; a proxy
+// that survives both is an error, with the agent stopped too
 // (kept, never removed) so no work runs while its egress is unconfirmed. An
 // error means containment is unconfirmed, not that the sandbox may go: the
 // control plane keeps the run and retries (#1060). A router in front of a
@@ -539,21 +540,23 @@ type ProxyStopper interface {
 // ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
 // sidecar, running or stopped, with a new one while the agent keeps running
 // (proxy-only revive and restart with current limits, long-holds design rev 4
-// §4.1). The control plane reads the old config back, rewrites only its token
-// and its denies, and hands it to ReplaceProxy; the per-run MITM CA inside it
-// is carried over, never copied anywhere else.
+// §4.1). The control plane reads the run's stored config (never the proxy
+// container, #1176), rewrites only its token and its denies, and hands it to
+// ReplaceProxy; the per-run MITM CA inside it is carried over.
 //
-// ReplaceProxy removes the old proxy first, then starts the new one on the
-// run's network at the address the agent's hosts entry pins. An error wrapping
-// ErrProxyReplaceFailed means the old proxy is, or may be, gone and no new one
-// runs: the sandbox has no egress, and the caller must treat the run as lost.
-// Where it can, the driver puts the old proxy back stopped (Docker), so its
-// config can be read back for a later revive.
+// CanReplaceProxy answers ErrReviveUnsupported, before the caller claims the
+// run, when ref's substrate cannot replace a proxy in place, and nil
+// otherwise. ReplaceProxy removes the old proxy (if there still is one), then
+// starts the new one on the run's network at the address the agent's hosts
+// entry pins, delivering cfgJSON so that no container config or environment
+// holds it. An error wrapping ErrProxyReplaceFailed means the old proxy is, or
+// may be, gone and no new one runs: the sandbox has no egress, and the caller
+// must treat the run as lost; a later revive rebuilds from the stored config.
 // Any other error came before the old proxy was touched and left it as it
 // was. A router in front of a substrate without it (Kubernetes: the agent pins
 // the proxy pod's IP) returns ErrReviveUnsupported.
 type ProxyReviver interface {
-	ProxyConfig(ctx context.Context, ref string) ([]byte, error)
+	CanReplaceProxy(ctx context.Context, ref string) error
 	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
 	// EnsureProxyImage pulls the proxy sidecar image if it is not already
 	// present locally. The control plane calls this BEFORE the revive claim

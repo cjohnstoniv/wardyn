@@ -167,9 +167,10 @@ func ProxySidecarEnvKnobs() [][2]string {
 
 // BuildProxyConfig marshals a run's ProxyConfig (egress policy, MITM CA,
 // injection rules, run token, ...) into the JSON payload every substrate
-// delivers to its wardyn-proxy sidecar as WARDYN_PROXY_CONFIG_JSON — the proxy
-// fails closed without it. port is the sidecar's listen port (ProxyListenPort
-// in production; parameterized for tests).
+// delivers to its wardyn-proxy sidecar (on stdin on Docker, as a staged file on
+// Kubernetes; never in its environment) — the proxy fails closed without it.
+// port is the sidecar's listen port (ProxyListenPort in production;
+// parameterized for tests).
 func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error) {
 	inj := make([]proxy.InjectionConfig, 0, len(pc.Injection))
 	for _, g := range pc.Injection {

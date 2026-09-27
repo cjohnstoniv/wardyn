@@ -137,7 +137,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
 	// reboot stopped is then marked lost (reboot), which says its agent needs
 	// starting again, before the same downtime marks it lost (outage).
-	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.sweepLapsedRunTokens(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.sweepLapsedRunTokens(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx), s.purgeTerminalRunProxyConfigs(ctx))
 }
 
 // auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol.fail",
@@ -524,6 +524,9 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 					// one ContainerList per grace period, free next to what it reclaims.
 					if err := s.sweepOrphanedSandboxes(ctx); err != nil {
 						slog.WarnContext(ctx, "wardynd: orphaned sandbox sweep", slog.Any("err", err))
+					}
+					if err := s.purgeTerminalRunProxyConfigs(ctx); err != nil {
+						slog.WarnContext(ctx, "wardynd: terminal run proxy config purge", slog.Any("err", err))
 					}
 				}
 				if err := s.sweepRunWatchers(ctx); err != nil {

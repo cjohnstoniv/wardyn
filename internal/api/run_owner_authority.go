@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -382,27 +381,24 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 // extendRefusal re-checks the owner's authority before a run's end moves
 // later or is removed: extending keeps a sandbox and its credentials alive,
 // so it needs the authority a revive needs, less the proxy rebuild. The
-// repos come from the run's rendered proxy config where the runner can read
-// it back; a runner that cannot (no revive support) leaves the legacy repo
-// field alone.
+// repos come from the run's stored proxy config where there is one
+// (run_proxy_config.go); a run without one leaves the legacy repo field alone.
 func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusal {
 	ctx := r.Context()
 	if _, ref := s.ownerProfile(ctx, run); ref != nil {
 		return ref
 	}
 	var cfg *proxy.Config
-	if rv, ok := s.cfg.Runner.(runner.ProxyReviver); ok && run.SandboxRef != "" {
-		raw, err := rv.ProxyConfig(ctx, run.SandboxRef)
-		switch {
-		case errors.Is(err, runner.ErrReviveUnsupported):
-		case err != nil:
-			return &ownerRefusal{status: http.StatusBadGateway, reason: "owner_unverifiable",
-				msg: "read the run's proxy config to re-check its owner's authority: " + err.Error()}
-		default:
-			if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
-				return &ownerRefusal{status: http.StatusConflict, reason: "owner_unverifiable",
-					msg: "the run's proxy config does not load: " + err.Error()}
-			}
+	raw, err := s.loadRunProxyConfig(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
+	case err != nil:
+		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: "owner_unverifiable",
+			msg: "read the run's proxy config to re-check its owner's authority: " + err.Error()}
+	default:
+		if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
+			return &ownerRefusal{status: http.StatusConflict, reason: "owner_unverifiable",
+				msg: "the run's proxy config does not load: " + err.Error()}
 		}
 	}
 	ref, err := s.ownerCapabilityRefusal(ctx, run, principalFromRequest(r) == run.CreatedBy, runRepos(run, cfg))

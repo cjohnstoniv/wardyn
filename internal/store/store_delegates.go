@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Registered portals and the delegated tokens they are handed (migration
-// 0092, #1142). Like store_apitokens.go and store_devices.go, every method
+// 0094, #1142). Like store_apitokens.go and store_devices.go, every method
 // takes the RAW credential and hashes it with hashToken before it reaches SQL.
 package store
 

@@ -649,7 +649,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 if run_section 6; then
   log "Section 6: kill cascade"
-  note "Kills the run; asserts container gone + token revoked + audit event"
+  note "Kills the run; asserts container gone + state KILLED + audit event"
 
   S6_RUN_ID=""
   if ensure_run 6; then
@@ -660,30 +660,10 @@ if run_section 6; then
     S6_CTR="wardyn-agent-${S6_RUN_ID}"
     S6_PROXY_CTR="wardyn-proxy-${S6_RUN_ID}"
 
-    # Capture the run token from the proxy config env so we can test 401 after kill.
-    S6_TOKEN="$(docker inspect "${S6_PROXY_CTR}" --format \
-      '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-      | sed -n 's/^WARDYN_PROXY_CONFIG_JSON=//p' \
-      | python3 -c 'import sys,json;print(json.load(sys.stdin)["run_token"])' 2>/dev/null || echo "")"
-
-    [[ -n "${S6_TOKEN}" ]] \
-      && note "section 6: run token captured from proxy config" \
-      || note "section 6: run token not found; post-kill 401 check will be skipped"
-
-    # Verify the token works before kill (via the internal decisions endpoint).
-    if [[ -n "${S6_TOKEN}" ]]; then
-      S6_PRE="$(hc -o /dev/null -w '%{http_code}' \
-        -X POST "${WARDYN_URL}/api/v1/internal/decisions" \
-        -H "Authorization: Bearer ${S6_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"request":{"host":"prekill.example","port":443,"method":"CONNECT"},"decision":"deny","rule_source":"test-drive:s6"}' \
-        2>/dev/null || echo "000")"
-      if [[ "${S6_PRE}" == "202" ]]; then
-        ok "section 6: pre-kill token is valid (202)"
-      else
-        note "section 6: pre-kill token returned ${S6_PRE} (expected 202)"
-      fi
-    fi
+    # The run token is not readable from the proxy container (#1176: its config
+    # reaches the proxy on stdin only), so the token's own refusal after the
+    # kill is pinned by internal/api's kill and TestInternalAuth_* tests.
+    note "section 6: the run token is not readable from the proxy container (by design); its post-kill refusal is covered by the Go tests"
 
     # Issue the kill.
     S6_KILL_CODE="$(hc -o /dev/null -w '%{http_code}' \
@@ -703,21 +683,6 @@ if run_section 6; then
       ok "section 6: agent container is gone"
     else
       bad "section 6: agent container still present: ${S6_GONE}"
-    fi
-
-    # Run token revoked -> 401.
-    if [[ -n "${S6_TOKEN}" ]]; then
-      S6_POST="$(hc -o /dev/null -w '%{http_code}' \
-        -X POST "${WARDYN_URL}/api/v1/internal/decisions" \
-        -H "Authorization: Bearer ${S6_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"request":{"host":"postkill.example","port":443,"method":"CONNECT"},"decision":"deny","rule_source":"test-drive:s6"}' \
-        2>/dev/null || echo "000")"
-      if [[ "${S6_POST}" == "401" ]]; then
-        ok "section 6: run token revoked (401 post-kill)"
-      else
-        bad "section 6: post-kill token returned ${S6_POST} (expected 401)"
-      fi
     fi
 
     # Run state.
@@ -747,13 +712,13 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 7: Recording
-# GET the asciicast recording artifact for a completed or killed run -> 200.
-# Uses the same manual-upload path exercised by the e2e suite to ensure there
-# is an artifact to retrieve; then confirms the admin-gated endpoint serves it.
+# The recording endpoint refuses an unauthenticated read (401). Upload and
+# serve need the run's token, which the proxy container no longer exposes
+# (#1176); the e2e suite's finite recording run covers them.
 # ─────────────────────────────────────────────────────────────────────────────
 if run_section 7; then
   log "Section 7: recording artifact"
-  note "Uploads a synthetic asciicast then retrieves it via the admin API"
+  note "Checks the recording endpoint refuses an unauthenticated read"
 
   S7_RUN_ID=""
   if ensure_run 7; then
@@ -761,55 +726,19 @@ if run_section 7; then
   fi
 
   if [[ -n "${S7_RUN_ID}" ]]; then
-    S7_PROXY_CTR="wardyn-proxy-${S7_RUN_ID}"
+    # The direct run-token upload this section made needs the run's token, which
+    # is no longer readable from the proxy container (#1176). Auto delivery
+    # through the proxy is exercised by the e2e suite's finite recording run.
+    note "section 7: the run token is not readable from the proxy container (by design); upload + serve are covered by the e2e recording run"
 
-    # Capture the run token so we can upload via the run-token-gated endpoint.
-    S7_TOKEN="$(docker inspect "${S7_PROXY_CTR}" --format \
-      '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-      | sed -n 's/^WARDYN_PROXY_CONFIG_JSON=//p' \
-      | python3 -c 'import sys,json;print(json.load(sys.stdin)["run_token"])' 2>/dev/null || echo "")"
-
-    if [[ -z "${S7_TOKEN}" ]]; then
-      bad "section 7: could not capture run token from proxy config; skipping upload"
+    # No-auth must be 401.
+    S7_NOAUTH="$(hc -o /dev/null -w '%{http_code}' \
+      "${WARDYN_URL}/api/v1/runs/${S7_RUN_ID}/recording/${S7_RUN_ID}" \
+      2>/dev/null || echo "000")"
+    if [[ "${S7_NOAUTH}" == "401" ]]; then
+      ok "section 7: unauthenticated request correctly rejected (401)"
     else
-      # Upload a minimal asciicast.
-      S7_CAST_TMP="$(mktemp /tmp/wardyn-td-s7.XXXXXX.cast)"
-      printf '{"version": 2, "width": 80, "height": 24, "timestamp": %s, "title": "wardyn-test-drive"}\n' \
-        "$(date +%s)" > "${S7_CAST_TMP}"
-      printf '[0.1, "o", "wardyn test-drive section 7\\r\\n"]\n' >> "${S7_CAST_TMP}"
-
-      S7_UP="$(hc -o /dev/null -w '%{http_code}' \
-        -X PUT "${WARDYN_URL}/api/v1/internal/recordings/${S7_RUN_ID}" \
-        -H "Authorization: Bearer ${S7_TOKEN}" \
-        --data-binary "@${S7_CAST_TMP}" 2>/dev/null || echo "000")"
-      rm -f "${S7_CAST_TMP}" 2>/dev/null || true
-
-      if [[ "${S7_UP}" == "204" ]]; then
-        ok "section 7: recording uploaded via run token (204)"
-      else
-        bad "section 7: recording upload returned ${S7_UP} (expected 204)"
-      fi
-
-      # Retrieve via admin token.
-      S7_GET="$(hc -o /dev/null -w '%{http_code}' \
-        -H "${ADMIN_HDR}" \
-        "${WARDYN_URL}/api/v1/runs/${S7_RUN_ID}/recording/${S7_RUN_ID}" \
-        2>/dev/null || echo "000")"
-      if [[ "${S7_GET}" == "200" ]]; then
-        ok "section 7: recording served by admin endpoint (200)"
-      else
-        bad "section 7: GET recording returned ${S7_GET} (expected 200)"
-      fi
-
-      # No-auth must be 401.
-      S7_NOAUTH="$(hc -o /dev/null -w '%{http_code}' \
-        "${WARDYN_URL}/api/v1/runs/${S7_RUN_ID}/recording/${S7_RUN_ID}" \
-        2>/dev/null || echo "000")"
-      if [[ "${S7_NOAUTH}" == "401" ]]; then
-        ok "section 7: unauthenticated request correctly rejected (401)"
-      else
-        bad "section 7: unauthenticated request returned ${S7_NOAUTH} (expected 401)"
-      fi
+      bad "section 7: unauthenticated request returned ${S7_NOAUTH} (expected 401)"
     fi
 
     kill_run "${S7_RUN_ID}"

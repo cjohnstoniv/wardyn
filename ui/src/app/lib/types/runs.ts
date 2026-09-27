@@ -190,6 +190,14 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // The run's end time, stamped by the three state writers that move a run to
+  // a terminal state (migration 0092, #1197). Absent for a live run and for a
+  // legacy row the backfill could not date exactly. A lease-ended run (
+  // lost_reason "ended") stays RUNNING until the ended-run grace makes it
+  // terminal, so ITS end time is lost_at, not this field — internal/types/
+  // types.go's AgentRun.EndedAt doc. Nothing in the console reads this field
+  // yet; it is a live wire field and the mirror rule forbids dropping one.
+  ended_at?: string;
   // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
   // lease sweep retries every pass and clears both once the stop lands.
@@ -208,7 +216,7 @@ export interface AgentRun {
   // sent as an explicit spec.
   preset?: string;
   preset_version?: number;
-  // AgentRun.CreatedVia (migration 0092, #1142): the registered portal this
+  // AgentRun.CreatedVia (migration 0094, #1142): the registered portal this
   // run was launched through on its owner's behalf. Absent for a run its
   // owner launched themselves.
   created_via?: string;

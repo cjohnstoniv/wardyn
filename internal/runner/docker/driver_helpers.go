@@ -63,24 +63,26 @@ func envSlice(env map[string]string) []string {
 	return out
 }
 
-// proxyEnv builds the environment handed to the wardyn-proxy sidecar: the
-// full proxy config (incl. the run's egress policy — a proxy without a policy
-// fails closed and the sandbox has no egress) as one JSON env var, plus the
-// individual values for operator inspection. The run token is verifiable but
-// not a usable secret outside the platform; env visibility is part of the
-// documented daemon-trust tradeoff. A thin wrapper over runner.BuildProxyConfig
-// (the substrate-agnostic field-mapping + marshal core, hoisted so a k8s
-// substrate builds byte-identical sidecar config): this function adds only the
-// docker-Env-slice shape and the operator-knob forwarding below.
-func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
-	cfgJSON, _ := runner.BuildProxyConfig(runID, pc, port)
-	return proxyEnvFromJSON(runID, cfgJSON, pc.ControlPlaneURL)
+// proxyEnv renders the wardyn-proxy sidecar's config (runner.BuildProxyConfig,
+// the substrate-agnostic core a k8s substrate shares) and builds its
+// environment. The config itself is NOT in the environment: it carries the run
+// token, the per-run MITM CA key and the upstream-proxy credential, and
+// startProxy delivers it on stdin (#1176). The environment holds only
+// non-secret values: the stdin marker, the run id, the control-plane URL and
+// the operator knobs forwarded below.
+func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) ([]string, []byte, error) {
+	cfgJSON, err := runner.BuildProxyConfig(runID, pc, port)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker: render proxy config: %w", err)
+	}
+	return proxyEnvFromJSON(runID, pc.ControlPlaneURL), cfgJSON, nil
 }
 
-// proxyEnvFromJSON is proxyEnv for a config already rendered (ReplaceProxy).
-func proxyEnvFromJSON(runID uuid.UUID, cfgJSON []byte, controlPlaneURL string) []string {
+// proxyEnvFromJSON is proxyEnv's environment for a config already rendered
+// (ReplaceProxy).
+func proxyEnvFromJSON(runID uuid.UUID, controlPlaneURL string) []string {
 	env := []string{
-		proxyConfigEnv + "=" + string(cfgJSON),
+		proxyConfigStdinEnv + "=1",
 		"WARDYN_RUN_ID=" + runID.String(),
 		"WARDYN_CONTROL_PLANE_URL=" + controlPlaneURL,
 	}

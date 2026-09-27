@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Delegate is a registered portal (migration 0092, #1142): a trusted front-end
+// Delegate is a registered portal (migration 0094, #1142): a trusted front-end
 // that may exchange a signed-in person's own identity-provider token for a
 // short delegated token acting for that person. IdPClientID is the portal's
 // own client id at the identity provider, which a subject token must name;

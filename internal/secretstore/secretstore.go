@@ -152,6 +152,9 @@ var PlatformNames = map[string]bool{
 	"wardyn-ui-session-key": true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-internal-ca":    true,
+	// Seals each run's stored proxy config (cmd/wardynd's
+	// loadOrCreateRunConfigKey, #1176).
+	"wardyn-run-config-key": true,
 	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid),
 	// bootstrapped through loadOrCreateSecret like the keys above.
 	"wardyn-org-device-credential": true,
