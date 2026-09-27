@@ -9,25 +9,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// Device is one enrolled laptop daemon: an organisation-side inventory row
-// binding a revocable bearer credential to that device's own audit-federation
-// progress (docs/design/0.8/PLAN.md, "Hybrid enrolment and audit
-// federation"). CredentialSHA256 is hex(sha256(raw token)) — the raw device
-// bearer never reaches a row (see store.hashToken); GetDeviceByRaw hashes the
-// presented bearer before every lookup, and its WHERE clause requires
-// RevokedAt IS NULL so a revoked credential answers exactly like an unknown
-// one — no oracle.
-//
-// LastSeq/LastRowHash are this device's chain cursor AS INGESTED by the
-// organisation so far — never the device's own local table, which the
-// organisation never reads directly. IngestDeviceAudit verifies each new
-// batch's first row's claimed PrevHash against LastRowHash before accepting
-// anything, and advances both atomically with the insert.
+// Device is one enrolled laptop daemon: an inventory row binding a revocable
+// bearer credential to that device's own audit-federation progress.
+// CredentialSHA256 never reaches a row unhashed; a revoked credential's WHERE
+// RevokedAt IS NULL makes it answer exactly like an unknown one (no oracle).
+// LastSeq/LastRowHash are the chain cursor as ingested so far, verified
+// against each new batch's claimed PrevHash before advancing atomically.
 type Device struct {
 	ID   uuid.UUID `json:"id"`
 	Name string    `json:"name"`
-	// Never serialized: the inventory is an admin read, and a credential hash
-	// has no business leaving the process any more than api_tokens' does.
+	// Never serialized: a credential hash has no business leaving the process.
 	CredentialSHA256 string     `json:"-"`
 	EnrolledBy       string     `json:"enrolled_by"`
 	CreatedAt        time.Time  `json:"created_at"`
@@ -38,11 +29,8 @@ type Device struct {
 }
 
 // DeviceEnrolmentToken is a single-use admin-minted token a laptop's first
-// boot exchanges for a Device credential. TokenSHA256 follows the same
-// hash-at-rest rule as every other bearer this tree mints (attach_tickets,
-// api_tokens). ConsumedAt is set by ConsumeEnrolmentToken's conditional
-// UPDATE ... RETURNING, which is what makes a second redemption impossible:
-// its WHERE clause requires ConsumedAt IS NULL.
+// boot exchanges for a Device credential. ConsumeEnrolmentToken's conditional
+// UPDATE ... RETURNING (WHERE ConsumedAt IS NULL) makes redemption single-use.
 type DeviceEnrolmentToken struct {
 	ID          uuid.UUID  `json:"id"`
 	TokenSHA256 string     `json:"-"`
@@ -54,28 +42,16 @@ type DeviceEnrolmentToken struct {
 	Token       string     `json:"token,omitempty"` // plaintext, mint response ONLY
 }
 
-// FederatedAuditEvent is one audit row as a device's forwarder submits it
-// upward: the device's own AuditEvent — already chained on the DEVICE's own
-// local audit_events table, so PrevHash/RowHash are the link ITS trigger
-// computed, not the organisation's — plus Seq, that same local table's own
-// seq for the row.
-//
-// Seq positions the row (store.PG.IngestDeviceAudit and
-// ListAuditEventsAfterSeq): a device's audit_events.id is not unique across a
-// retried push (the forwarder re-reads and re-sends whatever is at or after
-// its durable cursor), and its local seq is monotonic within one chain. It is
-// not identity on its own — a table reset can restart it — so a replayed row
-// is recognised by its seq together with its RowHash.
+// FederatedAuditEvent is one audit row plus Seq, its local table's own
+// sequence for the row. Seq alone is not identity — a table reset can
+// restart it — so a replay is recognised by seq together with RowHash.
 type FederatedAuditEvent struct {
 	AuditEvent
 	Seq int64 `json:"seq"`
 }
 
-// DeviceEnrolRequest / DeviceEnrolResponse are POST /api/v1/devices/enrol's
-// wire shapes, shared by the organisation's handler and the laptop's
-// federation client. DeviceAck is what the ingest and heartbeat routes answer:
-// the organisation's recorded cursor for the device, which the forwarder
-// advances to.
+// DeviceEnrolRequest/DeviceEnrolResponse are POST /devices/enrol's wire
+// shapes; DeviceAck is the ingest/heartbeat routes' recorded-cursor answer.
 type DeviceEnrolRequest struct {
 	Token string `json:"token"`
 }

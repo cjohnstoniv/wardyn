@@ -9,13 +9,6 @@
 // (netip.Addr.IsPrivate covers RFC1918 and the IPv6 ULA range, so those are NOT
 // re-listed in ReservedV4 — they ARE re-listed in Liftable, which is a different
 // job; see there).
-//
-// An earlier version of this comment described an "allowPrivate escape hatch"
-// belonging to the AI Run Composer's transport. That package was deleted, and
-// the stale sentence went on to cost a later design round a wrong conclusion —
-// it read as "no operator override exists", when the real override is
-// SiteConfig.InternalHosts (see Liftable below). Naming a dead consumer is
-// worse than naming none.
 package ipguard
 
 import (
@@ -27,22 +20,16 @@ import (
 // ReservedV4 are the reserved IPv4 ranges every guard denies that
 // netip.Addr.IsPrivate does not already cover.
 //
-// THE CANONICAL SURFACE is the IANA IPv4 Special-Purpose Address Registry, not
+// The canonical surface is the IANA IPv4 Special-Purpose Address Registry, not
 // a remembered list of RFCs: an entry belongs here when the registry's
-// "Globally Reachable" column says False and no stdlib predicate
-// (IsUnspecified/IsLoopback/IsLinkLocalUnicast/IsLinkLocalMulticast/
-// IsMulticast/IsPrivate) already covers it. Diff against the registry, not
-// against intuition — that is what an audit found missing here: 240.0.0.0/4 was
-// absent while 255.255.255.255/32, a /32 INSIDE it, was listed, so the table
-// blocked one address of a reserved /4 and left the other ~268 million open,
-// and 240/4 is used as extra private space inside some estates, which is
-// exactly the class of internal endpoint this guard is the backstop for.
-// Registry rows that ARE globally reachable (192.31.196.0/24 AS112-v4,
-// 192.52.193.0/24 AMT, 192.175.48.0/24 direct-delegation AS112) stay out.
+// "Globally Reachable" column says False and no stdlib predicate already
+// covers it — diff against the registry, not intuition. Registry rows that ARE
+// globally reachable (192.31.196.0/24, 192.52.193.0/24, 192.175.48.0/24) stay
+// out.
 //
-// ORDER MATTERS for the reason string only: PrivateReserved names the FIRST
-// matching prefix, so 255.255.255.255/32 stays listed ahead of the 240.0.0.0/4
-// that now contains it and keeps naming itself in a denial.
+// Order matters for the reason string only: PrivateReserved names the FIRST
+// matching prefix, so 255.255.255.255/32 stays listed ahead of the
+// 240.0.0.0/4 that now contains it.
 var ReservedV4 = []netip.Prefix{
 	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT (RFC6598)
 	netip.MustParsePrefix("0.0.0.0/8"),     // "this network"
@@ -57,27 +44,22 @@ var ReservedV4 = []netip.Prefix{
 }
 
 // ReservedV6 are the reserved IPv6 ranges every guard denies that no stdlib
-// predicate covers (netip.Addr.IsPrivate covers fc00::/7, IsLinkLocalUnicast
-// covers fe80::/10, so neither is re-listed). Same canonical surface as
-// ReservedV4: the IANA IPv6 Special-Purpose Address Registry.
+// predicate covers (IsPrivate covers fc00::/7, IsLinkLocalUnicast covers
+// fe80::/10). Same canonical surface as ReservedV4.
 //
-// 2002::/16 is here rather than in NAT64Prefixes on purpose. It carries a real
-// IPv4 exactly as a NAT64 prefix does — 2002:7f00:0001::1 is 127.0.0.1 — but at
-// bits 16..48 rather than in the low 32, so NAT64EmbeddedV4's extraction cannot
-// name the target. 6to4 is deprecated and unroutable (RFC7526), so the whole
-// prefix is denied wholesale instead: strictly stronger than an extraction, and
-// it leaves ONE place to look for "which embedded-v4 shapes are covered".
+// 2002::/16 is denied wholesale here rather than parsed in NAT64Prefixes: it
+// embeds a real IPv4 at bits 16..48, not the low 32 NAT64EmbeddedV4 extracts,
+// and 6to4 is deprecated and unroutable anyway.
 var ReservedV6 = []netip.Prefix{
 	netip.MustParsePrefix("fec0::/10"), // deprecated site-local (RFC3879) — still configured on some enterprise LANs
 	netip.MustParsePrefix("2002::/16"), // 6to4 (RFC7526, deprecated) — embeds an IPv4 at bits 16..48
 }
 
 // NAT64Prefixes are the well-known + local-use NAT64 translation prefixes
-// (RFC 6052 / RFC 8215). An address inside one carries a real IPv4 in its
-// low 32 bits, so a private/metadata target can be smuggled as an IPv6
-// literal (64:ff9b::a9fe:a9fe -> 169.254.169.254) past every stdlib
-// predicate (To4() is nil for it). Every guard must block these wholesale
-// and re-check the embedded v4 so the denial names the real target.
+// (RFC 6052 / RFC 8215). An address inside one carries a real IPv4 in its low
+// 32 bits, so a private/metadata target can be smuggled as an IPv6 literal
+// (64:ff9b::a9fe:a9fe -> 169.254.169.254) past every stdlib predicate. Every
+// guard must block these wholesale and re-check the embedded v4.
 var NAT64Prefixes = []netip.Prefix{
 	netip.MustParsePrefix("64:ff9b::/96"),   // well-known NAT64 (RFC 6052)
 	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64 (RFC 8215)
@@ -109,10 +91,7 @@ func PrivateReserved(ip net.IP) (bool, string) {
 // InternalHosts, and the proxy's per-request internal-host lift it drives).
 // Deliberately narrower than PrivateReserved's full denial set: RFC1918, the
 // IPv6 ULA range, and CGNAT only. Loopback/link-local/metadata/unspecified/
-// multicast/NAT64-embedded stay un-liftable by construction — the proxy's
-// blockKind classification (internal/egress/proxy) never offers them to the
-// lift predicate in the first place, and the site-config write validator
-// checks a declared CIDR against exactly this set.
+// multicast/NAT64-embedded stay un-liftable by construction.
 var Liftable = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
@@ -147,18 +126,13 @@ func NAT64EmbeddedV4(ip net.IP) (net.IP, bool) {
 // model gateway can never legitimately be: loopback, link-local (the metadata
 // address included), unspecified, multicast, or NAT64-embedded. RFC1918/ULA/
 // CGNAT are NOT refused — those are exactly the addresses an internal gateway is
-// expected to live on, which is what makes this a DIFFERENT predicate from
+// expected to live on, which makes this a DIFFERENT predicate from
 // PrivateReserved rather than a subset of it.
 //
-// It lives here because it has two consumers whose agreement is a trust
-// boundary: the control plane validates the operator's
-// configured gateway at boot (internal/api), and the proxy re-checks the
-// RESOLVED answer per request before dialling it with the brokered model
-// credential (internal/egress/proxy). Those were byte-identical copies coupled
-// only by a "mirrors …" sentence, and the proxy copy's NAT64 arm was unpinned:
-// deleting it left the whole proxy suite green while a gateway name resolving to
-// 64:ff9b::a9fe:a9fe (NAT64-mapped 169.254.169.254) became dialable with the
-// credential. One body, one table test, no drift.
+// It lives here as the single shared body for two consumers whose agreement is
+// a trust boundary: the control plane validates the configured gateway at boot
+// (internal/api), and the proxy re-checks the RESOLVED answer per request
+// before dialling it with the brokered model credential (internal/egress/proxy).
 //
 // A nil/!ok address is REFUSED: addrOf fails only on a slice that is not an
 // address at all, and an unparseable gateway address is not one this may admit.

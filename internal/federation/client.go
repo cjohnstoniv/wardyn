@@ -1,13 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package federation is the laptop half of hybrid enrolment
-// (docs/design/0.8/PLAN.md, "Hybrid enrolment and audit federation"): the
-// client for the organisation's device routes (internal/api/devices_auth.go)
-// and the forwarder that pushes this daemon's own chained audit rows upward
-// from a durable cursor. It READS the local audit table and never records into
-// the chain on anyone's behalf; the two rows it writes are its own
-// (device.local.enrol at boot, device.local.revoke here).
+// Package federation is the laptop half of hybrid enrolment: the client for
+// the organisation's device routes, and the forwarder pushing this daemon's
+// audit rows upward. It never writes into the chain on anyone else's behalf.
 package federation
 
 import (
@@ -32,21 +28,11 @@ import (
 // at most 8 MiB (maxDeviceIngestBytes), which this allows over a slow link.
 const requestTimeout = 60 * time.Second
 
-// Credential is what the laptop keeps in its secret store after enrolling: the
-// device id the organisation's routes are keyed on, the wdd_ bearer, and the
-// SHA-256 of the enrolment token that bought them. The last is how boot tells
-// a fresh token (re-enrol) from the spent one MDM leaves in place (keep).
-//
-// ResetPending and Name make the post-enrolment reset (ResetFederation, the
-// device.local.enrol row, then clearing ResetPending) resumable across a
-// crash: they are set true/non-empty only when this credential is freshly
-// generated, and durably stored BEFORE the reset runs. A boot that reads a
-// credential with ResetPending still true (its own prior attempt was
-// interrupted between that Put and finishing the reset) resumes the reset
-// without spending the enrolment token again. Once the reset completes,
-// ResetPending is persisted false and never set again for this credential, so
-// a later genuine revocation of this same identity is never cleared by a
-// restart.
+// Credential is what the laptop keeps in its secret store after enrolling:
+// device id, wdd_ bearer, and the enrolment token's SHA-256 (tells a fresh
+// token from the spent one MDM leaves behind). ResetPending, persisted true
+// only on a fresh credential, makes the post-enrolment reset resumable across
+// a crash without re-spending the token or clearing a later, genuine revocation.
 type Credential struct {
 	DeviceID             uuid.UUID `json:"device_id"`
 	Token                string    `json:"token"`
@@ -62,11 +48,8 @@ func TokenSHA256(token string) string {
 }
 
 // StatusError is a non-2xx answer from the organisation. RetryAfter is the
-// parsed Retry-After header (seconds or HTTP-date form), zero when absent or
-// unparseable. WWWAuthenticate is the raw WWW-Authenticate header, empty when
-// absent — how Revoked tells the organisation's own 401 from a 401 injected by
-// something on the path that is not the organisation (a captive portal, a
-// misconfigured proxy).
+// parsed Retry-After header; WWWAuthenticate lets Revoked tell the
+// organisation's own 401 from one injected elsewhere on the path.
 type StatusError struct {
 	Code            int
 	RetryAfter      time.Duration
@@ -78,10 +61,9 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("organisation answered %d: %s", e.Code, e.Message)
 }
 
-// Revoked reports the definitive "this credential is dead" answers: 410, and a
-// 401 that carries deviceAuth's own realm (revoked and unknown are
-// deliberately one answer there). A bare 401 without that realm is not the
-// organisation revoking this device — see forwarder.go's refused.
+// Revoked reports the definitive "this credential is dead" answers: 410, and
+// a 401 carrying deviceAuth's own realm (revoked and unknown are deliberately
+// one answer there). A bare 401 without that realm is not revocation.
 func (e *StatusError) Revoked() bool {
 	return e.Code == http.StatusGone ||
 		(e.Code == http.StatusUnauthorized && strings.Contains(e.WWWAuthenticate, `realm="wardyn-device"`))
@@ -93,10 +75,8 @@ type Client struct {
 	http *http.Client
 }
 
-// NewClient returns a client for orgURL. Its transport is the shared
-// http.DefaultTransport, which wardynd patches at boot with
-// WARDYN_DAEMON_PROXY_URL and WARDYN_TRUSTED_CA_FILE — the same path the audit
-// webhook sink rides. Redirects are refused: the bearer is for this URL only.
+// NewClient returns a client for orgURL, using the shared http.DefaultTransport
+// (patched at boot by wardynd). Redirects are refused: the bearer is for this URL only.
 func NewClient(orgURL string) *Client {
 	return &Client{
 		base: strings.TrimRight(orgURL, "/"),

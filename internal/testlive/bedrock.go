@@ -4,12 +4,11 @@
 package testlive
 
 // The live Bedrock suite's spend guard. Every credential comes from IAM
-// Identity Center role credentials for ONE member account, the capped one, and
-// that account is proven with STS before any model call: a service control
-// policy does not bind a management account, so a management-account
-// credential would spend outside the cap. There is deliberately no bearer-key
-// path. The model allow-list, the max_tokens ceiling and the per-process call
-// budget are enforced here, not left to the caller.
+// Identity Center role credentials for ONE member account, the capped one,
+// proven with STS before any model call (a service control policy does not
+// bind a management account, so a management credential would spend outside
+// the cap). There is deliberately no bearer-key path. The model allow-list,
+// max_tokens ceiling and per-process call budget are enforced here.
 
 import (
 	"bytes"

@@ -11,23 +11,17 @@ import (
 	"time"
 )
 
-// imagePrewarmTimeout bounds the background pull PrewarmImages fires at boot —
-// generous (a cold registry pull of a small image, on a slow link) but not
-// unbounded, so a stuck registry cannot leak the goroutine forever.
+// imagePrewarmTimeout bounds PrewarmImages' background pull: generous enough for
+// a cold registry pull on a slow link, but bounded so a stuck registry can't
+// leak the goroutine forever.
 const imagePrewarmTimeout = 5 * time.Minute
 
 // PrewarmImages best-effort pulls the proxy sidecar image and the drive-probe
-// image in the background, so neither is resolved for the first time on a
-// real request. Fire-and-forget (SF-14): without this, a fresh daemon's FIRST
-// host_path drive create/preflight paid a live registry pull inside
-// driveShareProbeTimeout's 5s budget, and driveHomeReadableByAgent reads any
-// probe error as "unknown" — fail open — so that first request's honest
-// answer was "pass", not "wait". A failed prewarm of the PROXY image is
-// retried inline, synchronously, the next time it is needed (CreateSandbox
-// still calls ensureImage). The drive-probe image differs: ProbeDrive only
-// checks presence and errors if it is absent, so a failed prewarm of THAT
-// image leaves every probe failing open until a later prewarm, a daemon
-// restart, or an operator pull succeeds.
+// image in the background, so neither is resolved for the first time on a real
+// request. Fire-and-forget (SF-14): a failed PROXY prewarm is retried inline by
+// CreateSandbox's ensureImage, but a failed drive-probe prewarm leaves every
+// probe failing open (ProbeDrive errors on absence) until a later prewarm, a
+// daemon restart, or an operator pull succeeds.
 func (d *Driver) PrewarmImages() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), imagePrewarmTimeout)
