@@ -175,7 +175,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, reviveRefused(http.StatusBadGateway, "read the run's proxy config: "+err.Error())
 	}
-	cfg, re, rerr := reassertProxyCeiling(run, old, c)
+	cfg, err := s.loadRenderedProxyConfig(old)
+	if err != nil {
+		return reviveResult{}, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
+	}
+	re, rerr := reassertProxyCeiling(run, cfg, c)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -187,7 +191,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "mint run identity: "+err.Error())
 	}
-	cfg.RunToken, cfg.ControlPlaneURL, cfg.ControlPlaneCAPEM = id.Token, s.cfg.ControlPlaneURL, s.cfg.ControlPlaneCAPEM
+	cfg.RunToken = id.Token
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())
@@ -418,20 +422,16 @@ type reasserted struct {
 // map is non-empty (isBrokeredGitGrant). A running agent's env cannot change,
 // so emptying the map would hand the sandbox a GitHub installation token on
 // request. A revive whose ceiling denies a broker-managed host is refused.
-func reassertProxyCeiling(run types.AgentRun, old []byte, c ownerCeiling) (*proxy.Config, reasserted, *reviveError) {
-	cfg, err := proxy.LoadConfigBytes(old)
-	if err != nil {
-		return nil, reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
-	}
+func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
-		return nil, reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config names another run")
+		return reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config names another run")
 	}
 	var re reasserted
 	if len(c.deny) == 0 {
-		return cfg, re, nil
+		return re, nil
 	}
 	if len(cfg.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
-		return nil, re, reviveRefused(http.StatusConflict,
+		return re, reviveRefused(http.StatusConflict,
 			"the owner's governance profile now denies GitHub, which this run's git broker needs; start a new run")
 	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
@@ -450,7 +450,37 @@ func reassertProxyCeiling(run types.AgentRun, old []byte, c ownerCeiling) (*prox
 	}
 	slices.Sort(re.droppedLane)
 	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(h string) bool { return ceilingDenies(c.deny, h) })
-	return cfg, re, nil
+	return re, nil
+}
+
+// loadRenderedProxyConfig loads a run's rendered proxy config with its
+// control-plane hop (URL and CA) set to this deployment's current pair BEFORE
+// the strict loader validates it. A config rendered before the TLS hop names
+// an http control plane the loader now refuses, and every reader here (revive,
+// extend) hands the proxy the current pair anyway. Only those two fields change,
+// on the raw JSON object: every other field, an unknown one included, still
+// meets the loader as written, and the run id and the per-run MITM CA are read
+// back exactly as rendered.
+func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if fields == nil {
+		return nil, errors.New("parse config: not a JSON object")
+	}
+	for k, v := range map[string]string{"control_plane_url": s.cfg.ControlPlaneURL, "control_plane_ca_pem": s.cfg.ControlPlaneCAPEM} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		fields[k] = b
+	}
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.LoadConfigBytes(b)
 }
 
 // reloseRun is the fail-closed arm after a claim: the run's proxy is gone (or
