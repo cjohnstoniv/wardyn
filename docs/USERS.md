@@ -234,6 +234,54 @@ table — this is automatic, admin-configured, and nothing you do here changes
 it. It does not change where you read your own runs' audit: it is still this
 page and this endpoint.
 
+## Model providers (0.8)
+
+Where your admin has set up one or more model providers (Settings ▸ Model
+providers), your model credential is your own, whatever kind the provider is:
+an Amazon Bedrock SSO sign-in, a Claude subscription sign-in, a typed
+Anthropic, OpenAI or Bedrock API key, or a token for your admin's own
+gateway. You connect it yourself — nobody else's runs can use it, and you are
+never served an admin's credential in its place.
+
+- **Where you see it.** In the User view only (not on Getting started), a
+  banner names a provider that is the default for one of your harnesses and
+  still needs you — not connected yet, or (Bedrock SSO only) your sign-in is
+  expiring or no longer works; a provider nobody defaults to is not an alarm
+  even if you never connected it. Two or more needing you collapse to one "N
+  of your model connections need you" line with a Review link, rather than
+  naming each. `GET /setup/status`'s `model_providers` and `provider_access`
+  are the same answer, if you are scripting: one row per provider you may use,
+  each with its own state (`not_configured`, `expiring`, `expired_signin`,
+  `live`, or `not_applicable` when you have no credential namespace of your
+  own, such as the admin token under OIDC).
+- **A sign-in kind** (Bedrock SSO, Claude subscription) opens a short-lived
+  login sandbox against your admin's own configuration — the access portal,
+  region, and (Bedrock) the pinned account and role — and stores what it
+  captures under your own principal, exactly as the AWS sign-in flow below
+  already does for the per-agent roster.
+- **A typed key or token** is stored write-only, under your own namespace,
+  with `PUT /api/v1/model-providers/{id}/credential` (`DELETE` to remove it) —
+  the console's own "Add your key" / "Add your token" door calls the same
+  route. Nothing ever reads a stored value back; `provider_access` reports
+  only whether one is present.
+- **Launching a run** chooses your provider in this order: the provider you
+  name on the request, else your workspace's pin, else the agent's own
+  default, else — when exactly one provider is left that serves the agent —
+  that one; two or more with no usable default refuses the run so you choose.
+  For a Claude subscription, a typed key/token, or a Bedrock API key, the
+  credential injected is yours, proxy-side, and never resident in the
+  sandbox. A Bedrock SSO sign-in is the one exception: the in-sandbox AWS SDK
+  always derives short-lived AWS role credentials that stay resident in the
+  sandbox for the run, and with `WARDYN_AWS_SSO_PROXY_INJECT=off` the SSO
+  access token itself is written into the sandbox too — see
+  [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) ("Derived
+  AWS role credentials") and [ENV.md](ENV.md)
+  (`WARDYN_AWS_SSO_PROXY_INJECT`).
+
+This is a per-deployment choice: an install with no model-provider block
+configured still works the older way described below, under **Your model
+key**.
+
 ## Your model key
 
 Store your own key under the provider-convention name from Getting Started ▸
@@ -281,6 +329,25 @@ their own inline policy.
   session reaches more than one, the sign-in asks you to choose. This sign-in
   is yours alone — your admin's own API calls, made with the shared admin
   token, cannot sign in on your behalf or read your model access for you.
+
+## What is kept about your stored credentials
+
+`GET /secrets` shows names only, `mine` included — never a value, not even
+your own; nothing you or your admin ever store is read back through the API.
+Rotating a value (setting it again under the same name) or removing it
+(`DELETE /secrets/<name>`) takes effect within minutes for a run already
+going, not just the next one: the proxy re-resolves an injected stored key
+from the store every ten to fifteen minutes and drops it at once on a
+definitive refusal (a short grace covers a transient store outage only). The
+one exception is an approval-gated grant, which is minted once and stays
+static for that run's whole life. Your
+admin can erase every credential in your namespace in one step; once that
+runs you keep nothing recoverable through Wardyn, though a database backup
+your organisation took beforehand is a separate question its own retention
+answers, not something erasing your namespace reaches into. Wardyn never
+revokes anything upstream on your behalf: your own AWS, Anthropic or Azure
+DevOps sign-in stays valid at the provider until you — or your admin, there,
+not here — revoke it directly.
 
 ## What to ask your admin for
 

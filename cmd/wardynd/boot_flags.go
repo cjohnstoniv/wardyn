@@ -86,6 +86,7 @@ type bootFlags struct {
 	// cannot work.
 	ssoOnly   *bool
 	uiDir     *string
+	basePath  *string
 	runnerSel *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
@@ -182,6 +183,10 @@ type bootFlags struct {
 	oidcClientSecret *string
 	oidcRedirectURL  *string
 	oidcEmailDomains *string
+	// oidcExtraScopes feeds oidc.Config.ExtraScopes (WARDYN_OIDC_EXTRA_SCOPES,
+	// CSV, default empty): scopes appended to the fixed authorization request,
+	// validated against the provider's discovery scopes_supported at boot.
+	oidcExtraScopes *string
 	// oidcOperatorEmails is the minimal member/admin role gate's allowlist
 	// (api.Config.OperatorEmails). Empty = every authenticated human is an
 	// operator, i.e. exactly the pre-existing behavior — which is REFUSED at boot
@@ -265,6 +270,11 @@ type bootFlags struct {
 	bedrockAWSProfile   *string
 	bedrockAWSSSORegion *string
 
+	// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100) size the sign-in
+	// sandbox itself — see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
+	harnessLoginCPUMillis *int
+	harnessLoginMemoryMiB *int
+
 	proxyURL *string
 
 	printGroundtruthToken *bool
@@ -287,6 +297,8 @@ type bootFlags struct {
 	// Vault one (secret_store.go).
 	vault vaultFlags
 	azure azureFlags
+
+	hostCapacity hostCapacityFlags
 
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
@@ -359,6 +371,8 @@ func resolveDeprecatedEnvAliases() {
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
 // and parses the command line. Moved verbatim out of run(); the usage strings
 // carry the operator-facing documentation for each knob.
+//
+//nolint:funlen // A flat table, one line per knob: its length is the knob count, not complexity.
 func parseBootFlags() *bootFlags {
 	resolveDeprecatedEnvAliases()
 	f := &bootFlags{
@@ -390,6 +404,7 @@ func parseBootFlags() *bootFlags {
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
+		basePath:                flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate, e.g. "docker" in -tags docker builds`),
 		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name stored objects validate against when -runner is "none" ("docker" or "k8s"); test harnesses only, ignored whenever a runner is configured. Empty (default) refuses every drive backend`),
 		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),
@@ -430,7 +445,7 @@ func parseBootFlags() *bootFlags {
 		oidcClientID:       flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
 		oidcClientSecret:   flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
 		oidcRedirectURL:    flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check"),
+		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
 		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
@@ -494,7 +509,8 @@ func parseBootFlags() *bootFlags {
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and an unencrypted http:// -bedrock-base-url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		bedrockAWSDir:          flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", "bind a host ~/.aws directory read-only into each Bedrock run so the AWS SDK resolves credentials itself; exposes the whole directory to the sandbox, so point it at ~/.aws only. Empty (default) uses static aws-* secrets or a bedrock-api-key instead"),
 		bedrockAWSProfile:      flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", "AWS_PROFILE to select from the mounted ~/.aws; falls back to the standard AWS_PROFILE. Only used with -bedrock-aws-dir"),
-		bedrockAWSSSORegion:    flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", "AWS SSO region for exchanging an SSO token for role credentials. Defaults to -bedrock-region"),
+		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB. Crammed onto bedrockAWSSSORegion's line (not their own) to hold parseBootFlags under the funlen ratchet.
+		bedrockAWSSSORegion: flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", "AWS SSO region for exchanging an SSO token for role credentials. Defaults to -bedrock-region"), harnessLoginCPUMillis: flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"), harnessLoginMemoryMiB: flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
@@ -535,6 +551,7 @@ func parseBootFlags() *bootFlags {
 		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
 		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit key at its latest version), then exit; values are never decrypted. See docs/OPERATIONS.md (default false)"),
 		vault:          registerVaultFlags(),
+		hostCapacity:   registerHostCapacityFlags(),
 		azure:          registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
@@ -596,6 +613,12 @@ func finalizeBootFlags(f *bootFlags) {
 	// bad file is a malformed setting like a bad flag, so it exits here the way
 	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
 	// budget left for another early return).
+	exitOnBadSecretFiles(f)
+}
+
+// exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted
+// because that function sits at the funlen ratchet.
+func exitOnBadSecretFiles(f *bootFlags) {
 	if err := resolveSecretFiles(secretFileSettings(f)); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
 		os.Exit(1)

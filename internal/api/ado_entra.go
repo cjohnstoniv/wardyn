@@ -99,13 +99,13 @@ const (
 	// admin-token or local-mode caller reaches the route (it is in the
 	// authenticated group) and has no IdP subject, so there is nothing this
 	// capture could be bound to and no honest namespace to store it under.
-	adoSignInNoSessionRefusal = "an Azure DevOps sign-in must be started from a signed-in browser session: " +
+	adoSignInNoSessionRefusal = "An Azure DevOps sign-in must be started from a signed-in browser session: " +
 		"the captured credential is bound to your identity provider subject, and an admin-token caller has none"
 	// adoSignInUnconfiguredRefusal: no Azure DevOps Entra block is configured.
-	adoSignInUnconfiguredRefusal = "this deployment has no Azure DevOps sign-in configured"
+	adoSignInUnconfiguredRefusal = "This deployment has no Azure DevOps sign-in configured"
 	// adoSignInForeignAppRefusal is THE 0.7.10 boundary. %s is the client id the
 	// row named.
-	adoSignInForeignAppRefusal = "refusing this Azure DevOps sign-in: it is configured against application %s, " +
+	adoSignInForeignAppRefusal = "Refusing this Azure DevOps sign-in: it is configured against application %s, " +
 		"which is not the application this console signs people in with. " +
 		"The identity binding compares the identity token's subject, which is per-application, " +
 		"so a different application's token cannot be bound to your session — and the claims that would " +
@@ -114,11 +114,11 @@ const (
 	// adoSignInSubjectMismatchRefusal is the fail-closed identity binding. It
 	// names no subject: the two values are identities, and an error page is not
 	// where either belongs.
-	adoSignInSubjectMismatchRefusal = "refusing this Azure DevOps sign-in: the identity token's subject is not the subject of " +
+	adoSignInSubjectMismatchRefusal = "Refusing this Azure DevOps sign-in: the identity token's subject is not the subject of " +
 		"the browser session that started it. The credential would have been stored under the wrong person, so nothing was stored"
 	// adoSignInWrongTenantRefusal: the id_token was issued by a tenant other
 	// than the configured one.
-	adoSignInWrongTenantRefusal = "refusing this Azure DevOps sign-in: the identity token was issued by a different tenant " +
+	adoSignInWrongTenantRefusal = "Refusing this Azure DevOps sign-in: the identity token was issued by a different tenant " +
 		"than the one this deployment is configured for"
 )
 
@@ -298,7 +298,10 @@ func (c ADOEntraConfig) authorizeURL(state, nonce, challenge string, scopes []st
 // place with a real credential.
 const (
 	// EntraAuthorityOverrideRefusal is the refusal when the override is set
-	// without the acknowledgement. %q is the offending value.
+	// without the acknowledgement. %q is the offending value. Lower-case on
+	// purpose (staticcheck ST1005): this is a Go error string returned from
+	// fmt.Errorf, not an HTTP/console sentence, and Go convention refuses a
+	// capitalised one so it composes when a caller wraps it with %w.
 	EntraAuthorityOverrideRefusal = "refusing the Entra authority override %q — " +
 		"it re-points the Azure DevOps sign-in's authorization, token and discovery endpoints at a server of " +
 		"your choosing, which is a TEST hatch and never a production posture; unset it, or explicitly set " +
@@ -485,7 +488,7 @@ func (s *Server) adoCookie(name, value string) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     "/",
+		Path:     s.cookiePath(),
 		MaxAge:   adoCookieMaxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -493,9 +496,9 @@ func (s *Server) adoCookie(name, value string) *http.Cookie {
 	}
 }
 
-func clearADOCookie(w http.ResponseWriter, name string) {
+func (s *Server) clearADOCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: "", Path: "/", MaxAge: -1,
+		Name: name, Value: "", Path: s.cookiePath(), MaxAge: -1,
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -512,7 +515,7 @@ func clearADOCookie(w http.ResponseWriter, name string) {
 // The state comparison is CONSTANT TIME and stays first: a callback whose state
 // does not match a cookie this server set is not a sign-in this browser began,
 // and nothing else about the request is worth reading until that holds.
-func consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
+func (s *Server) consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(adoStateCookieName)
 	if err != nil || stateCookie.Value == "" || stateParam == "" ||
@@ -530,9 +533,9 @@ func consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier 
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
 		return "", "", false
 	}
-	clearADOCookie(w, adoStateCookieName)
-	clearADOCookie(w, adoNonceCookieName)
-	clearADOCookie(w, adoPKCECookieName)
+	s.clearADOCookie(w, adoStateCookieName)
+	s.clearADOCookie(w, adoNonceCookieName)
+	s.clearADOCookie(w, adoPKCECookieName)
 	return nonceCookie.Value, pkceCookie.Value, true
 }
 
@@ -553,7 +556,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nonce, verifier, ok := consumeADOCookies(w, r)
+	nonce, verifier, ok := s.consumeADOCookies(w, r)
 	if !ok {
 		return
 	}
@@ -565,7 +568,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": reason, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
 	code := r.URL.Query().Get("code")
@@ -587,7 +590,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": reason, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
 	// Mask BEFORE anything can log or persist either value. Merge, not replace:
@@ -651,7 +654,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	// After the capture row, never before: captured -> resolved -> retry.
 	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
-	http.Redirect(w, r, adoSignInDonePath, http.StatusFound)
+	http.Redirect(w, r, s.cfg.BasePath+adoSignInDonePath, http.StatusFound)
 }
 
 // adoCaptureErrorCode names a CAPTURE failure for the console, which is not the

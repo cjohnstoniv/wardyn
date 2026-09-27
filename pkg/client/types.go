@@ -165,6 +165,31 @@ type (
 	// UserDriveGrant allocates one drive to one subject (DrivesDocument.Grants).
 	// Written via DriveGrantRequest.
 	UserDriveGrant = types.UserDriveGrant
+
+	// GovernanceProfile is one named, assignable ceiling (migration 0052's
+	// governance_profiles row), carried in GovernanceDocument.Profiles.
+	// Returned by GetGovernance and ApplyGovernance.
+	GovernanceProfile = types.GovernanceProfile
+
+	// GovernanceAssignment binds one profile to one subject
+	// (GovernanceDocument.Assignments). Returned by GetGovernance and
+	// ApplyGovernance.
+	GovernanceAssignment = types.GovernanceAssignment
+
+	// GovernanceLimits carries the request-shape autonomy switches a
+	// GovernanceProfile bounds a principal by, carried in
+	// GovernanceProfile.Limits. Aliased so a caller can author one through
+	// GovernanceProfileRequest.
+	GovernanceLimits = types.GovernanceLimits
+
+	// AutonomyRubric is GovernanceLimits.AutonomyRubric's pointed-to type.
+	// Aliased for the same reason as ArtifactOverride: without a nameable
+	// type a caller could not author one at all.
+	AutonomyRubric = types.AutonomyRubric
+
+	// AutonomyLevel is one rung on AutonomyRubric's ladder (see the AutonomyL0
+	// .. AutonomyL3 values below).
+	AutonomyLevel = types.AutonomyLevel
 )
 
 // Enumerated string types named in exported signatures and struct fields.
@@ -357,4 +382,12 @@ const (
 	CapabilitySubjectGroup    = types.CapabilitySubjectGroup
 	CapabilitySubjectAll      = types.CapabilitySubjectAll
 	CapabilitySubjectUserType = types.CapabilitySubjectUserType
+)
+
+// AutonomyLevel values.
+const (
+	AutonomyL0 = types.AutonomyL0
+	AutonomyL1 = types.AutonomyL1
+	AutonomyL2 = types.AutonomyL2
+	AutonomyL3 = types.AutonomyL3
 )

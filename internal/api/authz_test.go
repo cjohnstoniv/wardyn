@@ -331,6 +331,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// subtracts, and names no value back — the same shape as the revokes above.
 	"DELETE /api/v1/people/{principal}/credentials": {class: classSecurity},
 	"DELETE /api/v1/people/{principal}/ssh-keys":    {class: classSecurity},
+	// Its companion (CS-6, design K5-A): who holds a credential for which model
+	// provider, added and last used. Metadata only, never a value.
+	"GET /api/v1/model-providers/credentials": {class: classSecurity},
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
@@ -1273,7 +1276,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// subtracts (= 33 SEC), and #612 the GET/PUT /permissions/availability pair
 	// beside the grant rows (= 35 SEC), and #739 GET /permissions/explain, the
 	// same table read at a named subject (= 37 SEC with #154's DELETE
-	// /people/{principal}/ssh-keys). 0.8's model providers add GET/PUT
+	// /people/{principal}/ssh-keys). CS-6 added the credential inventory beside
+	// the erase, metadata only (= 38 SEC). 0.8's model providers add GET/PUT
 	// /model-providers, SUPER for the agent roster's reason (= 41). #575 then
 	// added the standing-runs pair (GET /admin/runs/proxy-window, POST
 	// /admin/runs/restart), born SUPER because a restart replaces proxies on runs
@@ -1283,8 +1287,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 37 || super != 46 {
-		t.Errorf("tier split = %d security / %d admin, want 37 / 46 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 38 || super != 46 {
+		t.Errorf("tier split = %d security / %d admin, want 38 / 46 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

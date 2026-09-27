@@ -46,11 +46,11 @@ const (
 	mpRunRemedyPerson = "sign in to the console, or use your own wdn_ API token."
 	mpSubReadFailed   = "Wardyn couldn't read your Claude sign-in for model provider %s just now — nothing was started. Try again in a moment."
 
-	mpSubSinkNotRecorded = "a per-person Claude sign-in is injected only through the grant Wardyn authors when a run " +
+	mpSubSinkNotRecorded = "A per-person Claude sign-in is injected only through the grant Wardyn authors when a run " +
 		"launches on its model provider, which records whose sign-in it is; this grant carries no such record"
-	mpSubSinkChanged = "this run's model provider was removed, turned off or changed after the run started, " +
+	mpSubSinkChanged = "This run's model provider was removed, turned off or changed after the run started, " +
 		"so its Claude sign-in is no longer injected"
-	mpSubSinkHost = "a Claude sign-in may only be injected to its model provider's own host"
+	mpSubSinkHost = "A Claude sign-in may only be injected to its model provider's own host"
 )
 
 // chosenProvider is the provider a run chose and whose credential serves it:
@@ -252,6 +252,7 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 			"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI,
 			"source": "provider", "provider": p.ID, "owner": claims.Sub,
 		})))
+	s.stampCredentialUse(ctx, claims.Sub, name)
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
 		ExpiresAt: s.subscriptionLease(minted, tok),

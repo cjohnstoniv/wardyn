@@ -195,17 +195,22 @@
     "sentence": "harnessLoginNotPerUserRefusal"
   },
   {
-    "reason": "model_provider (credential: d.credential)",
+    "reason": "model_provider_unavailable",
+    "target": "\"runs.model_provider\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "model_provider_unavailable (credential: d.credential)",
     "target": "choice.provider.ID",
     "sentence": "d.msg"
   },
   {
-    "reason": "model_provider (credential: false)",
+    "reason": "model_provider_unavailable (credential: false)",
     "target": "choice.provider.ID",
     "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
   },
   {
-    "reason": "model_provider (credential: false)",
+    "reason": "model_provider_unavailable (credential: false)",
     "target": "choice.providerID",
     "sentence": "choice.refusal"
   },

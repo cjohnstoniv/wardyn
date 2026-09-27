@@ -234,12 +234,12 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	}
 
 	errCh := make(chan error, 2)
-	internalSrv := startInternalListener(hop, f, srv.Handler(), errCh)
+	internalSrv := startInternalListener(hop, f, srv.InternalHandler(), errCh)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
 			slog.Info("wardynd: listening with built-in TLS",
-				slog.String("version", version.Version),
+				slog.String("version", version.String()),
 				slog.String("listen", *f.listen),
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),
@@ -249,7 +249,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 			}
 		default:
 			slog.Info("wardynd: listening",
-				slog.String("version", version.Version),
+				slog.String("version", version.String()),
 				slog.String("listen", *f.listen),
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),

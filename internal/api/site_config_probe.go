@@ -480,7 +480,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	}
 	// The proxy probe is the DEPLOYMENT's diagnostic on an operator-only route,
 	// not any principal's work: neither governance limit binds it.
-	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, operatorStepGovernance(probeCeiling), func(run *types.AgentRun) {
+	run, token, err := s.newProbeRun(launchCtx, runID, actor, script, cc, operatorStepGovernance(probeCeiling), func(run *types.AgentRun) {
 		run.AutoStopAfterSec = siteConfigProbeIdleCapSec
 		// The probe runs a plain curl, never a coding agent (see the Image
 		// comment on dispatchRun below) -- its own agent label should say so,

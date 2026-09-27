@@ -336,6 +336,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Host capacity, launch's last refusal and in the same place: the same 503,
+	// reason and Retry-After, so a busy host shows before the click. false:
+	// Review writes no audit row.
+	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", false)) {
+		return
+	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really

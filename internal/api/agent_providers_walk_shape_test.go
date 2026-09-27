@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The kind SSO walk (ui/e2e/live/sso-member.spec.ts) PUTs the agent roster from
+// The kind SSO walk (ui/e2e/walk/sso-member.spec.ts) PUTs the agent roster from
 // TypeScript, so nothing in the Go build ever type-checked that body — and the
 // first version sent `agents` as an OBJECT keyed by agent id. AgentProviders.Agents
 // is a LIST whose elements carry `id`, and handlePutAgentProviders decodes
@@ -24,7 +24,7 @@ import (
 // SERVER side of the contract is already covered (TestAgentProvidersPut); what
 // was missing was anything at all tying the spec's spelling to it.
 
-// walkRosterBody is the body ui/e2e/live/sso-member.spec.ts sends, verbatim.
+// walkRosterBody is the body ui/e2e/walk/sso-member.spec.ts sends, verbatim.
 // Kept in sync by TestWalkRosterBodyMatchesTheSpec below, which greps the spec
 // for the fields rather than trusting this copy.
 const walkRosterBody = `{"agents":[{"id":"claude-code","mechanism":"bedrock_sso",` +
@@ -65,7 +65,7 @@ func TestWalkRosterBodyMatchesTheSpec(t *testing.T) {
 	// same body), so BOTH live files are read: the body must exist in one of
 	// them, and the object-shaped mistake must exist in neither.
 	var spec string
-	for _, f := range []string{"../../ui/e2e/live/helpers.ts", "../../ui/e2e/live/sso-member.spec.ts"} {
+	for _, f := range []string{"../../ui/e2e/walk/helpers.ts", "../../ui/e2e/walk/sso-member.spec.ts"} {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read the live walk source %s: %v", f, err)

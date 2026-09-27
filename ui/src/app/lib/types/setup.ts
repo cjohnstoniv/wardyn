@@ -370,6 +370,11 @@ export interface SetupProviderAccess {
   // captured by, stamped by the server from that run's own token (#993).
   // Absent for a typed key and when nothing is captured.
   source_run_id?: string;
+  // RFC3339: when the caller's OWN credential for this provider was stored and
+  // when a run last used it (to the minute). Absent when none is stored or it
+  // was never used.
+  added_at?: string;
+  last_used_at?: string;
 }
 
 export interface SetupStatus {

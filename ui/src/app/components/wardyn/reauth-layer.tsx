@@ -39,8 +39,10 @@ import { SIGNIN } from "../../lib/sign-in-copy";
 import { SSO_SIGN_IN, TOKEN_LABEL } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useOperatorResolved, usePrincipal } from "./operator-context";
+import { appURL } from "../../lib/base-path";
 
-const SSO_LOGIN_URL = "/auth/login";
+// A function, not a constant: the base path is read when the link is used.
+const ssoLoginURL = () => appURL("/auth/login");
 const POLL_MS = 1500;
 // The fallback link opens a tab this page holds no handle on, so nothing
 // says when it closes — the poll it starts is bounded instead.
@@ -184,7 +186,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       return;
     }
     popup.opener = null;
-    popup.location.href = SSO_LOGIN_URL;
+    popup.location.href = ssoLoginURL();
     startPoll(
       () => popup.closed,
       () => setStatus("closed"),
@@ -324,7 +326,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
                 <p role="status" className="text-xs text-warning">
                   {REAUTH_DIALOG.POPUP_BLOCKED}{" "}
                   <a
-                    href={SSO_LOGIN_URL}
+                    href={ssoLoginURL()}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-medium text-info hover:underline"

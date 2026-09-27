@@ -843,13 +843,16 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
+	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
+	basePath := ""
 	return &bootFlags{
+		basePath:                &basePath,
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
 		oidcIssuer:              &issuerURL,
@@ -858,6 +861,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		oidcClientSecret:        &oidcClientSecret,
 		oidcRedirectURL:         &oidcRedirectURL,
 		oidcEmailDomains:        &oidcEmailDomains,
+		oidcExtraScopes:         &oidcExtraScopes,
 		oidcOperatorEmails:      &oidcOperatorEmails,
 		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
 		oidcRoleMap:             &oidcRoleMap,

@@ -71,7 +71,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// per-class substrates, the ephemeral-disk enforcement word). What keeps
 		// THIS endpoint honest is that it composes its body field by field, so a
 		// field added to the setup status never appears here by accident.
-		"version": version.Version,
+		"version": version.String(),
 		// sso reports whether the OIDC login flow is mounted (/auth/login). The
 		// sign-in screen reads it BEFORE anyone is authenticated to decide whether to
 		// offer the SSO link — without it the console has no usable sign-in at all in
@@ -380,4 +380,18 @@ func missingGroundtruthKinds(observedByKind map[string]uint64) []string {
 		}
 	}
 	return missing
+}
+
+// ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
+// facts only: Selected is ALWAYS the actual running implementation. The
+// recommended-vs-shipped split is prose and lives in docs/PLUGGABILITY.md +
+// ROADMAP.md. Source is "default" or "configured".
+type ComponentInfo struct {
+	Selected string `json:"selected"`
+	// Available lists every implementation self-registered in this build's seam
+	// registry (so /healthz truthfully shows what THIS binary can run — e.g. a
+	// tagless build advertises sandbox.available=[]). Empty for seams without a
+	// registry (policy_engine today).
+	Available []string `json:"available,omitempty"`
+	Source    string   `json:"source,omitempty"`
 }

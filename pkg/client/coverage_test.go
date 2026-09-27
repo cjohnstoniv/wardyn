@@ -61,6 +61,12 @@ var (
 	_ client.PresetsDocument
 	_ client.Preset
 	_ client.PresetRequest
+	_ client.GovernanceDocument
+	_ client.GovernanceProfile
+	_ client.GovernanceAssignment
+	_ client.GovernanceLimits
+	_ client.AutonomyRubric
+	_ client.AutonomyLevel
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -80,6 +86,7 @@ func routeFamilies() map[string][]string {
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
+		"governance":  {"GetGovernance", "ApplyGovernance"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},

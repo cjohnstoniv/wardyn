@@ -76,9 +76,8 @@ async function gotoProviders(page: Page): Promise<void> {
 // toHaveCount(0)` on an error that has not happened yet is satisfied on its
 // FIRST poll — it proves nothing about the in-flight PUT — so a wire read or a
 // reload placed straight after the click raced the save: the ADO test read the
-// PRE-save document in 4 of 20 repeats on an otherwise idle box (evidence:
-// local/v073/evidence/fix-providers-flake/probe-baseline-nodelay.log, where
-// the snapshot GET is logged ~26ms BEFORE the PUT's own 200). The reload in the
+// PRE-save document in 4 of 20 repeats on an otherwise idle box (the snapshot
+// GET was logged ~26ms BEFORE the PUT's own 200). The reload in the
 // GitHub test is the same race with a worse failure mode — navigating away
 // ABORTS the in-flight PUT, and wardynd cancels the write with the request
 // context. The toast closes both.

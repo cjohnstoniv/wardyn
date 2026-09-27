@@ -543,7 +543,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// this function is at the funlen ratchet (.golangci.yml, 150 non-comment
 	// lines), so the next lane to add a statement here extracts a block first —
 	// which is what recordLaunchRefusals is.
-	if rerr := s.recordLaunchRefusals(ctx, ws, stepRunAgent); rerr != nil {
+	if rerr := s.recordLaunchRefusals(ctx, actor, ws, stepRunAgent); rerr != nil {
 		return types.AgentRun{}, false, rerr
 	}
 	// A record session is a model run, so under a provider block it chooses a

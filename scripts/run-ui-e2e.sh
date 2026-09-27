@@ -114,19 +114,34 @@ export WARDYN_E2E_PG_DBNAME="${DB}"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 
+# Base-path mode (WARDYN_E2E_BASE_PATH, e.g. /wardyn): e2e-backend.sh serves the
+# backend under that WARDYN_BASE_PATH behind test/basepathproxy, and Playwright
+# browses the proxy under the prefix. The trailing slash is load-bearing: a
+# spec's relative page.goto("runs") then resolves under the prefix. Specs
+# written for the root use absolute paths and are not meant for this mode.
+# Unset, nothing below changes.
+if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+  if [[ -z "${WARDYN_E2E_PROXY_ADDR:-}" ]]; then
+    WARDYN_E2E_PROXY_ADDR=":$(pick_free_port)"
+  fi
+  export WARDYN_E2E_PROXY_ADDR
+  export WARDYN_E2E_BASE_URL="http://localhost:${WARDYN_E2E_PROXY_ADDR##*:}${WARDYN_E2E_BASE_PATH}/"
+  log "base-path mode: backend under ${WARDYN_E2E_BASE_PATH}, browsed through ${WARDYN_E2E_BASE_URL}"
+fi
+
 # log() uses WARDYN_LOG_TAG="[e2e-ui]" set before sourcing common.sh above.
 
-# LIVE mode (WARDYN_E2E_LIVE_BASE_URL): run a spec from ui/e2e/live/ against an
+# LIVE mode (WARDYN_E2E_WALK_BASE_URL): run a spec from ui/e2e/walk/ against an
 # ALREADY-RUNNING external Wardyn — the kind SSO cluster
 # (scripts/kind-sso-walk.sh) — instead of the hermetic `-runner none` backend
 # this script otherwise boots and re-seeds per spec. Nothing about the default
 # path changes: the whole of it is skipped below on one variable, and unset
 # (every other caller) the script is byte-identical to before this block.
 #
-# The `live` Playwright project is matched by the spec PATH, not a --project
-# flag: chromium testIgnores live/**, and no other project matches it, so
-# `playwright test e2e/live/<x>.spec.ts` selects exactly one project.
-LIVE_BASE_URL="${WARDYN_E2E_LIVE_BASE_URL:-}"
+# The `walk` Playwright project is matched by the spec PATH, not a --project
+# flag: chromium testIgnores walk/**, and no other project matches it, so
+# `playwright test e2e/walk/<x>.spec.ts` selects exactly one project.
+LIVE_BASE_URL="${WARDYN_E2E_WALK_BASE_URL:-}"
 if [[ -n "${LIVE_BASE_URL}" ]]; then
   export WARDYN_E2E_BASE_URL="${LIVE_BASE_URL}"
   log "LIVE mode: specs run against ${LIVE_BASE_URL} (no hermetic backend, no re-seed)"
@@ -143,7 +158,7 @@ fi
 
 # Spec selection: args map to e2e/<arg>.spec.ts; default = all *.spec.ts.
 spec_dir="ui/e2e"
-[[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/live"
+[[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/walk"
 specs=()
 if [[ $# -gt 0 ]]; then
   for a in "$@"; do specs+=("${spec_dir}/${a}.spec.ts"); done
@@ -233,7 +248,7 @@ run_lane() {
     mkdir "${work}/${base}" 2>/dev/null || continue
     spec_name="${base%.spec.ts}"
     # Playwright is run from ui/, so its argument is the spec path with the "ui/"
-    # prefix dropped — "e2e/foo.spec.ts", or "e2e/live/foo.spec.ts" in LIVE mode.
+    # prefix dropped — "e2e/foo.spec.ts", or "e2e/walk/foo.spec.ts" in LIVE mode.
     spec_rel="${spec#ui/}"
     # Retry once, and SHOW the failure. This used to be a single attempt with all
     # output sent to /dev/null, so a transient port race looked identical to a

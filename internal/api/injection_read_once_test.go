@@ -55,3 +55,36 @@ func TestInternalInjection_RecordsTheStoredReadOnce(t *testing.T) {
 		t.Errorf("the read is recorded as %v; want the sink's event naming the row it read", d)
 	}
 }
+
+// TestProviderKeyInjection_RecordsTheStoredReadOnce is the provider-key arm of
+// the same law (#987): behind the Audited store, resolving a
+// wardyn-provider-<uid>-key grant with its snapshot and a live provider
+// record is ONE secret.read — the sink's own, naming the provider and the row
+// it read — never a second one from the decorator.
+func TestProviderKeyInjection_RecordsTheStoredReadOnce(t *testing.T) {
+	h, st, g := keySinkGrant(t)
+	h.srv.cfg.Secrets = secretstore.Audited(h.srv.cfg.Secrets, h.audit)
+	h.srv.router = h.srv.routes()
+	name := h.broker.minted.Injection.SecretName
+
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+g.ID.String(), h.mintRunToken(t, st.run.ID), "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var reads []types.AuditEvent
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "secret.read" && ev.Target == name {
+			reads = append(reads, ev)
+		}
+	}
+	if len(reads) != 1 {
+		t.Fatalf("one resolve recorded %d secret.read events for %s, want exactly 1: %+v", len(reads), name, reads)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(reads[0].Data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d["provider_uid"] == nil || d["provider_uid"] == "" || d["store"] != "mem" || d["ref"] != "mem:"+mpOwner+"/"+name || d["source"] != "provider" {
+		t.Errorf("the read is recorded as %v; want the sink's event naming the provider and the owner's row it read", d)
+	}
+}

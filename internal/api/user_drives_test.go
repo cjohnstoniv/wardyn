@@ -237,7 +237,7 @@ func (s *driveCRUDStore) ListUserDriveGrants(context.Context) ([]types.UserDrive
 	return out, nil
 }
 
-// driveTierRank mirrors userDriveTierOrder: user > group > all, most specific
+// driveTierRank mirrors the store's subjectTierOrder: user > group > all, most specific
 // first.
 func driveTierRank(t types.CapabilitySubjectType) int {
 	switch t {

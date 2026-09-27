@@ -78,17 +78,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// (1) Per-run internal network. Internal=true => Docker provisions no
 	// gateway, so the network cannot route off-host: this is what upholds L0
 	// even though the agent is *connected* to it.
-	intNet, err := d.cli.NetworkCreate(ctx, internalNetName(spec.RunID), client.NetworkCreateOptions{
-		Driver:   "bridge",
-		Internal: true,
-		Labels:   wardynLabels(spec.RunID, "network", spec.Labels),
-	})
+	intNetID, err := d.createRunNetwork(ctx, spec.RunID, wardynLabels(spec.RunID, "network", spec.Labels))
 	if err != nil {
-		return runner.Sandbox{}, fmt.Errorf("docker: create internal network: %w", err)
+		return runner.Sandbox{}, err
 	}
 	// rollback collects teardown steps to run on any later failure.
 	var rollback []func()
-	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNet.ID, client.NetworkRemoveOptions{}) })
+	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNetID, client.NetworkRemoveOptions{}) })
 	fail := func(err error) (runner.Sandbox, error) {
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
@@ -205,7 +201,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			internalNetName(spec.RunID): {
-				NetworkID: intNet.ID,
+				NetworkID: intNetID,
 				Aliases:   []string{"agent"},
 			},
 		},
@@ -296,6 +292,59 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Driver:        driverName,
 		EnforcedClass: enforced,
 	}, nil
+}
+
+// createRunNetwork creates runID's internal network with a user-specified
+// IPv4 subnet and returns its id. ReplaceProxy pins the proxy's address on this
+// network, and Docker Engine 28 accepts a pinned address only on a network
+// created with a subnet in the request: moby's validateEndpointIPAddress
+// requires IpamConf.IsStatic (PreferredPool != ""), which a subnet the daemon
+// assigned, even one read back, is not. So the daemon picks the subnet first,
+// on a network it is then asked to remove: from its default-address-pools,
+// clear of every other network, the host's on-link routes and its resolvers.
+// The network is then created asking for that subnet. A network created in
+// between that takes it makes that create fail on the overlap, and the pick
+// is made again.
+func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
+	name := internalNetName(runID)
+	var err error
+	for range 3 {
+		opts := client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: labels}
+		var subnet netip.Prefix
+		if subnet, err = d.daemonSubnet(ctx, name, opts); err != nil {
+			break
+		}
+		opts.IPAM = &network.IPAM{Config: []network.IPAMConfig{{Subnet: subnet}}}
+		var res client.NetworkCreateResult
+		if res, err = d.cli.NetworkCreate(ctx, name, opts); err == nil {
+			return res.ID, nil
+		}
+	}
+	return "", fmt.Errorf("docker: create internal network: %w", err)
+}
+
+// daemonSubnet creates network name as opts asks, with no subnet, reads back
+// the IPv4 subnet the daemon gave it and removes it again.
+func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.NetworkCreateOptions) (netip.Prefix, error) {
+	res, err := d.cli.NetworkCreate(ctx, name, opts)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	insp, ierr := d.cli.NetworkInspect(ctx, res.ID, client.NetworkInspectOptions{})
+	// Background, like CreateSandbox's rollback: a cancelled dispatch must not
+	// strand the probe network holding a pool subnet.
+	if _, err := d.cli.NetworkRemove(context.Background(), res.ID, client.NetworkRemoveOptions{}); err != nil {
+		return netip.Prefix{}, fmt.Errorf("remove the subnet probe: %w", err)
+	}
+	if ierr != nil {
+		return netip.Prefix{}, fmt.Errorf("inspect the subnet probe: %w", ierr)
+	}
+	for _, c := range insp.Network.IPAM.Config {
+		if c.Subnet.Addr().Is4() {
+			return c.Subnet, nil
+		}
+	}
+	return netip.Prefix{}, fmt.Errorf("the daemon gave network %s no IPv4 subnet", name)
 }
 
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,

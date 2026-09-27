@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -374,7 +375,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			ClientID:            *f.oidcClientID,
 			ClientSecret:        *f.oidcClientSecret,
 			RedirectURL:         *f.oidcRedirectURL,
+			BasePath:            *f.basePath,
 			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
+			ExtraScopes:         splitCSV(*f.oidcExtraScopes),
 			SecureCookies:       secureCookies,
 			RoleMap:             roleMap,
 			DefaultRole:         defaultRole,
@@ -569,12 +572,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 	}
 
-	hop, herr := loadHopTLS(bootCtx, bootKeys, *f.controlURL)
-	if herr != nil {
+	var herr error
+	if of.hop, herr = loadHopTLS(bootCtx, bootKeys, *f.controlURL); herr != nil {
 		return of, herr
 	}
-	of.hop = hop
-
+	// Before anything serves, so an ingest waiting on wardynd's healthcheck finds it.
+	_ = publishHopCA(of.hop, strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")))
 	return of, nil
 }
 

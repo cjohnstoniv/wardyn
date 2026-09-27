@@ -85,7 +85,7 @@ BASE="http://127.0.0.1:8080"
 # under `make test-e2e-ssh-k8s`, a make failure like any other nonzero exit,
 # not a red CI has learned to look past (#463).
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment wardyn >/dev/null 2>&1 || {
-  skip_lane "run-e2e-ssh-k8s: no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping."
+  skip_lane "run-e2e-ssh-k8s: SKIPPED no-install — no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping."
 }
 
 # The install's own admin token, read the way quickstart.sh re-reads it.

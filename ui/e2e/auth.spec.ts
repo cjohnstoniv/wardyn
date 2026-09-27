@@ -593,6 +593,45 @@ test.describe("the page is checked against the re-authenticated role", () => {
     await expect(page).toHaveURL(/\/admin\/drives$/);
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
   });
+
+  // T-25 (P2-5's sibling gap): roleCanReach's OPERATOR_ONLY_PREFIXES
+  // (App.tsx) once named /drives, which would have bounced a security admin
+  // here to Runs exactly like the member case above — the wrong answer, since
+  // a security admin manages Drives' grants and preview (securityOps,
+  // admin-member-modes-design.md §2 comment). Only /admin/providers is
+  // operator-only now; this pins the OTHER admin tier through the same
+  // captured-path door the "neg" case above proves for a plain admin.
+  test("a security admin re-authenticating over their own captured /admin/drives path is restored, not bounced to Runs", async ({ page }) => {
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.role = "security_admin";
+      json.operator = false;
+      json.security_operator = true;
+      await route.fulfill({ response, json });
+    });
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+
+    await page.goto("/admin/drives");
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+
+    // Same trigger as the "neg" case above (revokeEverything): the console is
+    // already authed, so this stays the in-place reauth DIALOG, not the full
+    // sign-in gate — the wrong locators here (signInToken/useTokenButton, the
+    // gate's own) made this test wait on a screen that never replaces the
+    // page, timing out even though the dialog was up the whole time.
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
+
+    // Drops only the 401 handler: the /me splice above still answers the re-auth.
+    await page.unroute("**/api/v1/**");
+    await signInInDialog(page);
+
+    await expect(reauthDialog(page)).toHaveCount(0);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+  });
 });
 
 // B1 — the console fails CLOSED, never open, when /me never answers.

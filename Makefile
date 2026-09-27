@@ -534,6 +534,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-fixture-dates.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
+	./scripts/check-workflow-artifacts.sh
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -576,6 +578,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-release-check.sh
+	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
@@ -584,6 +587,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-setup-launch.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
+	./scripts/test-workflow-artifacts.sh
 
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
 # Each target below is the authority for one CI gate: ci.yml runs `make <target>`
@@ -678,6 +682,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
+	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
+	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \
@@ -735,6 +743,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$rules" | grep "^$$ir: " | grep -qE "ingress-nginx|monitoring" && { echo "the internal TLS port rides networkPolicy.ingress.from — the console's ingress controller and scrapers can reach the port proxies resolve credentials on"; exit 1; }; \
 	echo "$$rules" | grep "^$$ir: " | grep -q "podSelector: {}" || { echo "the internal TLS port rule lost its same-namespace peer — run proxies in this namespace lose their control plane"; exit 1; }; \
 	echo "$$rules" | grep "^$$ir: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "the internal TLS port rule lost the runs-namespace peer — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
+	for r in $$(echo "$$rules" | awk -F': ' '/port: http$$/{print $$1}' | sort -u); do \
+	  echo "$$rules" | grep "^$$r: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" && { echo "the runs namespace is granted wardynd's plaintext http port — a run could send its bearer to wardynd in cleartext (#606); it gets the internal TLS port only"; exit 1; }; \
+	done; \
 	true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set service.internalPort=8080 2>&1 | grep -q "service.internalPort 8080 collides" || { echo "chart no longer refuses service.internalPort == service.port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
@@ -981,6 +992,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#   replicas/allowMultiReplica    — exercised by their own refusal renders below
 	@#     (`--set replicas=5` is refused; `--set allowMultiReplica=true` renders).
 	@#   readinessProbe                — exercised by its own render (`readinessProbe.path=/healthz`).
+	@#   basePath                      — exercised by its own render (`--set basePath=/wardyn`).
 	@#   service                       — exercised by the two port-collision refusals
 	@#     (uiSandbox.port == service.port, ssh.port == service.port).
 	@#   pod/containerSecurityContext  — the DEFAULT render is what pins runAsNonRoot
@@ -988,7 +1000,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#   secretFiles                   — exercised by its own render (#596 block above);
 	@#     in all-on it would turn the env-mode DSN/age-key assertions into _FILE ones.
 	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
-		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
+		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe basePath service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
 		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
 	done; \
 	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }
@@ -1271,7 +1283,7 @@ ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/scr
 	@# spec file without a browser, a live cluster, WARDYN_TEST_K8S or WARDYN_DEMO, in
 	@# seconds — cheap enough to do it for all three off-chromium projects.
 	@echo "Loading the live walk's spec files (playwright --list)..."
-	cd ui && pnpm exec playwright test --project=live --list >/dev/null
+	cd ui && pnpm exec playwright test --project=walk --list >/dev/null
 	@echo "Loading the demo recording's spec files (playwright --list)..."
 	cd ui && pnpm exec playwright test --project=demo --list >/dev/null
 	@echo "Loading the screenshots' spec files (playwright --list)..."

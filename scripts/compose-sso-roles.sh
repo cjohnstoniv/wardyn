@@ -14,7 +14,7 @@
 # top (only the role-map / allowlist rows the Dex cast needs), plus this
 # script's runtime values (ports, token, images, secrets). Dex is the compose
 # stack's own service with test/sso-roles/dex.yaml swapped in. Then
-# ui/e2e/live/sso-roles.spec.ts signs every identity in through the real console
+# ui/e2e/walk/sso-roles.spec.ts signs every identity in through the real console
 # — the same spec the kind walk runs on its two chart renders.
 #
 # ISOLATION: own compose project per shape (wardyn-roles-<shape>), own
@@ -166,9 +166,9 @@ EOF
     rc=1; teardown; continue
   fi
 
-  log "${shape}: role walk (ui/e2e/live/sso-roles.spec.ts)"
-  WARDYN_E2E_LIVE_BASE_URL="http://localhost:${UP_PORT}" WARDYN_LIVE_ROLES_RENDER="${shape}" \
-    WARDYN_LIVE_ADMIN_TOKEN="${TOKEN}" \
+  log "${shape}: role walk (ui/e2e/walk/sso-roles.spec.ts)"
+  WARDYN_E2E_WALK_BASE_URL="http://localhost:${UP_PORT}" WARDYN_WALK_ROLES_RENDER="${shape}" \
+    WARDYN_WALK_ADMIN_TOKEN="${TOKEN}" \
     ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/${shape}.log"
   [[ "${PIPESTATUS[0]}" -eq 0 ]] || rc=1
   compose logs wardynd >"${EVIDENCE_DIR}/${shape}-wardynd.log" 2>&1

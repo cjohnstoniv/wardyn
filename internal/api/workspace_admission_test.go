@@ -427,13 +427,13 @@ func TestAdmissionAtTheRecordLauncher(t *testing.T) {
 	ws := types.Workspace{ID: uuid.New(),
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: admitOffRow}}}
 
-	err := srv.recordLaunchRefusals(context.Background(), ws, stepRunAgent)
+	err := srv.recordLaunchRefusals(context.Background(), "alice@example.com", ws, stepRunAgent)
 	if !errors.Is(err, errRepoNotAdmitted) {
 		t.Fatalf("err = %v, want errRepoNotAdmitted", err)
 	}
 
 	ws.Sources[0].Source = admitOnRow
-	if err := srv.recordLaunchRefusals(context.Background(), ws, stepRunAgent); err != nil {
+	if err := srv.recordLaunchRefusals(context.Background(), "alice@example.com", ws, stepRunAgent); err != nil {
 		t.Fatalf("a repository on the row must record: %v", err)
 	}
 }

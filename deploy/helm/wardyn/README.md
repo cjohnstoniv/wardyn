@@ -504,9 +504,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   carries no chart labels) so its proxy sidecars can still reach wardynd's
   `internal` TLS port for credential resolves and mints, approval checks, and
   recording uploads. That port has its own NetworkPolicy rule (this namespace
-  plus the runs namespace) and never inherits `networkPolicy.ingress.from`. A
-  separate `http` peer for the runs namespace stays only so a run already in
-  flight at an upgrade from 0.7.11 finishes.
+  plus the runs namespace) and never inherits `networkPolicy.ingress.from`.
+  The runs namespace is granted that port only, never `http`.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
   also what the boot-time egress canary launches. **Required — the chart
   refuses to render without it** (like `serviceAccount.automount` above): the
@@ -1117,6 +1116,12 @@ See `values.yaml` for all options. Key settings:
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
   you **pin an `image.tag` at or below `0.5.0`**, which serves none: see
   [Installation](#installation) for what that failure looks like.
+- `basePath`: serve the console, API, sign-in and health endpoints under a
+  sub-path behind a reverse proxy (`WARDYN_BASE_PATH`, e.g. `/wardyn`). The
+  three probes move under it (`readinessProbe.path` stays relative to it), and
+  so must `WARDYN_OIDC_REDIRECT_URL`. Empty (default) => the host root. See
+  [docs/OPERATIONS.md "Serving the console under a
+  sub-path"](../../../docs/OPERATIONS.md#serving-the-console-under-a-sub-path).
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see

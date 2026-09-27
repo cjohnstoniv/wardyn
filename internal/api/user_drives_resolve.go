@@ -246,73 +246,29 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 }
 
 // driveWithUnusableGroups is step 3: the caller's group identity cannot be
-// evaluated, so resolve on their user subjects alone and decide whether that
-// answer is trustworthy anyway.
-//
-// It is trustworthy in exactly two shapes, and the scoping is the whole point —
-// a blanket 403 here would lock every pre-0.6 cookie out of every deployment,
-// including the ones that have never allocated a drive:
-//
-//   - A USER-TIER row matched. user > group > all, so an explicitly named
-//     principal's drive is FULLY determined whatever their groups are —
-//     INCLUDING when that row is paused, which is an answer and not an absence:
-//     no group-tier grant can outrank it, so nothing the snapshot is hiding
-//     could change it.
-//   - no group-tier grant exists at all. Nothing an unknown group could have
-//     matched, so nothing a nil snapshot could be hiding.
-//
-// Otherwise it refuses, and the refusal is the honest answer: with the group
-// tier unreadable, an `all`-tier grant would win by default and could hand this
-// member a WRITABLE drive where their group's row says read-only — a widening
-// decided by alphabetical luck.
-//
-// HasGroupTierDriveGrants stays a SEPARATE read, deliberately: the case that
-// most needs it is the one where the resolver matched NOTHING, and a zero-row
-// result carries no columns to have piggybacked the answer on.
+// evaluated, so resolve on their user subjects and type alone and let
+// selectByTier's one stale rule decide whether that answer is trustworthy
+// (target runs.drive, matching denyUserDrive, the other refusal this seam
+// writes). The drive preview enters here too.
 func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
-	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil, userType)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	type pick struct {
+		d *types.UserDrive
+		g *types.UserDriveGrant
+	}
+	p, tier, err := selectByTier(ctx, s, authz.Deny(authz.ReasonGroupsSnapshotStale, "runs.drive", ""),
+		func() (pick, types.CapabilitySubjectType, error) {
+			d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil, userType)
+			return pick{d, g}, tier, err
+		}, s.cfg.Store.HasGroupTierDriveGrants)
+	switch {
+	case errors.Is(err, errGroupsSnapshotStale):
+		return nil, err
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil // no group tier could have been hiding one
+	case err != nil:
 		return nil, fmt.Errorf("api: resolve user drive: %w", err)
 	}
-	if err == nil && tier == types.CapabilitySubjectUser {
-		return newResolvedDrive(d, g, tier, users, ceiling)
-	}
-	hasGroupTier, herr := s.cfg.Store.HasGroupTierDriveGrants(ctx)
-	if herr != nil {
-		return nil, fmt.Errorf("api: resolve user drive: %w", herr)
-	}
-	if hasGroupTier {
-		// Audited, at the SECOND site that decides this refusal.
-		//
-		// This branch is the mirror image of ceilingWithUnusableGroups' own, and
-		// it was the silent one: docs/AUDIT-ACTIONS.md and OPERATIONS.md both
-		// described groups_snapshot_stale as emitted "at the ONE site that
-		// decides it", naming the governance resolver — while the DRIVES
-		// resolver raised the identical 403 from here and recorded nothing. On
-		// the deployment shape that has group-tier DRIVE grants and no
-		// group-tier governance assignment, that made the whole denial stream
-		// empty: executed, 0 authz.denied rows out of 0 events for a member the
-		// launch door refuses 403.
-		//
-		// HERE rather than at writeDriveError, for the reason the governance
-		// twin gives: writeDriveError is a free function with no server and no
-		// context, and auditing at the write sites would mean one emit per seam.
-		// This is the only place the drive refusal is DECIDED.
-		//
-		// runs.drive is the target, matching denyUserDrive — the other refusal
-		// this seam writes — rather than governance.ceiling. The two rows say
-		// different things: one is "your profile shuts the drive door", the
-		// other "nobody can tell whether it is shut", and an operator filtering
-		// by target is asking about the drive either way.
-		if !isDisplayRead(ctx) {
-			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "runs.drive", ""))
-		}
-		return nil, errGroupsSnapshotStale
-	}
-	if err != nil {
-		return nil, nil // ErrNotFound, and no group tier could have been hiding one
-	}
-	return newResolvedDrive(d, g, tier, users, ceiling)
+	return newResolvedDrive(p.d, p.g, tier, users, ceiling)
 }
 
 // displayReadCtxKey marks a resolve made to DISPLAY a state, not to enforce one.

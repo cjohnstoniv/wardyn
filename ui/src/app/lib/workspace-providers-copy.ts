@@ -212,7 +212,7 @@ export const PROVIDER_MEMBER = {
   ADMIT_MEMBER: "this repository's host is not an enabled git provider — ask an admin",
   AGENT_NOT_ENABLED: (id: string) => `agent: "${id}" is not an enabled agent on this deployment — ask an admin`,
   LLM_MECHANISM_DEAD: (mechanism: string, ts: string) =>
-    `this run's model access is configured as ${mechanism}, and that credential expired at ${ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.`,
+    `This run's model access is configured as ${mechanism}, and that credential expired at ${ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.`,
 } as const;
 
 // §7.7 — AGENTS

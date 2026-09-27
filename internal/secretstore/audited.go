@@ -186,6 +186,33 @@ func (a *audited) DeleteExpired(ctx context.Context) ([]Expired, error) {
 	return nil, ErrNoExpirySweep
 }
 
+// MarkUsed, Metadata and MetadataEverywhere forward the wrapped store's row
+// metadata (MetaStore), or answer ErrNoMetadata. Not audited: none reads a
+// value.
+func (a *audited) MarkUsed(ctx context.Context, name string) error {
+	m, ok := a.inner.(MetaStore)
+	if !ok {
+		return ErrNoMetadata
+	}
+	return m.MarkUsed(ctx, name)
+}
+
+func (a *audited) Metadata(ctx context.Context, names []string) ([]Meta, error) {
+	m, ok := a.inner.(MetaStore)
+	if !ok {
+		return nil, ErrNoMetadata
+	}
+	return m.Metadata(ctx, names)
+}
+
+func (a *audited) MetadataEverywhere(ctx context.Context, names []string) ([]Meta, error) {
+	m, ok := a.inner.(MetaStore)
+	if !ok {
+		return nil, ErrNoMetadata
+	}
+	return m.MetadataEverywhere(ctx, names)
+}
+
 // KeyService forwards the wrapped store's description of the key service that
 // wraps its writes (the pg store under WARDYN_KEK=transit), or "": metadata
 // for the setup row, never a value.

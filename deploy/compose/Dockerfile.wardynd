@@ -130,8 +130,14 @@ ARG GO_BUILD_TAGS=docker,k8s
 # under the legacy non-BuildKit builder, and `GOARCH=` empty is exactly how Go
 # spells "use the default", so a legacy build still produces a native binary.
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -o /out/wardynd ./cmd/wardynd \
- && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn ./cmd/wardyn \
+# RELEASE_BUILD=true (release.yml's `images` job, wardynd row only) stamps
+# internal/version's unexported releaseBuild var via -ldflags -X, so version.String()
+# reports the bare release instead of `<version>+<commit>` (#1105). Empty by
+# default, so `make ci`/`docker compose build`/publish-image.yml's per-commit
+# build all get the commit-suffixed string.
+ARG RELEASE_BUILD=false
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardynd ./cmd/wardynd \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardyn ./cmd/wardyn \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-git-helper ./cmd/wardyn-git-helper
 

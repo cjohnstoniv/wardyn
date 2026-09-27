@@ -41,47 +41,47 @@ const (
 	// captured AWS SSO session has lapsed mid-run and the request is being held.
 	// It names the mechanism, says what is happening to the run, and closes the
 	// substitution question before it is asked.
-	credentialReauthRaisedSentence = "this run's model access is configured as Amazon Bedrock " +
+	credentialReauthRaisedSentence = "This run's model access is configured as Amazon Bedrock " +
 		"(captured AWS SSO session), and that session can no longer be renewed — the run is HELD while " +
 		"you sign in again. It resumes by itself when the sign-in lands. Wardyn does not substitute a " +
 		"different model provider."
 	// credentialReauthHostPinRefusal is the host pin (I4), the exact shape of
 	// the subscription sentinel's own pin one file over: a grant could name any
 	// egress-allowlisted host, and this sink hands back a LIVE session token.
-	credentialReauthHostPinRefusal = "the AWS SSO access token may only be injected to this " +
+	credentialReauthHostPinRefusal = "The AWS SSO access token may only be injected to this " +
 		"credential's own sso portal host"
 	// credentialReauthScopeChangedRefusal is the I3 drift refusal. It is
 	// deliberately vague about WHICH field drifted: the caller is a sidecar, the
 	// reader is an audit row, and the field names are identity.
-	credentialReauthScopeChangedRefusal = "this run's model credential is no longer the one it was " +
+	credentialReauthScopeChangedRefusal = "This run's model credential is no longer the one it was " +
 		"dispatched with — the roster changed while the run was working, and Wardyn will not resolve a " +
 		"different principal's credential for a run already in flight. Relaunch the run."
 	// credentialReauthTooManyRefusal bounds the raise path. A run that has
 	// already asked its owner to sign in eight times is not going to be fixed by
 	// a ninth row.
-	credentialReauthTooManyRefusal = "this run has already asked for an AWS sign-in too many times; " +
+	credentialReauthTooManyRefusal = "This run has already asked for an AWS sign-in too many times; " +
 		"nothing was substituted and no further sign-in will be requested for it"
 	// credentialReauthClosedBody is the 403 a resolve gets when this run's
 	// sign-in request is no longer open. %s is the row's terminal state, which
 	// is a closed Wardyn enum and never caller input.
-	credentialReauthClosedBody = "this run's AWS sign-in request is closed: %s"
+	credentialReauthClosedBody = "This run's AWS sign-in request is closed: %s"
 	// credentialReauthRunUnreadableBody / credentialReauthStoreErrorBody /
 	// credentialReauthApprovalsUnreadableBody are the three fail-closed 503s.
 	// Machine-facing (the caller is a sidecar), but named rather than inlined so
 	// every sentence this lane puts on a wire has one definition and a canon row.
-	credentialReauthRunUnreadableBody = "could not read this run"
+	credentialReauthRunUnreadableBody = "Could not read this run"
 	// DRAFT (M2 canon pending)
-	credentialReauthStoreErrorBody = "could not read this run's AWS SSO credential"
+	credentialReauthStoreErrorBody = "Could not read this run's AWS SSO credential"
 	// DRAFT (M2 canon pending)
-	credentialReauthApprovalsUnreadableBody = "could not read this run's approvals"
+	credentialReauthApprovalsUnreadableBody = "Could not read this run's approvals"
 	// DRAFT (M2 canon pending)
 	// Fixed: the raise error wraps the approval store's own error (driver text,
 	// possibly), and the reader is the run's own sandbox — so the cause is
 	// logged, never answered (#173, #505).
-	credentialReauthRaiseFailedBody = "could not raise the AWS sign-in request"
+	credentialReauthRaiseFailedBody = "Could not raise the AWS sign-in request"
 	// credentialReauthNotDecidableBody is the 409 Server.decide answers for this
 	// kind, on every tier.
-	credentialReauthNotDecidableBody = "an AWS sign-in request is resolved by signing in, not by a " +
+	credentialReauthNotDecidableBody = "An AWS sign-in request is resolved by signing in, not by a " +
 		"decision: approving or denying it would change nothing, because the next credential resolve " +
 		"raises the request again"
 )
@@ -285,6 +285,9 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			"purpose": "proxy-injection-sso", "grant_id": grantID, "jti": minted.JTI,
 			"owner": snapshot.OwnerSubject, "credential_source": snapshot.CredentialSource,
 		})))
+	if scope.namespaced() {
+		s.stampCredentialUse(ctx, scope.owner, scope.ssoSecret())
+	}
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
 		Header:    minted.Injection.Header,

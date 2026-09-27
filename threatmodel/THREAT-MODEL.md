@@ -202,7 +202,7 @@ invitation, not an embarrassment.
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | Separate enforcement plane from B2 — a prior agent egress firewall was blind to MCP traffic, so tool egress is a first-class boundary. **Shipped half (v0.7):** a per-tool-call DECISION plane. `cmd/wardyn-toolgate` — an in-sandbox stdio MCP relay built into the agent images — is wired as claude's `--permission-prompt-tool` on a run dispatched with `tool_approvals=hold`; it raises each call through the proxy's brokered `POST /wardyn/v1/approvals`, and the run's OPERATOR-authored `tool_rules` are resolved PROXY-SIDE (`decideByToolRules`, outside the sandbox, on the policy the control plane resolved): `allow`/`deny` answer immediately with no human, `hold` raises the approval, and all three write a decision-log row. **Bypass class, and it is the whole boundary question:** the gate is IN-SANDBOX and COOPERATIVE — an agent that does not call it is not gated, the harness auto-approves its own read-only-safe command class without consulting it, and it covers one harness. A decision plane, not a containment one. Note also that `ToolAllow` is WIDENING authority evaluated outside the sandbox: an operator writing `tool_rules` is pre-approving calls no human will see. **Planned half:** interception of MCP tool-call EGRESS, which is what would make this a boundary rather than a protocol both sides have to honour. **Above this plane (0.8):** a governance profile's autonomy rubric decides, control-plane side and before dispatch, whether a run may operate at `L2`/`L3` (auto-approval, seeded auto tools, `task_mode=exec`) at all, graded on the run's posture; it is a gate on WHETHER the cooperative in-sandbox relay above is ever bypassed by policy, not a replacement for it, and does not change this boundary's bypass class — a run correctly resolved to an unattended level still depends on the same in-sandbox, cooperative `tool_rules`/`wardyn-toolgate` decision plane once it launches. |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
-| **B6 — Runner data plane vs. control plane** | 🟡 partial | **Transport: TLS with a pinned CA [v0.7.12 shipped].** Every proxy→control-plane call — the credential resolve (`GET /api/v1/internal/injection/{grant}`, the one API that returns a secret VALUE), mints, token renewal, decisions, approvals, uploads — rides wardynd's proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), and the proxy trusts only wardynd's own internal CA for it (`internal/hoptls`: minted on first boot into the secret store as `wardyn-internal-ca`, handed to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`). `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback (`hoptls.CheckURL`). **Authentication: bearer, not mTLS.** A per-run token (minted by the embedded identity provider, verified via `internalAuth`) authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**. So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server. **Residuals:** the console listener still answers `/api/v1/internal/*` in plaintext for callers that are not a proxy and for runs dispatched before an upgrade to 0.7.12. The standing one is `wardyn-tetragon-ingest`, whose audit-write-only bearer (`aud=wardyn-groundtruth`) still crosses in plaintext: that is an integrity exposure, not a confidentiality one — a captured token can forge ground-truth events until it rotates, and cannot read or mint a credential (#606). Test harnesses are the other caller; whoever can read wardynd's secret store with its age key holds the CA key, the same custody as the signing key. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
+| **B6 — Runner data plane vs. control plane** | 🟡 partial | **Transport: TLS with a pinned CA [v0.7.12 shipped].** Every proxy→control-plane call — the credential resolve (`GET /api/v1/internal/injection/{grant}`, the one API that returns a secret VALUE), mints, token renewal, decisions, approvals, uploads — rides wardynd's proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), and the proxy trusts only wardynd's own internal CA for it (`internal/hoptls`: minted on first boot into the secret store as `wardyn-internal-ca`, handed to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`). `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback (`hoptls.CheckURL`). **Authentication: bearer, not mTLS.** A per-run token (minted by the embedded identity provider, verified via `internalAuth`) authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**. So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server. `wardyn-tetragon-ingest` rides the same listener under the same rule [0.8]: its audit-write-only bearer (`aud=wardyn-groundtruth`) goes to `https://wardynd:8443`, pinned to the internal CA, whose public certificate wardynd publishes beside `WARDYN_GROUNDTRUTH_TOKEN_FILE`; the ingest refuses a non-loopback `http://` URL and an `https://` URL with no CA file (`controlPlaneClient`). The chart grants the runs namespace the internal port only, never `http`. **Residuals:** no current-version component sends a bearer to wardynd in plaintext on a non-loopback install. The console listener still answers `/api/v1/internal/*` in plaintext, for the test harnesses, which reach it from the host where the internal listener is not published; a caller misconfigured onto it (or a pre-0.7.12 compose run still in flight after an upgrade) is served rather than refused. Whoever can read wardynd's secret store with its age key holds the CA key, the same custody as the signing key. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
 | **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the sandboxes' own bridge, never `host`) plus the layer-cache registry. Residual #13. |
 | **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | An anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`). The DAEMON default is off — no var set, no listener, no host key generated — but **two shipped deployments turn it on for every install**: the one-line installer writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates *and backfills it on upgrade*, and the desktop envelope ships it on. So this boundary is live on every managed laptop and every `curl … | sh` box, bound to loopback by the compose host-port publish (`127.0.0.1:2222`) rather than left unexposed. Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes via self-service `/api/v1/me/ssh-keys`, so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds (§4). Once authenticated, a session is bounded by owner-or-admin authorization (residual #15) and runs entirely inside B1: shell/exec/sftp/`-L` are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal uses. A new front door, not a new back door. |
@@ -1955,12 +1955,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     database writer until the key is rotated past the old wrap
     (`wardynd -rotate-age-key`). A database writer is already super-admin
     equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered
-    around. (b) **The `local` KEK is the only one so far:** whoever
-    holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value,
-    offline and unlogged; a deleted credential still decrypts from any earlier
-    backup while both exist — the erasure horizon is the deployment's backup
-    retention. A key service (Vault/OpenBao Transit, Azure Key Vault) that keeps
-    the KEK away from the database is the next lane, not this one. (c)
+    around. (b) **Under the default, `local` KEK**, whoever holds both the
+    database (or a backup) and `WARDYN_AGE_KEY` reads every value, offline and
+    unlogged; a deleted or erased credential (`DELETE
+    /people/{principal}/credentials`, or the daily expiry sweep) still decrypts
+    from any earlier backup while both exist — the erasure horizon is the
+    deployment's backup retention, not the API call. **A key service that keeps
+    the KEK away from the database has shipped for one provider**: `WARDYN_KEK=
+    transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows
+    this to residual 49(c)'s shape — a Vault-side actor, not a database reader
+    alone — rather than closing it; Azure Key Vault and AWS KMS key-wrapping
+    (as opposed to Azure Key Vault as a plain external secret STORE, which has
+    also shipped and inherits this residual unchanged, since Wardyn does no
+    at-rest cryptography of its own on a row held there) remain planned. (c)
     **Metadata stays in the clear:** who holds which named credential, and since
     when, is readable to anyone who can read the table.
 
@@ -2082,6 +2089,146 @@ hiding them would repeat the failure mode we are designed to avoid.
     `docs/design/hybrid-0.8.md`): evidence flows toward the party the developer
     cannot edit, and the residual is bounded per row to the time before that
     row is acknowledged: an acknowledged row is witnessed.
+
+53. **Freeze pauses the agent's processes, not its access — "paused" is an
+    availability lever, not an added confinement boundary.** `Freezer`'s
+    docker implementation (`FreezeSandbox`/`ThawSandbox` in
+    `internal/runner/docker/driver_network.go`, long-holds RL-6) is
+    `ContainerPause`/`ContainerUnpause` on the AGENT container only: every
+    process in its cgroup gets the freezer-cgroup equivalent of SIGSTOP.
+    Nothing about its filesystem, network namespace, established connections,
+    or anything already resident in its environment changes — a frozen agent
+    sits exactly where a running one would, reachable to anyone who already
+    had host or daemon access. The proxy sidecar is deliberately never frozen
+    (so it keeps renewing its token and answering egress decisions), so a
+    frozen run is not "off the network" either. Verified only on runc/cgroup
+    v2 today (`runsc`/Kata report unsupported rather than assume an unproven
+    control); nothing yet calls Freeze from a real pause-and-resume feature
+    (residual #55 covers reach once something does) — this residual is about
+    the primitive itself, which any future caller inherits unchanged.
+54. **A control-plane outage leaves a window of egress with no durable
+    audit.** The proxy's token renewer gives up asking for a fresh token after
+    an hour of failures and keeps running "on a dead identity, visibly"
+    (`runTokenRenewerTuned` in `internal/egress/proxy/renew.go`) rather than
+    stopping, deliberately, so a brief blip never kills a run over one missed
+    heartbeat. Every egress decision the proxy makes in that window is still
+    evaluated against its last-loaded policy — nothing here widens what the
+    proxy would forward — but the row that would normally land in wardynd's
+    append-only audit log cannot: wardynd is the thing that is down. Once the
+    control plane returns, the lapsed-token sweep marks the run lost as
+    `outage` and stops its proxy (`stopLostSandbox` in
+    `internal/api/run_lost.go`), which closes the window going forward, but
+    nothing backfills what the sandbox reached while it was open. Bounded to
+    at most the outage's own duration — but for that bounded window, "every
+    decision is audited" is not true.
+55. **Revive re-asserts the run's OWNER's authority, not the caller's — which
+    means any admin, not a scoped operational role, can act on every run in
+    the deployment.** Reviving a run, restarting it in bulk, and extending its
+    end are each gated owner-or-super-admin, and the handler re-derives the
+    OWNER's own current governance-profile denies before touching anything
+    (`reviveCeiling` in `internal/api/run_revive.go`) — an admin's click never
+    grants a member's run more than that member already holds. What is not
+    scoped is REACH: keeping a fleet's runs alive — revive, bulk restart, and
+    extending a run's end — is available to every super admin over every
+    user's run, with no separate "operational continuity" capability a
+    deployment could hand to a narrower role. Tearing a run down early is
+    scoped differently: a security admin already has that axis, on any run in
+    the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in
+    `internal/api/helpers.go`, which admits `isSecurityOperator`) — it is keeping a
+    run alive that no narrower role can do. The action is fully audited
+    with both the actor and the owner as `subject` (`run.revive`,
+    `docs/AUDIT-ACTIONS.md`), so misuse is visible after the fact; nothing
+    today narrows who holds the button in advance.
+56. **A revived or restarted run keeps its ORIGINAL agent image — revive
+    never re-pulls or rebuilds it.** A proxy-only revive (a control-plane
+    outage) touches only the proxy sidecar; a revive after a reboot restarts
+    the SAME, already-created agent container rather than recreating it from
+    the current agent image. A run that started on an image later found to
+    carry a vulnerability, or superseded by a patched build, stays on the old
+    one through any number of revives — the only way off it is to end the run
+    and start a new one. This is a property of what revive is FOR (continuing
+    the same agent process or conversation across an outage or reboot), not
+    an oversight, but it means "the deployment is on the current release"
+    does not extend to a long-kept run's agent container.
+57. **A kept run's writable-layer disk footprint is not reclaimed until its
+    grace expires, and nothing surfaces how much that is.** An ended or lost
+    run is deliberately kept — its agent and proxy containers stopped, not
+    removed — for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days). Every byte
+    that run's agent wrote to its container's own writable layer sits on the
+    host disk for the whole grace window, and nothing on the run's page or in
+    the admin runs list reports it today — an operator sizing host disk for
+    "however many runs are live" can be surprised by however many are merely
+    kept. A fleet of long-running, frequently-ended runs under a generous
+    grace is the case this compounds; surfacing disk used on the run page is
+    a tracked follow-up, not yet shipped.
+58. **Kubernetes cannot keep, revive, restart, or (once it ships) pause a
+    run — each is an optional `Runner` capability the k8s substrate does not
+    implement**, so a k8s run's end and limits still fire on schedule but
+    every other long-holds behavior degrades to an immediate, non-resumable
+    teardown: `SandboxEnder`, `ProxyReviver`, `SandboxStarter` and `Freezer`
+    (all in `internal/runner/runner.go`) each document the same shape — a
+    router in front of a substrate without the interface returns that
+    interface's own `Err*Unsupported` sentinel, and the control plane's
+    fallback for an end is to stop the run outright rather than keep it. This
+    is a substrate gap, not a policy choice: a k8s deployment gets none of
+    "kept for a grace window," "revived after an outage," "resumed after a
+    reboot," or (when it ships) "paused when idle" — every one of those needs
+    a durable, re-attachable unit of storage and identity that a stopped or
+    evicted pod does not provide, which is also why user-drive persistence is
+    the prerequisite direction for closing this rather than a k8s-specific
+    reimplementation of each behavior individually. See
+    [Kubernetes: known gaps](../docs/OPERATIONS.md#kubernetes-known-gaps).
+59. **A kept run's proxy container holds its own run token, per-run MITM CA
+    private key and (when configured) the operator's upstream-proxy
+    credential for the whole grace window, not just "in proxy memory."**
+    `Config` (`internal/egress/proxy/config.go`) — the sidecar's own rendered
+    configuration, `RunToken`, `MITMCAKeyPEM` and `UpstreamProxyURL` included
+    — is delivered to the container as its own env on Docker (`proxyConfigEnv`
+    in `internal/runner/docker/driver_proxy_revive.go`), so that revive can
+    read it back later. That is a real, on-disk persistence of the
+    container's own state (Docker's container config), not merely process
+    memory, for as long as the container exists — and under the long-holds
+    design an ended or lost run's proxy is stopped rather than removed for
+    exactly that reason, for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days).
+    This is distinct from §5.1a's resident-secret exception list, which is
+    about what the SANDBOX (the agent container) can read: the agent never
+    sees this config, and no injected per-run credential VALUE is in it (only
+    a `grant_id` reference, re-minted fresh at each proxy start). The run
+    token itself is NOT revoked when the run ends — `endRun` never revokes
+    the run's identity, and `Broker.RevokeRun` is audit-only
+    (`internal/broker/revoke.go`) — so it stays valid, unrevoked, until its
+    ≤1h TTL lapses from its last renewal (tracked as #1176). The exposure
+    here is scoped to whoever already has host or Docker-daemon access — the
+    same actor every other proxy-state residual in this section already
+    assumes. It is bounded to one run's own token and CA — but when an
+    operator has configured an authenticated upstream proxy, that same
+    operator-wide credential rides in `UpstreamProxyURL` into every run's
+    proxy container, so that part of the exposure is never scoped to one
+    run: it is the fleet's.
+60. **A stored key keeps working for a bounded time after it is revoked,
+    rotated, or refused at the store — up to the injection TTL plus a
+    transient-failure grace, never indefinitely.** A stored API key the proxy
+    injects is re-resolved from the injection sink at most every ten minutes
+    (`storedKeyTTL` in `internal/api/injection.go`) — a MODEL-PROVIDER stored
+    key instead re-resolves every fifteen minutes (`providerKeyRecheck` in
+    `internal/api/injection_provider_key.go`) — an approval-gated grant is the
+    exception in either case: minted once, static for the
+    run — rather than held for the run's whole life, so a key removed,
+    replaced or refused there stops being injected within that window — this
+    is the "revocation" half of CS-4's memory/revocation/failure hygiene, not
+    literal in-process zeroing (nothing in the secret store or the broker
+    scrubs a plaintext buffer after use; the actual controls are the TTL
+    above, `internal/nodump`'s no-core-dump/no-same-uid-ptrace hardening on
+    both `wardynd` and `wardyn-proxy`, and a definitive-vs-transient failure
+    split that drops an injected header at once on anything but a bare
+    transient store error). That split is also where the bound sits: a
+    TRANSIENT failure (the store did not answer) keeps serving the
+    last-known-good header for a further fifteen minutes before it, too, is
+    dropped — so the worst case between a revocation and the proxy actually
+    stopping is the TTL plus that grace: about twenty-five minutes for most
+    stored keys, about thirty for a model-provider key's fifteen-minute TTL —
+    not the ten minutes alone, and a store outage that outlasts the grace
+    fails CLOSED (no header) rather than open.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
