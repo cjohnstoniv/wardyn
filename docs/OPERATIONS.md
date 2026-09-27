@@ -5819,7 +5819,8 @@ arm. That WARN is the *only* run-time signal a stored policy row produces —
 no HTTP error, nothing the member sees — and `buildRunMounts`' drop means
 dispatch never reaches the driver-level `docker: denied workspace mount
 "<source>" -> "<target>": target /home/agent/drive is reserved for the user
-drive` refusal (`internal/runner/docker/driver_mounts.go:120-123`) for this
+drive` refusal (the `ValidateAuthoredTarget` check in `Driver.agentMounts`,
+`internal/runner/docker/driver_mounts.go`) for this
 case at all; that check now guards only a path a stored policy row can no
 longer take. Find both shapes before the upgrade window rather than in
 somebody's run or wardynd's log:

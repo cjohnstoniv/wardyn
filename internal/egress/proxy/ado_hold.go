@@ -85,7 +85,8 @@ func (p *Proxy) refuseADOCredential(w http.ResponseWriter, r *http.Request, host
 }
 
 // adoAsk is what the control plane is told about a held request besides the
-// capability: repo is the approval's canonical identity; method/path are for the audit row only.
+// capability: repo and ref class are the approval's canonical identity;
+// method/path are for the card and audit row only.
 type adoAsk struct {
 	method, path, repo string
 }
