@@ -154,6 +154,37 @@ export interface ShellMeta {
   sso: boolean;
 }
 
+/** Everything the shell holds that /me decides — `me` null is a failed /me.
+ *  One mapping for the mount read and adopt(): a partial copy on adopt kept the
+ *  placeholder principal after a resume, so every later lapse in the tab
+ *  skipped the different-person check (#483, Q457-12). */
+function identityFromMe(me: Me | null) {
+  return {
+    principal: me?.principal || "unknown",
+    email: me?.email ?? "",
+    // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
+    // "none", which falls back to the email, then the principal.
+    name: me?.name ?? "",
+    method: me?.method || "",
+    identityResolved: me !== null,
+    operator: me?.operator ?? true,
+    // ?? true, not `?? me?.operator`: an older daemon that never sends
+    // this field must fail OPEN like every other identity signal here.
+    securityOperator: me?.security_operator ?? true,
+    role: me?.role ?? "admin",
+    // F3-F11: a bad string parses to an Invalid Date, not null — guard
+    // NaN here so useSessionExpiry never has to.
+    sessionExpiresAt: validExpiry(me?.session_expires_at),
+    memberLocalDirRoot: me?.member_local_dir_root ?? null,
+    userDrive: me?.user_drive ?? null,
+    userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
+    userDriveUnavailable: me?.user_drive_unavailable ?? "",
+    memberMode: me?.user_view ?? false,
+    memberModeNoCredential: me?.user_view_no_credential ?? false,
+    memberPreviewAvailable: me?.user_preview_available ?? false,
+  } satisfies Partial<ShellMeta>;
+}
+
 /** The shell's identity, the retry that re-fires /me (B1's banner action), and
  *  adopt() for a /me the reauth dialog already read (#483). */
 function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
@@ -194,29 +225,8 @@ function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
         setMeta({
           trustDomain: h.trust_domain || "unknown",
           identityProvider: h.identity_provider || "unknown",
-          principal: me?.principal || "unknown",
-          email: me?.email ?? "",
-          // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
-          // "none", which falls back to the email, then the principal.
-          name: me?.name ?? "",
-          method: me?.method || "",
+          ...identityFromMe(me),
           resolved: true,
-          identityResolved: me !== null,
-          operator: me?.operator ?? true,
-          // ?? true, not `?? me?.operator`: an older daemon that never sends
-          // this field must fail OPEN like every other identity signal here.
-          securityOperator: me?.security_operator ?? true,
-          role: me?.role ?? "admin",
-          // F3-F11: a bad string parses to an Invalid Date, not null — guard
-          // NaN here so useSessionExpiry never has to.
-          sessionExpiresAt: validExpiry(me?.session_expires_at),
-          memberLocalDirRoot: me?.member_local_dir_root ?? null,
-          userDrive: me?.user_drive ?? null,
-          userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
-          userDriveUnavailable: me?.user_drive_unavailable ?? "",
-          memberMode: me?.user_view ?? false,
-          memberModeNoCredential: me?.user_view_no_credential ?? false,
-          memberPreviewAvailable: me?.user_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
           // "" (unset) reads the same as absent: both mean "no mirror".
@@ -234,21 +244,10 @@ function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
       alive = false;
     };
   }, [attempt]);
-  // The same person signed back in over the page: take what can have moved
+  // The same person signed back in over the page: take the whole identity
   // from the /me the dialog read, rather than re-asking — a failed re-ask
   // would settle as an unknown identity and blank the page it just kept.
-  const adopt = React.useCallback(
-    (me: Me) =>
-      setMeta((m) => ({
-        ...m,
-        method: me.method || "",
-        operator: me.operator,
-        securityOperator: me.security_operator ?? true,
-        role: me.role,
-        sessionExpiresAt: validExpiry(me.session_expires_at),
-      })),
-    [],
-  );
+  const adopt = React.useCallback((me: Me) => setMeta((m) => ({ ...m, ...identityFromMe(me), resolved: true })), []);
   return [meta, React.useCallback(() => setAttempt((n) => n + 1), []), adopt];
 }
 

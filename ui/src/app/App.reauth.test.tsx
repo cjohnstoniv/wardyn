@@ -16,6 +16,7 @@ import App from "./App";
 import { SESSION_ENDED_REASON, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "./lib/reauth-copy";
 import { PROVIDERS_DRAFT } from "./lib/workspace-providers-copy";
+import { SHELL } from "./components/wardyn/copy";
 import { UNSAVED } from "./lib/unsaved-copy";
 
 const mockState = vi.hoisted(() => ({ claim: true }));
@@ -82,7 +83,8 @@ function json(status: number, body: unknown): Response {
 
 // The daemon: `dead` 401s every /api/v1 call; `down` refuses the connection;
 // /healthz answers regardless, with `sso` deciding the dialog's doors.
-const daemon = { dead: false, down: false, sso: false, me: ME as Record<string, unknown> };
+// `meFails` 500s GET /me alone: the shell mounts not knowing who is signed in.
+const daemon = { dead: false, down: false, sso: false, meFails: false, me: ME as Record<string, unknown> };
 const calls: string[] = [];
 // Set to hold POST /auth/logout open, so the sign-out round trip can be caught mid-flight.
 let heldLogout: Promise<Response> | null = null;
@@ -95,7 +97,7 @@ const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
   if (daemon.down) return Promise.reject(new TypeError("Failed to fetch"));
   if (daemon.dead) return Promise.resolve(json(401, { error: "unauthorized" }));
   if (u.includes("/setup/status")) return Promise.resolve(json(200, SETUP_STATUS_READY));
-  if (u.includes("/me")) return Promise.resolve(json(200, daemon.me));
+  if (u.includes("/me")) return Promise.resolve(daemon.meFails ? json(500, { error: "boom" }) : json(200, daemon.me));
   if (u.includes("/approvals") || u.includes("/runs")) return Promise.resolve(json(200, []));
   return Promise.resolve(json(200, {}));
 });
@@ -108,7 +110,7 @@ const assign = vi.fn();
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-  Object.assign(daemon, { dead: false, down: false, sso: false, me: ME });
+  Object.assign(daemon, { dead: false, down: false, sso: false, meFails: false, me: ME });
   mockState.claim = true;
   heldLogout = null;
   calls.length = 0;
@@ -340,6 +342,60 @@ describe("App — a session that ends mid-page (#483)", () => {
     await user.click(within(dialog).getByRole("button", { name: REAUTH_BAR.CTA }));
     expect(await within(dialog).findByText(REAUTH_DIALOG.UNREACHABLE)).toBeInTheDocument();
     expect(screen.getByLabelText("Note")).toHaveValue("hello");
+  });
+});
+
+// Owner ruling Q457-12 after a resume on an identity the shell never learned
+// (/me failed at mount): the first sign-in carries on as whoever it is
+// (SF-29), and from then on the shell knows who that was — so a DIFFERENT
+// person at a later lapse still gets a fresh page, never the first one's.
+describe("App — a resume on an unknown identity records who came back", () => {
+  async function resumeUnknownAsCj() {
+    daemon.meFails = true;
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByText(SHELL.UNKNOWN_BODY);
+    daemon.dead = true;
+    await act(async () => {
+      await wfetch("/lapse").catch(() => {});
+    });
+    await screen.findByRole("dialog");
+    daemon.meFails = false;
+    await signInWithToken();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(assign).not.toHaveBeenCalled();
+  }
+
+  it("someone else signing in at a later lapse reloads fresh, and the write hold stays", async () => {
+    await resumeUnknownAsCj();
+    daemon.dead = true;
+    await act(async () => {
+      await wfetch("/again").catch(() => {});
+    });
+    await screen.findByRole("dialog");
+    daemon.me = { ...ME, principal: "someone-else" };
+    await signInWithToken();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    await act(async () => {
+      await expect(wfetch("/stub-save", { method: "PUT", body: "{}" })).rejects.toMatchObject({ status: 401 });
+    });
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+  });
+
+  it("the first person's draft is not what someone else signs in to", async () => {
+    await resumeUnknownAsCj();
+    await user.type(await screen.findByLabelText("Note"), "hello");
+    daemon.dead = true;
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await screen.findByRole("dialog");
+    daemon.me = { ...ME, principal: "someone-else" };
+    await signInWithToken();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(screen.queryByLabelText("Note")).toBeNull();
+    expect(screen.queryByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY })).toBeNull();
   });
 });
 
