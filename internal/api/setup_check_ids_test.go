@@ -51,6 +51,10 @@ func (s setupCheckIdsStore) GetCapabilityEnforcement(context.Context) (map[strin
 	return nil, nil
 }
 
+func (s setupCheckIdsStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // setupCheckIds runs GET /api/v1/setup/status and returns the deduped, sorted
 // set of emitted check ids.
 //

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,7 +45,7 @@ func (s ssoBindingStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]ty
 
 // operatorStartURL / operatorRegion are what the OPERATOR asked for: the
 // access-portal URL that arrived with POST /setup/harness-login and was
-// recorded on harness.login.started, and the boot-config SSO region
+// recorded on harness.login.start, and the boot-config SSO region
 // handleHarnessLogin requires before an aws-sso login run may launch.
 const (
 	operatorStartURL = "https://my-sso.awsapps.com/start"
@@ -52,7 +53,7 @@ const (
 )
 
 // loginRunFor / loginStartedFor are the two pieces of trusted server state an
-// aws-sso login run carries: the run row, and the harness.login.started event
+// aws-sso login run carries: the run row, and the harness.login.start event
 // launchHarnessLoginRun wrote with the operator's own access-portal URL.
 func loginRunFor(runID uuid.UUID) types.AgentRun {
 	return types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent}
@@ -61,7 +62,7 @@ func loginRunFor(runID uuid.UUID) types.AgentRun {
 func loginStartedFor(runID uuid.UUID) []types.AuditEvent {
 	return []types.AuditEvent{{
 		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
-		Action: "harness.login.started", Target: runID.String(), Outcome: "success",
+		Action: "harness.login.start", Target: runID.String(), Outcome: "success",
 		Data: mustJSON(map[string]any{
 			"provider": awsSSOProvider, "sso_start_url": operatorStartURL,
 		}),
@@ -91,7 +92,7 @@ func ssoBlobBody(startURL, region, accessToken string) string {
 		"region": "` + region + `",
 		"account_id": "123456789012",
 		"role_name": "WardynBedrockRole",
-		"expires_at": "2100-01-01T00:00:00Z"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 }
 
@@ -177,7 +178,7 @@ func TestUploadSSOToken_SecondCaptureRefused(t *testing.T) {
 // account to be PRESENT, never that it was the RIGHT one.
 //
 // Two bindings close that, both against trusted server state: the LAUNCH-TIME
-// roster pin (read back off this run's own harness.login.started row, never off
+// roster pin (read back off this run's own harness.login.start row, never off
 // the live roster) and the account the configured Bedrock model lives in.
 
 // pinnedLoginStarted is loginStartedFor PLUS the launch-time account/role pin.
@@ -217,7 +218,7 @@ func ssoBlobFor(accountID, roleName string) string {
 		"region": "` + operatorRegion + `",
 		"account_id": "` + accountID + `",
 		"role_name": "` + roleName + `",
-		"expires_at": "2100-01-01T00:00:00Z"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 }
 
@@ -329,11 +330,11 @@ func TestUploadSSOToken_RefusalIsAudited(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400", code)
 	}
-	if !auditHas(h.audit.events, "harness.credential.refused") {
-		t.Fatal("a refused capture left no harness.credential.refused row — the refusal is invisible to an incident review")
+	if !auditHas(h.audit.events, "harness.credential.refuse") {
+		t.Fatal("a refused capture left no harness.credential.refuse row — the refusal is invisible to an incident review")
 	}
 	for _, ev := range h.audit.events {
-		if ev.Action != "harness.credential.refused" {
+		if ev.Action != "harness.credential.refuse" {
 			continue
 		}
 		data := string(ev.Data)
@@ -366,22 +367,22 @@ func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
 			body: `{"access_token": `, wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
 		},
 		"a structurally incomplete blob": {
-			body:       `{"access_token":"tok","region":"` + operatorRegion + `","expires_at":"2100-01-01T00:00:00Z"}`,
+			body:       `{"access_token":"tok","region":"` + operatorRegion + `","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
 		},
 		"a region that is not the one this run was launched with": {
 			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"eu-central-1",` +
-				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonRegionMismatch,
 		},
 		"a start URL that is not the one this run was launched with": {
 			body: `{"access_token":"tok","start_url":"https://attacker.example.com/start","region":"` + operatorRegion + `",` +
-				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonStartURLMismatch,
 		},
 		"a control character in a field baked into ~/.aws/config": {
 			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"` + operatorRegion + `",` +
-				`"account_id":"111111111111","role_name":"Bedrock\nRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+				`"account_id":"111111111111","role_name":"Bedrock\nRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonFieldUnsafe,
 		},
 		"an account the configured model does not live in": {
@@ -400,7 +401,7 @@ func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
 			}
 			rows := 0
 			for _, ev := range h.audit.events {
-				if ev.Action != "harness.credential.refused" {
+				if ev.Action != "harness.credential.refuse" {
 					continue
 				}
 				rows++
@@ -409,7 +410,7 @@ func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
 				}
 			}
 			if rows != 1 {
-				t.Errorf("harness.credential.refused rows = %d, want exactly 1", rows)
+				t.Errorf("harness.credential.refuse rows = %d, want exactly 1", rows)
 			}
 		})
 	}
@@ -429,12 +430,12 @@ func TestUploadSSOToken_FailedPersistIsAudited(t *testing.T) {
 	}
 	found := false
 	for _, ev := range h.audit.events {
-		if ev.Action == "harness.credential.refused" && strings.Contains(string(ev.Data), refuseReasonStoreError) {
+		if ev.Action == "harness.credential.refuse" && strings.Contains(string(ev.Data), refuseReasonStoreError) {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("a failed persist left no harness.credential.refused row — an operator sees a 500 and nothing in the trail")
+		t.Error("a failed persist left no harness.credential.refuse row — an operator sees a 500 and nothing in the trail")
 	}
 }
 
@@ -566,7 +567,7 @@ func TestUploadSSOToken_WrongShapedAccountOrRoleRejected(t *testing.T) {
 			}
 			rows := 0
 			for _, ev := range h.audit.events {
-				if ev.Action != "harness.credential.refused" {
+				if ev.Action != "harness.credential.refuse" {
 					continue
 				}
 				rows++
@@ -575,7 +576,7 @@ func TestUploadSSOToken_WrongShapedAccountOrRoleRejected(t *testing.T) {
 				}
 			}
 			if rows != 1 {
-				t.Errorf("harness.credential.refused rows = %d, want exactly 1", rows)
+				t.Errorf("harness.credential.refuse rows = %d, want exactly 1", rows)
 			}
 		})
 	}

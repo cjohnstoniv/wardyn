@@ -14,11 +14,12 @@ import type { AuditEvent } from "../../../../lib/types";
 import { AGENTS } from "../../../../lib/workspace-providers-copy";
 import { EffectivePolicyWidget } from "./effective-policy";
 import { RUN_WIDGETS, type WidgetContext } from "../widget-registry";
+import { aheadByHours } from "../../../../lib/test-clock";
 
 function createRow(data: Record<string, unknown> = {}): AuditEvent {
   return {
     id: "a1",
-    time: "2026-09-11T14:02:00Z",
+    time: aheadByHours(-1),
     actor_type: "human",
     actor: "bob@corp.example",
     action: "run.create",

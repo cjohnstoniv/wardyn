@@ -28,6 +28,10 @@ export interface SetupCheck {
   detail?: string;
   fix?: string;
   blocking?: boolean;
+  // Narrows a row that can warn for more than one reason — the same shape as
+  // SCMAccess.cause below. Only sso_rbac sets it today ("default_role", #491);
+  // absent on #484's original no-role-map-and-no-admin-list warn.
+  cause?: string;
 }
 
 // A resident coding-agent CLI detected on the wardynd host PATH. logged_in is
@@ -296,7 +300,7 @@ export interface SetupModelAccess {
   // the shell strip and the New Run rail, absoluteTime in the two card rows —
   // lib/workspace-providers-copy.ts's modelAccessActionLine). Absent for every state that
   // names no instant, and from a pre-0.7.6 daemon: render `action` verbatim
-  // then. NEVER sent to a member under a `shared` row — memberModelAccess
+  // then. NEVER sent to a member under a `shared` row — userModelAccess
   // builds a fresh struct that drops it, which is the leak that projection
   // exists to close.
   deadline?: string;
@@ -331,6 +335,39 @@ export interface SCMAccess {
   kind?: string;
 }
 
+// One model provider as THIS PRINCIPAL sees it (internal/api.SetupModelProvider)
+// — the same shape for every tier. D7: `host` is where their own credential
+// would be sent, the host only; never a path, start URL, pin or header scheme.
+export interface SetupModelProvider {
+  id: string;
+  name?: string;
+  kind: string;
+  // A turned-off provider is published, never hidden: a disabled default is
+  // why this person's runs of that agent are refused.
+  disabled?: boolean;
+  // The agents it serves that this person may launch (never empty).
+  harnesses: string[];
+  // The agents whose roster default it is.
+  default_for?: string[];
+  host: string;
+}
+
+// One provider's connection state for THIS PRINCIPAL (internal/api.
+// SetupProviderAccess, MP-12) — SetupModelAccess generalised per provider
+// rather than the one hardcoded AWS-only row. `state` is one of
+// SetupModelAccess's five live states; `shared_expired` is never produced
+// here (design doctrine: every credential is per person). `action` is
+// already composed by the server and rendered verbatim, exactly like
+// SetupModelAccess.action — never reworded client-side.
+export interface SetupProviderAccess {
+  provider: string;
+  state: "live" | "expiring" | "expired_signin" | "not_configured" | "not_applicable" | (string & {});
+  action?: string;
+  // RFC3339 UTC, only on a state `action` names an instant for. Same reading
+  // rule as SetupModelAccess.deadline.
+  deadline?: string;
+}
+
 export interface SetupStatus {
   ready: boolean;
   // Server-computed "does SOME run/compose LLM access path exist" (resident
@@ -344,7 +381,7 @@ export interface SetupStatus {
   // absent as "unknown", not "false".
   llm_ready?: boolean;
   // X3-F1 — true on a body the server stripped for this caller's tier
-  // (redactSetupStatusForMember). It exists so the console can tell "withheld"
+  // (redactSetupStatusForUser). It exists so the console can tell "withheld"
   // from "absent": treating an empty `checks` list as a FACT about the
   // deployment would show a member "Image builder · Off" / operator-shaped
   // runner fix advice for detail that is merely hidden from them. Absent on an
@@ -356,6 +393,14 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
+  // The model providers the caller may use. Absent with no provider block
+  // (today), or when none serves an agent the caller may launch.
+  model_providers?: SetupModelProvider[];
+  // THIS PRINCIPAL's own connection state for each provider in
+  // `model_providers` (MP-12) — one row per provider, graded against the
+  // caller's own credential. Same absence rule as `model_providers`: absent
+  // with no provider block, or when it lists none.
+  provider_access?: SetupProviderAccess[];
   // The CALLER's own Azure DevOps access state — ModelAccess's sibling.
   // Absent when no Azure DevOps row is configured at all.
   scm_access?: SCMAccess;
@@ -398,7 +443,7 @@ export interface SetupStatus {
     // be surface for the two to drift.
     // What actually binds a run's Resources.DiskMiB on THIS deployment —
     // orchestrator-aggregated, weakest-across-substrates (runner.Capabilities.
-    // EphemeralDiskEnforcement). Stripped for a member by redactSetupStatusForMember
+    // EphemeralDiskEnforcement). Stripped for a member by redactSetupStatusForUser
     // (internal/api/setup.go) — only the /providers screen (SUPER) renders it,
     // under the ephemeral-scratch fields, via DRIVES.ENFORCEMENT_*. Absent on an
     // older daemon or on Docker with no runner detected; empty reads as "none".

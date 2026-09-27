@@ -567,9 +567,9 @@ func TestGovernanceRoutedReadSites(t *testing.T) {
 		}
 		srv.cfg.Secrets = &memSecrets{m: map[string][]byte{blessed: []byte("v"), other: []byte("v")}}
 
-		names, err := srv.memberVisibleOperatorSecretNames(govMemberCtx([]string{"eng"}, false))
+		names, err := srv.userVisibleOperatorSecretNames(govMemberCtx([]string{"eng"}, false))
 		if err != nil {
-			t.Fatalf("memberVisibleOperatorSecretNames: %v", err)
+			t.Fatalf("userVisibleOperatorSecretNames: %v", err)
 		}
 		if !slices.Contains(names, blessed) {
 			t.Errorf("names = %v, want the profile's own pairing listed", names)

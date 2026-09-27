@@ -294,7 +294,7 @@ recorded is that a session *happened*, in the append-only audit log:
 
 | Action | When | Data |
 |---|---|---|
-| `ui.auth` | every enter — success and every denial | app, port; or the denial reason |
+| `ui.authorize` | every enter — success and every denial | app, port; or the denial reason |
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
@@ -317,7 +317,7 @@ expired — answers the same 403, so there is no oracle to probe.
 
 **Ticket.** Single-use, 30s TTL, owner-or-admin at mint
 (`POST /runs/{id}/attach-ticket`). A stale or already-redeemed ticket is a 403
-with a `ui.auth` denial in the log.
+with a `ui.authorize` denial in the log.
 
 **Only declared ports.** The port is captured from the effective policy when
 the ticket is redeemed and lives in the signed cookie, so no later request can
@@ -350,7 +350,7 @@ Two things that check does **not** catch, by design:
 And a connection already established (a relayed WebSocket) keeps working until
 it closes: killing the run is what ends an in-flight session, the same bound
 attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
-`ui.auth` / `denied` row naming the reason.
+`ui.authorize` / `denied` row naming the reason.
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
 hostname would otherwise hand console cookies to sandbox code: every forwarded
@@ -450,7 +450,7 @@ over a `runner.ExecSession`, so the standard library handles the WebSocket
 `101` upgrade code-server needs without a second protocol implementation.
 Policy validation is `validateUIApps` (`internal/api/policy.go`), applied
 wherever a policy enters — stored, inline, or `WARDYN_DEFAULT_POLICY`. A run's
-declared apps are resolved from the `run.policy.effective` audit envelope, not
+declared apps are resolved from the `run.policy.resolve` audit envelope, not
 from `policy_id`: an inline or default policy has no row to fetch, and
 resolving through the id would hand an inline-policy run the default policy's
 apps.

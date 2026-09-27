@@ -113,3 +113,8 @@ c9a5f79ea091ced42f46f019867a970ce41dc4ac:internal/runner/k8s/sandbox_test.go:aws
 # also quoted in docs/adoption/azure-devops-entra.md, not a secret. Commit-scoped to
 # the commit that introduced it.
 7546c7724e0989c757d626b14889ad413d966a41:deploy/azure-entra-sso/02-app.sh:generic-api-key:109
+# PR #834 (#675): generic-api-key false positive on internal/db/db.go's
+# retiredMigrations map, whose one entry maps a released migration file name to
+# its renamed successor ("0065_secret_envelope_v1.sql" -> "0069_…"): file names,
+# not a secret. Commit-scoped to the commit that introduced it.
+b75f982ca32cbea3a887acf57fa213d5535c2527:internal/db/db.go:generic-api-key:57

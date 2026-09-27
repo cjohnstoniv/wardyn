@@ -227,8 +227,8 @@ func TestRunFiles_ExecStreamUnsupported(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "does not support") {
 		t.Errorf("501 body does not carry the reason: %s", w.Body.String())
 	}
-	if len(audit.events) != 1 || audit.events[0].Action != "run.files" || audit.events[0].Outcome != "failure" {
-		t.Fatalf("audit = %+v, want one run.files/failure row", audit.events)
+	if len(audit.events) != 1 || audit.events[0].Action != "run.files.fail" || audit.events[0].Outcome != "failure" {
+		t.Fatalf("audit = %+v, want one run.files.fail/failure row", audit.events)
 	}
 }
 

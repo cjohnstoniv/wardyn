@@ -56,8 +56,8 @@ func TestSubstrateRegistry_K8sResolvesUnderK8sTag(t *testing.T) {
 // zero-live-cluster-risk trick the test above uses directly on substrate.New),
 // a real construction failure this unit test can trigger safely.
 func TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled(t *testing.T) {
-	sel, cmap, img := "k8s", "", ""
-	f := &bootFlags{runnerSel: &sel, confinementMap: &cmap, proxyImage: &img}
+	sel, cmap, img, probeImg := "k8s", "", "", ""
+	f := &bootFlags{runnerSel: &sel, confinementMap: &cmap, proxyImage: &img, driveProbeImage: &probeImg}
 
 	_, _, err := buildRunnerFromFlags(f, nil, nil)
 	if err == nil {

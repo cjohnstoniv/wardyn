@@ -67,7 +67,7 @@ func TestAuditFanoutSurvivesRootCtxCancellation(t *testing.T) {
 	// buffer nobody is reading.
 	ev := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem,
-		Actor: "wardyn/test", Action: "auth.failed", Target: "/api/v1/runs", Outcome: "failure",
+		Actor: "wardyn/test", Action: "auth.fail", Target: "/api/v1/runs", Outcome: "failure",
 		Data: json.RawMessage(`{"reason":"in_flight_at_shutdown"}`),
 	}
 	if eerr := fan.Emit(context.Background(), ev); eerr != nil {
@@ -116,7 +116,11 @@ func TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector(t *testing.T) {
 	defer srv.Close()
 	defer close(block)
 
-	cfgJSON := fmt.Sprintf(`{"webhook":{"url":%q,"batch_size":1,"flush_interval":"10ms","max_retries":0}}`, srv.URL)
+	// timeout shrinks the sink's own client.Timeout (default 15s) so this test
+	// waits well under a second instead of the real 15s to exercise "Close is
+	// bounded, not a hang" — see sinks.TestWebhookConfig_TimeoutDefaultUnchanged
+	// for the guard that the production default is untouched.
+	cfgJSON := fmt.Sprintf(`{"webhook":{"url":%q,"batch_size":1,"flush_interval":"10ms","max_retries":0,"timeout":"200ms"}}`, srv.URL)
 	rootCtx, cancel := context.WithCancel(context.Background())
 	fan, err := buildAuditFanout(rootCtx, cfgJSON)
 	if err != nil {
@@ -124,18 +128,18 @@ func TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector(t *testing.T) {
 	}
 	cancel()
 	_ = fan.Emit(context.Background(), types.AuditEvent{
-		ID: uuid.New(), Time: time.Now().UTC(), Action: "auth.failed", Outcome: "failure",
+		ID: uuid.New(), Time: time.Now().UTC(), Action: "auth.fail", Outcome: "failure",
 	})
 
 	done := make(chan error, 1)
 	go func() { done <- fan.Close() }()
 	select {
 	case <-done:
-	// The bound is the sink's own client.Timeout (15s) for the one in-flight
-	// delivery attempt, plus slack. What must NOT happen is an unbounded wait:
-	// running the flusher past rootCtx would be a bad trade if it turned
-	// shutdown into a hang.
-	case <-time.After(45 * time.Second):
+	// The bound is the sink's own client.Timeout (shrunk to 200ms above) for
+	// the one in-flight delivery attempt, plus slack. What must NOT happen is
+	// an unbounded wait: running the flusher past rootCtx would be a bad trade
+	// if it turned shutdown into a hang.
+	case <-time.After(5 * time.Second):
 		t.Fatal("fan.Close() did not return against a wedged collector — shutdown would hang")
 	}
 }
@@ -239,7 +243,7 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 
 	ev := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem,
-		Actor: "wardyn/test", Action: "auth.failed", Target: "/api/v1/runs", Outcome: "failure",
+		Actor: "wardyn/test", Action: "auth.fail", Target: "/api/v1/runs", Outcome: "failure",
 	}
 	if eerr := fan.Emit(context.Background(), ev); eerr != nil {
 		t.Fatalf("emit: %v", eerr)

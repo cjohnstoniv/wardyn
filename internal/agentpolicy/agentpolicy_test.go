@@ -33,7 +33,7 @@ func goldenFor(t *testing.T, level types.AutonomyLevel) []byte {
 func TestAgentPolicyMatchesTheVerifiedGoldenPerLevel(t *testing.T) {
 	for _, level := range []types.AutonomyLevel{types.AutonomyL0, types.AutonomyL1, types.AutonomyL2} {
 		t.Run(string(level), func(t *testing.T) {
-			path, content, ok := ForAgent("claude-code", level)
+			path, content, ok := ForAgent("claude-code", level, false)
 			if !ok {
 				t.Fatalf("ForAgent(claude-code, %s) ok=false, want a managed-settings file", level)
 			}
@@ -67,7 +67,7 @@ func TestAgentPolicyMatchesTheVerifiedGoldenPerLevel(t *testing.T) {
 func TestAgentPolicySupervisedRungsIgnoreRepoPermissions(t *testing.T) {
 	for _, level := range []types.AutonomyLevel{types.AutonomyL0, types.AutonomyL1} {
 		t.Run(string(level), func(t *testing.T) {
-			_, content, ok := ForAgent("claude-code", level)
+			_, content, ok := ForAgent("claude-code", level, false)
 			if !ok {
 				t.Fatalf("ForAgent(claude-code, %s) ok=false, want managed settings", level)
 			}
@@ -109,7 +109,7 @@ func TestAgentPolicySupervisedRungsIgnoreRepoPermissions(t *testing.T) {
 // --dangerously-skip-permissions. Disabling the bypass mode here kills that
 // lane at its first tool call while the file looks stricter than L1's.
 func TestAgentPolicyUnattendedRungKeepsTheBypassMode(t *testing.T) {
-	_, content, ok := ForAgent("claude-code", types.AutonomyL2)
+	_, content, ok := ForAgent("claude-code", types.AutonomyL2, false)
 	if !ok {
 		t.Fatal("ForAgent(claude-code, L2) ok=false, want the unattended rung's managed settings")
 	}
@@ -137,7 +137,7 @@ func TestAgentPolicyUnattendedRungKeepsTheBypassMode(t *testing.T) {
 // to mistake for a ceiling.
 func TestAgentPolicyNoFileWhereNothingIsBound(t *testing.T) {
 	for _, level := range []types.AutonomyLevel{types.AutonomyL3, ""} {
-		path, content, ok := ForAgent("claude-code", level)
+		path, content, ok := ForAgent("claude-code", level, false)
 		if ok || path != "" || content != nil {
 			t.Errorf("ForAgent(claude-code, %q) = (%q, %q, %v), want no file", level, path, content, ok)
 		}
@@ -151,7 +151,7 @@ func TestAgentPolicyNoFileWhereNothingIsBound(t *testing.T) {
 func TestAgentPolicyOnlyClaudeCodeGetsAFile(t *testing.T) {
 	for _, agent := range []string{"codex-cli", "", "Claude-Code", "claude-code-next"} {
 		for _, level := range []types.AutonomyLevel{types.AutonomyL0, types.AutonomyL1, types.AutonomyL2, types.AutonomyL3, ""} {
-			if _, _, ok := ForAgent(agent, level); ok {
+			if _, _, ok := ForAgent(agent, level, false); ok {
 				t.Errorf("ForAgent(%q, %q) ok=true, want no managed-settings file for a non-claude-code agent", agent, level)
 			}
 		}
@@ -165,13 +165,45 @@ func TestAgentPolicyOnlyClaudeCodeGetsAFile(t *testing.T) {
 // ceiling without changing a rubric.
 func TestAgentPolicyUndefinedLevelFailsClosed(t *testing.T) {
 	for _, level := range []types.AutonomyLevel{"L9", "bogus", "l1", " L1"} {
-		_, content, ok := ForAgent("claude-code", level)
+		_, content, ok := ForAgent("claude-code", level, false)
 		if !ok {
 			t.Errorf("ForAgent(claude-code, %q) ok=false: an undefined level must fail closed, not unmanaged", level)
 			continue
 		}
 		if want := goldenFor(t, types.AutonomyL0); string(content) != string(want) {
 			t.Errorf("ForAgent(claude-code, %q) content = %q, want the L0 document %q", level, content, want)
+		}
+	}
+}
+
+// TestAgentPolicyHoldLaneAlwaysGetsTheGatedDocument is #358: a hold run's gate
+// is bypassed by a repository or user `permissions.allow` rule unless a managed
+// document carries allowManagedPermissionRulesOnly. So a hold run gets the L1
+// document whatever it resolved to, including no level at all, and a level that
+// already carries the key keeps its own document.
+func TestAgentPolicyHoldLaneAlwaysGetsTheGatedDocument(t *testing.T) {
+	for level, wantGolden := range map[types.AutonomyLevel]types.AutonomyLevel{
+		"":               types.AutonomyL1,
+		types.AutonomyL1: types.AutonomyL1,
+		types.AutonomyL2: types.AutonomyL1,
+		types.AutonomyL3: types.AutonomyL1,
+		types.AutonomyL0: types.AutonomyL0,
+		"bogus":          types.AutonomyL0,
+	} {
+		path, content, ok := ForAgent("claude-code", level, true)
+		if !ok || path != ClaudeCodeManagedSettingsPath {
+			t.Errorf("ForAgent(claude-code, %q, hold) = (%q, ok=%v), want a managed-settings file: without one a repository allow rule answers before the gate", level, path, ok)
+			continue
+		}
+		if want := goldenFor(t, wantGolden); string(content) != string(want) {
+			t.Errorf("ForAgent(claude-code, %q, hold) content = %q, want the %s document %q", level, content, wantGolden, want)
+		}
+	}
+	// The allowlist of one still holds: no other agent has a hold lane or a
+	// managed-settings parser.
+	for _, agent := range []string{"codex-cli", ""} {
+		if _, _, ok := ForAgent(agent, "", true); ok {
+			t.Errorf("ForAgent(%q, \"\", hold) ok=true, want no file for a non-claude-code agent", agent)
 		}
 	}
 }

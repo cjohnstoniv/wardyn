@@ -62,11 +62,11 @@ func TestRefuseFailsClosedOnAnUnregisteredReason(t *testing.T) {
 	})
 }
 
-// TestStaleSnapshotRowCarriesTheMemberModeMarker: the two groups_snapshot_stale
-// emits hand-rolled their datum, so an admin in member mode refused there wrote
-// a row with no member_mode marker — reading as a member incident, the one
+// TestStaleSnapshotRowCarriesTheUserViewMarker: the two groups_snapshot_stale
+// emits hand-rolled their datum, so an admin in the user view refused there
+// wrote a row with no user_view marker — reading as a member incident, the one
 // outcome the marker exists to prevent. Every row now comes from authz.Datum.
-func TestStaleSnapshotRowCarriesTheMemberModeMarker(t *testing.T) {
+func TestStaleSnapshotRowCarriesTheUserViewMarker(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, staleAuditStore{hasGroupTier: true})
 	cfg.OIDC = &oidc.Authenticator{}
@@ -81,8 +81,8 @@ func TestStaleSnapshotRowCarriesTheMemberModeMarker(t *testing.T) {
 	if data["reason"] != string(authz.ReasonGroupsSnapshotStale) || ev.Target != "governance.ceiling" {
 		t.Fatalf("row = %s %v, want governance.ceiling groups_snapshot_stale", ev.Target, data)
 	}
-	if data["member_mode"] != true {
-		t.Errorf("data = %v, want member_mode:true — an admin walking the member path", data)
+	if data["user_view"] != true {
+		t.Errorf("data = %v, want user_view:true — an admin walking the member path", data)
 	}
 }
 
@@ -123,6 +123,8 @@ var adHocReasonLiterals = map[string]string{
 	"internal.go:run_not_found":                    "identity.renew's own reason, not an authz.denied row",
 	"user_drives_resolve.go:governance_profile":    "a drive's bound_by value on /me",
 	"user_drives_resolve.go:groups_snapshot_stale": "a drive's unavailable reason on /me",
+	"user_drives_resolve.go:user_type_unknown":     "a drive's unavailable reason on /me",
+	"user_view.go:admin_view":                      "the answered detail on the user_view_type_deleted row, not a second authz.denied row",
 }
 
 // roleComparisons counts the == / != comparisons against a stamped admin role
@@ -230,7 +232,8 @@ type refusalSentence struct {
 }
 
 // TestRefusalSentencesGolden pins every refusal body this package writes
-// through authz.Deny and denyMemberCapability to testdata/refusal_sentences.json.
+// through authz.Deny, denyUserCapability and writeProviderRefusal to
+// testdata/refusal_sentences.json.
 // A sentence the console renders verbatim is a contract; changing one is a
 // reviewed golden diff, never a drive-by.
 func TestRefusalSentencesGolden(t *testing.T) {
@@ -257,9 +260,14 @@ func TestRefusalSentencesGolden(t *testing.T) {
 					}
 				}
 				got = append(got, refusalSentence{reason, types.ExprString(call.Args[1]), sentence})
-			case strings.HasSuffix(fn, ".denyMemberCapability") && len(call.Args) == 6:
+			case strings.HasSuffix(fn, ".denyUserCapability") && len(call.Args) == 6:
 				got = append(got, refusalSentence{"capKinds[" + types.ExprString(call.Args[2]) + "].reason",
 					types.ExprString(call.Args[4]), types.ExprString(call.Args[5])})
+			case fn == "writeProviderRefusal" && len(call.Args) == 5:
+				// The model-provider 422 (#532) is no authz row, but the console
+				// renders its sentence all the same; its reason is the credential flag.
+				got = append(got, refusalSentence{"model_provider (credential: " + types.ExprString(call.Args[4]) + ")",
+					types.ExprString(call.Args[1]), types.ExprString(call.Args[3])})
 			}
 			return true
 		})

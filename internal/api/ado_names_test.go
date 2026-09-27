@@ -218,7 +218,7 @@ func TestADONames_ServerHostsComeFromProviderRows(t *testing.T) {
 		}
 		return req.Sources[0].Source, ""
 	}
-	if got, msg := decode(func() []string { return hosts }); got != canonical {
+	if got, msg := decode(func() ([]string, error) { return hosts, nil }); got != canonical {
 		t.Errorf("with the row: stored %q (%s), want %q", got, msg, canonical)
 	}
 	if got, msg := decode(nil); msg == "" {

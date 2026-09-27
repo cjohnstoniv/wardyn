@@ -391,7 +391,7 @@ type mapLiner interface {
 // corrected alongside this fix).
 //
 // A container/process that DOES correlate to a Wardyn run (RunID != nil) is
-// NEVER gated — it is always forwarded. Heartbeat and kernel.sensor.blind
+// NEVER gated — it is always forwarded. Heartbeat and kernel.sensor.bypass
 // events are also unaffected: they are built directly
 // (internal/groundtruth/sensor.go) and emitted straight to the sink, never
 // through a mapLiner.

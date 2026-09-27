@@ -96,6 +96,10 @@ type driveStore struct {
 	// entirely a statement about those arguments.
 	sawGovUsers  [][]string
 	sawGovGroups [][]string
+	// sawUserType / sawGovUserType are the user type each resolver was last
+	// asked with, for the same reason.
+	sawUserType    string
+	sawGovUserType string
 	// site is what GetSiteConfig answers, shadowing noGovernanceStore's zero
 	// value: the deployment half of the drive size ceiling
 	// (storage.user_drive.max_size_mib) and the org switch live on it.
@@ -117,10 +121,11 @@ func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
 // DRIVE DOOR for the claims under test. The preview resolves the ceiling for
 // the previewed principal, not for the admin asking, so this is the only way to
 // state "this person's profile forbids a drive".
-func (s *driveStore) ResolveGovernanceProfile(_ context.Context, users, groups []string) (
+func (s *driveStore) ResolveGovernanceProfile(_ context.Context, users, groups []string, userType string) (
 	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	s.sawGovUsers = append(s.sawGovUsers, users)
 	s.sawGovGroups = append(s.sawGovGroups, groups)
+	s.sawGovUserType = userType
 	if s.err != nil {
 		return nil, "", s.err
 	}
@@ -130,7 +135,7 @@ func (s *driveStore) ResolveGovernanceProfile(_ context.Context, users, groups [
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 
-func (s *driveStore) ResolveUserDrive(_ context.Context, users, groups []string) (
+func (s *driveStore) ResolveUserDrive(_ context.Context, users, groups []string, userType string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	// RECORDED, not discarded. Every store double in this package took the
 	// users argument as `_`, so nothing in the suite pinned WHICH principal's
@@ -142,6 +147,7 @@ func (s *driveStore) ResolveUserDrive(_ context.Context, users, groups []string)
 	// is the single worst outcome this file has, and it was invisible.
 	s.sawUsers = append([][]string(nil), users)
 	s.sawGroups = append([][]string(nil), groups)
+	s.sawUserType = userType
 	if s.err != nil {
 		return nil, nil, "", s.err
 	}
@@ -346,7 +352,7 @@ func TestResolveUserDrive(t *testing.T) {
 			// reach the same function, so both must fail closed at it.
 			name: "an admin preview with no groups",
 			call: func(srv *Server) (*types.ResolvedDrive, error) {
-				return srv.previewResolveUserDrive(context.Background(), []string{"sub-abc"}, nil, driveSizeCeiling{})
+				return srv.previewResolveUserDrive(context.Background(), []string{"sub-abc"}, nil, "", driveSizeCeiling{})
 			},
 		}} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1580,7 +1586,7 @@ func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 
 	users := []string{"sub-drive-bob", "bob@corp.example"}
 	groups := []string{"eng"}
-	if _, err := srv.resolveUserDriveFor(context.Background(), users, groups, driveSizeCeiling{}); err != nil {
+	if _, err := srv.resolveUserDriveFor(context.Background(), users, groups, "", driveSizeCeiling{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if len(st.sawUsers) != 1 {
@@ -1598,7 +1604,7 @@ func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 	// one place the two arguments deliberately differ, and the place a copy of
 	// the wrong slice would be least visible.
 	st2 := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-	if _, err := driveServer(st2).driveWithUnusableGroups(context.Background(), users, driveSizeCeiling{}); err != nil {
+	if _, err := driveServer(st2).driveWithUnusableGroups(context.Background(), users, "", driveSizeCeiling{}); err != nil {
 		t.Fatalf("unusable-groups resolve: %v", err)
 	}
 	if len(st2.sawUsers) != 1 || !reflect.DeepEqual(st2.sawUsers[0], users) {
@@ -1694,7 +1700,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 		t.Fatal("the write boundary accepts share+hash — this test's premise is gone")
 	}
 
-	resolved, err := driveServer(st).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, driveSizeCeiling{})
+	resolved, err := driveServer(st).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, "", driveSizeCeiling{})
 	if err == nil {
 		t.Fatalf("a stored share+hash row resolved to %+v, want a refusal — the home it derives is a directory "+
 			"nobody could have created", resolved)
@@ -1717,7 +1723,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, "/srv/homes"
 	})
 	okStore := &driveStore{drive: ok, grant: grantFixture(ok.ID, nil), tier: types.CapabilitySubjectUser}
-	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, driveSizeCeiling{}); err != nil {
+	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, "", driveSizeCeiling{}); err != nil {
 		t.Errorf("a share templated on sub = %v, want it to resolve", err)
 	}
 }
