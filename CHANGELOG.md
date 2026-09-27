@@ -392,6 +392,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The kind SSO walk's Playwright project is `walk`, not `live` (#467).** "Live" named three
+  different things in this tree (the kind SSO walk, the Docker task orchestrator under
+  `test/e2e/live/`, and the real-tenant `internal/testlive`/`live-local` harness); this rename
+  disambiguates the first. `ui/e2e/live/` moves to `ui/e2e/walk/`, the Playwright project is now
+  `walk` (`pnpm exec playwright test --project=walk --list`), and the walk's own env vars
+  (`WARDYN_E2E_LIVE_BASE_URL` and the walk's internal exports/inputs) are now `WARDYN_E2E_WALK_BASE_URL`
+  and `WARDYN_WALK_*`. Chromium's `testIgnore` now also drops `live-local/**` explicitly, so the
+  hermetic gate's file discovery does not depend solely on those specs self-skipping. The
+  `test/e2e/live` → `test/e2e/tasks` orchestrator rename stays deferred (it collides with the
+  fixture corpus already at that path — a directory restructuring, not a mechanical rename).
 - **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
   Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
   and never its value; its `purpose` is now `boot`, so `migrate` is left to

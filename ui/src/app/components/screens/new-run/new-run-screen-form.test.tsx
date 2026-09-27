@@ -272,7 +272,7 @@ describe("NewRunScreen — the form matches the run mode", () => {
   });
 
   // …and the DEFAULT of that radiogroup is the AGENT, not the shell. Pinned
-  // because a live walk now depends on it: ui/e2e/live/sso-member.spec.ts
+  // because a live walk now depends on it: ui/e2e/walk/sso-member.spec.ts
   // launches a run expecting claude-code to make a model call at boot, and it
   // does not touch this control. If the default ever flips to "Terminal" that
   // run comes up as an idle shell, calls nothing, and the walk fails 180

@@ -79,10 +79,10 @@ var envDocAllow = map[string]bool{
 	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
 	"WARDYN_LOG_TAG": true,
 	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
-	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
+	// `walk` Playwright project (ui/e2e/walk/) at a real cluster instead of the
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
 	// its ENV.md row honest.
-	"WARDYN_E2E_LIVE_BASE_URL": true,
+	"WARDYN_E2E_WALK_BASE_URL": true,
 	// The live-local harness (internal/testlive, ui/playwright.live-local.config.ts;
 	// docs/LIVE-TESTS.md): opt-in suites against a real tenant, never CI or
 	// operator config. Documented in ENV.md's "Live-local harness" table.
@@ -172,34 +172,34 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_QUICKSTART_SSH_PORT": true, "WARDYN_KIND_SSO_SERVICE_CIDR": true,
 	"WARDYN_KIND_SSO_REBUILD": true, "WARDYN_KIND_SSO_DEX_PORT": true,
 	"WARDYN_KIND_SSO_EVIDENCE": true, "WARDYN_KIND_SSO_ADMIN_TOKEN": true,
-	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_LIVE_SEEN_URL": true,
+	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_WALK_SEEN_URL": true,
 	"WARDYN_KIND_SSO_NODE":      true,
 	"WARDYN_KIND_SSO_TOKEN_TTL": true, "WARDYN_KIND_SSO_ROLE_CRED_TTL": true, "WARDYN_KIND_SSO_PROXY_INJECT": true,
 	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true,
 	// scripts/compose-sso-roles.sh's inputs (the compose SSO role walk), read
-	// only by that script and ui/e2e/live/sso-roles.spec.ts.
+	// only by that script and ui/e2e/walk/sso-roles.spec.ts.
 	"WARDYN_TEST_SSO_ROLES": true, "WARDYN_ROLES_WARDYND_IMAGE": true,
 	"WARDYN_ROLES_PROXY_IMAGE": true, "WARDYN_ROLES_EVIDENCE": true,
 	"WARDYN_KIND_SSO_PROFILE": true, "WARDYN_QUICKSTART_IMAGE_TAG": true,
-	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts and
-	// ui/e2e/live/sso-member-recovery.spec.ts (process.env, never Go) — outputs
+	// The walk's own EXPORTS to ui/e2e/walk/sso-member.spec.ts and
+	// ui/e2e/walk/sso-member-recovery.spec.ts (process.env, never Go) — outputs
 	// of the walk, not operator inputs.
-	"WARDYN_LIVE_ADMIN_TOKEN": true, "WARDYN_LIVE_FAKE_URL": true,
-	"WARDYN_LIVE_PIN_ACCOUNT": true, "WARDYN_LIVE_PIN_ROLE": true,
-	"WARDYN_LIVE_SSO_START_URL": true, "WARDYN_LIVE_SSO_REGION": true,
+	"WARDYN_WALK_ADMIN_TOKEN": true, "WARDYN_WALK_FAKE_URL": true,
+	"WARDYN_WALK_PIN_ACCOUNT": true, "WARDYN_WALK_PIN_ROLE": true,
+	"WARDYN_WALK_SSO_START_URL": true, "WARDYN_WALK_SSO_REGION": true,
 	// 0.7.5: the cluster coordinates the recovery spec's cold-start case taints
 	// the node and reads a pod phase with. Passed rather than guessed, so a
 	// renamed cluster reds that case instead of making its 90 s hold vacuous.
-	"WARDYN_LIVE_KUBE_CONTEXT": true, "WARDYN_LIVE_KUBE_NAMESPACE": true,
-	"WARDYN_LIVE_KUBE_NODE": true,
+	"WARDYN_WALK_KUBE_CONTEXT": true, "WARDYN_WALK_KUBE_NAMESPACE": true,
+	"WARDYN_WALK_KUBE_NODE": true,
 	// #285: the walk's two poll-ceiling overrides. Real operator inputs (unlike
-	// the exports just above), but read only by ui/e2e/live/helpers.ts
+	// the exports just above), but read only by ui/e2e/walk/helpers.ts
 	// (process.env) and set only by scripts/kind-sso-walk.sh — never by Go.
-	"WARDYN_LIVE_SANDBOX_UP_MS": true, "WARDYN_LIVE_LOGIN_DONE_MS": true,
-	// The chart render ui/e2e/live/sso-roles.spec.ts runs on, set per leg by
+	"WARDYN_WALK_SANDBOX_UP_MS": true, "WARDYN_WALK_LOGIN_DONE_MS": true,
+	// The chart render ui/e2e/walk/sso-roles.spec.ts runs on, set per leg by
 	// the walk — another walk output, read only via process.env.
-	"WARDYN_LIVE_ROLES_RENDER": true,
-	"WARDYN_LIVE_ADO_MEMBER_EMAIL": true, "WARDYN_LIVE_ADO_PROXY_URL": true,
+	"WARDYN_WALK_ROLES_RENDER": true,
+	"WARDYN_WALK_ADO_MEMBER_EMAIL": true, "WARDYN_WALK_ADO_PROXY_URL": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

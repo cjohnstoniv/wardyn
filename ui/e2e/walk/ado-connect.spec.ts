@@ -36,7 +36,7 @@
  *
  * The sandbox-progress half of #751's "wanted" list ("where the profile
  * launches a sign-in sandbox, it asserts the door's progress steps") does not
- * apply here: unlike the AWS SSO door (ui/e2e/live/helpers.ts's
+ * apply here: unlike the AWS SSO door (ui/e2e/walk/helpers.ts's
  * awaitSelfRunStarted), Azure DevOps connect never launches a sign-in
  * sandbox — it is a popup through a plain Entra OAuth redirect. There is no
  * sandbox door on this profile to assert progress on.
@@ -53,16 +53,16 @@ test.skip(
 );
 
 // scripts/lib/kind-sso-walk-ado.sh's own fixed member identity/proxy —
-// exported by the walk as WARDYN_LIVE_ADO_*. The literal fallback matches
+// exported by the walk as WARDYN_WALK_ADO_*. The literal fallback matches
 // the walk script exactly, so a developer running this file by hand against
 // a walk-up cluster (without re-exporting anything the walk already set)
 // still works.
-const MEMBER_EMAIL = process.env.WARDYN_LIVE_ADO_MEMBER_EMAIL || "member@wardyn.test";
+const MEMBER_EMAIL = process.env.WARDYN_WALK_ADO_MEMBER_EMAIL || "member@wardyn.test";
 // The walk's port-forward to the fake (kind-sso-walk-ado.sh's FAKE_LOCAL) —
 // the browser's only route to "login.microsoftonline.com", exactly as the
 // curl walk's --proxy is. Required; there is no meaningful fallback for a
 // proxy address.
-const PROXY_URL = process.env.WARDYN_LIVE_ADO_PROXY_URL || "";
+const PROXY_URL = process.env.WARDYN_WALK_ADO_PROXY_URL || "";
 
 // Routed through the fake's forward proxy, bypassed for the console itself
 // (localhost) — the same split kind-sso-walk-ado.sh's curl draws between
@@ -126,7 +126,7 @@ test.describe.configure({ mode: "serial" });
 test.beforeEach(() => {
   expect(
     PROXY_URL,
-    "WARDYN_LIVE_ADO_PROXY_URL is unset — run this through scripts/lib/kind-sso-walk-ado.sh",
+    "WARDYN_WALK_ADO_PROXY_URL is unset — run this through scripts/lib/kind-sso-walk-ado.sh",
   ).not.toBe("");
 });
 

@@ -201,7 +201,7 @@ func ccSeed(t *testing.T, env ...string) string {
 //
 // Without the seed an interactive bedrock run met the CLI's own first-use
 // screens (theme picker, then "Security notes") before it could reach the model
-// — which is why ui/e2e/live/sso-member.spec.ts could only ever launch an
+// — which is why ui/e2e/walk/sso-member.spec.ts could only ever launch an
 // autonomous run.
 func TestSeedClaudeOnboarding_WritesUnderBedrock(t *testing.T) {
 	home := ccSeed(t, "CLAUDE_CONFIG_DIR=", "CLAUDE_CODE_USE_BEDROCK=1")

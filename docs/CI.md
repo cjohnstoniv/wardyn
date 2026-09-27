@@ -386,7 +386,11 @@ its longest job, so 19 minutes is the floor while `build` is the critical path.
 `-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or
 `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
 Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land
-below the old 537+395=932 s combined, not above it.
+below the old 537+395=932 s combined, not above it. A local `make ci` run on the (daemon-free)
+worktree that renamed the kind SSO walk's Playwright project (`live` → `walk`, #467's remaining
+scope) measured `cover-check` at 358 s and the whole gate at 632 s total — comfortably under the
+932 s combined figure above, though this local number is not the hosted `build` job's own
+per-step breakdown and should still be replaced once a hosted green run accumulates one.
 `make lint` has since gained the console's ESLint (`ui/eslint.config.js`), so
 the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the
 120 s above.

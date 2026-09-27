@@ -1216,7 +1216,7 @@ ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live walk's s
 	@# somebody spent ten minutes standing up (0.7.5's first walk). --list loads every
 	@# live spec file without a browser, a cluster or WARDYN_TEST_K8S, in seconds.
 	@echo "Loading the live walk's spec files (playwright --list)..."
-	cd ui && pnpm exec playwright test --project=live --list >/dev/null
+	cd ui && pnpm exec playwright test --project=walk --list >/dev/null
 
 ui-test: ## Web UI vitest unit/component tests + coverage
 	@echo "Running web UI unit/component tests (vitest + coverage)..."

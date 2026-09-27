@@ -85,7 +85,7 @@ export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 
 # log() uses WARDYN_LOG_TAG="[e2e-ui]" set before sourcing common.sh above.
 
-# LIVE mode (WARDYN_E2E_LIVE_BASE_URL): run a spec from ui/e2e/live/ against an
+# LIVE mode (WARDYN_E2E_WALK_BASE_URL): run a spec from ui/e2e/walk/ against an
 # ALREADY-RUNNING external Wardyn — the kind SSO cluster
 # (scripts/kind-sso-walk.sh) — instead of the hermetic `-runner none` backend
 # this script otherwise boots and re-seeds per spec. Nothing about the default
@@ -95,7 +95,7 @@ export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 # The `live` Playwright project is matched by the spec PATH, not a --project
 # flag: chromium testIgnores live/**, and no other project matches it, so
 # `playwright test e2e/live/<x>.spec.ts` selects exactly one project.
-LIVE_BASE_URL="${WARDYN_E2E_LIVE_BASE_URL:-}"
+LIVE_BASE_URL="${WARDYN_E2E_WALK_BASE_URL:-}"
 if [[ -n "${LIVE_BASE_URL}" ]]; then
   export WARDYN_E2E_BASE_URL="${LIVE_BASE_URL}"
   log "LIVE mode: specs run against ${LIVE_BASE_URL} (no hermetic backend, no re-seed)"
@@ -111,7 +111,7 @@ fi
 
 # Spec selection: args map to e2e/<arg>.spec.ts; default = all *.spec.ts.
 spec_dir="ui/e2e"
-[[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/live"
+[[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/walk"
 specs=()
 if [[ $# -gt 0 ]]; then
   for a in "$@"; do specs+=("${spec_dir}/${a}.spec.ts"); done
