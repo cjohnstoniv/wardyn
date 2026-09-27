@@ -13,15 +13,15 @@ import (
 // TestScanSummaryFrom_FindingsCappedStillAlerts pins B2 (F075 fix-up):
 // findings_capped sets Result.Skipped, and scanSummaryFrom used to resolve
 // `case res.Skipped` BEFORE ever reaching the "alert" default — so the
-// decision's Action flipped from "alert" to "skipped" exactly when the scan
+// decision's Action flipped from "alert" to "skip" exactly when the scan
 // produced the MOST findings. egress.ScanSummary.Action is the literal
 // audit-action suffix (docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs
-// llm.scan.skipped), so a 500-finding capped body used to audit as
-// llm.scan.skipped instead of llm.scan.alert.
+// llm.scan.skip), so a 500-finding capped body used to audit as
+// llm.scan.skip instead of llm.scan.alert.
 //
 // A capped scan with findings must still alert; an uncapped scan with the
 // same finding must also alert (baseline); and a finding-free skip (e.g.
-// span_oversize) must still read as "skipped", not "alert".
+// span_oversize) must still read as "skip", not "alert".
 func TestScanSummaryFrom_FindingsCappedStillAlerts(t *testing.T) {
 	eng, err := contentscan.NewEngine(types.LLMInspectionSpec{
 		Mode: "alert", DetectSecrets: true,
@@ -43,8 +43,8 @@ func TestScanSummaryFrom_FindingsCappedStillAlerts(t *testing.T) {
 	}
 
 	oversize := contentscan.Result{Scanned: true, Skipped: true, SkipReason: "span_oversize"}
-	if got := scanSummaryFrom(oversize, nil, eng, "", contentscan.ChannelAnthropicMessages).Action; got != "skipped" {
-		t.Errorf("finding-free span_oversize: Action = %q, want %q (must still read as skipped)", got, "skipped")
+	if got := scanSummaryFrom(oversize, nil, eng, "", contentscan.ChannelAnthropicMessages).Action; got != "skip" {
+		t.Errorf("finding-free span_oversize: Action = %q, want %q (must still read as skip)", got, "skip")
 	}
 }
 
@@ -52,7 +52,7 @@ func TestScanSummaryFrom_FindingsCappedStillAlerts(t *testing.T) {
 // fix-up): B2 fixed findings_capped only, but scan_budget (F073) and
 // attachment_decode_error (F056) fall into the identical `case res.Skipped`
 // arm and flip a genuinely finding-bearing scan's audit action from
-// llm.scan.alert to llm.scan.skipped — the same sibling-caller class B2
+// llm.scan.alert to llm.scan.skip — the same sibling-caller class B2
 // declared blocking, with two of three siblings missed.
 func TestScanSummaryFrom_SkipReasonsWithFindingsStillAlert(t *testing.T) {
 	eng, err := contentscan.NewEngine(types.LLMInspectionSpec{

@@ -52,7 +52,7 @@ func TestSetApprovedEgressValidation(t *testing.T) {
 		{"wildcard", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["*.ghcr.io"]}`},
 		{"bare word (no dot)", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["postgres"]}`},
 		{"path", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["ghcr.io/acme"]}`},
-		// W19-W19b-3: a git-broker-managed forge host, an SSH-over-443
+		// A git-broker-managed forge host, an SSH-over-443
 		// forge host, and the control plane's own host are all routed
 		// SPECIALLY at dispatch — never as a plain ApprovedEgress entry — so
 		// approving one here would succeed with a toast and be dead by
@@ -223,7 +223,7 @@ func TestObservedEgress(t *testing.T) {
 	}
 }
 
-// W25-S1-2: the observed-egress route is member-reachable, and every host it
+// The observed-egress route is member-reachable, and every host it
 // returns is another run's audit-trail telemetry. A member must see only the
 // runs they created — the same owner-or-admin line /runs/{id} draws — while an
 // admin still sees the whole workspace's telemetry for the promote flow.
@@ -273,7 +273,7 @@ func TestObservedEgress_MemberSeesOnlyOwnRuns(t *testing.T) {
 	}
 
 	denied, examined := call(func(ctx context.Context) context.Context {
-		return withOIDCRole(withOIDCHuman(ctx, "sub-bob"), oidc.RoleMember)
+		return withOIDCRole(withOIDCHuman(ctx, "sub-bob"), oidc.RoleUser)
 	})
 	if strings.Join(denied, ",") != "bobs-host.example.com" {
 		t.Errorf("member denied = %v, want only their own run's host", denied)

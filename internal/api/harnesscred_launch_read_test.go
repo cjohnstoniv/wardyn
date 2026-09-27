@@ -13,22 +13,16 @@ import (
 )
 
 // TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks is a CHARACTERIZATION
-// test, and it is expected GREEN — it is not red-first, and saying so is the
-// point of it.
+// test, and it is expected green.
 //
-// The 0.7.4 field report (finding 6) reads as if the pane's poll had been unable
-// to READ the run during a cold image pull: "Wardyn stopped being able to read
-// the sign-in sandbox". The read path says otherwise — handleGetRun is a plain
-// store SELECT with no runner call, no lock and no dependence on dispatch — and
-// the pane's budget was a tick count that a 131-second pull with healthy reads
-// never trips. So the pane's sentence was fixed (login-start-wait.ts) and the
-// server was NOT changed. This test is the evidence for that decision: with
-// CreateSandbox held open, the launching member reads their own run over and
-// over, and gets it.
+// handleGetRun is a plain store SELECT with no runner call, no lock and no
+// dependence on dispatch, so a sign-in pane polling during a cold image pull can
+// always read the run; the pane's budget is a tick count that a 131-second pull
+// with healthy reads never trips (login-start-wait.ts). With CreateSandbox held
+// open, the launching member reads their own run over and over, and gets it.
 //
-// IF THIS EVER GOES RED the cause is in-tree and the console fix is treating a
-// real server bug as a wording problem — stop and report rather than adjusting
-// the test.
+// If this ever goes red the cause is in-tree: the server has a real read bug,
+// not a wording problem — stop and report rather than adjusting the test.
 func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	gr := &coldPullRunner{
 		fakeRunner: &fakeRunner{},
@@ -47,7 +41,7 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	// panic, not the logged error handleGetRun tolerates). The store is otherwise
 	// the same one.
 	srv := newSupersedeFixture(t, nil, gr).srv
-	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", mine, `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {
@@ -94,7 +88,7 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	// The ownership rule is the same one on the same route: somebody else's
 	// sign-in is a 404, not a 403 — which is also the ONE way a healthy daemon
 	// makes getRun fail for the pane (a roster edit mid-wait).
-	theirs := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleMember)
+	theirs := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
 	r := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+launched.RunID, theirs, "")
 	if r.Code != http.StatusNotFound {
 		t.Fatalf("foreign read: code = %d, want 404; body=%s", r.Code, r.Body.String())

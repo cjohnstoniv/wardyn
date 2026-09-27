@@ -25,14 +25,18 @@
 ARG BASE_IMAGE=wardyn/agent-base:local
 FROM ${BASE_IMAGE}
 
-# Local build recipe only — never in release.yml's publish matrix (a gate in
-# scripts/check-image-pins.sh keeps it out). The licences label extends the
-# inherited base expression with what THIS stage adds: x11vnc and procps
-# (GPL-2.0-only), openbox (GPL-2.0-or-later), websockify (LGPL-3.0),
+# Published (release.yml's images-ui-sandbox job, #141). agent-base already
+# carries these two COPYs, but scripts/check-image-pins.sh's licence-file gate
+# reads each PUBLISHED Dockerfile's own text, not what an inherited layer
+# happens to contain, so a published stage restates them. The licences label
+# extends the inherited base expression with what THIS stage adds: x11vnc and
+# procps (GPL-2.0-only), openbox (GPL-2.0-or-later), websockify (LGPL-3.0),
 # noVNC (MPL-2.0), Xvfb/xterm (MIT/X11) — per-package copyright files are the
 # source of each.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 LABEL org.opencontainers.image.title="agent-novnc" \
-      org.opencontainers.image.description="Wardyn agent image: agent-base plus an X/noVNC desktop stack (local build only)" \
+      org.opencontainers.image.description="Wardyn agent image: agent-base plus an X/noVNC desktop stack" \
       org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-3.0-or-later AND MPL-2.0 AND MIT" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
 

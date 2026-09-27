@@ -361,7 +361,8 @@ describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", (
 // of having to re-focus the panel to discover it settled. The ticker
 // ("Starting a throwaway sandbox — Ns") stays outside this region: it is not
 // a role="status" itself, so it never fires a repeat announcement.
-describe("F3-F9: the probe result is announced (role=status, aria-live=polite)", () => {
+describe("the probe result is announced (role=status, aria-live=polite)", () => {
+  // ticket: F3-F9
   it("the done verdict renders inside a role=status/aria-live=polite region", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
     renderStep();

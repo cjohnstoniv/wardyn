@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -98,6 +99,49 @@ func TestAuditFilter_AppliesOnBothReadPaths(t *testing.T) {
 		if w := do(t, srv, http.MethodGet, "/api/v1/audit"+q, adminToken, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("GET /audit%s: code = %d, want 400", q, w.Code)
 		}
+	}
+}
+
+// TestAuditFilter_OriginSeparatesForwardedRows pins ?origin= on both read
+// paths and the export: a forwarded row is on the device side, and an
+// organisation row carrying only one of the two marks stays on the
+// organisation side.
+func TestAuditFilter_OriginSeparatesForwardedRows(t *testing.T) {
+	h := newHarness(t)
+	device := uuid.New()
+	origin := json.RawMessage(`{"device_origin":{"device_id":"` + device.String() + `"}}`)
+	events := append(auditFilterFixture(),
+		types.AuditEvent{ID: uuid.New(), ActorType: types.ActorHuman, Actor: store.FederatedActor(device, "alice"),
+			Action: "secret.write", Outcome: "success", Data: origin},
+		types.AuditEvent{ID: uuid.New(), ActorType: types.ActorSystem, Actor: "sensor", Action: "kernel.exec",
+			Outcome: "success", Data: origin},
+	)
+	forwarded := events[3].ID
+	for _, tc := range []struct {
+		name  string
+		store store.Store
+	}{
+		{"pager", &pagerFake{recentAudit: events}},
+		{"fetch-all fallback", &nonPagerAuditStore{events: events}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(baseTestConfig(h, tc.store))
+			if got := getAuditEvents(t, srv, "?origin=device"); len(got) != 1 || got[0].ID != forwarded {
+				t.Errorf("?origin=device: got %+v, want only the forwarded row", got)
+			}
+			got := getAuditEvents(t, srv, "?origin=organisation")
+			if len(got) != 4 || slices.ContainsFunc(got, func(e types.AuditEvent) bool { return e.ID == forwarded }) {
+				t.Errorf("?origin=organisation: got %+v, want the four organisation rows", got)
+			}
+			if w := do(t, srv, http.MethodGet, "/api/v1/audit?origin=laptop", adminToken, ""); w.Code != http.StatusBadRequest {
+				t.Errorf("?origin=laptop: code = %d, want 400", w.Code)
+			}
+		})
+	}
+	srv := New(baseTestConfig(h, &pagerFake{recentAudit: events}))
+	w := do(t, srv, http.MethodGet, "/api/v1/audit/export?origin=device", adminToken, "")
+	if lines := ndjsonLines(t, w.Body.Bytes()); len(lines) != 1 || lines[0].ID != forwarded {
+		t.Fatalf("?origin=device export = %+v, want only the forwarded row", lines)
 	}
 }
 

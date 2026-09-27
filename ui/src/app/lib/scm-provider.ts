@@ -100,9 +100,23 @@ export interface LaneMeta {
 // hardcodes under different names (LANE_BROKERED/LANE_INSANDBOX/
 // LANE_RESIDENT). Importing it means the two surfaces can't drift apart; a
 // hand-retyped copy here could.
+// patLaneMeta (#381) is the PAT lane's meta chosen from the operator's real
+// WARDYN_GIT_PAT_BROKER switch (Config.DisableGitPATBroker), rather than a
+// single frozen guess: on (the 0.7 default) the token is rewritten to a
+// broker path and never enters the sandbox, so it reads like the App lane
+// (brokered residency); off, it reverts to the pre-0.7 in-sandbox posture.
+// LANE_META.pat below is this function's ON shape — the default a caller with
+// no switch value in scope (secrets.tsx's chip, the Integrations rollup)
+// should show, since that's what a fresh 0.7.10 install actually does.
+export function patLaneMeta(brokered: boolean): LaneMeta {
+  return brokered
+    ? { label: "PAT · brokered", tooltip: CAPABILITY.gitPatLine, tone: "success", residency: "proxy_injected" }
+    : { label: "PAT · in-sandbox", tooltip: CAPABILITY.gitPatLineResident, tone: "info", residency: "resident_env" };
+}
+
 export const LANE_META: Record<Lane, LaneMeta> = {
   app: { label: "App · brokered", tooltip: CAPABILITY.brokerLine, tone: "success", residency: "brokered_mint" },
-  pat: { label: "PAT · in-sandbox", tooltip: CAPABILITY.gitPatLine, tone: "info", residency: "resident_env" },
+  pat: patLaneMeta(true),
   ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning", residency: "resident_mount" },
 };
 
@@ -218,4 +232,83 @@ export function deriveProviders(
   });
   rows.sort((a, b) => (a.host < b.host ? -1 : a.host > b.host ? 1 : 0));
   return rows;
+}
+
+// ── Azure DevOps names in URLs (#485) ─────────────────────────────────────────
+// A port of internal/adoscope/names.go's UnescapeName — the ONE rule the server
+// reads a project or repository name out of a URL path segment with. Azure
+// DevOps names carry spaces and most punctuation, so they reach the console as
+// typed ("Card Auth (v2).Service"), as Azure DevOps' own %20 spelling, or
+// escaped wholesale; each decodes to one name. Refused (null), exactly as the
+// server refuses it: a malformed escape, an escape decoding to "/" or "\", a
+// dot segment, edge whitespace, a trailing ".", a control character, and a
+// segment that would decode AGAIN into any of those ("%252F").
+
+const ADO_SEGMENT_MAX_DECODES = 4;
+
+// percentDecode decodes every %XY in s; strict answers null on a malformed
+// escape, lenient keeps it as literal text (the server's hidesStructure reads
+// with the lenient one, the most dangerous decoder a request could meet).
+function percentDecode(s: string, strict: boolean): string | null {
+  const bytes: number[] = [];
+  const enc = new TextEncoder();
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === "%") {
+      const hex = s.slice(i + 1, i + 3);
+      if (/^[0-9a-fA-F]{2}$/.test(hex)) {
+        bytes.push(parseInt(hex, 16));
+        i += 3;
+        continue;
+      }
+      if (strict) return null;
+    }
+    const ch = String.fromCodePoint(s.codePointAt(i) ?? 0);
+    bytes.push(...enc.encode(ch));
+    i += ch.length;
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+function adoSegmentHazard(seg: string): boolean {
+  return (
+    seg === "." ||
+    seg === ".." ||
+    seg.trim() !== seg ||
+    seg.endsWith(".") ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(seg) ||
+    /[/\\]/.test(seg)
+  );
+}
+
+/** The name one URL path segment decodes to, or null when the server refuses it. */
+export function unescapeADOName(raw: string): string | null {
+  if (/%(2f|5c)/i.test(raw)) return null;
+  const once = percentDecode(raw, true);
+  if (once === null || adoSegmentHazard(once)) return null;
+  let seg = once;
+  for (let d = 0; d < ADO_SEGMENT_MAX_DECODES; d++) {
+    const next = percentDecode(seg, false) ?? seg;
+    if (next === seg) return once;
+    if (adoSegmentHazard(next)) return null;
+    seg = next;
+  }
+  return null;
+}
+
+/** Whether a repository address is on an Azure DevOps service host — the
+ *  hosts adoscope.CanonicalRepoURL knows without configuration. An Azure DevOps
+ *  Server host is one only when a provider row names it, which this screen
+ *  does not read; its name is shown as written. */
+export function isADOAddress(locator: string): boolean {
+  const m = /^(?:[a-z][a-z+.-]*:\/\/)?(?:[^@/]*@)?([^/:]+)/i.exec(locator.trim());
+  const host = (m?.[1] ?? "").toLowerCase();
+  return host === "dev.azure.com" || host.endsWith(".dev.azure.com") || host.endsWith(".visualstudio.com");
+}
+
+/** An Azure DevOps repository's own name from its address — "Card Auth
+ *  (v2).Service", never its escapes — or null for any other address. */
+export function adoRepoName(locator: string): string | null {
+  if (!isADOAddress(locator)) return null;
+  const leaf = locator.trim().replace(/\.git$/, "").replace(/\/+$/, "").split(/[/:]/).pop() ?? "";
+  return leaf ? unescapeADOName(leaf) : null;
 }

@@ -3,7 +3,7 @@
 
 package main
 
-// THE CENSUS THAT MAKES THE ISOLATION CLAIM ENFORCEABLE.
+// The census that makes the isolation claim enforceable.
 //
 // Audit-chain link correctness rests on the isolation level of the transaction
 // doing the writing: since 0056 the head read that decides prev_hash runs inside

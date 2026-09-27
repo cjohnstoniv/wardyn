@@ -23,7 +23,7 @@ import (
 // hand-back and discardMinted, the mint's discard door — but neither can ever
 // reach the credential this row is about: both surrender a token that was never
 // returned to the run, so "wardyn does not call it" would be false here. NOTHING
-// is actually invalidated by this cascade (F013) — the note is the only place
+// is actually invalidated by this cascade — the note is the only place
 // the audit trail says WHY, and it must not claim GitHub TTL semantics for an
 // operator-managed PAT that Wardyn cannot expire, down-scope, or deny (the
 // identity denylist stops further MINTS, not use of a secret the sandbox already
@@ -67,8 +67,7 @@ func revokeNote(kind string) string {
 // whose minted_jti was burnt. Sourcing it from approvals alone would emit ZERO
 // rows for every auto-mintable grant (requires_approval=false creates no approval
 // row) and for the 2nd..Nth mint of a leased git_pat, while THREAT-MODEL.md
-// publishes step 4 of the kill cascade as "every minted credential for the run"
-// (F096/F122).
+// publishes step 4 of the kill cascade as "every minted credential for the run".
 func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	minted, err := b.db.MintedCredentials(ctx, runID)
 	if err != nil {

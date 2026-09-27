@@ -6,13 +6,35 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, AgentRun, SetupHarnessTool } from "../../../lib/types";
-import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
+import { makeRun } from "../../../../test/factories";
+import { WithDoor } from "../../../../test/door-harness";
+import { MODEL_PROVIDERS, baseMe, baseMeDrive, baseStatus, providerStatus } from "../../../lib/test-fixtures";
+
+// A provider door's pane starts its sign-in at once; held pending here, so the
+// case below ends at the door it opened.
+const startSignInMock = vi.fn();
+vi.mock("../../../lib/api/model-provider-signin", () => ({
+  modelProviderSignIn: {
+    startSignIn: (id: string) => {
+      startSignInMock(id);
+      return new Promise(() => {});
+    },
+    captureSignIn: vi.fn(),
+  },
+}));
 
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+
+// The connect popup + poll (#386) — mocked so the chip's CONNECT_ADO tests
+// below drive the click without a real window.
+const adoConnectMock = vi.fn();
+let adoBlockedUrl: string | null = null;
+vi.mock("../../../lib/hooks/use-ado-connect", () => ({
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: adoBlockedUrl }),
 }));
 
 const listSecretsMineMock = vi.fn();
@@ -27,9 +49,41 @@ vi.mock("../../../lib/api/secrets", () => ({
 }));
 
 const listRunsMock = vi.fn();
+const createRunMock = vi.fn();
+const getRunMock = vi.fn();
+const killRunMock = vi.fn();
+const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { listRuns: (...a: unknown[]) => listRunsMock(...a) },
+  runs: {
+    listRuns: (...a: unknown[]) => listRunsMock(...a),
+    createRun: (...a: unknown[]) => createRunMock(...a),
+    getRun: (...a: unknown[]) => getRunMock(...a),
+    killRun: (...a: unknown[]) => killRunMock(...a),
+    getGrants: (...a: unknown[]) => getGrantsMock(...a),
+  },
 }));
+
+// DemoDetail (setup/demos-step.tsx, React.lazy'd below this page's demo
+// sections) drags in the same runner graph demos-step.test.tsx stubs —
+// xterm, live approvals, audit and the profile sheet are irrelevant to
+// whether the RIGHT demo row pre-opens, so they stay inert markers here too.
+vi.mock("../../attach-terminal", () => ({
+  AttachTerminal: ({ runId }: { runId: string }) => <div data-testid="attach-terminal">{runId}</div>,
+}));
+vi.mock("../../wardyn/live-approvals", () => ({
+  LiveApprovals: ({ runId }: { runId: string }) => <div data-testid="live-approvals">{runId}</div>,
+}));
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", () => ({
+  audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
+  egressFromAudit: () => [],
+  demoAuditRows: () => [],
+}));
+vi.mock("../profile-review", () => ({
+  ProfileReview: ({ runId }: { runId: string | null }) =>
+    runId ? <div data-testid="profile-review">{runId}</div> : null,
+}));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const listKeysMock = vi.fn();
 vi.mock("../../../lib/api/ssh-keys", () => ({
@@ -55,9 +109,11 @@ vi.mock("../../../lib/api/policies", () => ({
 import { MemberGettingStarted } from "./member-getting-started";
 import type { Me } from "../../../lib/api/health";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ViewAccessProvider, type ViewAccess } from "../../wardyn/console-view";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { ADO } from "../../../lib/ado-entra-copy";
 import { MEMBER_GETTING_STARTED as T, YOUR_MODEL_KEY as YMK } from "../../wardyn/copy";
 
 // U-13 (a11y): the two "Sign in to AWS" buttons now carry DISTINCT accessible
@@ -78,7 +134,7 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
 }
 
 function run(id: string): AgentRun {
-  return { id, created_at: "", updated_at: "" } as AgentRun;
+  return makeRun({ id, created_at: "", updated_at: "" });
 }
 
 // Appendix A finding 2 — a per_user roster row (modelKeyProvider's
@@ -105,20 +161,25 @@ const sharedBedrockHarness: SetupHarnessTool[] = [
 ];
 
 // The page reads its drive off the shell's ONE GET /me (operator-context's
-// UserDriveContext), not a fetch of its own — so a case states its /me body
+// MeIdentity.userDrive), not a fetch of its own — so a case states its /me body
 // here, exactly as app-shell hands it down.
-function renderPage(me: Me = baseMe()) {
+// `shell` is the shell's own /setup/status read, behind the one door the
+// page's sign-in buttons open (#544) — the page itself reads its own. `search`
+// is a `?step=<id>` deep link on the page's own URL.
+function renderPage(me: Me = baseMe(), shell: SetupStatus | null = null, search = "", access: ViewAccess = "url") {
   return render(
-    <MemoryRouter>
-      <OperatorProvider
-        operator={false}
-        securityOperator={false}
-        userDrive={me.user_drive}
-        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
-      >
-        <MemberGettingStarted />
-      </OperatorProvider>
-    </MemoryRouter>,
+    <WithDoor status={shell} path={`/setup${search}`} operator={false}>
+      <ViewAccessProvider value={access}>
+        <OperatorProvider
+          operator={false}
+          securityOperator={false}
+          userDrive={me.user_drive}
+          userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+        >
+          <MemberGettingStarted />
+        </OperatorProvider>
+      </ViewAccessProvider>
+    </WithDoor>,
   );
 }
 
@@ -454,29 +515,49 @@ describe("MemberGettingStarted", () => {
 
     // Appendix A finding 2 — a per_user row's not_configured state is
     // actionable on BOTH the chip row (unchanged) and the card (new): TWO
-    // "Sign in to AWS" buttons, one pane, either one opens it (both call the
-    // same setAwsLoginOpen(true)).
-    it("clicking Sign in to AWS opens HarnessLoginPane in place", async () => {
+    // "Sign in to AWS" buttons, one door, either one opens it (#544: the
+    // shell's door, no longer a pane this page mounts).
+    it("clicking Sign in to AWS opens the one door", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[0]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
+    });
+
+    // #544: on an install with model providers the same button opens the
+    // door of the provider it is for — the claude-code default AWS provider —
+    // never /setup/harness-login, which the server refuses there.
+    it("with providers, it opens that provider's AWS door", async () => {
+      const user = userEvent.setup();
+      const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"] }], {
+        model_access: { state: "not_configured" },
+        harnesses: perUserHarness,
+      });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
+      await user.click((await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME }))[0]);
+      const dialog = await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS });
+      expect(dialog).toHaveTextContent("For Bedrock (prod)");
+      await waitFor(() => expect(startSignInMock).toHaveBeenCalledWith("bedrock-prod"));
     });
 
     // FIX PASS 1 (REVIEW-1.md H1) — the SAME scenario, but through the
     // CARD's own button (buttons[1]) instead of the chip row's: both must
-    // reach the identical single pane mount.
+    // reach the identical single door.
     it("...and so does the CARD's own Sign in to AWS button", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[1]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
     // The pane's start-URL field would otherwise be EMPTY, leaving every
@@ -486,12 +567,13 @@ describe("MemberGettingStarted", () => {
     // none; the note is the fact.
     it("...and that pane asks for no access portal — the admin's is the one used", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[0]);
-      expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
+      expect(await screen.findByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
       expect(document.getElementById("harness-login-start-url")).toBeNull();
       // The pane is at its consent gate, ready to launch — not stuck waiting on
       // a field it no longer shows.
@@ -553,15 +635,16 @@ describe("MemberGettingStarted", () => {
     // would leave this exact fixture showing MODEL_ACCESS_OWN_CHIP ("Your
     // key", success) with the chip row AND the card's own Sign-in button
     // dead: H1's probe catches PROBE pane present after click = false.
-    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent, own chip absent, card's own button mounts the pane", async () => {
+    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent, own chip absent, card's own button opens the door", async () => {
       const user = userEvent.setup();
       // FIX PASS 1 (M1) — same observable-of-modelKeyDone technique as the
       // test above: a workspace present makes model-key the page's sole
       // `default`-variant section IFF modelKeyDone is actually false.
       listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
       listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       expect(await screen.findByText(YMK.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
       const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
       expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
@@ -581,7 +664,7 @@ describe("MemberGettingStarted", () => {
       await waitFor(() => expect(defaultButtons().length).toBe(1));
       expect(defaultButtons()[0].textContent).toContain(AGENTS.SIGN_IN_AWS);
       await user.click(buttons[1]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
     // Negative control for the reveal-hidden assertion above: a shared/api-key
@@ -672,7 +755,7 @@ describe("MemberGettingStarted", () => {
     });
 
     // U-1 (W6 blind lens) — the wire shape the server really emits for a shared
-    // bedrock_sso row: memberModelAccess (internal/api/modelaccess.go) projects
+    // bedrock_sso row: userModelAccess (internal/api/modelaccess.go) projects
     // `live` for the ADMIN's credential, so the fixture above (no model_access at
     // all) never exercises the branch that actually renders. Without this, the
     // chip row would read "Model access · Your AWS sign-in" — a sign-in this
@@ -713,15 +796,13 @@ describe("MemberGettingStarted", () => {
 
     // U-13 (a11y, W6 blind lens) — without distinct names, the page's two
     // sign-in buttons would carry the IDENTICAL accessible name "Sign in to
-    // AWS" (plus a plain-text action line saying the same words), and the
-    // card's one opens a pane mounted in the card ABOVE it, moving no focus
-    // and staying enabled as a no-op once it is open.
-    it("U-13: the two Sign in to AWS buttons have distinct accessible names, and the card's hides while the pane is open", async () => {
+    // AWS" (plus a plain-text action line saying the same words). Both open
+    // the one door, a modal, so while it is open neither is a second way in.
+    it("U-13: the two Sign in to AWS buttons have distinct accessible names, and neither is reachable while the door is open", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(
-        status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }),
-      );
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
@@ -732,7 +813,7 @@ describe("MemberGettingStarted", () => {
       // section, so the visible console is byte-identical.
       for (const b of buttons) expect(b).toHaveTextContent(AGENTS.SIGN_IN_AWS);
       await user.click(buttons[0]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
@@ -757,4 +838,105 @@ describe("MemberGettingStarted", () => {
       );
     });
   });
+
+  // #386: one more chip from the six states, reusing the vocabulary for a
+  // second subject (§6.2/§7.5) — no button in the common case, a named cause
+  // in the fallback, never for `not_applicable` (unreachable from a browser).
+  describe("the Azure DevOps chip reads status.scm_access", () => {
+    beforeEach(() => {
+      adoConnectMock.mockReset();
+      adoBlockedUrl = null;
+    });
+
+    it("live via the org's sign-in: success tone, no action line, no button", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live", source: "org" } }));
+      renderPage();
+      const chip = await screen.findByText(ADO.ACCESS_LIVE_ORG);
+      expect(chip.closest("span")?.className).toMatch(/success/);
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("live via a separate connect: its own chip label", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live", source: "separate" } }));
+      renderPage();
+      expect(await screen.findByText(ADO.ACCESS_LIVE_SEPARATE)).toBeInTheDocument();
+    });
+
+    it("live on a shared row (no source): the shared chip, still no button — makes no per-person claim", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live" } }));
+      renderPage();
+      expect(await screen.findByText(ADO.ACCESS_SHARED_LIVE)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("not_configured: warning tone, the row-is-newer cause line, and CONNECT_ADO", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      const chip = await screen.findByText(ADO.ACCESS_NOT_CONNECTED);
+      expect(chip.closest("span")?.className).toMatch(/warning/);
+      expect(screen.getByText(ADO.CAUSE_ROW_IS_NEWER)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: ADO.CONNECT_ADO })).toBeInTheDocument();
+    });
+
+    it("clicking Connect Azure DevOps drives the popup flow and reloads status on success", async () => {
+      adoConnectMock.mockResolvedValueOnce(true);
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      await userEvent.click(await screen.findByRole("button", { name: ADO.CONNECT_ADO }));
+      expect(adoConnectMock).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    });
+
+    // Review follow-ups F9/N1: a blocked popup shows the canon sentence and
+    // fallback link, and clicking it starts the same poll (bounded).
+    it("a blocked popup shows the canon sentence and fallback link, which reloads status once connected", async () => {
+      adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
+      adoConnectMock.mockResolvedValueOnce(true);
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      expect(await screen.findByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
+      const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
+      expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+      await userEvent.click(link);
+      expect(adoConnectMock).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    });
+
+    it("shared_expired: warning tone, the action line, and NO button — nothing the member can do", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "shared_expired" } }));
+      renderPage();
+      const chip = await screen.findByText(ADO.ACCESS_SHARED_EXPIRED);
+      expect(chip.closest("span")?.className).toMatch(/warning/);
+      expect(screen.getByText(ADO.ACCESS_SHARED_EXPIRED_ACTION)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("scm_access absent (no Azure DevOps row) renders no chip at all", async () => {
+      getSetupStatusMock.mockResolvedValue(status());
+      renderPage();
+      await screen.findByRole("heading", { name: T.SETUP_SUMMARY_TITLE });
+      expect(screen.queryByText(ADO.ACCESS_LIVE_ORG)).not.toBeInTheDocument();
+      expect(screen.queryByText(ADO.ACCESS_NOT_CONNECTED)).not.toBeInTheDocument();
+    });
+
+    it("not_applicable renders no chip — unreachable from a browser session, and §7.5 freezes none for it", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "not_applicable" } }));
+      renderPage();
+      await screen.findByRole("heading", { name: T.SETUP_SUMMARY_TITLE });
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+  });
 });
+
+// M-6 (D5) — the two demo sections member-getting-started.tsx adds, gated by
+// walkableDemos (setup/steps.ts) the same way the funnel's PHASES walk used
+// to. #850's redaction (internal/api/setup.go's redactSetupStatusForUser)
+// zeroes secrets.present and providers for a non-operator, so these cases
+// exercise the exact shape a real SSO user's browser receives, not the
+// admin-token D1 fixture the demos.spec/secrets-demos.spec e2e run as.

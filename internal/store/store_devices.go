@@ -13,10 +13,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,12 +48,14 @@ import (
 type DeviceStore interface {
 	MintEnrolmentToken(ctx context.Context, token string, t types.DeviceEnrolmentToken) (types.DeviceEnrolmentToken, error)
 	ConsumeEnrolmentToken(ctx context.Context, token string, now time.Time) (types.DeviceEnrolmentToken, bool, error)
+	ListEnrolmentTokens(ctx context.Context, now time.Time) ([]types.DeviceEnrolmentToken, error)
+	RevokeEnrolmentToken(ctx context.Context, id uuid.UUID, now time.Time) (types.DeviceEnrolmentToken, error)
 	CreateDevice(ctx context.Context, d types.Device, raw string) (types.Device, error)
 	GetDeviceByRaw(ctx context.Context, raw string) (types.Device, error)
 	TouchDevice(ctx context.Context, id uuid.UUID, now time.Time) error
 	ListDevices(ctx context.Context) ([]types.Device, error)
 	RevokeDevice(ctx context.Context, id uuid.UUID, now time.Time) (types.Device, error)
-	IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, rows []types.FederatedAuditEvent) (DeviceIngestResult, error)
+	IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditEvent) (DeviceIngestResult, error)
 	ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error)
 	GetFederationCursor(ctx context.Context) (int64, error)
 	SetFederationCursor(ctx context.Context, seq int64) error
@@ -135,6 +140,29 @@ func (s PG) ConsumeEnrolmentToken(ctx context.Context, token string, now time.Ti
 	return t, true, nil
 }
 
+// ListEnrolmentTokens returns every token still redeemable at now — unconsumed
+// and unexpired — newest first: the tokens an admin may still need to cancel.
+// A redeemed token is in the device inventory instead, and an expired one can
+// no longer be redeemed, so neither is listed.
+func (s PG) ListEnrolmentTokens(ctx context.Context, now time.Time) ([]types.DeviceEnrolmentToken, error) {
+	const q = `SELECT ` + enrolmentTokenCols + ` FROM device_enrolment_tokens
+		WHERE consumed_at IS NULL AND expires_at > $1 ORDER BY created_at DESC`
+	return collect(ctx, s.Pool, "list", "device enrolment tokens", q, []any{now}, scanEnrolmentToken)
+}
+
+// RevokeEnrolmentToken cancels a token that is still redeemable by setting its
+// consumed_at, the column ConsumeEnrolmentToken's WHERE requires to be NULL, so
+// a revoke and a racing redemption cannot both win. A token already redeemed,
+// already revoked, expired or unknown is ErrNotFound, and the caller writes no
+// audit row for a revoke that did not happen.
+func (s PG) RevokeEnrolmentToken(ctx context.Context, id uuid.UUID, now time.Time) (types.DeviceEnrolmentToken, error) {
+	const q = `
+		UPDATE device_enrolment_tokens SET consumed_at = $2
+		WHERE id = $1 AND consumed_at IS NULL AND expires_at > $2
+		RETURNING ` + enrolmentTokenCols
+	return scanEnrolmentToken(s.Pool.QueryRow(ctx, q, id, now))
+}
+
 // CreateDevice inserts one device row, following CreateAPIToken's shape: raw
 // is the PLAINTEXT device credential minted at enrolment (first-boot token
 // exchange); only its hash is stored, and d.CredentialSHA256 is ignored —
@@ -163,7 +191,7 @@ func (s PG) CreateDevice(ctx context.Context, d types.Device, raw string) (types
 // the WHERE, not checked by the caller — the same shape GetAPITokenByRaw
 // uses — so a revoked credential, an unknown one and a mismatched hash all
 // fail IDENTICALLY with ErrNotFound: the boundary is not an oracle for "this
-// device used to be enrolled".
+// device was once enrolled".
 func (s PG) GetDeviceByRaw(ctx context.Context, raw string) (types.Device, error) {
 	const q = `SELECT ` + deviceCols + ` FROM devices WHERE credential_sha256 = $1 AND revoked_at IS NULL`
 	return scanDevice(s.Pool.QueryRow(ctx, q, hashToken(raw)))
@@ -204,9 +232,9 @@ func (s PG) RevokeDevice(ctx context.Context, id uuid.UUID, now time.Time) (type
 
 // DeviceIngestResult reports what one IngestDeviceAudit call did. Accepted is
 // how many of the submitted rows were newly appended — 0 on any refusal,
-// since the whole batch is one transaction, and also 0 when every row was at
-// or before the device's already-recorded cursor (an idempotent retry:
-// nothing new to do, not a refusal). Reset is true when the accepted rows
+// since the whole batch is one transaction, and also 0 when every row is one
+// this organisation already holds (an idempotent retry: nothing new to do,
+// not a refusal). Reset is true when the accepted rows
 // began with a genesis (empty-PrevHash) row while the device already had a
 // recorded chain — the documented "device chain reset" case (a purge on the
 // device's own local table), which is accepted rather than refused.
@@ -215,63 +243,116 @@ type DeviceIngestResult struct {
 	Reset    bool
 }
 
+// ErrDeviceRevoked is IngestDeviceAudit's answer for a device revoked after
+// its request was authenticated. It is distinct from ErrConflict so the caller
+// answers it as the revocation it is — the 401 the device's next request gets
+// anyway — and never records it as a broken chain.
+var ErrDeviceRevoked = errors.New("store: device is revoked")
+
+// ErrFederatedOrgRun refuses a batch in which a row's run_id names one of THIS
+// organisation's own runs. Phase one federates audit rows, never run records,
+// so a laptop's row cannot legitimately belong to an org run; accepting one
+// would file a device's claim in that run's evidence trail.
+var ErrFederatedOrgRun = errors.New("store: federated row names an organisation run")
+
+// ErrFederatedRowInvalid refuses a batch holding a row this organisation cannot
+// store so that the device's claim re-checks from the stored row
+// (FederatedRowProblem), or a claimed value Postgres cannot represent (an
+// SQLSTATE class 22 data exception from the recompute — a \u0000 escape, a NUL
+// in text). The device's fault, never the store's: the caller answers 4xx so
+// the forwarder stops rather than retrying a 5xx forever.
+var ErrFederatedRowInvalid = errors.New("store: federated row cannot be stored as claimed")
+
+// FederatedRowProblem says why r cannot be stored so that its claim re-checks
+// from the stored row, or "" when it can. data must be a JSON object without a
+// top-level device_origin key (that key is this organisation's marker, and
+// overwriting a claimed one would lose what the device signed), JSON null, or
+// absent; target must be one CapAuditTarget leaves unchanged, which every row a
+// laptop stored is, since the cap is applied at its own insert; device_id is
+// this organisation's to derive, never the device's to claim. Exported so the
+// API refuses these with a 400 before any database work.
+func FederatedRowProblem(r types.FederatedAuditEvent) string {
+	if r.DeviceID != nil {
+		return "device_id is set by this organisation, not claimed"
+	}
+	if CapAuditTarget(r.Target) != r.Target {
+		return fmt.Sprintf("target exceeds %d bytes", MaxAuditTargetLen)
+	}
+	if len(r.Data) == 0 || isJSONNull(r.Data) {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(r.Data, &m) != nil {
+		return "data must be a JSON object or null"
+	}
+	if _, claimed := m["device_origin"]; claimed {
+		return "data carries a device_origin key"
+	}
+	return ""
+}
+
+func isJSONNull(data json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(data), []byte("null"))
+}
+
 // IngestDeviceAudit appends one device's forwarded batch to THIS
 // organisation's own audit_events, as the organisation's own chained rows —
-// "one chain per writer" (docs/design/0.8/PLAN.md): a federated row is
-// otherwise indistinguishable from one this organisation wrote itself, with
-// the device's provenance folded into `data` instead of a new audit action,
-// so no existing filter or SIEM rule keyed on `action` has to learn about it.
+// "one chain per writer" (docs/design/0.8/PLAN.md). A federated row keeps the
+// device's CLAIMED actor_type, action, target and outcome; what marks it as
+// forwarded is the device's provenance folded into `data` (mergeDeviceOrigin),
+// not a new audit action, so no existing filter or SIEM rule keyed on `action`
+// has to learn about it. Three fields are never the device's to choose: actor
+// is FederatedActor — the claimed principal behind this device's own prefix,
+// so a laptop cannot write a row that reads as an organisation admin's — with
+// the claim kept in data.device_origin.actor; source_ip is peer — the address
+// this organisation saw the push arrive from — with the claimed value kept in
+// data.device_origin.source_ip; and a run_id naming one of this
+// organisation's runs refuses the batch (ErrFederatedOrgRun).
 //
-// The whole batch is ONE transaction, under the SAME advisory lock and lock
-// timeout InsertAuditEvent takes (db.AuditChainLockKey via lockAuditChainSQL,
-// bounded by db.AuditChainLockTimeoutSQL) — this call inserts into
-// audit_events too, so it must serialize against every other writer the same
-// way. The device's own cursor row is locked (FOR UPDATE) inside the same
-// transaction, re-entrant with the advisory lock, so two concurrent pushes
-// from the same device cannot both read the same cursor and both believe they
-// are extending the chain.
+// Order of work, chosen so a device can make the organisation's own audit
+// writers wait for at most its inserts:
 //
-// Verification, in order:
+//  0. Every row must be storable so its claim re-checks (FederatedRowProblem),
+//     and every claimed value must be one Postgres can represent; otherwise
+//     ErrFederatedRowInvalid.
+//  1. Every claimed RowHash is recomputed BEFORE any transaction or lock, in
+//     ONE statement (verifyClaimedHashes). Each row is hashed against its OWN
+//     claimed PrevHash, so the check needs no cursor; step 4 is what ties the
+//     claims to each other and to the recorded head. A refused batch — and a
+//     replayed one — therefore never touches the chain lock.
+//  2. The device row is locked FOR UPDATE, which serializes this device's
+//     concurrent pushes against each other before either reaches the chain
+//     lock. Deadlock-free: no transaction takes the chain lock and then a
+//     device row. A revoked device answers ErrDeviceRevoked.
+//  3. Idempotency rides the cursor and the hash, not audit_events.id: rows at
+//     or before the recorded LastSeq that ARE the rows held here (heldPrefix)
+//     are skipped — the forwarder re-sends from its own durable cursor, which
+//     can lag what was committed here. A reused seq is not a re-send.
+//  4. The first NEW row's claimed PrevHash is either empty (a genesis row,
+//     accepted, and a chain reset when a chain was already recorded, at any
+//     seq) or equal to the recorded LastRowHash with a seq past LastSeq;
+//     every later row's claimed PrevHash equals
+//     the preceding row's claimed RowHash. Otherwise ErrConflict.
+//  5. Only then the chain lock (db.AuditChainLockKey via lockAuditChainSQL),
+//     under the lock timeout every lock wait in this transaction obeys, and
+//     the inserts: field for field as claimed, except actor, source_ip and
+//     the merged data, with target through CapAuditTarget like every writer.
+//     The cursor advances in the same transaction.
 //
-//  1. Idempotency rides the cursor, not audit_events.id — a device's id is
-//     not unique across a retried push (the forwarder re-sends from its own
-//     durable cursor, which can be behind what was already committed here if
-//     it crashed between this call's success and its own cursor advance), but
-//     the device's local seq is monotonic and gapless. Rows at or before the
-//     device's recorded LastSeq are skipped, not re-verified or refused.
-//  2. The first NEW row's claimed PrevHash decides reset vs. continuation: an
-//     EMPTY PrevHash is always accepted as a genesis row (the device's local
-//     chain started fresh, whether this is the very first ingest ever or a
-//     reset after a purge on the device); anything else must equal the
-//     device's recorded LastRowHash exactly, or the claim does not attach to
-//     what this organisation already recorded and the WHOLE BATCH is refused
-//     (ErrConflict).
-//  3. Every later row's claimed PrevHash must equal the PRECEDING row's
-//     claimed RowHash — the batch's own internal chain.
-//  4. Every row's claimed RowHash must equal audit_row_hash(...) recomputed
-//     IN SQL from that row's own fields — never by re-marshalling in Go
-//     (json.Marshal on a round-tripped Go value reorders map keys and changes
-//     the digest). Data is bound straight through as the ::jsonb parameter:
-//     Postgres normalizes a jsonb INPUT parameter on parse exactly the way it
-//     normalizes a jsonb COLUMN on insert, which is the same canonicalization
-//     the device's own local trigger applied when it first computed this
-//     digest — so this recomputation is bit-for-bit comparable to that one
-//     without ever decoding Data into a Go value.
-//
-// Any mismatch anywhere refuses the ENTIRE batch (the transaction rolls
-// back) rather than accepting a verified prefix: a batch is the unit the
-// caller retries, and a partial accept would leave the cursor pointing
-// mid-batch with no way to tell the caller which rows to resend.
-//
-// On success every row in the batch is inserted field-for-field (same id,
-// time, run_id, actor_type, actor, action, target, outcome, source_ip as the
-// device claimed — target still passes through CapAuditTarget, like every
-// other audit_events writer) with the origin merged into data, and the
-// device's LastSeq/LastRowHash advance to the batch's last row, atomically
-// with the inserts.
-func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, rows []types.FederatedAuditEvent) (DeviceIngestResult, error) {
+// Any refusal refuses the ENTIRE batch rather than a verified prefix: a
+// batch is the unit the caller retries, and a partial accept would leave the
+// cursor mid-batch with no way to tell the caller which rows to resend.
+func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditEvent) (DeviceIngestResult, error) {
 	if len(rows) == 0 {
 		return DeviceIngestResult{}, nil
+	}
+	for _, r := range rows {
+		if p := FederatedRowProblem(r); p != "" {
+			return DeviceIngestResult{}, fmt.Errorf("store: federated row seq %d: %s: %w", r.Seq, p, ErrFederatedRowInvalid)
+		}
+	}
+	if err := s.verifyClaimedHashes(ctx, rows); err != nil {
+		return DeviceIngestResult{}, err
 	}
 
 	// Pinned READ COMMITTED like every other audit_events writer: at
@@ -283,17 +364,12 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, rows []ty
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 
-	// Bound the wait before asking for the lock — see InsertAuditEvent's own
-	// comment: a timeout here is not a lost event, the caller (the forwarder)
-	// retries from its own durable cursor.
+	// Bound every lock wait in this transaction — the device row's as well as
+	// the chain's. A timeout is not a lost event: the forwarder retries from
+	// its own durable cursor.
 	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
-		return DeviceIngestResult{}, fmt.Errorf("store: bound audit chain lock wait: %w", err)
+		return DeviceIngestResult{}, fmt.Errorf("store: bound device ingest lock waits: %w", err)
 	}
-	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
-		return DeviceIngestResult{}, fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
-			db.AuditChainLockTimeout, err)
-	}
-
 	var lastSeq int64
 	var lastRowHash string
 	var revokedAt *time.Time
@@ -306,64 +382,56 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, rows []ty
 		return DeviceIngestResult{}, fmt.Errorf("store: read device cursor: %w", err)
 	}
 	if revokedAt != nil {
-		return DeviceIngestResult{}, fmt.Errorf("store: ingest device audit: device is revoked: %w", ErrConflict)
+		return DeviceIngestResult{}, ErrDeviceRevoked
+	}
+	if err := refuseOrgRuns(ctx, tx, rows); err != nil {
+		return DeviceIngestResult{}, err
 	}
 
-	start := 0
-	for start < len(rows) && rows[start].Seq <= lastSeq {
-		start++
+	start, err := heldPrefix(ctx, tx, deviceID, lastSeq, rows)
+	if err != nil {
+		return DeviceIngestResult{}, err
 	}
 	if start == len(rows) {
-		// Every row in the batch was already ingested: an idempotent retry,
-		// not a refusal. Nothing to verify or insert.
+		// Every row was already ingested: an idempotent retry, not a refusal.
 		if err := tx.Commit(ctx); err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: commit device audit ingest: %w", err)
 		}
 		return DeviceIngestResult{}, nil
 	}
 	toIngest := rows[start:]
-
-	prev := lastRowHash
 	reset := false
 	if toIngest[0].PrevHash == "" {
 		reset = lastRowHash != ""
-		prev = ""
-	} else if toIngest[0].PrevHash != lastRowHash {
+	} else if toIngest[0].Seq <= lastSeq || toIngest[0].PrevHash != lastRowHash {
+		// At or before the cursor, a row that is not the one held here can
+		// only begin a new chain (a genesis, above); anything else rewrites
+		// history this organisation already holds.
 		return DeviceIngestResult{}, fmt.Errorf(
-			"store: ingest device audit: row seq %d claims prev_hash %q, device's recorded head is %q: %w",
-			toIngest[0].Seq, toIngest[0].PrevHash, lastRowHash, ErrConflict)
+			"store: ingest device audit: row seq %d claims prev_hash %q, device's recorded head is seq %d %q: %w",
+			toIngest[0].Seq, toIngest[0].PrevHash, lastSeq, lastRowHash, ErrConflict)
 	}
-
-	for i, r := range toIngest {
-		if i > 0 && r.PrevHash != toIngest[i-1].RowHash {
+	for i := 1; i < len(toIngest); i++ {
+		if toIngest[i].PrevHash != toIngest[i-1].RowHash {
 			return DeviceIngestResult{}, fmt.Errorf(
 				"store: ingest device audit: row seq %d does not chain to the previous row in this batch: %w",
-				r.Seq, ErrConflict)
+				toIngest[i].Seq, ErrConflict)
 		}
-		var want string
-		if err := tx.QueryRow(ctx,
-			`SELECT audit_row_hash($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
-			prev, r.ID, r.Time, r.RunID, string(r.ActorType), r.Actor,
-			r.Action, r.Target, r.Outcome, r.SourceIP, []byte(r.Data),
-		).Scan(&want); err != nil {
-			return DeviceIngestResult{}, fmt.Errorf("store: recompute device audit row hash: %w", err)
-		}
-		if want != r.RowHash {
-			return DeviceIngestResult{}, fmt.Errorf(
-				"store: ingest device audit: row seq %d hash mismatch (edited after the device chained it): %w",
-				r.Seq, ErrConflict)
-		}
-		prev = r.RowHash
 	}
 
+	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+		return DeviceIngestResult{}, fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
+			db.AuditChainLockTimeout, err)
+	}
 	const insertQ = `INSERT INTO audit_events (` + auditCols + `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	for _, r := range toIngest {
-		data, err := mergeDeviceOrigin(r.Data, deviceID, r.Seq, r.RowHash, r.PrevHash)
+		data, err := mergeDeviceOrigin(deviceID, r)
 		if err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: merge device origin: %w", err)
 		}
 		if _, err := tx.Exec(ctx, insertQ,
-			r.ID, r.Time, r.RunID, string(r.ActorType), r.Actor, r.Action, CapAuditTarget(r.Target), r.Outcome, r.SourceIP, data,
+			r.ID, r.Time, r.RunID, string(r.ActorType), FederatedActor(deviceID, r.Actor), r.Action,
+			CapAuditTarget(r.Target), r.Outcome, peer, data,
 		); err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: insert federated audit event: %w", err)
 		}
@@ -376,39 +444,222 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, rows []ty
 	); err != nil {
 		return DeviceIngestResult{}, fmt.Errorf("store: advance device cursor: %w", err)
 	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return DeviceIngestResult{}, fmt.Errorf("store: commit device audit ingest: %w", err)
 	}
 	return DeviceIngestResult{Accepted: len(toIngest), Reset: reset}, nil
 }
 
-// mergeDeviceOrigin folds one federated row's provenance into its data as a
-// "device_origin" object: which device forwarded it, that device's own local
-// seq, and the link it claimed. This is what "one chain per writer" means in
-// practice, in place of a new audit action — a federated row stays
-// indistinguishable from an ordinary one to every existing filter and SIEM
-// rule keyed on `action`, with the provenance riding in data instead.
-//
-// Unlike IngestDeviceAudit's hash VERIFICATION above, a Go-side json.Marshal
-// here is fine: this builds the data for a BRAND NEW row on the
-// organisation's own chain, hashed by ITS OWN trigger from whatever actually
-// lands in the column — nothing here is compared against a digest the device
-// already claimed.
-func mergeDeviceOrigin(data json.RawMessage, deviceID uuid.UUID, seq int64, rowHash, prevHash string) (json.RawMessage, error) {
-	m := map[string]any{}
-	if len(data) > 0 && string(data) != "null" {
-		if err := json.Unmarshal(data, &m); err != nil {
-			// Not a JSON object (array/scalar) — wrap it rather than lose it.
-			m = map[string]any{"data": json.RawMessage(data)}
+// heldPrefix counts the batch's leading rows this organisation already holds:
+// each at or before the recorded cursor AND carrying the row_hash of the
+// newest row ingested here at that device seq. Seq alone is not identity — a
+// laptop table reset so that its seq restarts (TRUNCATE ... RESTART IDENTITY,
+// a restore) reuses seqs — so matching on seq would drop a new chain's rows as
+// re-sends, silently. Rows for one device are only written under its device
+// row lock, which the caller holds, so this read cannot race an ingest.
+func heldPrefix(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, lastSeq int64, rows []types.FederatedAuditEvent) (int, error) {
+	var seqs []string
+	for _, r := range rows {
+		if r.Seq > lastSeq {
+			break
+		}
+		seqs = append(seqs, strconv.FormatInt(r.Seq, 10))
+	}
+	if len(seqs) == 0 {
+		return 0, nil
+	}
+	// Text comparison on both keys, matching audit_events_device_origin_idx
+	// (migration 0078): mergeDeviceOrigin wrote them as a uuid string and a
+	// JSON integer, whose ->> text is exactly FormatInt's.
+	res, err := tx.Query(ctx, `
+		SELECT DISTINCT ON (data->'device_origin'->>'seq') data->'device_origin'->>'seq', data->'device_origin'->>'row_hash'
+		FROM audit_events
+		WHERE data ? 'device_origin' AND data->'device_origin'->>'device_id' = $1
+		  AND data->'device_origin'->>'seq' = ANY($2::text[])
+		ORDER BY data->'device_origin'->>'seq', seq DESC`, deviceID.String(), seqs)
+	if err != nil {
+		return 0, fmt.Errorf("store: read held device rows: %w", err)
+	}
+	held := map[string]string{}
+	var seq, hash string
+	if _, err := pgx.ForEachRow(res, []any{&seq, &hash}, func() error { held[seq] = hash; return nil }); err != nil {
+		return 0, fmt.Errorf("store: read held device rows: %w", err)
+	}
+	n := 0
+	for n < len(seqs) && held[seqs[n]] == rows[n].RowHash {
+		n++
+	}
+	return n, nil
+}
+
+// verifyClaimedHashes recomputes every row's claimed RowHash IN SQL, from
+// that row's own claimed fields and its own claimed PrevHash, in one
+// statement — never by re-marshalling in Go (json.Marshal on a round-tripped
+// value reorders keys and changes the digest). Data travels as text and is
+// cast ::jsonb, the same input function a jsonb parameter or column goes
+// through, which is the canonicalization the device's own trigger applied;
+// the uuid columns travel as text for the same reason (NULL run_id included).
+func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAuditEvent) error {
+	n := len(rows)
+	prev, ids, actorTypes, actors, actions := make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n)
+	targets, outcomes, sourceIPs := make([]string, n), make([]string, n), make([]string, n)
+	times := make([]time.Time, n)
+	runIDs, data := make([]*string, n), make([]*string, n)
+	for i, r := range rows {
+		prev[i], ids[i], times[i] = r.PrevHash, r.ID.String(), r.Time
+		actorTypes[i], actors[i], actions[i] = string(r.ActorType), r.Actor, r.Action
+		targets[i], outcomes[i], sourceIPs[i] = r.Target, r.Outcome, r.SourceIP
+		if r.RunID != nil {
+			id := r.RunID.String()
+			runIDs[i] = &id
+		}
+		if len(r.Data) > 0 {
+			d := string(r.Data)
+			data[i] = &d
 		}
 	}
-	m["device_origin"] = map[string]any{
-		"device_id": deviceID,
-		"seq":       seq,
-		"row_hash":  rowHash,
-		"prev_hash": prevHash,
+	const q = `
+		SELECT audit_row_hash(u.prev, u.id::uuid, u.at, u.run_id::uuid, u.actor_type, u.actor,
+		                      u.action, u.target, u.outcome, u.source_ip, u.data::jsonb)
+		FROM unnest($1::text[], $2::text[], $3::timestamptz[], $4::text[], $5::text[], $6::text[],
+		            $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
+		     WITH ORDINALITY AS u(prev, id, at, run_id, actor_type, actor, action, target, outcome, source_ip, data, n)
+		ORDER BY u.n`
+	got, err := collect(ctx, s.Pool, "recompute", "federated audit row hashes", q,
+		[]any{prev, ids, times, runIDs, actorTypes, actors, actions, targets, outcomes, sourceIPs, data},
+		func(row pgx.Row) (string, error) {
+			var h string
+			return h, row.Scan(&h)
+		})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "22") {
+		return fmt.Errorf("store: a claimed value cannot be stored (SQLSTATE %s): %w", pgErr.Code, ErrFederatedRowInvalid)
 	}
+	if err != nil {
+		return err
+	}
+	if len(got) != n {
+		return fmt.Errorf("store: recomputed %d federated row hashes for %d rows", len(got), n)
+	}
+	for i, r := range rows {
+		if got[i] != r.RowHash {
+			return fmt.Errorf("store: ingest device audit: row seq %d hash mismatch (edited after the device chained it): %w",
+				r.Seq, ErrConflict)
+		}
+	}
+	return nil
+}
+
+// refuseOrgRuns answers ErrFederatedOrgRun when any row's run_id is a run in
+// this organisation's agent_runs (audit_events.run_id carries no foreign key,
+// so nothing else would stop it).
+func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEvent) error {
+	var ids []string
+	for _, r := range rows {
+		if r.RunID != nil {
+			ids = append(ids, r.RunID.String())
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var hit bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = ANY($1::uuid[]))`, ids).Scan(&hit); err != nil {
+		return fmt.Errorf("store: check federated run ids: %w", err)
+	}
+	if hit {
+		return ErrFederatedOrgRun
+	}
+	return nil
+}
+
+// FederatedClaimHashSQL recomputes, from one STORED federated row aliased e,
+// the hash the device claimed for it. It equals
+// e.data->'device_origin'->>'row_hash' for every row IngestDeviceAudit
+// accepts: the claimed actor, source_ip and prev_hash are in device_origin,
+// the claimed object is the stored data minus that key, and a data-less claim
+// is named by device_origin.data_null — "json" for a JSON null (what a laptop
+// row with no data holds), "sql" for an absent value.
+const FederatedClaimHashSQL = `audit_row_hash(e.data->'device_origin'->>'prev_hash', e.id, e.time, e.run_id,
+	e.actor_type, e.data->'device_origin'->>'actor', e.action, e.target, e.outcome, e.data->'device_origin'->>'source_ip',
+	CASE e.data->'device_origin'->>'data_null' WHEN 'json' THEN 'null'::jsonb WHEN 'sql' THEN NULL
+	     ELSE e.data - 'device_origin' END)`
+
+// FederatedActor is the actor a federated row is stored under: the forwarding
+// device's own actor (device:<id>, the name the organisation's rows about a
+// device already use), a slash, then the principal the device claimed, so a
+// filter or rule keyed on an organisation principal never matches a laptop's
+// claim to be that principal.
+func FederatedActor(deviceID uuid.UUID, claimed string) string {
+	return "device:" + deviceID.String() + "/" + claimed
+}
+
+// FederatedDeviceID reports which device forwarded ev, or nil for one of the
+// organisation's own rows. A row is federated only when BOTH marks agree — the
+// data.device_origin.device_id IngestDeviceAudit writes and the FederatedActor
+// prefix naming that same device — so no organisation writer that controls
+// only one of them (a sensor's raw data, a principal's name) can make its own
+// row read as a device's. federatedRowSQL is the same predicate in SQL.
+func FederatedDeviceID(ev types.AuditEvent) *uuid.UUID {
+	if len(ev.Data) == 0 || !bytes.Contains(ev.Data, []byte(`"device_origin"`)) {
+		return nil
+	}
+	var m struct {
+		DeviceOrigin struct {
+			DeviceID string `json:"device_id"`
+		} `json:"device_origin"`
+	}
+	if json.Unmarshal(ev.Data, &m) != nil || m.DeviceOrigin.DeviceID == "" ||
+		!strings.HasPrefix(ev.Actor, "device:"+m.DeviceOrigin.DeviceID+"/") {
+		return nil
+	}
+	id, err := uuid.Parse(m.DeviceOrigin.DeviceID)
+	if err != nil {
+		return nil
+	}
+	return &id
+}
+
+// federatedRowSQL is FederatedDeviceID's predicate over an audit_events row:
+// true for a federated row, false (never NULL) for the organisation's own.
+const federatedRowSQL = `COALESCE(starts_with(actor, 'device:' || (data->'device_origin'->>'device_id') || '/'), false)`
+
+// mergeDeviceOrigin folds one federated row's provenance into its data as a
+// "device_origin" object: which device forwarded it, that device's own local
+// seq, the link it claimed, and the actor and source_ip it claimed (the
+// columns hold FederatedActor and the peer this organisation saw instead).
+//
+// The claimed object's members are carried as raw JSON, never decoded, so
+// they survive byte-for-byte (a float64 round trip would rewrite a large
+// integer); FederatedRowProblem has already refused every other shape. That
+// is what keeps the device's claim re-checkable from the stored row
+// (FederatedClaimHashSQL). The row's own org-chain hash is computed by this
+// organisation's trigger over whatever lands in the column.
+func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditEvent) (json.RawMessage, error) {
+	origin := map[string]any{
+		"device_id": deviceID,
+		"seq":       r.Seq,
+		"row_hash":  r.RowHash,
+		"prev_hash": r.PrevHash,
+		"actor":     r.Actor,
+		"source_ip": r.SourceIP,
+	}
+	m := map[string]json.RawMessage{}
+	switch {
+	case len(r.Data) == 0:
+		origin["data_null"] = "sql"
+	case isJSONNull(r.Data):
+		origin["data_null"] = "json"
+	default:
+		if err := json.Unmarshal(r.Data, &m); err != nil {
+			return nil, err
+		}
+	}
+	o, err := json.Marshal(origin)
+	if err != nil {
+		return nil, err
+	}
+	m["device_origin"] = o
 	return json.Marshal(m)
 }
 
@@ -431,6 +682,19 @@ func (s PG) ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) (
 		ORDER BY seq
 		LIMIT $2`
 	return collect(ctx, s.Pool, "list", "federated audit events", q, []any{seq, limit}, scanFederatedAuditEvent)
+}
+
+// AuditHeadSeq is THIS deployment's newest audit_events seq, 0 on an empty
+// table: the head the laptop-side forwarder measures its lag against, read on
+// every tick whether or not a push succeeds, so an unreachable organisation
+// shows as growing lag rather than a frozen one. max(seq) walks the primary
+// key's index backwards.
+func (s PG) AuditHeadSeq(ctx context.Context) (int64, error) {
+	var seq int64
+	if err := s.Pool.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM audit_events`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("store: audit head seq: %w", err)
+	}
+	return seq, nil
 }
 
 func scanFederatedAuditEvent(row pgx.Row) (types.FederatedAuditEvent, error) {
@@ -461,6 +725,47 @@ func (s PG) GetFederationCursor(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("store: get federation cursor: %w", err)
 	}
 	return seq, nil
+}
+
+// FederationRevoked reports whether the organisation revoked this laptop's
+// device credential (MarkFederationRevoked), false when no row exists.
+func (s PG) FederationRevoked(ctx context.Context) (bool, error) {
+	var revoked bool
+	err := s.Pool.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM org_federation WHERE singleton`).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: get federation revoked: %w", err)
+	}
+	return revoked, nil
+}
+
+// MarkFederationRevoked durably records that the organisation revoked this
+// laptop, so a restart comes back still refusing new runs.
+func (s PG) MarkFederationRevoked(ctx context.Context) error {
+	const q = `
+		INSERT INTO org_federation (singleton, revoked_at, updated_at)
+		VALUES (true, now(), now())
+		ON CONFLICT (singleton) DO UPDATE SET revoked_at = COALESCE(org_federation.revoked_at, now()), updated_at = now()`
+	if _, err := s.Pool.Exec(ctx, q); err != nil {
+		return fmt.Errorf("store: mark federation revoked: %w", err)
+	}
+	return nil
+}
+
+// ResetFederation is a (re-)enrolment: a new device identity starts an empty
+// chain at the organisation, so the cursor returns to 0 and the revoked mark
+// clears. The only writer that clears it.
+func (s PG) ResetFederation(ctx context.Context) error {
+	const q = `
+		INSERT INTO org_federation (singleton, last_forwarded_seq, revoked_at, updated_at)
+		VALUES (true, 0, NULL, now())
+		ON CONFLICT (singleton) DO UPDATE SET last_forwarded_seq = 0, revoked_at = NULL, updated_at = now()`
+	if _, err := s.Pool.Exec(ctx, q); err != nil {
+		return fmt.Errorf("store: reset federation: %w", err)
+	}
+	return nil
 }
 
 // SetFederationCursor durably advances the forwarder's cursor, upserting the

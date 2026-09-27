@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── FIX #10: X-Wardyn-Principal cannot forge human attribution ───────────────
+// FIX #10: X-Wardyn-Principal cannot forge human attribution
 //
 // principalFromRequest/actorFromRequest resolve the audit actor for admin-gated
 // actions (decided_by on approvals, sub/sponsor + run.create/run.kill actor).
@@ -22,7 +22,7 @@ import (
 // a run when no human acted — breaking invariant 4 (per-run identity) and the
 // non-repudiation intent of invariant 6.
 
-// TestPrincipalHeaderNotTrustedForAdminToken is the FIX #10 regression: a
+// TestPrincipalHeaderNotTrustedForAdminToken: a
 // non-local admin-token request carrying X-Wardyn-Principal must NOT be attributed
 // to that header value. The resolved actor is the non-human "admin-token" (system),
 // never the forged human.

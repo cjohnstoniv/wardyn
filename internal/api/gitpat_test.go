@@ -81,9 +81,9 @@ func TestValidateInlineSecretRefs_GitPAT(t *testing.T) {
 	}
 
 	// Same omission, same class: the SSH gateway's ed25519 host key. The broker
-	// has refused it since W12-B-1, but this side did not — so GET /secrets
-	// listed it and PUT/DELETE clobbered it, which regenerates the gateway host
-	// key at next boot and breaks every pinned fingerprint.
+	// refuses it, and this side must too — listing it on GET /secrets and
+	// letting PUT/DELETE clobber it would regenerate the gateway host key at
+	// next boot and break every pinned fingerprint.
 	if !secretsAPIReserved("wardyn-ssh-host-key") || !sinkReservedSecret("wardyn-ssh-host-key") {
 		t.Fatal("wardyn-ssh-host-key must be reserved at the secrets API and at every sink")
 	}
@@ -118,14 +118,14 @@ func TestADOEgressDomains(t *testing.T) {
 }
 
 // TestBrokeredRunWithholdsGitPATGrantEnv is the git_pat half of "brokered means
-// single-lane", the sibling of TestBrokeredRunWithholdsSSHGrantEnv. It exists
-// because git_pat used to be exempt from all three seams on the reasoning that
-// such a grant was "already dead twice over" — one of those two deaths being
-// wardyn-git-helper's in-sandbox refusal, which binds only a caller that asks
-// GIT for the credential. An agent that POSTs the mint route never meets it, so
-// the surviving barrier was a name-keyed egress deny that does not bind a raw-IP
-// CONNECT under allow_all_egress. Withholding the grant id is what makes the
-// credential absent rather than merely inconvenient.
+// single-lane", the sibling of TestBrokeredRunWithholdsSSHGrantEnv. git_pat is
+// not exempt from the three seams on the reasoning that such a grant is "already
+// dead twice over": one of those two deaths is wardyn-git-helper's in-sandbox
+// refusal, which binds only a caller that asks git for the credential. An agent
+// that POSTs the mint route never meets it, so the surviving barrier would be a
+// name-keyed egress deny that does not bind a raw-IP CONNECT under
+// allow_all_egress. Withholding the grant id is what makes the credential absent
+// rather than merely inconvenient.
 //
 // The drop is scoped, not a blanket: only a BROKERED forge's host, only on a run
 // that is actually brokered, and the caller's map is never mutated.
@@ -156,7 +156,7 @@ func TestBrokeredRunWithholdsGitPATGrantEnv(t *testing.T) {
 	// Brokered run whose ONLY git_pat is for a host the broker does NOT serve:
 	// nothing is withheld and the map ships verbatim. The broker is github.com-only,
 	// so ADO/GitLab have no brokered alternative — breaking this lane on a run that
-	// merely also holds a github_token grant would be a pure regression.
+	// merely also holds a github_token grant would take it away for nothing.
 	adoOnly := map[string]string{"dev.azure.com": uuid.NewString()}
 	env, dropped = apply(adoOnly, brokered)
 	if dropped != nil {
@@ -203,7 +203,7 @@ func TestDispatch_BrokeredGitPATDropIsAuditedAndNeverReachesTheSandbox(t *testin
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher; this test is about dispatch
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:       types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC1},
 		GitGrants:    map[string]uuid.UUID{"acme/widgets": uuid.New()},
@@ -213,9 +213,9 @@ func TestDispatch_BrokeredGitPATDropIsAuditedAndNeverReachesTheSandbox(t *testin
 	if v, ok := fr.lastSpec.Env["WARDYN_GIT_PAT_GRANTS"]; ok {
 		t.Errorf("the sandbox was handed WARDYN_GIT_PAT_GRANTS=%q on a brokered run — the agent can mint a resident GitHub PAT", v)
 	}
-	ev := findAudit(audit.events, run.ID, "run.git_pat.brokered_forge", "failure")
+	ev := findAudit(audit.events, run.ID, "run.git_pat.drop", "failure")
 	if ev == nil {
-		t.Fatalf("the git_pat drop was SILENT: no run.git_pat.brokered_forge event; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("the git_pat drop was SILENT: no run.git_pat.drop event; events=%s", auditDump(audit.events, run.ID))
 	}
 	if !strings.Contains(string(ev.Data), "github.com") {
 		t.Errorf("audit event does not name the dropped host: %s", ev.Data)
@@ -319,7 +319,7 @@ func TestDispatchHonoursTheGitPATBrokerFlag(t *testing.T) {
 		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 		srv.cfg.DisableGitPATBroker = disabled
 		run.Task = "" // composition only: no agent exec, no completion watcher
-		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest",
 			GitPATGrants: map[string]string{host: uuid.NewString()},
 		})

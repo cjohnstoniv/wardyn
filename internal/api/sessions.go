@@ -222,8 +222,9 @@ func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, err
 		// One row per credential, naming its owner: an aggregate `tokens_revoked`
 		// on the caller's own event alone cannot answer "which credentials did
 		// that edit kill" for the role-mapping lane's unanswerable-snapshot arm,
-		// which revokes EVERY elevated-stamp token in the deployment, whoever
-		// holds it — a table is a state, not a record of who did it or when.
+		// which revokes EVERY elevated-stamp or old-type-stamped token in the
+		// deployment, whoever holds it — a table is a state, not a record of
+		// who did it or when.
 		// Same action and same two keys as the single-token door
 		// (handleRevokeAPIToken), plus the scope that says this was a sweep, so
 		// one query answers the question across both doors.

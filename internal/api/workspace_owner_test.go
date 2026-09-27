@@ -53,11 +53,18 @@ func (s *ownerStore) GetCapabilityEnforcement(ctx context.Context) (map[string]b
 	return s.caps.GetCapabilityEnforcement(ctx)
 }
 
-func (s *ownerStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s *ownerStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	if s.caps == nil {
-		return s.authzStore.ListCapabilityGrantsFor(ctx, users, groups)
+		return s.authzStore.ListCapabilityGrantsFor(ctx, users, groups, userType)
 	}
-	return s.caps.ListCapabilityGrantsFor(ctx, users, groups)
+	return s.caps.ListCapabilityGrantsFor(ctx, users, groups, userType)
+}
+
+func (s *ownerStore) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
+	if s.caps == nil {
+		return s.authzStore.ListCapabilityRestrictions(ctx)
+	}
+	return s.caps.ListCapabilityRestrictions(ctx)
 }
 
 func (s *ownerStore) ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error) {
@@ -104,14 +111,14 @@ func (s *ownerStore) put(ws types.Workspace) uuid.UUID {
 }
 
 // ownerHarness wires a server with OIDC on (so roles are real) over ownerStore.
-func ownerHarness(t *testing.T, mounts runner.MemberMountPolicy) (*Server, *ownerStore, *harness) {
+func ownerHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerStore, *harness) {
 	t.Helper()
 	st := newOwnerStore()
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
-	cfg.MemberMounts = mounts
+	cfg.UserMounts = mounts
 	return New(cfg), st, h
 }
 
@@ -126,8 +133,8 @@ const (
 // oracle. Asserted by EQUALITY against the missing-id response, never by
 // eyeballing "it's a 404 too".
 func TestWorkspaceOwnership_ForeignOwned404Parity(t *testing.T) {
-	srv, st, h := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	srv, st, h := ownerHarness(t, runner.UserMountPolicy{})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	foreign := st.put(types.Workspace{OwnedBy: ownerOtherSub})
 	missing := uuid.New()
 
@@ -186,20 +193,18 @@ func TestWorkspaceOwnership_ForeignOwned404Parity(t *testing.T) {
 // TestWorkspaceOwnership_OwnerReachesOwn is the positive control for the same
 // routes: the owning member is not refused.
 func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
-	// R1-F315: the MUTATIONS are in here too, and each gets its OWN fixture from
-	// inside the loop. That is the whole reason they were missing — this control
-	// used to walk one shared workspace, so a PUT would rename it and a DELETE
-	// remove it under the cases that follow, and the four {id} mutations sat with
+	// The mutations are in here too, and each gets its own fixture from inside
+	// the loop: one shared workspace would be renamed by a PUT and removed by a
+	// DELETE under the cases that follow, leaving the four {id} mutations with
 	// their foreign-404 direction pinned and their owner-ADMIT direction pinned
-	// nowhere (ownerAdmitNotInTheControl's admitted debt). A handler that refused
-	// the owning member on PUT /workspaces/{id} left all 221 test files in this
-	// package green — exactly F315's own counterfactual for env-as-code.
+	// nowhere (ownerAdmitNotInTheControl's admitted debt). A handler that refuses
+	// the owning member on PUT /workspaces/{id} must fail here.
 	//
-	// A fresh fixture per case is what makes the destructive ones safe to include,
-	// which is why the shared one this test used to open is gone.
+	// A fresh fixture per case is what makes the destructive ones safe to
+	// include.
 	for _, c := range []struct{ method, suffix, body string }{
 		{http.MethodGet, "", ""},
 		{http.MethodGet, "/build", ""},
@@ -230,8 +235,8 @@ func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 // the routes moved off the operatorOnly group — not a 404, which would be a lie
 // about a row the member can see in their own list.
 func TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 	opOwned := st.put(types.Workspace{}) // owned_by == "" — operator-owned
 
@@ -264,8 +269,8 @@ func TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly(t *testing.T) {
 // from the body — strict decoding refuses an owned_by field outright, which is
 // what keeps the column un-forgeable.
 func TestWorkspaceOwnership_CreateStampsOwner(t *testing.T) {
-	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	srv, _, _ := ownerHarness(t, runner.UserMountPolicy{})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	created := func(t *testing.T, sess *http.Cookie, body string) types.Workspace {
@@ -298,8 +303,8 @@ func TestWorkspaceOwnership_CreateStampsOwner(t *testing.T) {
 // TestWorkspaceOwnership_ListScoping: a member's list is their own owned rows
 // plus every operator-owned one, never another member's.
 func TestWorkspaceOwnership_ListScoping(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	own := st.put(types.Workspace{OwnedBy: ownerMemberSub})
@@ -371,8 +376,8 @@ func TestWorkspaceOwnership_MemberLocalDirGate(t *testing.T) {
 			t.Fatalf("mkdir: %v", err)
 		}
 	}
-	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	srv, _, _ := ownerHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	body := func(path string, writable bool) string {
@@ -419,7 +424,7 @@ func TestWorkspaceOwnership_MemberLocalDirGate(t *testing.T) {
 }
 
 // TestWorkspaceOwnership_MemberWritableAllowlist pins O3's two halves at the
-// route: writable inside WARDYN_MEMBER_WRITABLE_ROOTS is accepted, and the
+// route: writable inside WARDYN_USER_WRITABLE_ROOTS is accepted, and the
 // deny carve-out wins over it.
 func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	root, project := memberProjectRoot(t)
@@ -427,10 +432,10 @@ func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	if err := os.MkdirAll(vendored, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{
+	srv, _, _ := ownerHarness(t, runner.UserMountPolicy{
 		Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{vendored},
 	})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	body := func(path string) string {
 		src := types.WorkspaceSource{Type: types.WorkspaceSourceTypeLocalDir, Path: path, Writable: true}
@@ -455,7 +460,7 @@ func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 // silently degrading to the operator path.
 func TestMemberMountPosture_Resolve(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+	srv, _, _ := ownerHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 
 	opOwned := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{
 		{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/operator/repo"},
@@ -465,13 +470,13 @@ func TestMemberMountPosture_Resolve(t *testing.T) {
 		{Type: types.WorkspaceSourceTypeRepo, Source: "acme/widgets"},
 	}}
 
-	if got := srv.memberMountPosture(nil); got.Roots != nil || got.Sources != nil {
+	if got := srv.userMountPosture(nil); got.Roots != nil || got.Sources != nil {
 		t.Errorf("no workspaces: posture = %+v, want the zero value (operator path)", got)
 	}
-	if got := srv.memberMountPosture([]types.Workspace{opOwned}); got.Roots != nil || got.Sources != nil {
+	if got := srv.userMountPosture([]types.Workspace{opOwned}); got.Roots != nil || got.Sources != nil {
 		t.Errorf("operator-owned workspace: posture = %+v, want the zero value (operator path)", got)
 	}
-	p := srv.memberMountPosture([]types.Workspace{opOwned, memberOwned})
+	p := srv.userMountPosture([]types.Workspace{opOwned, memberOwned})
 	if len(p.Roots) != 1 || p.Roots[0] != root {
 		t.Errorf("member-owned workspace: roots = %v, want %v", p.Roots, []string{root})
 	}
@@ -488,8 +493,8 @@ func TestMemberMountPosture_Resolve(t *testing.T) {
 		t.Errorf("sources = %v, want exactly one entry", p.Sources)
 	}
 
-	unconfigured, _, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	got := unconfigured.memberMountPosture([]types.Workspace{memberOwned}).Roots
+	unconfigured, _, _ := ownerHarness(t, runner.UserMountPolicy{})
+	got := unconfigured.userMountPosture([]types.Workspace{memberOwned}).Roots
 	if got == nil {
 		t.Fatal("member-owned workspace with NO configured roots: roots = nil, which the driver reads as an OPERATOR run — must be empty-but-non-nil so every bind fails closed")
 	}

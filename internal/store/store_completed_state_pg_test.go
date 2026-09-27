@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Postgres regression test for the COMPLETED run-state cluster. Guarded by
+// Postgres test for the COMPLETED run state. Guarded by
 // WARDYN_TEST_PG. Run with: WARDYN_TEST_PG=postgres://... go test ./internal/store/...
 package store_test
 
@@ -16,11 +16,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestUpdateRunState_RunningToCompleted_PG is the regression for the top
-// critical finding: before migration 0003 the agent_runs.state CHECK omitted
-// 'COMPLETED', so this UPDATE failed with a constraint violation, the run never
-// reached a terminal state, and the credential-revocation cascade never fired.
-// This test asserts the completion transition actually persists end to end.
+// TestUpdateRunState_RunningToCompleted_PG: the agent_runs.state CHECK must
+// allow 'COMPLETED' (migration 0003), or this UPDATE fails with a constraint
+// violation, the run never reaches a terminal state, and the
+// credential-revocation cascade never fires. This test asserts the completion
+// transition actually persists end to end.
 func TestUpdateRunState_RunningToCompleted_PG(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()

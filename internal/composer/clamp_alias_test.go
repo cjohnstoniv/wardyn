@@ -13,8 +13,8 @@ import (
 
 // aliasProposal is a proposal that sets EVERY reference-semantics field of
 // RunPolicySpec, paired with aliasCeiling so the clamp tightens nothing: the
-// pass-through paths are exactly the ones where a ceiling "has no opinion" and
-// the shallow copy therefore used to hand the caller's own memory back.
+// pass-through paths are exactly the ones where a ceiling "has no opinion",
+// and where a shallow copy would hand the caller's own memory back.
 func aliasProposal(t *testing.T) types.RunPolicySpec {
 	t.Helper()
 	ro := true
@@ -199,6 +199,8 @@ func TestCloneProposal_SharesNothingWithItsInput(t *testing.T) {
 		WorkspaceSecretValues: []string{"resolved-at-dispatch-only"},
 		ClassifiedMarkers:     []string{"WARDYN-CONFIDENTIAL"},
 	}
+	orig.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 8,
+		RequireReviewPaths: []string{"infra/**"}}
 	beforeOrig := specJSON(t, orig)
 
 	clone := cloneProposal(orig)
@@ -216,6 +218,9 @@ func TestCloneProposal_SharesNothingWithItsInput(t *testing.T) {
 	clone.LLMInspection.WorkspaceSecretNames[0] = "attacker-chosen"
 	clone.LLMInspection.WorkspaceSecretValues[0] = ""
 	clone.LLMInspection.ClassifiedMarkers[0] = "ignored"
+	clone.PushRules.DenyPaths[0] = "nothing/**"
+	clone.PushRules.MaxInspectPackMiB = 64
+	clone.PushRules.RequireReviewPaths[0] = "nothing/**"
 	if after := specJSON(t, orig); after != beforeOrig {
 		t.Errorf("mutating the copy changed its input (aliased):\n before %s\n after  %s", beforeOrig, after)
 	}

@@ -139,6 +139,16 @@ export function isCredentialRefusal(e: unknown): boolean {
   return e instanceof HttpError && e.status === 422 && e.reason === "model_credential";
 }
 
+// The create-time git-credential refusal (#386's launch door) —
+// gitCredentialRefusal's 422 carrying reason `git_credential`: a repository
+// admitted onto a per-user Azure DevOps row with no usable captured sign-in
+// for this caller. The New Run rail answers it with the Connect Azure DevOps
+// dialog and launches again once the connection lands — isCredentialRefusal's
+// twin, for a second credential.
+export function isGitCredentialRefusal(e: unknown): boolean {
+  return e instanceof HttpError && e.status === 422 && e.reason === "git_credential";
+}
+
 // #159: the Recordings screen paginates instead of stopping at LIST_LIMIT
 // (1000). unwrapList discards the response object, so it can never carry
 // X-Wardyn-Truncated — the caller needs it FROM listRuns, not from a second
@@ -319,8 +329,13 @@ export const runs = {
   // POST /api/v1/runs/{id}/attach/takeover — displace the current holder and
   // become the writer. Audited server-side (session.takeover, naming the actor
   // and the previous holder) because it ends someone else's live session.
-  async takeoverAttach(runId: string): Promise<void> {
+  // `promoted` is true when one of the caller's own queued observer sockets on
+  // this run was flipped to writer IN PLACE (attach_holder.go's
+  // announceAttachPromotion) — a caller whose socket is still open must not
+  // evict-then-reconnect on that answer; see doTakeover in attach-terminal.tsx.
+  async takeoverAttach(runId: string): Promise<{ promoted: boolean }> {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/takeover`, { method: "POST" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<{ promoted: boolean }>(res);
   },
 };

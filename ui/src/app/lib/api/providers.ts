@@ -14,17 +14,33 @@
 // the reason lib/api/drives.ts's header states for its own hand-maintained
 // mirrors: one shape, one place it can drift.
 import type {
+  ADOEntraConfig,
+  ADOTokenMode,
+  CredentialSource,
   EphemeralProvider,
   GitLane,
   GitProvider,
   GitProviderKind,
+  LegacyGitLane,
   StorageProviders,
   UserDriveProvider,
   WorkspaceProviders,
 } from "../types/site";
 import { asJson, wfetch } from "./core";
 
-export type { EphemeralProvider, GitLane, GitProvider, GitProviderKind, StorageProviders, UserDriveProvider, WorkspaceProviders };
+export type {
+  ADOEntraConfig,
+  ADOTokenMode,
+  CredentialSource,
+  EphemeralProvider,
+  GitLane,
+  GitProvider,
+  GitProviderKind,
+  LegacyGitLane,
+  StorageProviders,
+  UserDriveProvider,
+  WorkspaceProviders,
+};
 
 // GET's response, with the ETag the console keeps and sends back as If-Match
 // on every PUT (§9.4) — never a silent overwrite. A block with no rows and no

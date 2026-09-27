@@ -31,7 +31,7 @@ func TestApplyDefaultsAndValidate_TrustedCAPEM(t *testing.T) {
 	base := func(pem string) *Config {
 		return &Config{
 			RunID:           uuid.New(),
-			ControlPlaneURL: "http://cp:8080",
+			ControlPlaneURL: "http://127.0.0.1:8080",
 			RunToken:        "tok",
 			TrustedCAPEM:    pem,
 		}
@@ -57,7 +57,7 @@ func TestApplyDefaultsAndValidate_TrustedCAPEM(t *testing.T) {
 // TestLoadConfigBytes_RejectsGarbageTrustedCA drives the same check through
 // the JSON entry point every substrate actually uses.
 func TestLoadConfigBytes_RejectsGarbageTrustedCA(t *testing.T) {
-	b := []byte(`{"run_id":"` + uuid.New().String() + `","control_plane_url":"http://cp:8080","run_token":"tok","trusted_ca_pem":"garbage"}`)
+	b := []byte(`{"run_id":"` + uuid.New().String() + `","control_plane_url":"http://127.0.0.1:8080","run_token":"tok","trusted_ca_pem":"garbage"}`)
 	if _, err := LoadConfigBytes(b); err == nil {
 		t.Fatal("LoadConfigBytes(garbage trusted_ca_pem): want an error, got nil")
 	}
@@ -113,7 +113,7 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 	corpSrv.StartTLS()
 	defer corpSrv.Close()
 
-	// A SEPARATE CA for the AGENT-facing leg — this is the proxy's own MITM CA
+	// A separate CA for the agent-facing leg — this is the proxy's own MITM CA
 	// (WARDYN_MITM_CA_PEM the sandbox trusts), unrelated to the corp CA under
 	// test; every MITM test in this package mints one the same way.
 	mitmCertPEM, mitmKeyPEM := genTestCA(t)
@@ -231,54 +231,46 @@ func TestNewServer_WiresTrustedCAPEM(t *testing.T) {
 	}
 }
 
-// TestNewServer_ControlPlaneClientTrustsCorpCA: the sidecar's CONTROL-PLANE
-// client — not only the forward transport — trusts the corporate pool. A
-// caller-supplied client with no Transport would otherwise ride the process
-// DefaultTransport, which never sees the pool, and the injector's startup
-// resolve against a corp-issued wardynd cert would fail closed with x509.
-// The control plane here is a TLS server whose cert IS the "corporate" CA.
-func TestNewServer_ControlPlaneClientTrustsCorpCA(t *testing.T) {
+// TestNewServer_CorpCAConfigNotMutatedByHTTP2 is the regression for the defect
+// that made an HTTP/2 answer reachable on the egress lane in the first place
+// (#360): one *tls.Config handed to several transports, and net/http's HTTP/2
+// support prepending "h2" to it in place on first use. The control-plane client
+// keeps HTTP/2; after a real round trip over TLS the config the proxy's other
+// control-plane transport holds must still offer nothing.
+// (TestNewServer_WrongControlPlaneCAFailsClosed in hop_tls_test.go is what
+// replaced "the control-plane client trusts the corp CA": it must not.)
+func TestNewServer_CorpCAConfigNotMutatedByHTTP2(t *testing.T) {
 	grant := uuid.New()
-	cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/internal/injection/"+grant.String()) {
-			http.NotFound(w, r)
-			return
-		}
+	cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: "Bearer tok"})
 	}))
 	defer cp.Close()
-	cpCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cp.Certificate().Raw})
-
-	build := func(trustedCAPEM string) error {
-		cfg := &Config{
-			RunID:           uuid.New(),
-			ControlPlaneURL: cp.URL,
-			RunToken:        "tok",
-			Listen:          "127.0.0.1:0",
-			Policy:          types.RunPolicySpec{AllowedDomains: []string{"example.com"}},
-			Injection:       []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "example.com"}, GrantID: grant}},
-			TrustedCAPEM:    trustedCAPEM,
-		}
-		if err := cfg.applyDefaultsAndValidate(); err != nil {
-			t.Fatalf("config: %v", err)
-		}
-		srv, err := NewServer(context.Background(), cfg, &http.Client{Timeout: time.Second}, &bytes.Buffer{})
-		if err != nil {
-			return err
-		}
+	cfg := &Config{
+		RunID:             uuid.New(),
+		ControlPlaneURL:   cp.URL,
+		ControlPlaneCAPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cp.Certificate().Raw})),
+		RunToken:          "tok",
+		Listen:            "127.0.0.1:0",
+		Policy:            types.RunPolicySpec{AllowedDomains: []string{"example.com"}},
+		Injection:         []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "example.com"}, GrantID: grant}},
+		TrustedCAPEM:      testCPCAPEM,
+	}
+	if err := cfg.applyDefaultsAndValidate(); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	// NewServer resolves the injection grant over TLS before it returns, so the
+	// control-plane transport has been used by the time this test looks.
+	srv, err := NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
-		return nil
-	}
+	})
 
-	if err := build(string(cpCertPEM)); err != nil {
-		t.Fatalf("with the corp CA trusted, the startup resolve must succeed; got %v", err)
-	}
-	// Negative control: without the pool the SAME startup resolve fails closed
-	// on the corp-issued control-plane cert — proving the dial really happens
-	// and really depends on the pool.
-	if err := build(""); err == nil || !strings.Contains(err.Error(), "certificate") {
-		t.Fatalf("without the corp CA the startup resolve must fail on x509; got %v", err)
+	if got := srv.proxy.controlTransport.TLSClientConfig.NextProtos; len(got) != 0 {
+		t.Fatalf("the pinned control-plane config now offers %v: a transport edited it in place instead of copying it", got)
 	}
 }

@@ -210,7 +210,7 @@ type WorkspaceProfile struct {
 }
 
 // ProfileHash returns the SHA-256 hex digest of the profile's canonical
-// (sorted-object-keys) JSON form. It's used to cache-key generated/built
+// (sorted-object-keys) JSON form. It cache-keys generated/built
 // images (Workspace.BuiltProfileHash, a later wave): the same detected
 // profile always hashes the same, regardless of Go struct field order.
 //

@@ -106,6 +106,7 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 	}{
 		{"RunFiles", "internal/api/run_files.go", "runFilesResponse", client.RunFiles{}},
 		{"RunFileStat", "internal/api/run_files.go", "runFileStat", client.RunFileStat{}},
+		{"DrivesDocument", "internal/api/user_drives.go", "userDrivesResponse", client.DrivesDocument{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := serverJSONTags(t, tc.file, tc.server)

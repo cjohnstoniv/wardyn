@@ -14,7 +14,7 @@
 // because the widening it would need is not in the database.
 //
 // Unset fails closed. With no roots configured, NO host_path drive may be
-// authored at all — byte-for-byte the WARDYN_MEMBER_WORKSPACE_ROOTS posture,
+// authored at all — byte-for-byte the WARDYN_USER_WORKSPACE_ROOTS posture,
 // and for the same reason: the safe default for "the operator has not said
 // where" is "nowhere", not "anywhere".
 package runner
@@ -37,11 +37,11 @@ import (
 //
 // It reuses parseRootList verbatim, so a root here can no more carry a
 // traversal segment than a member root can, and a malformed value REFUSES BOOT
-// exactly as WARDYN_MEMBER_WORKSPACE_ROOTS does: a ceiling the operator
+// exactly as WARDYN_USER_WORKSPACE_ROOTS does: a ceiling the operator
 // mistyped must not silently become a ceiling that bounds a different tree.
 //
 // THREE root values are permitted but WARNED about, the same allow-and-warn
-// posture MemberMountPolicy.bootWarnings takes — and they are warned about for
+// posture UserMountPolicy.bootWarnings takes — and they are warned about for
 // OPPOSITE reasons, which is why they do not share a sentence:
 //
 //   - the daemon's own $HOME is far too WIDE: every dotfile tree that home
@@ -102,12 +102,12 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 // host_root is the mount point of a SHARE, and Wardyn binds only ONE PERSON's
 // subdirectory of it into a sandbox — the whole per-person isolation model, and
 // the reason UserDriveMountSourceCheck refuses a source that resolved TO a root.
-// WARDYN_MEMBER_WORKSPACE_ROOTS bounds a different thing entirely: directories a
+// WARDYN_USER_WORKSPACE_ROOTS bounds a different thing entirely: directories a
 // MEMBER may name as a workspace and bind WHOLE, writable where
-// WARDYN_MEMBER_WRITABLE_ROOTS allows it.
+// WARDYN_USER_WRITABLE_ROOTS allows it.
 //
 // Point the two at one tree and the second undoes the first. With
-// WARDYN_MEMBER_WORKSPACE_ROOTS=/srv/shares and a drive rooted at /srv/shares,
+// WARDYN_USER_WORKSPACE_ROOTS=/srv/shares and a drive rooted at /srv/shares,
 // a member onboards /srv/shares as a workspace and mounts EVERY person's home,
 // through a surface that never consults a drive allocation at all. Both ceilings
 // individually accept it; nothing compared them, so no boot line said so and no
@@ -115,7 +115,7 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 //
 // A WARNING, NOT A REFUSAL, the same allow-and-warn posture the surrounding
 // ceiling parsing takes (see the three-case doc above and
-// MemberMountPolicy.bootWarnings): an operator may have deliberately opened a
+// UserMountPolicy.bootWarnings): an operator may have deliberately opened a
 // tree to both, and a refusal at boot would take a running deployment down on
 // upgrade over a posture it already has. What was missing was the operator ever
 // being told.
@@ -125,24 +125,24 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 // Every member ceiling is compared, the shared list and each per-principal
 // override alike — a per-member override REPLACES the shared list, so it is a
 // ceiling in its own right and can overlap on its own.
-func MountCeilingOverlapWarnings(member MemberMountPolicy, driveRoots []string) []string {
+func MountCeilingOverlapWarnings(member UserMountPolicy, driveRoots []string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, m := range memberCeilingRoots(member) {
+	for _, m := range userCeilingRoots(member) {
 		for _, d := range driveRoots {
 			d = filepath.Clean(d)
 			var msg string
 			switch {
 			case m == d:
-				msg = fmt.Sprintf("WARDYN_MEMBER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name %q: a member can onboard "+
+				msg = fmt.Sprintf("WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name %q: a member can onboard "+
 					"that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive "+
 					"allocation. Point the drive ceiling at the share and the member ceiling somewhere else", m)
 			case strings.HasPrefix(d, m+string(filepath.Separator)):
-				msg = fmt.Sprintf("WARDYN_MEMBER_WORKSPACE_ROOTS contains %q, which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: a member can onboard "+
+				msg = fmt.Sprintf("WARDYN_USER_WORKSPACE_ROOTS contains %q, which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: a member can onboard "+
 					"that share as a workspace and bind it whole, every other person's home included, without a drive allocation. "+
 					"Point the member ceiling at a tree that does not contain the share", m, d)
 			case strings.HasPrefix(m, d+string(filepath.Separator)):
-				msg = fmt.Sprintf("WARDYN_MEMBER_WORKSPACE_ROOTS contains %q, which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: member workspaces "+
+				msg = fmt.Sprintf("WARDYN_USER_WORKSPACE_ROOTS contains %q, which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: member workspaces "+
 					"would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member "+
 					"ceiling outside the share", m, d)
 			default:
@@ -157,10 +157,10 @@ func MountCeilingOverlapWarnings(member MemberMountPolicy, driveRoots []string) 
 	return out
 }
 
-// memberCeilingRoots is every distinct root that bounds SOME member's mounts:
+// userCeilingRoots is every distinct root that bounds SOME member's mounts:
 // the shared list plus each per-principal override, which replaces rather than
 // extends it and is therefore its own ceiling.
-func memberCeilingRoots(member MemberMountPolicy) []string {
+func userCeilingRoots(member UserMountPolicy) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(roots []string) {
@@ -233,14 +233,14 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 			return fmt.Errorf("host_root %q could not be resolved on this host (a drive's host root must be a directory that exists here): %w", hostRoot, err)
 		}
 		// The member rule's DOTFILE deny-list, on the RESOLVED path — the same
-		// segments ValidateMemberMountSource refuses (.ssh, .aws, .claude, .kube,
+		// segments ValidateUserMountSource refuses (.ssh, .aws, .claude, .kube,
 		// .config/gh, …). ValidateMountSource above denies whole system trees; it
 		// says nothing about a credential directory inside an ordinary home, and
 		// a share whose mount point is one — or a symlink that lands in one — is
 		// exactly the shape THREAT-MODEL's host_path residual claims is bounded
 		// by "the dotfile deny-list matches the real path". Without this the
 		// claim was true of member mounts only.
-		if seg := deniedMemberSegment(real); seg != "" {
+		if seg := deniedUserSegment(real); seg != "" {
 			return fmt.Errorf("host_root %q resolves to %q, which is or traverses %q — a credential directory is never a drive's host root",
 				hostRoot, real, seg)
 		}

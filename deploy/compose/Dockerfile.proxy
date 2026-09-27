@@ -22,11 +22,24 @@ ENV GOTOOLCHAIN=local
 ARG GOPROXY=
 ENV GOPROXY=${GOPROXY}
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+# Fails closed (exit 1) when a corp CA is staged but the regenerated bundle
+# does not actually contain MORE certificates than the corp CA alone: the
+# runtime stage below is distroless (no update-ca-certificates) and copies
+# this bundle VERBATIM, so a bare corp CA here would silently become the
+# proxy's entire runtime trust store — replacing public roots rather than
+# joining them, and taking every vendor dial down in a shape that looks like
+# a network fault, not a config error.
 RUN apk add --no-cache ca-certificates && \
     if [ -f /corp-ca/corp-ca.pem ]; then \
         mkdir -p /usr/local/share/ca-certificates && \
         cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
-        update-ca-certificates; \
+        update-ca-certificates && \
+        corp_certs=$(grep -c 'BEGIN CERTIFICATE' /corp-ca/corp-ca.pem) && \
+        bundle_certs=$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt) && \
+        if [ "$bundle_certs" -le "$corp_certs" ]; then \
+            echo "FATAL: corp CA staged (deploy/images/corp-ca.pem) but the regenerated trust bundle ($bundle_certs cert(s)) is no larger than the corp CA alone ($corp_certs cert(s)) -- refusing to ship a runtime image whose trust store is a bare corporate CA instead of system roots + corporate CA" >&2; \
+            exit 1; \
+        fi; \
     fi
 
 COPY go.mod go.sum ./
@@ -63,5 +76,16 @@ LABEL org.opencontainers.image.title="wardyn-proxy" \
 
 
 COPY --from=builder /out/wardyn-proxy /usr/local/bin/wardyn-proxy
+
+# Corporate build support, runtime half (see the builder stage above and
+# docs/adoption/corp-image-authoring.md's "Corporate-build convention"): this
+# stage is distroless, so there is no update-ca-certificates to run here —
+# the builder's already-regenerated bundle (system roots, plus the corporate
+# CA when one was staged — see the fail-closed check above) is copied
+# VERBATIM over distroless's own default bundle at the same well-known path,
+# so the proxy's own outbound TLS (control-plane calls, forward egress)
+# trusts it with no further wiring. A no-op when no corp CA was staged: apk's
+# ca-certificates package always produces this file, corp CA or not.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 ENTRYPOINT ["/usr/local/bin/wardyn-proxy"]

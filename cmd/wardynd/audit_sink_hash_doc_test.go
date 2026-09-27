@@ -19,11 +19,7 @@ import (
 // claim that reads as one sentence to a human is one string to Contains.
 func readDoc(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
-	if err != nil {
-		t.Fatalf("read %s: %v", rel, err)
-	}
-	return strings.Join(strings.Fields(string(b)), " ")
+	return strings.Join(strings.Fields(readRepo(t, rel)), " ")
 }
 
 // TestAuditSinkHashClaimIsQualified pins the docs' off-box tamper-evidence claim

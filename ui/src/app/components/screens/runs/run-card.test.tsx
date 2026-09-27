@@ -14,7 +14,8 @@ import { approvalSignals, type RunSignals } from "./board-groups";
 import { RUN } from "../../wardyn/copy";
 import { CLONE_LOAD_FAILED } from "../new-run/wizard-types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
 // gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
@@ -71,6 +72,21 @@ const reauthSignals = (runId: string) =>
     },
   ]);
 
+// S10 round 2 (F13) — the Azure DevOps twin of reauthSignals: same wire kind
+// (credential_reauth), a DIFFERENT provider, so the board chip must read
+// "Azure DevOps", never "AWS".
+const adoConsentSignals = (runId: string) =>
+  approvalSignals([
+    {
+      id: "a-ado-consent",
+      run_id: runId,
+      kind: "credential_reauth",
+      requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "me", provider_id: "row_1", scopes: [] },
+      state: "PENDING",
+      requested_at: new Date().toISOString(),
+    },
+  ]);
+
 // CONSOLE-RULES §5: every actor on a row is two adjacent glyphs, never fused —
 // WHO (the agent monogram) and WHAT (the state). The state's WORD moved to
 // row 2, but it stays in the DOM: the e2e suite reads state off that text.
@@ -98,6 +114,37 @@ describe("RunCard — two-row anatomy", () => {
     renderCard(run(), reauthSignals("run_3b7f10c4aa99"), "admin@corp");
     expect(screen.getByText(waitingReauth(1, false))).toBeInTheDocument();
     expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+  });
+
+  // S10 round 2 (F13) — the Azure DevOps consent chip must never say "AWS".
+  it("a run held on an Azure DevOps consent request names Azure DevOps, never AWS, by the reader", () => {
+    renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  // A mid-run Azure DevOps SIGN-IN request is the same chip, never the AWS one.
+  it("a run held on an Azure DevOps sign-in request names Azure DevOps, never AWS", () => {
+    const signals = approvalSignals([
+      {
+        id: "a-ado-signin",
+        run_id: "run_3b7f10c4aa99",
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_signin", reason: "signin", owner: "me", provider_id: "row_1" },
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    renderCard(run(), signals, "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  it("…and the same card read by somebody else says the owner's Azure DevOps sign-in", () => {
+    renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "admin@corp");
+    expect(screen.getByText(waitingAdoConsent(1, false))).toBeInTheDocument();
+    expect(screen.queryByText(waitingAdoConsent(1))).not.toBeInTheDocument();
   });
 
   it("row 2 carries repo, barrier, short id and age", () => {
@@ -167,61 +214,62 @@ describe("RunCard — two-row anatomy", () => {
   });
 });
 
-// #160 — isHeld's stale-hold ceiling (lib/types/approvals.ts): a tool_call or
-// credential_reauth row older than 60 minutes stops counting as a live hold.
-// This pins the RUNS BOARD call site (approvalSignals -> RunCard); the
-// cockpit command bar's call site is pinned in run-detail.test.tsx.
-describe("RunCard — a stale hold degrades the card's own claim (#160)", () => {
-  const staleToolCall: RunSignals = approvalSignals([
+// #509 — a PENDING tool_call/credential_reauth row is live until the SERVER
+// says otherwise (its own state), never a client elapsed-time guess: the
+// sandbox stays parked on it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h
+// default). This pins the RUNS BOARD call site (approvalSignals -> RunCard);
+// the cockpit command bar's call site is pinned in run-detail.test.tsx.
+describe("RunCard — a PENDING hold stays held until the server's own state says otherwise (#509)", () => {
+  const twoHourOldToolCall: RunSignals = approvalSignals([
     {
       id: "a1",
       run_id: "run_3b7f10c4aa99",
       kind: "tool_call",
       requested_scope: { tool: "Bash", cmd: "rm -rf build" },
       state: "PENDING",
-      requested_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+      requested_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
     },
   ]);
 
-  it("offers Open, not Review, once the hold is stale", () => {
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
-    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+  it("a PENDING tool_call 2 hours old — past the old 60-minute ceiling — still says Review and the live sentence", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), twoHourOldToolCall);
+    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
   });
 
-  it("says a neutral 'was held', not the live warning sentence", () => {
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
-    expect(screen.getByText("Was held — check the run")).toBeInTheDocument();
-    expect(screen.queryByText(/sandbox held/)).not.toBeInTheDocument();
-  });
-
-  // The DELIBERATE LIMIT: only the derived claim degrades. The run's own
-  // wire state, via RunStateBadge, still reads exactly what it is — restyling
-  // it would invent a new tone for a state that has not changed.
+  // The DELIBERATE LIMIT: only the derived claim would ever degrade. The
+  // run's own wire state, via RunStateBadge, still reads exactly what it is —
+  // restyling it would invent a new tone for a state that has not changed.
   it("leaves RunStateBadge alone — the wire state still reads Awaiting confirmation", () => {
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), twoHourOldToolCall);
     expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
   });
 
-  it("a FRESH tool_call hold (same kind, well inside the ceiling) still says Review and the live sentence", () => {
-    const fresh = approvalSignals([
-      {
-        id: "a1",
-        run_id: "run_3b7f10c4aa99",
-        kind: "tool_call",
-        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
-        state: "PENDING",
-        requested_at: new Date().toISOString(),
-      },
-    ]);
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), fresh);
-    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
-    expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
+  // A row the server has ACTUALLY decided or expired never reaches the card
+  // at all: approvalSignals only ever joins PENDING rows (board-groups.ts), so
+  // a decided/EXPIRED tool_call carries no pending count and no hold.
+  it("a decided or server-expired tool_call is not held — it never produces a signal for the run", () => {
+    for (const state of ["APPROVED", "DENIED", "EXPIRED", "CANCELLED"] as const) {
+      const signals = approvalSignals([
+        {
+          id: "a1",
+          run_id: "run_3b7f10c4aa99",
+          kind: "tool_call",
+          requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+          state,
+          requested_at: new Date().toISOString(),
+        },
+      ]);
+      renderCard(run({ state: "COMPLETED" }), signals);
+      expect(screen.queryByText(/sandbox held/)).not.toBeInTheDocument();
+    }
   });
 });
 
 // 0.7.3 F7 — the Runs-list door onto the same clone the run header offers.
-describe("RunCard — kebab clone door (0.7.3 F7)", () => {
+describe("RunCard — kebab clone door", () => {
+  // ticket: 0.7.3 F7
   async function openMenu() {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole("button", { name: "Run actions" }));
@@ -256,7 +304,7 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
 
   const createEvent = (data: Record<string, unknown>): AuditEvent => ({
     id: "ev-create",
-    time: "2026-09-14T10:00:00Z",
+    time: aheadByHours(-1),
     actor_type: "human",
     actor: "alice",
     action: "run.create",
@@ -276,7 +324,7 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
     await clickClone();
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalled());
-    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", "run.create");
+    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", { action: "run.create" });
     const [path, opts] = navigateMock.mock.calls[0];
     expect(path).toBe("/runs/new");
     expect(opts.state.prefill.state.toolApprovals).toBe("hold");

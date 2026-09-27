@@ -9,6 +9,7 @@
 // opinion about what the server ultimately decides.
 import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { unescapeADOName } from "../../../lib/scm-provider";
 
 export const KIND_LABEL: Record<GitProviderKind, string> = {
   github: PROVIDERS.KIND_GITHUB,
@@ -32,7 +33,7 @@ function isADOHost(host: string): boolean {
 }
 
 // Client mirror of validateWorkspaceProviders' base-URL shape rule
-// (internal/api/workspace_providers.go:230-310), checked BEFORE a credential is
+// (internal/api/workspace_providers_baseurl.go), checked BEFORE a credential is
 // written (§2.5) — the server's own 400s (§7.1, unparsed) are still what a
 // post-attempt refusal renders, under SAVE_REFUSED_TITLE. The exact-segment and
 // kind x host branches below are validateProviderHostForKind's own four, ported
@@ -62,8 +63,20 @@ export function baseURLError(raw: string, kind: GitProviderKind): string | null 
   // No percent-encoding in the path — the server refuses `u.Path !=
   // u.EscapedPath()`, which ANY escape in the path trips: "acme%2Fevil" hides a
   // second segment from the count below, and "%60id%60" decodes to a backtick
-  // shellSafeSiteString refuses on sight.
-  if (u.pathname.includes("%")) return PROVIDERS.BASE_URL_INVALID;
+  // shellSafeSiteString refuses on sight. The one exception is an Azure DevOps
+  // row scoped to a project whose name has a space (#485): the server stores
+  // its path in adoscope's canonical spelling, so it admits exactly the
+  // segments that name rule decodes (unescapeADOName) — and, the decoded name
+  // being stored literally, none holding a shellSafeSiteString character.
+  if (kind === "azure_devops") {
+    const rawPath = s.replace(/^[^:]*:\/\/[^/]*/, "");
+    for (const seg of rawPath.split("/").filter(Boolean)) {
+      const name = unescapeADOName(seg);
+      if (name === null || /[`$;&|<>"'\\]/.test(name)) return PROVIDERS.BASE_URL_INVALID;
+    }
+  } else if (u.pathname.includes("%")) {
+    return PROVIDERS.BASE_URL_INVALID;
+  }
   const host = u.hostname.toLowerCase();
   // hostrules.ValidApprovedHost's dotted-host rule, reached through validSiteURL:
   // a single-label host ("localhost") is refused at write.
@@ -126,24 +139,42 @@ export function sshLaneAvailable(baseUrls: string[]): boolean {
   return baseUrls.some((u) => hostOf(u) === "github.com" || hostOf(u) === "dev.azure.com");
 }
 
-// The SSH scoping CEILING is visible exactly when both halves are true: this row
-// carries an ORG PATH (so it reads as bounded) and it PERMITS the ssh lane (so a
-// clone can actually take the host-level route). Either alone is honest already —
-// a bare host bounds nothing to widen, and a row with no ssh lane never widens.
-export function sshScopedHostLevel(baseUrls: string[], permitsSSH: boolean): boolean {
-  if (!permitsSSH) return false;
-  return baseUrls.some((raw) => {
+// sshLaneExceedsPathScope mirrors the server's rule (workspace_providers.go's
+// function of the same name) bit for bit (#380 F5): true when EVERY base URL
+// matching an SSH-over-443 host (github.com or dev.azure.com, literal) carries
+// a path. SSH scoping is host-level only — a bare-host entry means the row
+// already bounds the whole host and the lane widens nothing; a path on every
+// matching entry means ticking ssh would exceed what the row's own addresses
+// declare, which the console door refuses outright.
+//
+// For azure_devops this is unconditionally true: dev.azure.com's OWN host-kind
+// rule (validateProviderHostForKind) makes the org segment MANDATORY, so no
+// legal Azure DevOps row can ever present a bare dev.azure.com entry — the
+// explicit SSH lane is therefore never selectable there, not a bug this
+// mirror should paper over.
+export function sshLaneExceedsPathScope(baseUrls: string[]): boolean {
+  let sawSSHHost = false;
+  for (const raw of baseUrls) {
+    let u: URL;
     try {
-      return new URL(raw.trim()).pathname.replace(/^\/+|\/+$/g, "") !== "";
+      u = new URL(raw.trim());
     } catch {
-      return false;
+      continue;
     }
-  });
+    const host = u.hostname.toLowerCase();
+    if (host !== "github.com" && host !== "dev.azure.com") continue;
+    sawSSHHost = true;
+    if (u.pathname.replace(/^\/+|\/+$/g, "") === "") return false; // bounds the whole host already
+  }
+  return sawSSHHost;
 }
 
 export function laneUnavailableReason(lane: GitLane, kind: GitProviderKind, baseUrls: string[]): string | null {
   if (lane === "app" && !appLaneAvailable(kind, baseUrls)) return PROVIDERS.LANE_APP_UNAVAILABLE;
-  if (lane === "ssh" && !sshLaneAvailable(baseUrls)) return PROVIDERS.LANE_SSH_UNAVAILABLE;
+  if (lane === "ssh") {
+    if (!sshLaneAvailable(baseUrls)) return PROVIDERS.LANE_SSH_UNAVAILABLE;
+    if (sshLaneExceedsPathScope(baseUrls)) return PROVIDERS.LANE_SSH_PATH_SCOPED;
+  }
   return null;
 }
 

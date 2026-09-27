@@ -46,9 +46,6 @@ type decisionSink struct {
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	s := &decisionSink{
 		endpoint: controlPlaneURL + "/api/v1/internal/decisions",
 		token:    token,
@@ -118,7 +115,7 @@ func (s *decisionSink) mirror(log egress.DecisionLog) {
 }
 
 // dropReportInterval bounds how often the worker flushes a synthetic
-// egress.decisions.dropped summary when it is IDLE (drops accrued but no traffic
+// egress:dropped-decisions-<n> summary when it is IDLE (drops accrued but no traffic
 // to piggyback on). Under active traffic drops surface at the next flush, so
 // this only bounds the idle case.
 const dropReportInterval = 30 * time.Second
@@ -146,7 +143,7 @@ func (s *decisionSink) run() {
 			// Individual decision: best-effort, must never block egress — but a
 			// decision the control plane REFUSED is a decision that was not
 			// individually recorded, which is exactly what s.dropped counts and
-			// reportDropped summarizes (F075 fix-up). Discarding the error would
+			// reportDropped summarizes. Discarding the error would
 			// let an over-large or rejected decision vanish from the audit trail
 			// with nothing anywhere saying so: internal/api's MaxBytesReader
 			// 413s a body over maxJSONBody, and that 413 must not be silent.
@@ -160,7 +157,7 @@ func (s *decisionSink) run() {
 	}
 }
 
-// reportDropped posts a synthetic egress.decisions.dropped audit event when the
+// reportDropped posts a synthetic egress.deny (rule_source egress:dropped-decisions-<n>) when the
 // drop counter has advanced since *reported, so the auditor learns that N egress
 // decisions were NOT individually recorded — rather than only learning the total
 // at shutdown. It runs on the worker goroutine and reuses post(), so it never
@@ -195,13 +192,13 @@ func (s *decisionSink) reportDropped(reported *uint64) {
 // droppedSummaryLog builds the synthetic DecisionLog summarizing dropped
 // decisions. DecisionLog has no dedicated count field (its wire shape is owned
 // elsewhere), so the count rides in RuleSource under the extensible
-// "egress.decisions.dropped:<n>" marker. Decision is Deny: an unrecorded
+// "egress:dropped-decisions-<n>" marker. Decision is Deny: an unrecorded
 // decision is an audit-fidelity gap, surfaced as a fail-closed alert.
 func droppedSummaryLog(n uint64) egress.DecisionLog {
 	return egress.DecisionLog{
 		Request:    egress.Request{Time: time.Now()},
 		Decision:   egress.Deny,
-		RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n),
+		RuleSource: fmt.Sprintf("egress:dropped-decisions-%d", n),
 	}
 }
 

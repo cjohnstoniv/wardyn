@@ -12,9 +12,9 @@
 #   - an sftp round-trip: put + get + byte-compare
 #   - a `-L` forward against an in-sandbox loopback listener (socat, started
 #     over a separate exec)
-#   - the audit rows for each: ssh.exec / ssh.sftp / ssh.forward
+#   - the audit rows for each: ssh.exec / ssh.sftp.transfer / ssh.forward
 #   - a saved ssh-<session> recording, discovered via the audit trail's
-#     session.recording event and fetched via the recordings API
+#     session.recording.write event and fetched via the recordings API
 #   - a foreign-key denial: a SECOND principal's MEMBER-role key (registered
 #     directly in this stack's own Postgres — the same operator mechanism
 #     docs/SSH.md's "Reclaiming a squatted fingerprint" section uses, since
@@ -24,8 +24,15 @@
 #     SAME run
 #   - F1 admin override: a THIRD principal's key, registered with role='admin'
 #     the same direct-Postgres way, reaches the first principal's (member-
-#     owned) run — and the resulting ssh.auth success row carries
+#     owned) run — and the resulting ssh.authenticate success row carries
 #     data.override=true (internal/api/sshgateway.go's sshVerifiedAuth)
+#   - in-place promotion (#131): a `wardyn attach` client mints its own
+#     ticket and holds the terminal over the WEB WebSocket, a second `ssh -tt`
+#     joins and is admitted read-only (the notice on ITS stderr), the web
+#     holder drops, and the ssh client is promoted on the SAME socket — the
+#     session.promote audit row AND a keystroke from that ssh session
+#     actually reaching the shell are both asserted, because the row alone
+#     only proves the server announced a promotion, never that it granted one
 #
 # NOTE (F1.2, the 0.6 SSH-override lane): the admin-override block below HAS
 # now been exercised against a live stack — 15/15 checks green, both override
@@ -108,6 +115,10 @@ fail() { note "[FAIL]" "$1"; FAILED=1; }
 
 teardown() {
   [[ -n "${FWD_PID:-}" ]] && kill "${FWD_PID}" >/dev/null 2>&1 || true
+  [[ -n "${WEB_PID:-}" ]] && kill "${WEB_PID}" >/dev/null 2>&1 || true
+  [[ -n "${SSH2_PID:-}" ]] && kill "${SSH2_PID}" >/dev/null 2>&1 || true
+  exec 4>&- 4<&- 2>/dev/null || true
+  exec 5>&- 5<&- 2>/dev/null || true
   # Kill the run FIRST (best-effort) so wardynd stops+removes the per-run
   # agent+proxy sidecar containers itself, THEN tear down the compose stack.
   # `compose down` alone only knows about compose-managed resources (postgres,
@@ -296,7 +307,7 @@ FWD_PID=""
 REC_KEY=""
 for _ in $(seq 1 10); do
   status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
-  REC_KEY="$(jq -r '[.[] | select(.action=="session.recording")][0].data.key // empty' "${TMPDIR}/resp.json" 2>/dev/null)"
+  REC_KEY="$(jq -r '[.[] | select(.action=="session.recording.write")][0].data.key // empty' "${TMPDIR}/resp.json" 2>/dev/null)"
   [[ -n "${REC_KEY}" ]] && break
   sleep 1
 done
@@ -308,11 +319,11 @@ if [[ -n "${REC_KEY}" ]]; then
     fail "recording fetch: status ${status} for key ${REC_KEY}"
   fi
 else
-  fail "no session.recording audit event appeared for the ssh shell session (log: $(cat "${TMPDIR}/shell.log"))"
+  fail "no session.recording.write audit event appeared for the ssh shell session (log: $(cat "${TMPDIR}/shell.log"))"
 fi
 
-# ── 7. audit rows for ssh.exec / ssh.sftp / ssh.forward ─────────────────────
-for action in ssh.exec ssh.sftp ssh.forward; do
+# ── 7. audit rows for ssh.exec / ssh.sftp.transfer / ssh.forward ─────────────────────
+for action in ssh.exec ssh.sftp.transfer ssh.forward; do
   count=0
   for _ in $(seq 1 5); do
     status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
@@ -383,10 +394,10 @@ else
   denial_rc=$?
   status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
   denied_row="$(jq --arg fp "${FOREIGN_FP}" \
-    '[.[] | select(.action=="ssh.auth" and .outcome=="failure" and .target==$fp and .data.reason=="not the run owner")] | length' \
+    '[.[] | select(.action=="ssh.authenticate" and .outcome=="failure" and .target==$fp and .data.reason=="not the run owner")] | length' \
     "${TMPDIR}/resp.json")"
   if [[ "${denial_rc}" -ne 0 && "${denial_out}" != *"should-never-run"* && "${denied_row}" -ge 1 ]]; then
-    pass "member-key denial: non-owner, non-admin key refused (rc=${denial_rc}) and audited ssh.auth failure reason=\"not the run owner\""
+    pass "member-key denial: non-owner, non-admin key refused (rc=${denial_rc}) and audited ssh.authenticate failure reason=\"not the run owner\""
   else
     fail "member-key denial: rc=${denial_rc} out=${denial_out} audited_denial_rows=${denied_row}"
   fi
@@ -421,14 +432,115 @@ else
   override_rc=$?
   status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
   override_row="$(jq --arg fp "${ADMIN_KEY_FP}" \
-    '[.[] | select(.action=="ssh.auth" and .outcome=="success" and .target==$fp and .data.override==true)] | length' \
+    '[.[] | select(.action=="ssh.authenticate" and .outcome=="success" and .target==$fp and .data.override==true)] | length' \
     "${TMPDIR}/resp.json")"
   if [[ "${override_rc}" -eq 0 && "${override_out}" == *"wardyn-override-ok"* && "${override_row}" -ge 1 ]]; then
-    pass "admin override: admin-role key reached a run it does not own, and ssh.auth success is audited with data.override=true"
+    pass "admin override: admin-role key reached a run it does not own, and ssh.authenticate success is audited with data.override=true"
   else
     fail "admin override: rc=${override_rc} out=${override_out} audited_override_rows=${override_row}"
   fi
 fi
+
+# ── 11. in-place promotion (#131): web holds, ssh observes read-only, web
+#    drops, ssh is promoted on its own socket ─────────────────────────────
+# `wardyn attach` is the exact client the console's terminal uses: it mints
+# its own single-use ticket (POST /runs/{id}/attach-ticket) and dials the WS
+# attach endpoint with it — built once here, the same way run-e2e-live.sh
+# already builds the CLI on this host.
+go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "build wardyn CLI failed"
+
+# Hold the web terminal. Its stdin is one end of a FIFO this script keeps
+# open at fd 5 (read+write, so it never sees EOF) -- the client sends no
+# keystrokes; it only occupies the writer slot until killed below.
+mkfifo "${TMPDIR}/web_stdin"
+exec 5<>"${TMPDIR}/web_stdin"
+WARDYN_URL="${BASE}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMPDIR}/wardyn" attach "${RUN_ID}" \
+  <"${TMPDIR}/web_stdin" >"${TMPDIR}/web_attach.log" 2>&1 &
+WEB_PID=$!
+
+held=0
+for _ in $(seq 1 15); do
+  status=$(api GET "/api/v1/runs/${RUN_ID}/attach-holder")
+  src="$(jq -r '.source // empty' "${TMPDIR}/resp.json" 2>/dev/null)"
+  [[ "${src}" == "web" ]] && { held=1; break; }
+  sleep 1
+done
+if [[ "${held}" -eq 1 ]]; then
+  pass "promotion: web attach holds the terminal (GET attach-holder source=web)"
+else
+  fail "promotion: web attach never registered as the writer (log: $(cat "${TMPDIR}/web_attach.log"))"
+fi
+
+# A second session, an ssh -tt observer, on its own FIFO (fd 4) so it can be
+# driven in two acts: read the read-only notice now, then send a real
+# keystroke once promoted, later.
+mkfifo "${TMPDIR}/ssh2_in"
+exec 4<>"${TMPDIR}/ssh2_in"
+timeout 90 ssh -tt "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" \
+  <"${TMPDIR}/ssh2_in" >"${TMPDIR}/ssh2_out.log" 2>"${TMPDIR}/ssh2_err.log" &
+SSH2_PID=$!
+
+readonly_seen=0
+for _ in $(seq 1 15); do
+  grep -q "wardyn: read-only" "${TMPDIR}/ssh2_err.log" 2>/dev/null && { readonly_seen=1; break; }
+  sleep 1
+done
+if [[ "${readonly_seen}" -eq 1 ]]; then
+  pass "promotion: ssh observer admitted read-only, notice on stderr ($(grep 'wardyn: read-only' "${TMPDIR}/ssh2_err.log"))"
+else
+  fail "promotion: ssh observer never saw the read-only notice on stderr (log: $(cat "${TMPDIR}/ssh2_err.log"))"
+fi
+
+# Drop the web holder. `wardyn attach` wires SIGTERM to a clean detach
+# (cmd/wardyn/attach.go's runAttach / signal.NotifyContext).
+kill "${WEB_PID}" >/dev/null 2>&1 || true
+wait "${WEB_PID}" 2>/dev/null || true
+WEB_PID=""
+
+promoted_notice=0
+for _ in $(seq 1 15); do
+  grep -q "wardyn: you now hold this terminal" "${TMPDIR}/ssh2_err.log" 2>/dev/null && { promoted_notice=1; break; }
+  sleep 1
+done
+if [[ "${promoted_notice}" -eq 1 ]]; then
+  pass "promotion: ssh observer's stderr carries the promotion notice after the web holder dropped"
+else
+  fail "promotion: no promotion notice on the ssh observer's stderr after the web holder dropped (log: $(cat "${TMPDIR}/ssh2_err.log"))"
+fi
+
+promote_row=0
+for _ in $(seq 1 10); do
+  status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
+  promote_row="$(jq '[.[] | select(.action=="session.promote" and .outcome=="success" and .data.source=="ssh")] | length' "${TMPDIR}/resp.json")"
+  [[ "${promote_row}" -ge 1 ]] && break
+  sleep 1
+done
+if [[ "${promote_row}" -ge 1 ]]; then
+  pass "audit: session.promote row recorded for the ssh observer (${promote_row})"
+else
+  fail "audit: no session.promote row for the ssh observer"
+fi
+
+# The assertion that matters: a keystroke from the NOW-promoted ssh session
+# reaches the shell. The audit row above only proves the server announced a
+# promotion; only the shell's own echo of this command proves it granted one.
+printf 'echo wardyn-promoted-keystroke-marker\n' >&4
+keystroke_seen=0
+for _ in $(seq 1 15); do
+  grep -q "wardyn-promoted-keystroke-marker" "${TMPDIR}/ssh2_out.log" 2>/dev/null && { keystroke_seen=1; break; }
+  sleep 1
+done
+if [[ "${keystroke_seen}" -eq 1 ]]; then
+  pass "promotion: a keystroke from the promoted ssh session reached the shell (its own echo came back)"
+else
+  fail "promotion: keystroke from the promoted ssh session never reached the shell (out: $(cat "${TMPDIR}/ssh2_out.log"))"
+fi
+
+printf 'exit\n' >&4
+wait "${SSH2_PID}" 2>/dev/null || true
+SSH2_PID=""
+exec 4>&- 4<&-
+exec 5>&- 5<&-
 
 # ── summary ───────────────────────────────────────────────────────────────────
 if [[ "${FAILED}" -eq 0 ]]; then

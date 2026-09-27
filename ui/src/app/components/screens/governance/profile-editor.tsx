@@ -34,6 +34,7 @@ import { Mono } from "../../wardyn/code-block";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
 import { Note, withMono } from "./display";
+import { ProfileRubric } from "./profile-rubric";
 
 // A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
 // rows below, not a value worth spelling out in the input (storage-tab.tsx's
@@ -202,6 +203,12 @@ export function ProfileEditor({
           onChange={(v) => setLimits((l) => ({ ...l, max_drive_size_mib: v }))}
         />
       </section>
+
+      <ProfileRubric
+        value={limits.autonomy_rubric ?? {}}
+        disabled={disabled}
+        onChange={(rubric) => setLimits((l) => ({ ...l, autonomy_rubric: rubric }))}
+      />
 
       {error && (
         <Note tone="red" role="alert">

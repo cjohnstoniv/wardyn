@@ -37,24 +37,24 @@ import { getErrorMessage } from "../../../lib/format";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { isPerUserSsoRow } from "../../../lib/workspace-providers-copy";
+import { isPerUserBearerRow } from "../../../lib/model-access";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
-import { HarnessLoginPane } from "./harness-login-pane";
-import { MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
+import { MODEL_LEDE } from "../../../lib/model-providers-copy";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 
 // Canon strings (local/ux-0.5-mock/CANON-STRINGS.md § Settings). Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
 // deleted and shrinks with it.
 export const S = {
   MODEL_TITLE: "Model provider",
-  MODEL_LEDE: "Agent runs need one. Governed commands don't.",
+  MODEL_LEDE,
   // The old footer said "Keys never enter the sandbox" full stop, which is true
   // of the subscription lane, both api-key lanes, and Bedrock's BEARER key — the
   // proxy injects a static header on the wire for all four. It is NOT true of
@@ -104,6 +104,21 @@ export const S = {
   // row is per_user, so the card says so rather than implying it might be.
   BEDROCK_BEARER_UNUSED_PER_USER:
     "Not read while this lane is per person — each person's own AWS sign-in carries their runs.",
+  // DRAFT (M2 canon pending) — PR #352 review, finding 3: the bearer field's
+  // per_user twin of BEDROCK_PER_USER_NOTE. A per_user BEARER row is the one
+  // case this card offers a non-operator an editable credential at all
+  // (#337); silence there read as an operator-only field like every other
+  // one on the card. Unconditional on role (mirrors BEDROCK_PER_USER_NOTE),
+  // since the fact is true of whoever owns the row, operator included.
+  BEDROCK_BEARER_OWN_NOTE:
+    "This lane is per person: it is declared on the Agents tab, and each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's.",
+  // DRAFT (M2 canon pending) — PR #352 review, finding 4: the disabled field's
+  // own reason, for the row shape where it stays operator-only (a shared row,
+  // or no row at all — deriveIntegrations' default). Without this the only
+  // explanation on screen was the card-level OperatorOnlyHint, which reads
+  // identically whether the field is disabled for this reason or offered to
+  // the caller under a per_user bearer row — no explanation at all.
+  BEDROCK_BEARER_SHARED_REASON: "Shared — the operator's key carries every run on this lane.",
 } as const;
 
 // Card shell + lane rows.
@@ -344,17 +359,16 @@ export function SecretLane({
             Cancel
           </Button>
         )}
-        <span className="text-meta text-muted-foreground">
-          {stored ? (
-            <>
-              Replaces <Mono>{secretName}</Mono>
-            </>
-          ) : (
-            <>
-              Stored as <Mono>{secretName}</Mono>
-            </>
-          )}
-        </span>
+        {/* #355: this branch also renders the UNSTORED form (stored=false —
+            the early return above only covers stored && !editing), where
+            nothing is stored yet. "Stored as <name>" here read as "already
+            stored" beside an empty Save button. Only the Replace flow
+            (stored && editing) has a name worth naming ahead of Save. */}
+        {stored && (
+          <span className="text-meta text-muted-foreground">
+            Replaces <Mono>{secretName}</Mono>
+          </span>
+        )}
       </div>
     </div>
   );
@@ -400,22 +414,13 @@ export function ModelProviderCard({
   const [lane, setLane] = React.useState<ModelLane>(
     subRow ? "subscription" : keyRow ? "api_key" : bedrockRow ? "bedrock" : "subscription",
   );
-  const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
-  // One closer for the REFRESH, behind every way out of
-  // the login dialog. CAPTURE_CHECK_UNREACHABLE leaves the pane on its error
-  // phase with the capture possibly LANDED — onDone never fires, so without
-  // this the card kept reading not-connected until a manual page reload.
-  // Cancel/Escape make no claim either way; they just cost one GET.
-  //
-  // The pane's own Cancel is the only path that KILLS the login sandbox
-  // run (HarnessLoginPane owns that; it holds the run id). Escape and an
-  // overlay click close the dialog and unmount the pane — deliberately NOT
-  // lifted here, because a kill issued from the card would race the pane's own
-  // and would claim knowledge of a run this component never had.
-  const closeLogin = React.useCallback(() => {
-    setLoginOpen(null);
-    onChanged();
-  }, [onChanged]);
+  // Both sign-in buttons open the shell's one door (#544 — this card mounted
+  // its own dialog before). `onClosed` re-reads this screen's status behind
+  // every way out: CAPTURE_CHECK_UNREACHABLE leaves the pane on its error phase
+  // with the capture possibly LANDED — onDone never fires — and Cancel/Escape
+  // make no claim either way; they just cost one GET.
+  const door = useModelAccessDoor();
+  const openLogin = (login: "anthropic" | "aws") => door.openDoor({ for: { login }, onClosed: onChanged });
   const [busy, setBusy] = React.useState(false);
   const { disabled: harnessBusy, showSpinner: harnessSpinning } = useDeferredBusy(busy);
 
@@ -453,6 +458,12 @@ export function ModelProviderCard({
   // See that function's comment for why `enabled !== false` is
   // load-bearing, not decorative.
   const perUserSso = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserSsoRow(h));
+  // #337's twin predicate: the claude-code roster row is per_user Bedrock
+  // BEARER — a member's own stored key is what their runs actually
+  // authenticate with (the write door already admits it, #153/#327), so the
+  // bearer field below is theirs to edit. A shared row, or a per_user SSO
+  // row, leaves it operator-only exactly as before.
+  const perUserBearer = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserBearerRow(h));
   const modelAccessState = status.model_access?.state;
   // `expiring` still counts as Connected — the session still signs, and the
   // warning rides the action line, not this badge.
@@ -468,7 +479,13 @@ export function ModelProviderCard({
   return (
     <>
       <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
-        {!operator && <OperatorOnlyHint />}
+        {/* PR #352 review, finding 3: suppressed while a member sits on the
+            ONE lane/row combination this card actually hands them an
+            editable field (a per_user bearer row's AWS Bedrock lane) — the
+            hint read as "you can't touch any of this" directly above a field
+            they could. Still shown on Subscription/API key, and still shown
+            on Bedrock for every other row shape, where it remains true. */}
+        {!operator && !(perUserBearer && lane === "bedrock") && <OperatorOnlyHint />}
         {/* Roving tabindex + arrow keys
             (wardyn/use-roving-radio.ts) — one Tab stop for the group, not
             three. Each Lane's expanded form must never nest INSIDE it (an ARIA
@@ -572,7 +589,7 @@ export function ModelProviderCard({
                 Unavailable in this deployment — {status.auth.shared_subscription_reason}
               </p>
             ) : (
-              <Button size="sm" disabled={!operator} onClick={() => setLoginOpen("anthropic")}>
+              <Button size="sm" disabled={!operator} onClick={() => openLogin("anthropic")}>
                 Sign in
               </Button>
             )}
@@ -626,12 +643,35 @@ export function ModelProviderCard({
               {mechanismPrincipal && (
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_MECHANISM}</p>
               )}
+              {/* PR #352 review, finding 3: BEDROCK_PER_USER_NOTE's bearer
+                  twin — says the key belongs to whoever is looking at it,
+                  right beside the field that is (sometimes) theirs to edit. */}
+              {perUserBearer && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_OWN_NOTE}</p>
+              )}
               <SecretLane
                 label="Bedrock bearer key"
                 placeholder="Bearer token"
                 secretName="bedrock-api-key"
-                stored={present.includes("bedrock-api-key")}
-                disabled={!operator}
+                // `present` is the OPERATOR namespace only (setupSecretsSnapshot,
+                // internal/api/setup_status_secrets.go) — a MEMBER's own write
+                // never shows there, so under a per_user bearer row a member
+                // reads status.bedrock.bearer_present instead (scoped to the
+                // caller, bedrockBearerFor). An OPERATOR's own write is a
+                // DIFFERENT story even under that same row: the admin-token
+                // PUT lands in the "" namespace (runs_policy.go), while
+                // bearer_present under a per_user scope is read from the
+                // roster owner's OWN subject namespace — two different
+                // namespaces for the same operator, so reading bearer_present
+                // for an operator here would show their own just-saved key as
+                // unstored (PR #352 review, finding 2). `present` is the one
+                // that matches what an operator's Save actually wrote.
+                stored={
+                  perUserBearer && !operator
+                    ? !!status.bedrock?.bearer_present
+                    : present.includes("bedrock-api-key")
+                }
+                disabled={!operator && !perUserBearer}
                 onChanged={onChanged}
               />
               {perUserSso && (
@@ -640,6 +680,16 @@ export function ModelProviderCard({
                 // is per_user, beside the lane rather than inside the form so
                 // it shows whether or not a key happens to be stored.
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_UNUSED_PER_USER}</p>
+              )}
+              {/* PR #352 review, finding 4: a MEMBER's own reason for the
+                  field's disabled state on the row shape where it stays
+                  operator-only — a shared row, or no row at all
+                  (deriveIntegrations' default reads as shared). Excludes
+                  perUserSso, which already has its own true reason above
+                  (BEDROCK_BEARER_UNUSED_PER_USER) — this row is per person,
+                  just not on this mechanism, and "Shared" would be wrong. */}
+              {!operator && !perUserBearer && !perUserSso && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_SHARED_REASON}</p>
               )}
               {/* NOT rendered for a mechanism
                   principal. `disabled={!operator}` is no guard here — an
@@ -651,7 +701,7 @@ export function ModelProviderCard({
                   one) and drops the door. */}
               {!mechanismPrincipal && (
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
+                  <Button size="sm" variant="secondary" disabled={!operator} onClick={() => openLogin("aws")}>
                     Sign in with SSO
                   </Button>
                   <span className="text-meta text-muted-foreground">
@@ -663,67 +713,6 @@ export function ModelProviderCard({
           </LaneBody>
         )}
       </Card>
-
-      {/* This dialog hosts a live PTY, which makes it unlike every other dialog
-          in the console, in three ways worth spelling out:
-
-          1. NO TRANSFORM. DialogContent centres itself with
-             translate(-50%,-50%), and a transformed ancestor becomes the
-             containing block for `position: fixed` DESCENDANTS. AttachTerminal's
-             fullscreen is `fixed inset-0`, so inside the default dialog it
-             rendered at the dialog's size instead of the viewport's — the
-             fullscreen button silently did almost nothing. Measured: a host
-             with `transform: translate(0,0)` gives a `fixed inset-0` child
-             512px; `transform: none` gives it the full 2548px viewport. Note
-             `transform-none`, NOT `translate-x-0` — a zeroed translate is still
-             a transform and still traps `fixed`. Centring is inset-0 + m-auto
-             + h-fit, which needs no transform at all.
-          2. WIDER via an inline `style`, not a class. The base carries
-             `w-full` and `sm:max-w-lg`; a competing `max-w-*` class is the same
-             specificity, so which one wins is decided by utility order in the
-             compiled stylesheet — measured, `sm:max-w-lg` won both `max-w-3xl`
-             and `sm:max-w-[72rem]`. An inline style beats every class, so the
-             width is a fact rather than a race.
-          3. `min-w-0` on the pane. DialogContent is a GRID, and a grid item
-             defaults to `min-width: auto`, so it refuses to shrink below its
-             content's min-content width. The login terminal is pinned to 512
-             columns (LOGIN_PTY_COLS — a wrapped OAuth URL breaks the login), so
-             without this the terminal shoved the dialog past the viewport edge
-             and painted over the page. */}
-      <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && closeLogin()}>
-        <DialogContent
-          className="scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
-          // `translate` and `transform` are SEPARATE CSS properties in Tailwind
-          // v4: translate-x-[-50%] emits `translate: -50% -50%`, which
-          // `transform: none` does not reset. Left applied it shifted this
-          // dialog half its own size up and to the left of where margin:auto
-          // had centred it — measured left 122px against a computed
-          // margin-left of 698px. Cleared here, where nothing can outrank it.
-          style={{
-            width: "min(96vw, 72rem)",
-            maxWidth: "min(96vw, 72rem)",
-            translate: "none",
-            transform: "none",
-          }}
-        >
-          {/* ONE spelling with the button that opens it and with the shell
-              strip's own door (W0-mock ruling 5): the dialog title and the
-              control that opens it must never name the sign-in differently. */}
-          <DialogTitle>
-            {loginOpen === "aws" ? MODEL_ACCESS_BANNER.DIALOG_TITLE : "Sign in to Claude"}
-          </DialogTitle>
-          {loginOpen && (
-            <div className="min-w-0">
-              <HarnessLoginPane
-                provider={loginOpen}
-                startURLManaged={perUserSso}
-                onDone={closeLogin}
-                onCancel={closeLogin}
-              />
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

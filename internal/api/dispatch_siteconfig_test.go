@@ -121,6 +121,7 @@ func dispatchAndCaptureSpec(t *testing.T, srv *Server, fr *fakeRunner) runner.Sa
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
 	if fr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
@@ -138,7 +139,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 
 	// 1. Platform sandboxEnv + artifact config delivery + the Bedrock switch —
 	// all riding the same Env map.
-	for _, k := range []string{"GOTMPDIR", "GOCACHE", "MAVEN_OPTS"} {
+	for _, k := range []string{"GOTMPDIR", "GOCACHE", "GOMODCACHE", "MAVEN_OPTS"} {
 		if spec.Env[k] == "" {
 			t.Errorf("Env[%q] empty, want platform toolchain env set", k)
 		}
@@ -155,8 +156,8 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	// The resident SigV4 keys are the CREDENTIAL half of the environment, so
 	// they ride SecretEnv, not Env: splitSecretEnv moves every key the Bedrock
 	// lane reports out of the map a k8s pod spec would carry inline. Asserting
-	// both sides here is the point — a regression that put the key back in Env
-	// is exactly the API-readable leak the split closed.
+	// both sides here is the point — a change that put the key back in Env
+	// would be exactly the API-readable leak the split closes.
 	if spec.SecretEnv["AWS_ACCESS_KEY_ID"] != "AKIATESTTESTTESTTEST" {
 		t.Errorf("SecretEnv[AWS_ACCESS_KEY_ID] = %q, want the resident test key", spec.SecretEnv["AWS_ACCESS_KEY_ID"])
 	}
@@ -170,14 +171,13 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	if spec.ProxyConfig.UpstreamProxyURL != "http://proxy.corp:3128" {
 		t.Errorf("ProxyConfig.UpstreamProxyURL = %q, want http://proxy.corp:3128", spec.ProxyConfig.UpstreamProxyURL)
 	}
-	// PORT-QUALIFIED, not bare: 4d8f48e1 (W13-S1-5) made planArtifactRedirect
-	// author net.JoinHostPort(host, redirectPort(r.To)), so the proxy's MITM dial
-	// lands on the port the operator configured instead of assuming 443. The
-	// redirect above has no explicit port, so 443 is the derived one. The proxy
-	// splits the suffix back off (parseMITMHostPort, proxy.go) and scopes the
-	// entry to that port, so this is the correct wire shape — this expectation
-	// predates the change (test last touched d3c1f103) and was stale, not the
-	// code. TestRedirectPort (artifact_redirect_test.go) is the producer-side half.
+	// Port-qualified, not bare: planArtifactRedirect authors net.JoinHostPort(host,
+	// redirectPort(r.To)), so the proxy's MITM dial lands on the port the operator
+	// configured instead of assuming 443. The redirect above has no explicit port,
+	// so 443 is the derived one. The proxy splits the suffix back off
+	// (parseMITMHostPort, proxy.go) and scopes the entry to that port, so this is
+	// the correct wire shape. TestRedirectPort (artifact_redirect_test.go) is the
+	// producer-side half.
 	const wantMITM = "artifactory.corp:443"
 	foundMITM := false
 	for _, h := range spec.ProxyConfig.MITMHosts {
@@ -279,6 +279,7 @@ func TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder(t *testing.T) 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
 	if fr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
@@ -363,6 +364,7 @@ func TestDispatch_BedrockPrivateEndpoint_Composed(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST /runs = %d, want 201: %s", w.Code, w.Body.String())
 	}
+	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
 	if fr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
