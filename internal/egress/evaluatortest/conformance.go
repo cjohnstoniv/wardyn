@@ -16,45 +16,33 @@ import (
 )
 
 // EvaluatorErrorRuleSource is the operator-visible rule source a host whose
-// policy could not be evaluated is denied under (docs/UI-SANDBOXES.md publishes
-// it as a decision reason). It lives here rather than only in the proxy because
-// the fail-closed handling it names is part of the Evaluator CONTRACT
-// (egress.Evaluator: "An EvaluateHost error MUST be treated as deny"), and a
-// contract with no shared assertion is a comment.
+// policy could not be evaluated is denied under (docs/UI-SANDBOXES.md
+// publishes it as a decision reason).
 const EvaluatorErrorRuleSource = "policy:evaluator-error"
 
 // ErrEvaluate is the error ErrorEvaluator returns.
 var ErrEvaluate = errors.New("evaluatortest: engine unavailable")
 
-// ErrorEvaluator is an egress.Evaluator whose host evaluation always fails —
-// the OPA sidecar that is down, the Cedar policy that will not compile, the
-// network call an alternate engine makes. Its methods are otherwise permissive
-// (MethodAllowed returns true) so a Deny observed by RunHostErrorFailsClosed
-// can only have come from the error handling under test.
+// ErrorEvaluator is an egress.Evaluator whose host evaluation always fails.
+// Its methods are otherwise permissive (MethodAllowed returns true) so a Deny
+// observed by RunHostErrorFailsClosed can only have come from the error
+// handling under test.
 type ErrorEvaluator struct{}
 
 func (ErrorEvaluator) Name() string { return "evaluatortest:error" }
 
 func (ErrorEvaluator) EvaluateHost(context.Context, egress.Request) (egress.HostVerdict, error) {
-	// The verdict returned alongside the error is deliberately the MOST
-	// permissive one: a host that fails closed only because the engine also
-	// happened to say "deny" is not failing closed at all.
+	// Deliberately the MOST permissive verdict: a host that fails closed only
+	// because the engine also happened to say "deny" isn't failing closed.
 	return egress.VerdictAllow, ErrEvaluate
 }
 
 func (ErrorEvaluator) MethodAllowed(string) bool { return true }
 
-// RunHostErrorFailsClosed holds a HOST of the Evaluator seam — the proxy today,
-// any other consumer tomorrow — to the error half of the contract:
-// egress.Evaluator states "An EvaluateHost error MUST be treated as deny (fail
-// closed)", and nothing tested it. evaluate is given an evaluator that always
-// errors and must report what the host decided plus the rule source it recorded.
-//
-// With the branch disabled (`if verr != nil` -> `if false`) the whole
-// egress + ipguard + hostrules + contentscan suite stayed green, and the shared
-// conformance suite could not catch it either — its verdict helper t.Fatalf's on
-// any error, so an alternate engine can pass conformance while returning the
-// very errors this branch is the only thing standing behind.
+// RunHostErrorFailsClosed holds a host of the Evaluator seam to the error half
+// of the contract: egress.Evaluator states "An EvaluateHost error MUST be
+// treated as deny (fail closed)". evaluate is given an evaluator that always
+// errors and must report what the host decided plus the rule source recorded.
 func RunHostErrorFailsClosed(t *testing.T, evaluate func(egress.Evaluator) (egress.Decision, string)) {
 	t.Helper()
 	decision, ruleSource := evaluate(ErrorEvaluator{})
@@ -83,8 +71,7 @@ func RunConformance(t *testing.T, newFromSpec func(types.RunPolicySpec) egress.E
 	}
 
 	t.Run("empty_policy_is_unknown_then_proxy_default_denies", func(t *testing.T) {
-		// An empty allowlist (no allow-all) yields Unknown for any host — the proxy
-		// turns Unknown into deny (or approval). The evaluator must NOT return Allow.
+		// Empty allowlist yields Unknown; the proxy turns that into deny/approval.
 		if v := verdict(types.RunPolicySpec{}, "example.com"); v == egress.VerdictAllow {
 			t.Fatalf("empty policy must not allow; got %v", v)
 		}

@@ -1,20 +1,14 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package hostrules holds the host-shape rules and artifact-registry tables the
-// RUNTIME governance paths depend on — approval write-back, egress substitution,
-// site-config validation and the artifact-redirect emitter.
+// Package hostrules holds the host-shape rules and artifact-registry tables
+// the RUNTIME governance paths depend on — approval write-back, egress
+// substitution, site-config validation, and the artifact-redirect emitter.
+// Not scanning: extracted from internal/workspacescan (scheduled for deletion
+// in 0.5.x) so these could outlive it.
 //
-// These four helpers were extracted verbatim from internal/workspacescan, where
-// they had accumulated for no better reason than that the scanner was written
-// first. They are not scanning: ValidApprovedHost gates what an operator may
-// promote into a durable allowlist (internal/api/approvals.go's learnVerifyEgress),
-// HostOf is the URL→host parser site-config and the probes validate with, and
-// PublicRegistryHosts/EmitArtifactConfig drive corporate artifact redirection.
-// The scanner is scheduled for deletion in 0.5.x; these outlive it.
-//
-// Leaf package by design (stdlib only), so both internal/api and — until it goes —
-// internal/workspacescan can depend on it without a cycle.
+// Leaf package by design (stdlib only), so internal/api and — until it goes
+// — internal/workspacescan can both depend on it without a cycle.
 package hostrules
 
 import (
@@ -51,28 +45,20 @@ func HostOf(rawURL string) string {
 	return ""
 }
 
-// ecosystemPublicHosts maps an artifact ecosystem key (matching the
-// types.SiteConfig.ArtifactOverrides keys — npm|pip|go|cargo|maven|nuget) to the
-// public-registry hosts a corporate redirect REPLACES.
+// ecosystemPublicHosts maps an artifact ecosystem key (matching
+// types.SiteConfig.ArtifactOverrides — npm|pip|go|cargo|maven|nuget) to the
+// public-registry hosts a corporate redirect REPLACES. Spelled out here
+// rather than reusing workspacescan's marker-table literals: same strings,
+// different (soon to diverge) purpose.
 //
-// These values are spelled out here rather than referencing workspacescan's
-// marker-table literals. The two are the same strings
-// for different reasons — the marker table answers "a repo with this file
-// probably needs these hosts" (scanner inference, being deleted), this answers
-// "these are the hosts a corp mirror stands in for" (runtime egress
-// substitution, permanent). Coupling them outlived its usefulness the moment
-// one side was scheduled for removal.
-//
-// maven maps to Central's mirror hosts; the plugins.gradle.org plugin-portal
-// host is a separate concern a mirror override does not touch.
+// maven maps to Central's mirror hosts; plugins.gradle.org is a separate
+// concern a mirror override does not touch.
 var ecosystemPublicHosts = map[string][]string{
 	"npm":   {"registry.npmjs.org"},
 	"pip":   {"pypi.org", "files.pythonhosted.org"},
 	"go":    {"proxy.golang.org", "sum.golang.org"},
 	"cargo": {"crates.io", "static.crates.io", "index.crates.io"},
-	// repo1.maven.org is Central's canonical host; many builds hit it directly
-	// (survey: 6/10 JVM repos resolve against both).
-	"maven": {"repo.maven.apache.org", "repo1.maven.org"},
+	"maven": {"repo.maven.apache.org", "repo1.maven.org"}, // repo1 is Central's canonical host
 	"nuget": {"api.nuget.org"},
 }
 
@@ -90,32 +76,20 @@ func PublicRegistryHosts(ecosystem string) []string {
 var artifactEcosystems = []string{"npm", "pip", "cargo", "maven", "go", "nuget"}
 
 // EmitArtifactConfig turns operator-configured artifact-registry redirects
-// (ecosystem -> corporate base URL) into the per-tool config each toolchain reads
-// to pull from the corporate mirror instead of the public registry. Returns
-// (files, env):
-//   - files: path -> content, keyed by each tool's real config location relative
-//     to HOME (npm .npmrc, pip .config/pip/pip.conf, cargo .cargo/config.toml,
-//     maven .m2/settings.xml, nuget .nuget/NuGet/NuGet.Config). A dispatch-time
-//     writer drops them under $HOME; a committable export drops the
-//     repo-cascading ones (.npmrc/.cargo) usefully at the repo root and the
-//     rest as documentation.
-//   - env: the go-toolchain variables (go redirects via GOPROXY/GOSUMDB env, not
-//     a file).
+// (ecosystem -> corporate base URL) into the per-tool config each toolchain
+// reads to pull from the corporate mirror instead of the public registry.
+// Returns files (path -> content, relative to HOME) and env (the go
+// toolchain's GOPROXY/GOSUMDB, which has no config file).
 //
-// The output is URL-ONLY and carries NO secret — an injected registry token is
-// applied proxy-side, never written into a committable/readable config file.
-// Maven's settings.xml is intentionally MIRRORS-ONLY: the sandbox reaches the
-// mirror THROUGH wardyn-proxy via MAVEN_OPTS (set platform-wide at dispatch), so
-// no <proxies> block is emitted here — which also keeps a committed settings.xml
-// free of the sandbox-only wardyn-proxy hostname (mirrors=which-URL is additive
-// to proxies=how-to-reach, which lives in MAVEN_OPTS). GOPRIVATE is deliberately
-// NOT set: GOPRIVATE="*" would route modules to direct VCS and defeat the corp
-// GOPROXY, and GOSUMDB=off already disables the checksum DB the corp proxy may
-// not serve. Pure + deterministic; unknown/empty ecosystems are skipped.
+// Output is URL-ONLY, no secret: a registry token is injected proxy-side,
+// never written to a committable/readable config file. Maven's settings.xml
+// is MIRRORS-ONLY — no <proxies>, since the sandbox reaches the mirror
+// through wardyn-proxy via MAVEN_OPTS. GOPRIVATE is deliberately NOT set
+// (it would route modules to direct VCS and defeat the corp GOPROXY).
 //
 // Injection safety: base URLs come from site-config, which validateSiteConfig
-// already rejects if they contain control chars or shell/XML metacharacters
-// (`$;&|<>"'\), so embedding base verbatim into TOML/XML/ini here is safe.
+// already rejects if they contain shell/XML metacharacters, so embedding
+// base verbatim into TOML/XML/ini here is safe.
 func EmitArtifactConfig(bases map[string]string) (files map[string]string, env map[string]string) {
 	files = map[string]string{}
 	env = map[string]string{}

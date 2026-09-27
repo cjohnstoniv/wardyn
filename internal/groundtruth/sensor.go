@@ -11,37 +11,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// HeartbeatEventWithDropped builds the periodic sensor liveness beat. run_id is
-// NULL (the sensor is host-scoped, not per-run); actor_type=system,
-// actor=sensor. The control plane records these append-only and /healthz keys
-// the ebpf_groundtruth state off the most recent one within a TTL. droppedTotal
-// is the sensor's cumulative count of events LOST before they ever reached the
-// control plane — TWO causes share this one counter: (1) backpressure, the
-// original and still primary one — the POST buffer was full and an event was
-// discarded rather than blocking the tail loop (cmd/wardyn-tetragon-ingest's
-// eventSink); and (2) an oversized/unterminated export line — tailExport's
-// pending buffer exceeded its 1 MiB cap (B12b-F9) and was dropped before it
-// ever became an event to map. Both are counted here rather than split into a
-// second field because the operator-facing question either answers is the
-// same ("is ground truth complete"), and the file's own dropped_unmapped
-// precedent (below) reserves a SEPARATE counter only for a cause with a
-// materially different operator response (a TracingPolicy/correlation fix,
-// not a capacity one) — a log line is what distinguishes the two drop causes
-// when the count alone is not enough. observedTotal is the cumulative count of
-// real kernel events mapped off the tail; both are surfaced on /healthz so it
-// can tell "sensor alive but observing nothing" (idle) apart from "events
-// flowing" (healthy) and show the drop-gap size. A live heartbeat ALONE never
-// proves kernel ground truth is arriving. observedByKind (keyed by
-// Action — ActionProcessExec/ActionNetworkConnect/ActionFileWrite) is the
-// SAME cumulative count split per event kind (W20-W20-groundtruth-mapper-4):
-// the aggregate alone cannot distinguish "all three kinds arriving" from "one
-// kind carrying the whole count while the others are silently blind" (a
-// mis-scoped TracingPolicy, say). May be nil/empty on an older sensor build.
-// droppedUnmapped is the count of mapped kernel events the sensor refused to
-// forward because they correlated to no run (the sidecar's default-on unmapped
-// gate). It exists so "the sensor saw nothing" and "the sensor saw plenty and
-// correlated none" stop being the same observed_total==0 on /healthz — the
-// second is a correlation failure, and it must not be invisible.
+// HeartbeatEventWithDropped builds the periodic sensor liveness beat. run_id
+// is NULL (host-scoped); /healthz keys ebpf_groundtruth state off the most
+// recent one within a TTL.
+//
+// droppedTotal merges two loss causes (full POST buffer; oversized/
+// unterminated export line) since both answer the same operator question; a
+// log line distinguishes them. observedTotal is the real-kernel-event count
+// mapped — together they show "alive but idle" vs "events flowing".
+// observedByKind splits it per event kind (nil on older builds), since the
+// aggregate can't tell all kinds arriving from one masking others gone blind.
+// droppedUnmapped counts events refused for correlating to no run, so "saw
+// nothing" isn't conflated with "saw plenty, correlated none".
 func HeartbeatEventWithDropped(droppedTotal, observedTotal, droppedUnmapped uint64, observedByKind map[string]uint64) types.AuditEvent {
 	data := heartbeatData{
 		EventData: EventData{
@@ -74,25 +55,16 @@ func HeartbeatEventWithDropped(droppedTotal, observedTotal, droppedUnmapped uint
 type heartbeatData struct {
 	EventData
 	DroppedTotal uint64 `json:"dropped_total"`
-	// ObservedTotal is the cumulative count of real kernel ground-truth events
-	// the sensor has mapped off the tail (NOT heartbeats/blinds). /healthz reads
-	// it to tell "sensor alive but observing nothing" (idle) apart from "events
-	// flowing" (healthy) — a live heartbeat alone never proves ground truth.
+	// ObservedTotal is the real-kernel-event count mapped (NOT heartbeats/blinds).
 	ObservedTotal uint64 `json:"observed_total"`
-	// DroppedUnmapped is the cumulative count of kernel events dropped because
-	// they correlated to no run. Nonzero with ObservedTotal==0 means the sensor
-	// is NOT blind — correlation is failing. Omitted by an older sensor build.
+	// DroppedUnmapped counts events dropped for correlating to no run (omitted by an older sensor build).
 	DroppedUnmapped uint64 `json:"dropped_unmapped,omitempty"`
-	// ObservedByKind splits ObservedTotal by event Action
-	// (kernel.process.exec/kernel.network.connect/kernel.file.write).
-	// /healthz reports per-kind coverage off this — see HeartbeatEventWithDropped.
+	// ObservedByKind splits ObservedTotal by event Action.
 	ObservedByKind map[string]uint64 `json:"observed_by_kind,omitempty"`
 }
 
-// BlindEvent builds the one-time event emitted for a run the host eBPF sensor
-// cannot see into (CC3/Kata microVM guest). It is bound to the run (so the gap
-// is attributable) with a fixed reason. This makes the published host-eBPF-vs-
-// Kata blindness gap VISIBLE in the audit stream rather than a silent absence.
+// BlindEvent builds the one-time event for a run the host eBPF sensor can't
+// see into (CC3/Kata), bound to the run so the gap is visible, not silent.
 func BlindEvent(runID uuid.UUID, reason string) types.AuditEvent {
 	if reason == "" {
 		reason = "cc3-kata-host-ebpf-blind"

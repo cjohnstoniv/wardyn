@@ -31,9 +31,12 @@
 //
 // Cookies are not port-scoped, so a shared hostname would let sandbox content
 // see console cookies and vice versa: every forwarded request has ALL wardyn_*
-// cookies plus Authorization and ?ticket stripped, and every response has
-// Set-Cookie: wardyn_* dropped (cookie tossing). Both directions are pinned by
-// tests in uigateway_test.go.
+// cookies plus Authorization and ?ticket stripped (and any other cookie the
+// operator's UICookiePolicy strips), and every response has Set-Cookie:
+// wardyn_* dropped (cookie tossing), along with any Set-Cookie carrying a
+// Domain attribute or no name (uiSetCookieAllowed, uigateway_cookies.go). Both
+// directions are pinned by tests in uigateway_test.go and
+// uigateway_cookies_test.go.
 //
 // No content is recorded. ui.authorize/ui.start/ui.open/ui.close say that a human
 // opened and closed an app; there is no keystroke, screen or page capture on
@@ -359,8 +362,28 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	s.uiReverseProxy().ServeHTTP(w, r.WithContext(ctx))
+	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
 }
+
+// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say).
+// ReverseProxy copies an interim response's headers straight onto the writer
+// and never runs ModifyResponse for it, so without this uiStripOutbound's
+// rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and
+// hijack reachable through http.ResponseController.
+type uiInterimWriter struct{ http.ResponseWriter }
+
+func (w uiInterimWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		uiFilterSetCookie(w.Header())
+	} else {
+		// ReverseProxy clears the header map after each 1xx, which takes the
+		// gateway's own Referrer-Policy with it; put it back on the final response.
+		w.Header().Set("Referrer-Policy", "no-referrer")
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
 // transport) on first use. Per-request state — which run, which port — rides
@@ -416,7 +439,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	// The app sees a plain loopback Host, which is what it is bound to and what
 	// its own CSRF/host checks expect — never the run id we dial by.
 	pr.Out.Host = "localhost:" + strconv.Itoa(sess.Port)
-	uiStripInbound(pr.Out)
+	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
 }
 
 // uiStripInbound is the sandbox-ward half of the header hygiene. Cookies are
@@ -424,8 +447,9 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 // hostname — including the console's session on a shared-host deployment — to
 // a request bound for sandbox-authored code. They come off here, along with
 // Authorization (same reason) and any ?ticket (single-use, but a ticket in an
-// app's access log is still a ticket in a log).
-func uiStripInbound(out *http.Request) {
+// app's access log is still a ticket in a log). Every other cookie is the
+// operator's policy (UICookiePolicy; the default forwards it).
+func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	out.Header.Del("Authorization")
 	out.Header.Del("Proxy-Authorization")
 	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
@@ -439,8 +463,13 @@ func uiStripInbound(out *http.Request) {
 		kept := make([]string, 0, strings.Count(raw, ";")+1)
 		for _, seg := range strings.Split(raw, ";") {
 			seg = strings.TrimSpace(seg)
-			name, _, _ := strings.Cut(seg, "=")
-			if seg != "" && !uiIsWardynCookie(name) {
+			// A segment with no '=' is a NAMELESS cookie (RFC 6265bis sends
+			// just its value), so it matches only what the policy says of "".
+			name, _, ok := strings.Cut(seg, "=")
+			if !ok {
+				name = ""
+			}
+			if seg != "" && policy.forwards(name) {
 				kept = append(kept, seg)
 			}
 		}
@@ -459,24 +488,25 @@ func uiStripInbound(out *http.Request) {
 // uiStripOutbound is the browser-ward half: an app in the sandbox must not be
 // able to set, overwrite or delete a wardyn_* cookie in the operator's browser
 // (cookie tossing — a sandbox-set wardyn_ui_sess or console session cookie
-// would be an authentication attack, not a rendering quirk).
+// would be an authentication attack, not a rendering quirk), nor set one that
+// escapes its own host (uiSetCookieAllowed).
 func uiStripOutbound(resp *http.Response) error {
-	raw := resp.Header.Values("Set-Cookie")
+	uiFilterSetCookie(resp.Header)
+	return nil
+}
+
+// uiFilterSetCookie keeps only the Set-Cookie values uiSetCookieAllowed passes.
+func uiFilterSetCookie(h http.Header) {
+	raw := h.Values("Set-Cookie")
 	if len(raw) == 0 {
-		return nil
+		return
 	}
-	kept := make([]string, 0, len(raw))
+	h.Del("Set-Cookie")
 	for _, sc := range raw {
-		name, _, _ := strings.Cut(sc, "=")
-		if !uiIsWardynCookie(strings.TrimSpace(name)) {
-			kept = append(kept, sc)
+		if uiSetCookieAllowed(sc) {
+			h.Add("Set-Cookie", sc)
 		}
 	}
-	resp.Header.Del("Set-Cookie")
-	for _, sc := range kept {
-		resp.Header.Add("Set-Cookie", sc)
-	}
-	return nil
 }
 
 // uiIsWardynCookie matches the reserved cookie namespace case-insensitively.

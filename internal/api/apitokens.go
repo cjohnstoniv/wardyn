@@ -23,8 +23,6 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -285,34 +283,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if s.denyUserCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
-		writeError(w, http.StatusUnprocessableEntity, "name: invalid")
+	name, ok := apiTokenName(w, req.Name)
+	if !ok || s.apiTokenCapReached(w, r, sub) {
 		return
 	}
-
-	existing, err := s.cfg.Store.ListAPITokensByPrincipal(ctx, sub)
-	if err != nil {
-		writeServerError(w, r, "list api tokens", err)
-		return
-	}
-	live := 0
-	for _, t := range existing {
-		if t.RevokedAt == nil {
-			live++
-		}
-	}
-	if live >= apiTokenMaxPerPrincipal {
-		writeError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
-		return
-	}
-
-	raw := make([]byte, 32)
-	// crypto/rand.Read never returns an error (go1.24+): it crashes the program
-	// irrecoverably instead, so there is no failure path to serve a 500 on.
-	rand.Read(raw)
-	plaintext := apiTokenPrefix + hex.EncodeToString(raw)
 
 	// The identity SNAPSHOT. Role is the caller's REAL session role, copied
 	// verbatim — NOT a two-valued isOperator re-derivation. This token
@@ -389,8 +363,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	created, err := s.cfg.Store.CreateAPIToken(ctx, types.APIToken{
-		ID:              uuid.New(),
+	created, ok := s.insertAPIToken(w, r, types.APIToken{
 		Principal:       sub,
 		Email:           oidcEmailFromContext(ctx),
 		Role:            role,
@@ -399,20 +372,64 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		GroupsTruncated: &groupsTruncated,
 		Name:            name,
 		CreatedAt:       authorizedAt,
-	}, plaintext)
-	if err != nil {
-		writeServerError(w, r, "create api token", err)
+	})
+	if !ok {
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"token.create", created.ID.String(), "success",
 		mustJSON(map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType})))
-
-	// The ONLY response that carries the plaintext. It is not stored, so this
-	// body is the sole opportunity to read it; a lost token is re-minted, never
-	// recovered.
-	created.Token = plaintext
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// apiTokenName is the trimmed display name, or false after a 422.
+func apiTokenName(w http.ResponseWriter, raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	if len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
+		writeError(w, http.StatusUnprocessableEntity, "name: invalid")
+		return "", false
+	}
+	return name, true
+}
+
+// apiTokenCapReached answers the per-principal live cap, writing the refusal
+// (or the 500) when it is reached. Both mint routes ask it BEFORE their late
+// session-revocation re-check, so that check stays the last thing before the
+// row.
+func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, principal string) bool {
+	existing, err := s.cfg.Store.ListAPITokensByPrincipal(r.Context(), principal)
+	if err != nil {
+		writeServerError(w, r, "list api tokens", err)
+		return true
+	}
+	live := 0
+	for _, e := range existing {
+		if e.RevokedAt == nil {
+			live++
+		}
+	}
+	if live >= apiTokenMaxPerPrincipal {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
+		return true
+	}
+	return false
+}
+
+// insertAPIToken is the store half both mint routes share: a fresh plaintext
+// and the row. The returned token carries the plaintext, and the 201 that
+// writes it is the ONLY response that ever does — it is not stored, so a lost
+// token is re-minted, never recovered.
+func (s *Server) insertAPIToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (types.APIToken, bool) {
+	plaintext := newBearer(apiTokenPrefix)
+	t.ID = uuid.New()
+	created, err := s.cfg.Store.CreateAPIToken(r.Context(), t, plaintext)
+	if err != nil {
+		writeServerError(w, r, "create api token", err)
+		return types.APIToken{}, false
+	}
+	created.Token = plaintext
+	return created, true
 }
 
 // handleListAPITokens is GET /api/v1/me/tokens: the caller's own tokens,
@@ -421,8 +438,13 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 // retired). No row anywhere in this response carries the plaintext or the
 // hash.
 func (s *Server) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
+	s.listAPITokensFor(w, r, principalFromRequest(r))
+}
+
+// listAPITokensFor is the list body GET /me/tokens and an admin's
+// GET /people/{principal}/tokens share: one principal's tokens, exactly.
+func (s *Server) listAPITokensFor(w http.ResponseWriter, r *http.Request, principal string) {
 	ctx := r.Context()
-	principal := principalFromRequest(r)
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
 		return

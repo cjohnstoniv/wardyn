@@ -740,6 +740,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
 	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	s.mountPeopleRoutes(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys

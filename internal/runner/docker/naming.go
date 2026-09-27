@@ -21,9 +21,8 @@ const (
 	agentNamePrefix = "wardyn-agent-"
 
 	// demoAgentImagePrefix is the repository prefix of the demo agent images
-	// `make agent-images` builds (wardyn/agent-claude-code, wardyn/agent-oracle,
-	// wardyn/agent-aws-sso, ...). They live in no registry, so an absent one is
-	// the single case where a failed pull has a make target as its fix.
+	// `make agent-images` builds. They live in no registry, so a failed pull
+	// for one of these has a make target as its fix.
 	demoAgentImagePrefix = "wardyn/agent-"
 
 	// labelRun tags every Wardyn-owned object with its run UUID for audit and
@@ -41,11 +40,10 @@ const (
 // UUID alone.
 func agentContainerName(runID uuid.UUID) string { return agentNamePrefix + runID.String() }
 
-// runIDFromAgentName recovers the run UUID from a deterministic agent container
-// name. The Docker daemon reports the name with a leading slash
-// ("/wardyn-agent-<uuid>"); both forms are accepted. It is the teardown fallback
-// when the wardyn.run-id label is unreadable, so the sibling proxy + per-run
-// network can still be located by their deterministic names.
+// runIDFromAgentName recovers the run UUID from a deterministic agent
+// container name. The Docker daemon reports the name with a leading slash;
+// both forms are accepted. Teardown fallback when the wardyn.run-id label is
+// unreadable.
 func runIDFromAgentName(name string) (uuid.UUID, error) {
 	name = strings.TrimPrefix(name, "/")
 	if !strings.HasPrefix(name, agentNamePrefix) {
@@ -60,15 +58,10 @@ func proxyContainerName(runID uuid.UUID) string { return "wardyn-proxy-" + runID
 func internalNetName(runID uuid.UUID) string { return "wardyn-int-" + runID.String() }
 
 // wardynLabels stamps every Wardyn-owned object so audit and teardown
-// selectors can find them by run and component. extra is applied FIRST and the
-// three reserved keys are stamped LAST — the rule the k8s driver has carried
-// since its M3 finding (k8s/naming.go), here for the same reason: extra is
-// caller-supplied (it reaches this function from policy/dispatch), and applying
-// it last let an entry named wardyn.run-id rename the run on every object it
-// stamped. Every teardown and audit selector on this substrate keys on exactly
-// that label, so a run that mislabelled itself could never be reclaimed by id
-// again — agent container, credential-holding proxy sidecar and per-run network
-// all answering to someone else's selector.
+// selectors can find them by run and component. extra is applied FIRST and
+// the three reserved keys are stamped LAST (same rule as the k8s driver's
+// naming.go): extra is caller-supplied, and applying it last stops an entry
+// named wardyn.run-id from renaming the run on every object it stamps.
 func wardynLabels(runID uuid.UUID, component string, extra map[string]string) map[string]string {
 	l := make(map[string]string, len(extra)+3)
 	for k, v := range extra {

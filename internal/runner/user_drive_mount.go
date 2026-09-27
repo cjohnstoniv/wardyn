@@ -1,22 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The deployment's ENV CEILING over user drives whose bytes live on a host path
-// (WARDYN_USER_DRIVE_HOST_ROOTS).
-//
-// Why a drive needs one at all, when the drive row is admin-authored: a
-// host_path drive names a tree the OPERATOR mounted host-side, and Wardyn then
-// binds a subdirectory of it into OTHER PEOPLE's sandboxes. That is the same
-// shape member_mount.go's own doc argues about — a path typed into the product
-// deciding what a sandbox can reach — and it takes the same answer: the
-// security ceiling is operator/MDM-set in the environment, never a row in a
-// table the product itself writes. A console compromise then widens nothing,
-// because the widening it would need is not in the database.
-//
-// Unset fails closed. With no roots configured, NO host_path drive may be
-// authored at all — byte-for-byte the WARDYN_USER_WORKSPACE_ROOTS posture,
-// and for the same reason: the safe default for "the operator has not said
-// where" is "nowhere", not "anywhere".
+// The deployment's ENV ceiling over user drives whose bytes live on a host path
+// (WARDYN_USER_DRIVE_HOST_ROOTS): operator/MDM-set, never a row the product
+// itself writes, so a console compromise cannot widen it. Unset fails closed —
+// no roots configured means no host_path drive may be authored at all.
 package runner
 
 import (
@@ -33,43 +21,20 @@ import (
 
 // ParseUserDriveHostRoots parses WARDYN_USER_DRIVE_HOST_ROOTS — a CSV of
 // absolute, already-cleaned host directories — into the roots a host_path drive
-// may be authored inside, plus the boot WARNINGS a dangerously wide root earns.
+// may be authored inside, plus boot WARNINGS for a dangerously wide root. It
+// reuses parseRootList, so a malformed value REFUSES BOOT like
+// WARDYN_USER_WORKSPACE_ROOTS does.
 //
-// It reuses parseRootList verbatim, so a root here can no more carry a
-// traversal segment than a member root can, and a malformed value REFUSES BOOT
-// exactly as WARDYN_USER_WORKSPACE_ROOTS does: a ceiling the operator
-// mistyped must not silently become a ceiling that bounds a different tree.
+// Three values are allowed but warned about: the daemon's own $HOME (too WIDE —
+// every dotfile tree becomes authorable, and per-person subdirectories get
+// bound into other sandboxes); "/" (DEAD, not wide — withinAnyRoot never
+// matches it, so it refuses every drive); and a root under a denied bind prefix
+// (dead the same way, and previously silent — UserDriveHostRootCheck runs
+// ValidateMountSource before comparing against roots).
 //
-// THREE root values are permitted but WARNED about, the same allow-and-warn
-// posture UserMountPolicy.bootWarnings takes — and they are warned about for
-// OPPOSITE reasons, which is why they do not share a sentence:
-//
-//   - the daemon's own $HOME is far too WIDE: every dotfile tree that home
-//     holds becomes a place a drive may be authored over, and its per-person
-//     subdirectories are bound into other people's sandboxes.
-//   - "/" is DEAD, not wide. withinAnyRoot matches `real == root` or `real`
-//     under `root + "/"`, and for the root "/" that second form is the prefix
-//     "//", which no cleaned absolute path has — so a ceiling of "/" matches
-//     nothing at all and refuses EVERY host_path drive. It reads like "allow
-//     anywhere" and behaves like "allow nothing", so the warning has to say
-//     which.
-//   - A root UNDER A DENIED BIND PREFIX is dead in exactly the same way, and
-//     was the silent one (F13 H2). UserDriveHostRootCheck runs
-//     ValidateMountSource BEFORE it ever compares against the roots, so a
-//     ceiling of /dev/shm, a share mounted under /var/run, or a relocated
-//     Docker data-root under /var/lib/docker parses clean here and then refuses
-//     every drive authored inside it — the operator learning from a 422 on a
-//     form they believed was right rather than from the boot line that could
-//     have told them. Same "matches NOTHING" wording as "/", because it is the
-//     same outcome; the deny-list's own sentence is carried through so the
-//     operator reads WHICH prefix bit.
-//
-// The deny-list runs LEXICALLY here, on the value as configured, and does not
-// resolve symlinks: boot is not the place to touch a share that may not be
-// mounted yet, and a root that resolves INTO a denied tree is still caught —
-// by UserDriveHostRootCheck, which re-runs the same list on the real path at
-// authoring and at bind time. This warning is about the value the operator can
-// read back out of their own unit file.
+// The deny-list runs LEXICALLY on the configured value, not the resolved path:
+// boot must not touch a share that may not be mounted yet. UserDriveHostRootCheck
+// re-runs the same list on the real path at authoring and bind time.
 func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err error) {
 	roots, err = parseRootList("WARDYN_USER_DRIVE_HOST_ROOTS", raw)
 	if err != nil {
@@ -95,36 +60,18 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 	return roots, warnings, nil
 }
 
-// MountCeilingOverlapWarnings returns the boot WARNINGS earned when the two
-// operator-set mount ceilings name overlapping trees.
+// MountCeilingOverlapWarnings returns boot WARNINGS when the two operator-set
+// mount ceilings (WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS)
+// name overlapping trees. They are one level apart by design — a drive's
+// host_root is a share's mount point and Wardyn binds only one person's
+// subdirectory of it, while a workspace root may be bound WHOLE and writable —
+// so overlap lets a member onboard a drive's share as a workspace and bind every
+// person's home through a surface that never consults drive allocation.
 //
-// THEY ARE ONE LEVEL APART BY DESIGN, and nothing enforced it. A drive's
-// host_root is the mount point of a SHARE, and Wardyn binds only ONE PERSON's
-// subdirectory of it into a sandbox — the whole per-person isolation model, and
-// the reason UserDriveMountSourceCheck refuses a source that resolved TO a root.
-// WARDYN_USER_WORKSPACE_ROOTS bounds a different thing entirely: directories a
-// MEMBER may name as a workspace and bind WHOLE, writable where
-// WARDYN_USER_WRITABLE_ROOTS allows it.
-//
-// Point the two at one tree and the second undoes the first. With
-// WARDYN_USER_WORKSPACE_ROOTS=/srv/shares and a drive rooted at /srv/shares,
-// a member onboards /srv/shares as a workspace and mounts EVERY person's home,
-// through a surface that never consults a drive allocation at all. Both ceilings
-// individually accept it; nothing compared them, so no boot line said so and no
-// gate refused it.
-//
-// A WARNING, NOT A REFUSAL, the same allow-and-warn posture the surrounding
-// ceiling parsing takes (see the three-case doc above and
-// UserMountPolicy.bootWarnings): an operator may have deliberately opened a
-// tree to both, and a refusal at boot would take a running deployment down on
-// upgrade over a posture it already has. What was missing was the operator ever
-// being told.
-//
-// LEXICAL, on the values as configured, for the same reason the deny-list check
-// above is: boot is not the place to touch a share that may not be mounted yet.
-// Every member ceiling is compared, the shared list and each per-principal
-// override alike — a per-member override REPLACES the shared list, so it is a
-// ceiling in its own right and can overlap on its own.
+// A WARNING, not a refusal: an operator may have deliberately opened a tree to
+// both, and refusing at boot would take a running deployment down on upgrade.
+// Comparison is LEXICAL, on configured values, and covers the shared list plus
+// every per-principal override (which replaces rather than extends it).
 func MountCeilingOverlapWarnings(member UserMountPolicy, driveRoots []string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -173,8 +120,7 @@ func userCeilingRoots(member UserMountPolicy) []string {
 		}
 	}
 	add(member.Roots)
-	// Sorted: a map iteration would reorder the boot warnings between restarts,
-	// and an operator diffing two boots would read that as a change.
+	// Sorted so boot warnings are stable across restarts (map order isn't).
 	for _, p := range slices.Sorted(maps.Keys(member.RootsByPrincipal)) {
 		add(member.RootsByPrincipal[p])
 	}
@@ -183,45 +129,27 @@ func userCeilingRoots(member UserMountPolicy) []string {
 
 // UserDriveHostRootCheck returns the ceiling predicate the API write boundary
 // composes with types.ValidateUserDrive: nil when hostRoot is inside one of
-// roots, an error naming the ceiling otherwise. It satisfies
+// roots, an error naming the ceiling otherwise. Satisfies
 // types.UserDriveHostRootCheck.
 //
-// THE EMPTY-ROOTS ARM IS THE FEATURE, not a degenerate case: no roots means
-// every host_path drive is refused, so a deployment that has not opted in
-// cannot acquire one by an admin filling in a form.
+// Empty roots refuses EVERY host_path drive by design — a deployment that has
+// not opted in cannot acquire one via an admin form.
 //
-// It resolves symlinks and matches on the REAL path (withinAnyRoot, shared with
-// the member rule), and it FAILS CLOSED on a resolve error — including "does
-// not exist". That last one is stricter than ValidateMountSource, which falls
-// through to a lexical check so a remote dockerd's paths still validate, and
-// the difference is deliberate: a member's mount source is a path they are
-// looking at, while a drive's host root is a share the operator is asserting is
-// mounted HERE. Authoring a drive over a path that is not there yet would defer
-// the failure to somebody else's run.
+// Resolves symlinks and matches on the REAL path, failing closed on any
+// resolve error (including "does not exist") — stricter than
+// ValidateMountSource, since a drive's host root asserts a share is mounted
+// HERE, not merely a path being looked at.
 func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 	return func(hostRoot string) error {
 		if len(roots) == 0 {
 			return fmt.Errorf("this deployment sets no WARDYN_USER_DRIVE_HOST_ROOTS, so no host_path drive may be authored " +
 				"(set it to the mount point of the share, then re-save this drive)")
 		}
-		// The SAME host bind-mount deny-list every other authored source runs,
-		// applied here rather than left to the driver: a drive whose root is
-		// /etc or a directory holding a runtime socket is a row that would be
-		// refused at every member's dispatch, so it is refused at authoring
-		// instead. The driver still re-checks at bind time — this is the policy
-		// half of the two-layer guardrail, exactly as validatePolicySpec is.
-		//
-		// The list is shared, the sentence is not. Returned unwrapped, the
-		// deny-list speaks bind-mount: `mount source "/etc/homes" is under
-		// denied host path "/etc"`. An admin reads that on the DRIVE EDITOR,
-		// which has no "mount source" field — the field they filled in is
-		// host_root — so the one arm with a frozen row in the server-composed
-		// table (docs/design/user-drives-prompt.md §7.1) gets that row's
-		// wording, built from the prefix the shared list itself names
-		// (DeniedSourcePrefix) rather than from a second copy of it. Every
-		// other arm — empty, relative, uncleaned, the host root itself, a
-		// runtime socket — has no frozen row and keeps the shared sentence
-		// rather than acquiring an invented one.
+		// The same host bind-mount deny-list every authored source runs (policy
+		// half of the two-layer guardrail; the driver re-checks at bind time).
+		// Rewritten to name host_root, since the drive editor has no "mount
+		// source" field — the frozen wording is pinned in
+		// docs/design/user-drives-prompt.md §7.1.
 		if err := ValidateMountSource(hostRoot); err != nil {
 			if p := DeniedSourcePrefix(hostRoot); p != "" {
 				return fmt.Errorf("host_root %q is under a denied prefix (%s) — the same deny list every host bind obeys", hostRoot, p)
@@ -232,23 +160,17 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 		if err != nil {
 			return fmt.Errorf("host_root %q could not be resolved on this host (a drive's host root must be a directory that exists here): %w", hostRoot, err)
 		}
-		// The member rule's DOTFILE deny-list, on the RESOLVED path — the same
-		// segments ValidateUserMountSource refuses (.ssh, .aws, .claude, .kube,
-		// .config/gh, …). ValidateMountSource above denies whole system trees; it
-		// says nothing about a credential directory inside an ordinary home, and
-		// a share whose mount point is one — or a symlink that lands in one — is
-		// exactly the shape THREAT-MODEL's host_path residual claims is bounded
-		// by "the dotfile deny-list matches the real path". Without this the
-		// claim was true of member mounts only.
+		// The member rule's dotfile deny-list, on the RESOLVED path (.ssh, .aws,
+		// .claude, .kube, .config/gh, …) — ValidateMountSource above denies whole
+		// system trees but says nothing about a credential dir inside an
+		// ordinary home.
 		if seg := deniedUserSegment(real); seg != "" {
 			return fmt.Errorf("host_root %q resolves to %q, which is or traverses %q — a credential directory is never a drive's host root",
 				hostRoot, real, seg)
 		}
 		if !withinAnyRoot(real, roots) {
-			// The frozen wording (docs/design/user-drives-prompt.md's
-			// server-composed table), naming the RESOLVED path too when it
-			// differs — a symlink out of the ceiling is the case an admin
-			// cannot diagnose from the path they typed.
+			// Frozen wording (docs/design/user-drives-prompt.md); names the
+			// resolved path too when it differs from what the admin typed.
 			if real != filepath.Clean(hostRoot) {
 				return fmt.Errorf("host_root %q resolves to %q and is not inside WARDYN_USER_DRIVE_HOST_ROOTS (%s) — "+
 					"a drive may bind only a subdirectory of a root this deployment allows", hostRoot, real, strings.Join(roots, ", "))
@@ -261,32 +183,17 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 }
 
 // UserDriveMountSourceCheck is the DRIVER-side check over the path a host_path
-// drive is actually BOUND from — this principal's subdirectory — as opposed to
-// the host_root an admin authored, which UserDriveHostRootCheck decides about.
+// drive is actually bound from (this principal's subdirectory), as opposed to
+// the authored host_root UserDriveHostRootCheck decides about.
 //
-// It is that check plus ONE rule that only makes sense for a bind: the resolved
-// source must be a STRICT SUBDIRECTORY of a root, never a root itself. An
-// authored host_root legitimately IS a root (the ordinary shape: the ceiling
-// names the share's mount point and so does the drive), so the equality arm
-// cannot live inside the shared check without refusing every correct drive. But
-// a MOUNT whose source resolved to the root would bind the whole share —
-// everybody's home directory — into one member's sandbox, which is the single
-// outcome the per-person subdirectory model exists to prevent. That can only
-// arrive through a bug (a home name that resolved to "." or "", a symlink from
-// a home back to its parent), and a bug is precisely what a last-thing-before-
-// ContainerCreate check is for.
+// Adds one rule beyond the shared check: the resolved source must be a STRICT
+// subdirectory of a root, never the root itself — a source that resolved TO
+// the root would bind the whole share into one sandbox, which only a bug (a
+// home name resolving to "." or a symlink back to its parent) could produce.
 //
-// Composed rather than restated so the driver and the API write boundary cannot
-// drift on what the deny-list, the unset-roots refusal, or "inside a root" mean.
-//
-// IT RETURNS THE RESOLVED REAL PATH, not just nil/error, and the caller is
-// expected to keep asserting about it. This function's whole job is symlink
-// resolution, so handing back the answer is what stops the ONE caller that has
-// to say more about it — the Docker driver, which knows whose home the bind is
-// supposed to be — from resolving the same path a second time and reasoning
-// about a value this one never saw. On an error the string is "": there is no
-// resolved path to speak of, and a caller that ignored the error must not find
-// a plausible-looking one in its place.
+// Returns the resolved real path (not just error) so the one caller that needs
+// it — the Docker driver — doesn't re-resolve the same path. On error the path
+// is always "".
 func UserDriveMountSourceCheck(roots []string) func(source string) (string, error) {
 	within := UserDriveHostRootCheck(roots)
 	return func(source string) (string, error) {
@@ -295,9 +202,9 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 		}
 		real, err := filepath.EvalSymlinks(filepath.Clean(source))
 		if err != nil {
-			// Unreachable in practice — `within` already resolved this path and
-			// fails closed when it cannot — but a resolve that started working
-			// and then stopped must not fall through to a bind.
+			// Unreachable in practice (`within` already resolved this path),
+			// kept as a fail-closed guard against a resolve that stops working
+			// mid-flight.
 			return "", fmt.Errorf("user drive source %q could not be resolved on this host: %w", source, err)
 		}
 		for _, root := range roots {
@@ -314,57 +221,29 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 	}
 }
 
-// UserDriveHomeWithinItsRoot asserts that real — the symlink-RESOLVED directory
+// UserDriveHomeWithinItsRoot asserts that real — the symlink-resolved directory
 // a host_path drive is about to be bound from — is a STRICT SUBDIRECTORY of
 // hostRoot, THIS drive's own root, resolved the same way.
 //
-// Why the deployment ceiling is not enough.
+// The deployment ceiling (UserDriveMountSourceCheck) only bounds the bind to
+// the union of every configured root, not to which root THIS drive was
+// authored against — so on a deployment with two share drives, a home replaced
+// host-side by a link to the same-named home under a DIFFERENT drive's root
+// would pass every other check and bind the wrong drive's tree. The per-drive
+// root closes that gap; a drive must satisfy both bounds.
 //
-// UserDriveMountSourceCheck bounds the bind to the union of every root in
-// WARDYN_USER_DRIVE_HOST_ROOTS, which is the OPERATOR's outer bound and stays
-// exactly that. It cannot say which of those roots this particular drive was
-// authored against, because it is not given the drive. So on a deployment with
-// two share drives — ceiling `/srv/a,/srv/b`, drive A rooted at /srv/a, drive B
-// at /srv/b — a home under A replaced host-side by a link to the SAME-NAMED
-// home under B satisfies every check the driver had: it is inside a configured
-// root, it is not a root, it traverses no denied prefix, and its base name is
-// still this principal's home. And it binds drive B's tree.
-//
-// The per-drive root closes it, and the two bounds are kept BOTH rather than
-// collapsed into one: the ceiling is the operator's (env/MDM-set, a console
-// compromise cannot widen it) and the root is the row's (admin-authored, and
-// therefore not allowed to be the outer bound). A drive must satisfy both.
-//
-// Fail closed on an absent root.
-//
-// An empty hostRoot is a REFUSAL, not a skip. types.DriveMount.HostRoot is set
+// An empty hostRoot is a REFUSAL, not a skip: types.DriveMount.HostRoot is set
 // from the resolved row for every host_path drive, so "" means the mount was
-// built by something that does not know about this field — an older control
-// plane, or an in-process caller that assembled a runner.SandboxSpec itself —
-// and it must refuse rather than silently succeed. NOT the standalone runner's -spec JSON: cmd/wardyn-runner's
-// fileSpec decodes no drive field and loadSpec never sets SandboxSpec.Drive, so
-// a hand-written spec cannot produce a drive at all
-// (TestLoadSpec_CannotProduceADrive pins that).
+// built by something that doesn't know this field (an older control plane, or
+// a caller that assembled a SandboxSpec directly) — never the standalone
+// runner's -spec JSON, which cannot produce a drive at all
+// (TestLoadSpec_CannotProduceADrive).
 //
-// STRICT, so a source that resolved TO the root is refused here as well as by
-// UserDriveMountSourceCheck: binding a share's root hands one member every
-// other member's home, and a check that is only stated once is a check a
-// refactor can drop.
+// STRICT: a source resolved TO the root is refused here too, since a check
+// stated only once is a check a refactor can drop.
 //
-// The refusal names the drive, the log names the paths.
-//
-// Every driver refusal on this path becomes the run's failure_hint, which the
-// run's CREATOR reads — the same reader driveShareIsBindable already refuses to
-// hand the resolved path, applyUserDriveEnv refuses to hand the object name, and
-// driveAuditTarget masks the audit row for. So the returned error names the
-// DRIVE and the DIRECTORY and nothing else (DriveSubject), the shape
-// driveVolumeAdoptable already uses when it declines to reproduce a subject
-// digest, and the host_root, the resolved real path and the underlying resolve
-// error go to slog, where the operator reads them. Field NAMES are kept
-// (host_root) — a field name is not a value.
-//
-// A mount that cannot even name its drive falls back to the directory alone: the
-// fallback for "I cannot name the drive" must not be "then disclose the path".
+// The returned error names the drive and directory only (DriveSubject); the
+// host_root, real path, and resolve error go to slog for the operator.
 func UserDriveHomeWithinItsRoot(drive *types.DriveMount, real string) error {
 	if drive == nil {
 		return fmt.Errorf("user drive: this mount carries no drive to be contained by")
@@ -405,17 +284,12 @@ func UserDriveHomeWithinItsRoot(drive *types.DriveMount, real string) error {
 }
 
 // DriveSubject names a mount the way a member-facing refusal may: which drive,
-// whose directory, and NO PATH. A mount carrying no drive name (an older control
-// plane, an in-process caller that built the spec itself) names the directory
-// alone — never the object, which on a share IS the operator's absolute path.
+// whose directory, and NO PATH. A mount carrying no drive name (older control
+// plane, or a directly-built spec) names the directory alone — never the
+// object, which on a share IS the operator's absolute path.
 //
-// Exported because the DRIVER composes the same sentence for its own refusals
-// (RefuseUserDriveBind, and internal/runner/docker's drive arm). One definition
-// of "what a member may be told about a drive" is the point: two would drift,
-// and the direction they drift in is disclosure.
-//
-// Nil-safe: a refusal about a mount that carries no drive at all still has to
-// be a sentence, and "the drive" is the least it can say.
+// Exported so the driver's own refusals (RefuseUserDriveBind, docker's drive
+// arm) compose the same sentence rather than drift on what may be disclosed.
 func DriveSubject(drive *types.DriveMount) string {
 	switch {
 	case drive == nil:
@@ -432,40 +306,25 @@ func DriveSubject(drive *types.DriveMount) string {
 // audience rule is checkable in one place: neither may name a path, and
 // RefuseUserDriveBind's own test asserts they do not.
 const (
-	// DriveSourceRefused is every way the composed source check can refuse the
-	// path this deployment resolved for the drive: the deployment ceiling, the
-	// host bind deny-list, the credential-dotfile list, a source that resolved
-	// to a configured root, an unresolvable path. WHICH of them is a fact about
-	// the OPERATOR's filesystem and their configuration, so it goes to the log
-	// and the member is told who can act on it.
+	// DriveSourceRefused covers every way the source check can refuse the
+	// resolved path; which reason applies is an operator-filesystem fact, so
+	// it goes to the log, not here.
 	DriveSourceRefused = "cannot be bound on this host: the directory this deployment resolved for it is not one a drive may bind here — " +
 		"wardynd's log names the rule that refused it, and an operator can fix it"
-	// DriveHomeNameRefused is the sibling-symlink case. The diagnosis needs no
-	// path to be complete, and the path it would name is ANOTHER PRINCIPAL's
-	// home directory.
+	// DriveHomeNameRefused is the sibling-symlink case; the path it would name
+	// is another principal's home directory.
 	DriveHomeNameRefused = "resolves to a directory named after somebody else — a home replaced by a link to a sibling " +
 		"would bind another person's directory"
 )
 
 // RefuseUserDriveBind is the ONE place a DRIVER-side refusal about a share's
-// bind source becomes an error somebody reads, and it splits the audience in
-// two — the shape k8s.refuseForbiddenDriveClaim already uses, for the same
-// reason and on the same evidence.
+// bind source becomes an error, and it splits the audience in two (same shape
+// as k8s.refuseForbiddenDriveClaim).
 //
-// The OPERATOR gets the paths, in a log line: the source the resolver derived
-// (on a share that IS the operator's absolute share path), what it resolved to,
-// and the underlying check's own sentence — which names the deployment's
-// configured roots, or the denied prefix, or the sibling home. Nothing has been
-// taken away from them.
-//
-// The MEMBER gets the drive, the directory and `reason`, and `reason` carries
-// no path. A driver refusal becomes the run's failure_hint VERBATIM
-// (internal/api's dispatch), read by whoever launched the run — the same reader
-// driveShareIsBindable already refuses to hand the resolved path,
-// applyUserDriveEnv refuses to hand the object name, and driveAuditTarget masks
-// the audit row for. Two of the Docker driver's three host_path refusal sites
-// handed them all of it: the deployment's configured roots on one, and on the
-// other the absolute path of the home a sibling symlink actually landed on.
+// The OPERATOR gets the paths in a log line (source, resolved real path, and
+// the underlying check's sentence). The MEMBER gets only drive, directory, and
+// `reason` — `reason` carries no path, since it becomes the run's
+// failure_hint verbatim and is read by whoever launched the run.
 //
 // Field NAMES are kept (host_root, source) — a field name is not a value.
 func RefuseUserDriveBind(drive *types.DriveMount, source, real, reason string, cause error) error {
