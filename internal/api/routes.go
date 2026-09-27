@@ -50,9 +50,10 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		// A sign-in refused over its user type (ambiguous or unknown) is an
-		// auth.fail row; the oidc package stays audit-agnostic.
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
+		// A sign-in whose subject is a reserved principal is refused; that and
+		// one refused over its user type (ambiguous or unknown) are auth.fail
+		// rows. The oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -691,6 +692,7 @@ func (s *Server) routes() chi.Router {
 		// Hybrid enrolment: anonymous enrol, the wdd_ device routes and the admin
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
+		s.mountBrandingRoutes(r) // console branding: anonymous reads, SUPER writes (branding.go)
 	})
 
 	s.mountUI(r)

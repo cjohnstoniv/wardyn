@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -52,6 +53,14 @@ type capExplainRow struct {
 	Value      string          `json:"value"`
 	State      capExplainState `json:"state"`
 	Restricted bool            `json:"restricted,omitempty"`
+	// Label is a non-secret display name for Value, set where the server can
+	// name it and never where naming it would leak a secret or an id nobody
+	// asked for (user-types packet UT-G, G-4). A git provider row has no name
+	// field of its own, and a model provider's is behind an operatorOnly
+	// roster a security admin cannot read — both come back named here instead,
+	// so a caller of either tier reads the same words. Empty when the kind
+	// isn't one of the two, or the row's own resource is gone.
+	Label string `json:"label,omitempty"`
 }
 
 // explainPrincipal canonicalizes subject the way validateCapabilityGrant
@@ -121,6 +130,14 @@ func (s *Server) capExplain(ctx context.Context, subj callerSubjects, kinds []st
 	if err != nil {
 		return nil, fmt.Errorf("api: explain capabilities: %w", err)
 	}
+	// Site config is read only when a labelled kind is actually asked for — a
+	// caller naming neither never pays for it.
+	var sc types.SiteConfig
+	if slices.Contains(kinds, capWorkspaceProvider) || slices.Contains(kinds, capModelProvider) {
+		if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
+			return nil, fmt.Errorf("api: explain capabilities: %w", err)
+		}
+	}
 	var wild []types.CapabilityGrant
 	for _, g := range grants {
 		if strings.TrimSpace(g.Value) == capWildcard {
@@ -156,10 +173,78 @@ func (s *Server) capExplain(ctx context.Context, subj callerSubjects, kinds []st
 			if state, err = full.explainCell(ctx, kind, k.direction, v); err != nil {
 				return nil, err
 			}
-			rows = append(rows, capExplainRow{Kind: kind, Value: v, State: state, Restricted: k.restrictable && restricted[kind][v]})
+			rows = append(rows, capExplainRow{
+				Kind: kind, Value: v, State: state,
+				Restricted: k.restrictable && restricted[kind][v],
+				Label:      explainLabel(sc, kind, v),
+			})
 		}
 	}
 	return rows, nil
+}
+
+// gitProviderKindLabel names a git provider kind the same words the console's
+// own PROVIDERS.KIND_GITHUB / KIND_AZURE_DEVOPS strings render
+// (workspace-providers-copy.ts) — one vocabulary on both surfaces.
+var gitProviderKindLabel = map[types.GitProviderKind]string{
+	types.GitProviderGitHub:      "GitHub",
+	types.GitProviderAzureDevOps: "Azure DevOps",
+}
+
+// gitProviderOrgOrHost names WHERE a git provider row points: the
+// organisation path segment of its first base URL if it has one (Azure
+// DevOps: "https://dev.azure.com/example-org" -> "example-org"), else the
+// host alone (a GitHub Enterprise Server row has no org path to read, so its
+// host IS the identity: "https://github.example.com" -> "github.example.com").
+// "" if no base URL parses, which explainLabel treats as unnamed.
+func gitProviderOrgOrHost(baseURLs []string) string {
+	for _, raw := range baseURLs {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			continue
+		}
+		if seg := strings.Trim(u.Path, "/"); seg != "" {
+			if i := strings.IndexByte(seg, '/'); i >= 0 {
+				seg = seg[:i]
+			}
+			return seg
+		}
+		return u.Host
+	}
+	return ""
+}
+
+// explainLabel is a row's non-secret display label (G-4): the kind and its
+// organisation or host for a git provider row (workspace_provider — it has no
+// name field of its own), and the admin-chosen name for a model provider row
+// (model_provider — operatorOnly, so a security admin reads only an id
+// without this). "" for every other kind, the wildcard row, and a resource
+// this deployment no longer carries; the caller then falls back to a
+// client-side name or the raw value.
+func explainLabel(sc types.SiteConfig, kind, value string) string {
+	switch kind {
+	case capWorkspaceProvider:
+		for _, p := range gitProviderRows(sc) {
+			if p.ID != value {
+				continue
+			}
+			kindLabel, ok := gitProviderKindLabel[p.Kind]
+			who := gitProviderOrgOrHost(p.BaseURLs)
+			if !ok || who == "" {
+				return ""
+			}
+			return kindLabel + " · " + who
+		}
+	case capModelProvider:
+		if sc.ModelProviders != nil {
+			for _, p := range sc.ModelProviders.Providers {
+				if p.ID == value {
+					return p.Name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // explainBatch is a capBatch already holding everything decide reads — the

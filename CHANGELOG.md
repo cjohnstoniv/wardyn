@@ -49,6 +49,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`WARDYN_BEDROCK_BASE_URL` on a wardyn-proxy sidecar's own subnet now refuses boot instead of
+  denying every model call (#1198).** The proxy's SSRF guard never lifts an address on any subnet
+  its own interfaces sit on, so a Bedrock PrivateLink endpoint resolving onto the docker
+  control-plane network's subnet used to have every model call denied at dispatch time, with the
+  SDK misreading the denial as a malformed Bedrock response. `wardynd` now resolves the
+  variable's host once, at boot, and refuses to start when the resolved address falls inside the
+  control-plane network's subnet, naming the variable, the address, the subnet and a remedy. The
+  same failure can also land on a run's own per-run network — that subnet is allocated fresh per
+  run and can't be predicted at boot, so an address inside Docker's own built-in
+  default-address-pools instead logs a WARN naming the `daemon.json` remedy. Kubernetes logs a
+  WARN too (the per-run proxy pod's CIDR is not reliably known at boot); an unresolvable host
+  also WARNs and proceeds.
+
 - **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
   run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
   answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the
@@ -64,6 +77,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   client-go's 5/10 per API group to one shared 50 QPS / burst 100 limiter, and a readiness wait that
   times out under client-side throttling now names the pod's reason (for example
   "Unschedulable … Insufficient cpu") instead of "client rate limiter Wait returned an error".
+- **The AWS SSO reauth-hold docker tests now start the agent image the way a Bedrock SSO run
+  does (#1193, refs #1185).** They bind-mounted a host-written `~/.aws` over the image's home and
+  ran `claude` directly, so a red run read as "the pinned Claude Code CLI cannot resolve an SSO
+  profile" while real runs were minting role credentials all along (the kind SSO walk's pinned
+  identity case). The files now arrive as dispatch sends them (`WARDYN_AWS_SSO_CONFIG_B64`,
+  materialized by the image's own `agent-run`) with the env dispatch writes, so a break in that
+  delivery path fails them. The tolerance measurement now fits inside `go test`'s default
+  timeout and removes its agent container instead of leaving it holding the parked call.
 - **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
   recovers a KILLED run whose kill tail never finished (#710).** That route is
   the sweep's only caller: it does not run at boot or on a timer, so recovery
@@ -966,6 +987,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Console branding (#1125).** A super admin sets the organisation's name, how the product name
+  reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an
+  optional dark-mode pair (derived when unset), a logo (SVG or PNG, at most 512 KB) and an optional
+  https Support link from a new Branding card in Admin view Settings. The sign-in page, the top bar,
+  the browser tab title and the tab icon follow it; the danger, warning, success and info colours
+  and the Admin view cue are never brandable. wardynd stores the record (migration
+  `0091_branding`), validates every save server-side with a named reason (`invalid_colour`,
+  `low_contrast` with the ratio, `link_not_https`, `logo_too_large`, `invalid_logo`, …), rebuilds
+  an uploaded SVG from an allowlist and refuses one that can run script or fetch, serves the logo
+  from `'self'` with its validated type and `nosniff`, and audits `branding.write` /
+  `branding.delete`. The Content-Security-Policy is unchanged, and an unbranded console renders
+  exactly as before. New routes: `GET /api/v1/branding` and `/branding/logo` (anonymous, the
+  public subset), `GET /branding/settings` (signed in), `PUT`/`DELETE /branding/settings` (admin).
+
 - **Admin-minted API tokens and people set up before their first sign-in (#1157).** An admin or
   `security_admin` can create a person keyed by their identity provider's `sub` (`POST /people`),
   mint them a `wdn_` token (`POST /people/{principal}/tokens`) and list their tokens
@@ -977,6 +1012,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   token whose role the person's sign-in would change is revoked rather than re-stamped. Migration
   `0090_people_and_token_minted_by` adds the `people` table and `api_tokens.minted_by`. See
   [Tokens for a person who never signs in](docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in).
+
+- **User types screen: list, editor, and "What this type gets" (#618).** A new admin screen at
+  `/admin/user-types` lists every org-defined user type and edits its name, description and sign-in
+  priority. Each type's editor shows the ceiling and run limits (read-only) of the governance
+  profile assigned to it, and a "What this type gets" grid answering every resource family for that
+  type (everyone / this type / blocked / admins only / not available), backed by
+  `GET /permissions/explain`. A restricted resource the type isn't listed for names who it is for, a
+  block carries the wall note, and a row written for the type can be removed from the grid. Each
+  family carries an Add button that opens Permissions' own "Add a grant" dialog with Who and
+  Capability fixed, and `GET /permissions/explain` rows now carry a non-secret display `label` for a
+  git provider or model provider value (its kind and organisation or host, or its own name), so a
+  security admin reads the same words an operator does instead of an id. The
+  Permissions, Governance and Drive-allocation "Who" pickers now offer "User type" alongside
+  User/Group/Everyone, with a closed picker of the org's types rather than free text, and an
+  existing row names the type by its name; adding a deny for a user type asks to confirm first,
+  since no person or group allow overrides it. The People step's add-mapping form offers a type
+  picker once more than the built-in Standard user exists. `/me`'s `user_type` now carries a
+  `description`; the user's own Getting started page reads "You're set up as {type}" with the type's
+  description. `GET /runs/{id}` carries `user_type_name`, so a run's Identity panel shows "Ran as
+  {type}" to its owner as well as to admins.
+
 - **Console e2e suite hardening (#728).** Every spec built on `fixtures.ts`'s shared `test` now
   fails if its page throws an uncaught JS error or trips the Content-Security-Policy, not only
   when a spec happened to assert on one — a per-spec allowlist covers the rare case where that
@@ -1649,6 +1705,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
+  Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
+  operator's and a device's, so an identity provider that let a user pick their `sub` could
+  produce a human treated as that identity — owning every run the admin token created. The SSO
+  callback now refuses a subject equal to `admin-token`, the configured `WARDYN_LOCAL_OPERATOR`,
+  or starting with `local:` or `device:` (trimmed and case-folded), before role derivation, with
+  the generic sign-in error and an `auth.fail` row (`wardyn/oidcCallback`, reason
+  `reserved_principal`). A session cookie or `wdn_` API token carrying such a principal, issued
+  before this change, is refused with `401` and the same reason on every request; with OIDC
+  configured, a stored SSH key under one is refused at the gateway (`ssh.authenticate` failure),
+  while local-mode and admin-token-only SSH keep working. The revive/restart/extend owner
+  re-check now exempts a run by its recorded `operator_owned` flag instead of `created_by ==
+  "admin-token"`, so a person's run named like the admin token is re-checked; an admin-token run
+  created before 0.8 (flag unset) is re-checked too when a signed-in admin revives it, so under an
+  enforced kind it needs an allow row for everyone, its user type or `admin-token`; the admin
+  token reviving its own run is unaffected. A guard test now fails on any new
+  comparison against the admin token's principal string outside a reviewed allow-list. If a local
+  install moves to SSO with a custom `WARDYN_LOCAL_OPERATOR`, keep the variable set: that seat is
+  reserved only while it is configured.
+
 - **The UI-sandbox gateway drops a sandbox app's `Set-Cookie` that carries a `Domain` attribute, and
   can keep other hosts' HttpOnly cookies away from the app (#1158).** A relayed app confined to its
   own origin never needs `Domain=`; with it, the app's server on a relay host under a shared parent
@@ -1667,6 +1743,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   non-HttpOnly cookies matter — host mode on a registrable domain of its own is the answer. See
   docs/UI-SANDBOXES.md, "Header hygiene".
 
+- **A kept run's token is refused at every `/internal` door the moment the run is kept (#1176).**
+  A run its lease ended, or one lost to a reboot or an outage, stays `RUNNING` with its identity
+  unrevoked (a run-wide revoke would also refuse the fresh token a revive mints), so the token
+  its stopped proxy still holds used to pass `internalAuth`'s liveness gate: the credential-mint,
+  injection, approval and decision doors kept answering it until it lapsed, up to an hour after
+  its last renewal. The gate now refuses a kept run with `403 run is lost` and audits
+  `authz.denied` with the new reason `run_kept` (the kept reason rides beside it as
+  `lost_reason`), as token renew already did. The three tail-upload doors keep their five-minute
+  grace, counted from when the run was kept. Revive is unchanged: it still mints a fresh token for
+  the new proxy and retires the old one by its jti. The run token, MITM CA key and upstream-proxy
+  URL still sit in the stopped proxy container's Docker env for the grace window; that part of
+  #1176 is still open.
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
   (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
   kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env

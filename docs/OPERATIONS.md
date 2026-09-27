@@ -898,6 +898,16 @@ A few things that don't fit the grid:
   real login would, against pasted claims or the caller's own session, so an
   admin can see "who would this row make an admin" without waiting for that
   person to sign in — nothing it does is saved.
+- **Some subjects never sign in.** The callback refuses an identity-provider
+  `sub` that names an identity that is not a person — `admin-token`, the
+  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:` name, trimmed
+  and case-folded — with the generic sign-in error and an `auth.fail` row
+  (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
+  one is refused on use. Switching a local-mode install to SSO: the default
+  seat (`local:<os-user>`) stays reserved by its prefix, but a custom
+  `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains
+  set — unset it, and a person whose `sub` is that name would own the runs
+  local mode created under it. Keep it set.
 - **The same claim values do double duty.** The `roles`/`groups` values a role
   mapping matches are the exact same login-time snapshot a `/permissions`
   capability grant's `subject_type=group` matches against (see "Subjects, and
@@ -957,7 +967,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 
 | Surface | Gate |
 |---|---|
-| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; launch preset writes (`PUT`/`DELETE /presets/{name}`), selectable content like a stored policy; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; launch preset writes (`PUT`/`DELETE /presets/{name}`), selectable content like a stored policy; the console branding writes (`PUT`/`DELETE /branding/settings`), org-wide presentation every sign-in page shows; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the operator-topology READS — `GET /site-config`, `GET /sources`, `GET /sources/{id}`, `GET /base-images`: they carry the upstream-proxy secret ref, a `local_dir` source Locator and internal registry refs, so reading them is reading the deployment's own topology | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
@@ -2391,8 +2401,9 @@ is not supported.
 happens when the email already names another known subject, when the subject is
 already known under a different email, when the subject differs from a known
 one only by case, or when the subject is another person's email. It answers
-`422` for the reserved subjects `admin-token`, the local-mode operator, and
-`device:…`.
+`422` for the reserved subjects `admin-token`, the local-mode operator,
+`local:…` and `device:…`, in any case — the same set a sign-in is refused for
+(see "Some subjects never sign in").
 
 **What the minted token carries.** It gets the role and user type the person's
 sign-in would derive from their email. Their groups are unknown until they sign
@@ -2601,8 +2612,8 @@ field carries the stored value forward; name it as `""` to clear it.
 Every member denial that isn't a plain foreign-resource 404 is audited under
 `authz.denied`, whose `reason` field is the whole vocabulary.
 
-Two of the reasons below are NOT member denials at all: 0.7.4 added a RUN-TOKEN
-tier (`run_terminal`, `run_not_found`), raised by `internalAuth`'s liveness
+Three of the reasons below are NOT member denials at all: 0.7.4 added a RUN-TOKEN
+tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness
 gate against a sandbox sidecar's own run token rather than against a person. They
 live in this table because the action, the shape and the `reason` field are the
 same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
@@ -2643,6 +2654,7 @@ admin walking the member path, not an incident.
 | `harness_login_not_per_user` | 0.7.2: `POST /setup/harness-login` by a member when the agent's model credential is NOT a `per_user` row (`authorizeHarnessLogin`, `internal/api/harnesscred.go`) — the deployment's credential is one an admin connects for everyone, so there is no personal sign-in to capture. Target `setup.harness_login`. Emitted since 0.7.2 and missing from this table until 0.8 | ⛔ `403` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
+| `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
@@ -2755,13 +2767,20 @@ the run has no network, its pending approvals are cancelled and its broker
 credentials get a best-effort, audit-only revoke — but the run's own identity
 is NOT revoked, so the run stays `RUNNING` and holds its quota slot until
 `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or a
-kill. `run.ending_soon` warns at 24h, 1h and 10m before the end.
+kill. `run.ending_soon` warns at 24h, 1h and 10m before the end. Its token is
+refused all the same: every `/internal/*` door refuses a kept run (ended, or
+lost to a reboot or an outage) with `403` and an `authz.denied` row, reason
+`run_kept`, so nothing can mint a credential, resolve an injection or decide an
+approval with it; only the three tail uploads are still accepted, for five
+minutes after the run was kept. A revive gives the new proxy a fresh token.
 
 A stopped-but-kept container is not an empty one: the proxy's own rendered
-configuration — its per-run TLS-MITM CA private key and its run token, still
-unrevoked and valid until its ≤1h TTL lapses from its last renewal (see
-#1176), included — sits in that container's own environment for the whole
-grace window, specifically so a revive (below) can read it back. Sizing
+configuration — its per-run TLS-MITM CA private key, its run token (refused
+by the control plane once the run is kept, but not revoked, and valid as a
+signature until its ≤1h TTL lapses) and any authenticated upstream-proxy URL
+included — sits in that container's own environment for the whole grace
+window, specifically so a revive (below) can read it back (#1176 tracks
+moving it out). Sizing
 `WARDYN_ENDED_RUN_GRACE` is therefore also sizing the exposure window of that
 container's own state to whoever already has host or Docker-daemon access —
 see the threat model's residual on kept-proxy-state. The same "kept, not
@@ -3211,6 +3230,62 @@ Presets round-trip declaratively, like drives:
 wardyn preset get > presets.json
 wardyn preset apply presets.json   # upserts by name; get then apply is a no-op
 ```
+
+## Console branding
+
+A super admin can make the console introduce itself as the organisation's own:
+**Admin view → Settings → Branding**. One record for the whole deployment
+(migration `0091_branding`); with none, the console is exactly the unbranded
+Wardyn console, byte for byte.
+
+What a brand sets, and nothing more:
+
+- **Organisation name** and how the product name reads: `<Company> Wardyn`
+  (`prefix`) or `Wardyn for <Company>` (`suffix`). It replaces the wordmark on
+  the sign-in page and the top bar, and the browser tab title (the Admin view
+  keeps its ` admin` suffix there).
+- **Primary colour** and **text on primary**, as hex. The pair must reach 4.5:1
+  (WCAG AA). Dark mode uses a pair of its own: set one, or leave it and Wardyn
+  derives it (the primary mixed toward white until it reaches 4.5:1 against
+  the dark background, with dark text); a set pair is held to the same 4.5:1.
+- **Logo**, SVG or PNG, at most 512 KB (a PNG at most 4096 pixels a side). It
+  replaces the mark on the sign-in page, in the top bar and as the browser tab
+  icon. A logo is uploaded to wardynd and served from it
+  (`GET /api/v1/branding/logo`, its validated type, `nosniff`), never
+  hot-linked, so the console's Content-Security-Policy is unchanged.
+- **Support link** (optional), `https://` only, shown in the header to
+  everyone signed in; it opens in a new tab with `rel="noopener noreferrer"`.
+
+Not brandable, on purpose: the danger, warning, success and info colours, the
+approval-state chips, the denied-host rows and the Admin view cue stay Wardyn's
+own, so no brand can recolour a security signal to look like decoration. The
+initial loading screen keeps the Wardyn mark.
+
+**SVG logos are rebuilt, not stored as sent.** wardynd parses the upload and
+re-emits it from an allowlist of shape, text and gradient elements and
+presentation attributes. An SVG with anything that can run script or fetch —
+`<script>`, `<foreignObject>`, `<image>`, `<a>`, `<style>`, animation, an
+`on*` handler, an `href` or `url()` that is not a same-document `#fragment`, a
+DOCTYPE — is refused with the reason; editor metadata is dropped. Export from
+a design tool with "presentation attributes" rather than CSS if a `style`
+attribute is refused.
+
+| Route | Who |
+| --- | --- |
+| `GET /branding` | anyone, signed in or not: the name, format, colours (the dark pair in effect) and logo URL the sign-in page draws; `{}` when unbranded |
+| `GET /branding/logo` | anyone, signed in or not |
+| `GET /branding/settings` | any signed-in person: the above plus the Support link |
+| `PUT /branding/settings` | admin only. Replaces the record; a body without `logo` keeps the stored logo, `"remove_logo": true` drops it |
+| `DELETE /branding/settings` | admin only. Back to unbranded |
+
+A refused save names its rule in `reason`: `invalid_org_name`,
+`invalid_name_format`, `invalid_colour`, `low_contrast` (the message carries
+the ratio), `link_not_https`, `invalid_link`, `logo_too_large`,
+`invalid_logo`. Every save is audited as `branding.write` and a removal as
+`branding.delete` (see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+
+Branding is not part of `wardyn site-config apply` yet; set it from the card
+or with the routes above.
 
 ## Workspaces: three tiers
 
@@ -4178,6 +4253,54 @@ Pointing `WARDYN_BEDROCK_BASE_URL` at the `vpce` hostname against a public-host
 cert is the trap: the sandbox presents the `vpce` name, the endpoint answers
 with the public-host cert, the handshake fails. The composed dispatch test
 proves the env vars propagate, not that TLS validates.
+
+**The endpoint must not land on a wardyn-proxy sidecar's own subnet.** Every
+run's proxy refuses to dial any address on the subnet(s) it is itself attached
+to (`onOwnSubnetOrControlPlane`, `internal/egress/proxy/egress_target.go` — a
+deliberate SSRF invariant that `internal_hosts` cannot lift, on purpose), and
+that covers EVERY subnet the sidecar's own interfaces sit on — both the fixed
+control-plane network below and the per-run network it shares with that run's
+agent. A PrivateLink endpoint that happens to resolve onto either would have
+every model call on the affected run(s) denied there instead, with the SDK
+misreading the proxy's denial page as a malformed Bedrock response — one
+dispatch at a time, never a clean failure. `wardynd` resolves
+`WARDYN_BEDROCK_BASE_URL`'s host ONCE, at **boot**, and checks it against
+whatever it can know this early:
+
+- **docker, the control-plane network**: refuses to start when the resolved
+  address falls inside the control-plane network's subnet
+  (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default — looked up via the
+  Docker API), naming the variable, the resolved address and the subnet. This
+  is the ONE subnet fixed and knowable ahead of any run, which is why it is a
+  refusal and not a WARN.
+- **docker, the per-run network**: each sandbox's own per-run network is a
+  REAL instance of the same failure — it is not exempt just because it is
+  `Internal=true` (gatewayless); the proxy's clamp above covers it exactly
+  like the control-plane network — but its subnet is allocated fresh by the
+  daemon at `CreateSandbox` time, from Docker's default (or
+  operator-configured) address pools, so no boot-time check can predict which
+  run will draw a colliding range. Rather than guess, boot instead WARNs, by
+  name, when the resolved address falls inside Docker's own BUILT-IN default
+  pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16` — the
+  ranges an unconfigured daemon draws from) — the remedy is to set
+  `default-address-pools` in that daemon's `daemon.json` away from the
+  endpoint's range, or to use an endpoint outside those pools. The WARN checks
+  the built-in ranges only, so it keeps printing after the remedy is applied;
+  once `default-address-pools` no longer covers the endpoint, it can be
+  ignored.
+- **Kubernetes**: the per-run proxy pod's CIDR is not reliably known from
+  `wardynd`'s own boot-time view (it depends on the cluster's CNI and is not
+  surfaced to a workload without extra node/API access this daemon is not
+  guaranteed to hold). This is a documented gap, not a guess: boot logs a WARN
+  instead of refusing, and instead of silently passing. If your PrivateLink
+  endpoint's address could fall inside the cluster's pod CIDR, verify that by
+  hand before relying on this variable.
+- A DNS name that does not resolve at boot WARNs and proceeds (never refuses
+  boot over a transient resolution failure). The name is resolved exactly
+  ONCE, at that boot: a later DNS change for the same name is NOT re-checked
+  until `wardynd` next restarts (a PrivateLink ENI's address is stable for the
+  endpoint's life, which is why this is an accepted gap rather than a
+  request-time re-check).
 
 **The control plane is a second service.** Profile-id and
 application-inference-profile models call `bedrock.<region>.amazonaws.com`

@@ -558,3 +558,47 @@ func TestHandleExplainCanonicalizesSubject(t *testing.T) {
 		})
 	}
 }
+
+// TestCapExplainLabelsGitAndModelProviderRows: G-4 (packet UT-G) — the server
+// names a git provider row (its kind, then the organisation or host it points
+// at, since the resource itself has no name field) and a model provider row
+// (its own admin-set Name, since a security admin cannot read GET
+// /model-providers) directly on the Explain wire, so both tiers read the same
+// words with no client-side lookup. Every other kind's Label stays empty: it
+// is named client-side, from a list the caller's own tier can already read.
+func TestCapExplainLabelsGitAndModelProviderRows(t *testing.T) {
+	site := types.SiteConfig{
+		WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{
+			{ID: "ado-org", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/example-org"}},
+			{ID: "ghes", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.example.com"}},
+			{ID: "no-url", Kind: types.GitProviderGitHub, BaseURLs: nil},
+		}},
+		ModelProviders: providerBlock(types.ModelProvider{ID: "mp-1", Name: "Corp gateway", Kind: types.ModelProviderCustomEndpoint}),
+	}
+	grants := []types.CapabilityGrant{
+		grant(types.CapabilitySubjectGroup, "eng", capWorkspaceProvider, "ado-org", types.CapabilityAllow),
+		grant(types.CapabilitySubjectGroup, "eng", capWorkspaceProvider, "ghes", types.CapabilityAllow),
+		grant(types.CapabilitySubjectGroup, "eng", capWorkspaceProvider, "no-url", types.CapabilityAllow),
+		grant(types.CapabilitySubjectGroup, "eng", capModelProvider, "mp-1", types.CapabilityAllow),
+		grant(types.CapabilitySubjectGroup, "eng", capAgent, "codex", types.CapabilityAllow),
+	}
+	rows := explainGrid(t, &capStore{grants: grants, site: site}, types.CapabilitySubjectGroup, "eng",
+		[]string{capWorkspaceProvider, capModelProvider, capAgent})
+
+	for _, tc := range []struct{ kind, value, want string }{
+		{capWorkspaceProvider, "ado-org", "Azure DevOps · example-org"},
+		{capWorkspaceProvider, "ghes", "GitHub · github.example.com"},
+		{capWorkspaceProvider, "no-url", ""},    // no base URL to name it by
+		{capWorkspaceProvider, capWildcard, ""}, // the default row is never named
+		{capModelProvider, "mp-1", "Corp gateway"},
+		{capAgent, "codex", ""}, // named client-side; the server never touches it
+	} {
+		row, ok := explainRow(rows, tc.kind, tc.value)
+		if !ok {
+			t.Fatalf("no row for %s/%s", tc.kind, tc.value)
+		}
+		if row.Label != tc.want {
+			t.Errorf("%s/%s label = %q, want %q", tc.kind, tc.value, row.Label, tc.want)
+		}
+	}
+}

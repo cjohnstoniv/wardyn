@@ -103,6 +103,14 @@ const PermissionsScreen = React.lazy(() =>
     default: m.PermissionsScreen,
   })),
 );
+// User types (0.8, UT-7a) — the org-defined kinds of person every "Available
+// to" control and subject picker names. securityOps server-side, like
+// Governance; no member route.
+const UserTypesScreen = React.lazy(() =>
+  import("./components/screens/user-types/user-types-screen").then((m) => ({
+    default: m.UserTypesScreen,
+  })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({
     default: m.SecretsScreen,
@@ -687,6 +695,7 @@ export default function App() {
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
+            <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
             <Route path="/admin/secrets" element={suspend(<SecretsScreen />)} />
             <Route path="/admin/audit" element={suspend(<AuditScreen />)} />
             <Route path="/admin/recordings" element={suspend(<RecordingScreen />)} />

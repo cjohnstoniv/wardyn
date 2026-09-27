@@ -128,6 +128,8 @@ export type NavLabel =
   // the three read as one narrowing sequence. Never in MEMBER_NAV_PATHS.
   | "Governance"
   | "Permissions"
+  // 0.8 (UT-7a) — both admin tiers, beside Permissions.
+  | "User types"
   | "Secrets"
   | "Audit"
   | "Recordings"

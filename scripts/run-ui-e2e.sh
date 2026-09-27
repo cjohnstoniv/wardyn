@@ -223,7 +223,11 @@ run_lane() {
   export WARDYN_E2E_ADDR="${LANE_ADDR[lane]}" WARDYN_E2E_UI_ADDR="${LANE_UI_ADDR[lane]}"
   export WARDYN_E2E_INTERNAL_ADDR="${LANE_INTERNAL_ADDR[lane]}" WARDYN_E2E_PG_DBNAME="${LANE_DB[lane]}"
   export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/${LANE_DB[lane]}?sslmode=disable"
-  export WARDYN_E2E_BASE_URL="http://localhost:${LANE_ADDR[lane]#*:}"
+  # #1207: LIVE mode already set WARDYN_E2E_BASE_URL to the external Wardyn
+  # above (LIVE_BASE_URL); LANE_ADDR[0] there is only the unused, auto-picked
+  # port reserved for a hermetic backend that never boots, so overwriting it
+  # here sent every walk spec to a random local port nothing listens on.
+  [[ -n "${LIVE_BASE_URL}" ]] || export WARDYN_E2E_BASE_URL="http://localhost:${LANE_ADDR[lane]#*:}"
   if [[ -n "${label}" ]]; then
     log() { printf '\033[1;34m[e2e-ui:%s]\033[0m %s\n' "${label}" "$*"; }
   fi

@@ -73,6 +73,8 @@
 //     session an SDK caller does not have.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
+//     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - the console SPA at /   — static assets
 //

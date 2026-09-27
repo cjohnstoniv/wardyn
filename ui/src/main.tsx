@@ -7,6 +7,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./app/App";
+import { BrandingProvider } from "./app/components/wardyn/branding-context";
 import { basePath } from "./app/lib/base-path";
 import "./styles/index.css";
 
@@ -18,7 +19,9 @@ if (!container) {
 createRoot(container).render(
   <React.StrictMode>
     <BrowserRouter basename={basePath() || undefined}>
-      <App />
+      <BrandingProvider>
+        <App />
+      </BrandingProvider>
     </BrowserRouter>
   </React.StrictMode>,
 );
