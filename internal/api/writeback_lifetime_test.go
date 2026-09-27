@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B3-F2: the decision's durable write-backs outlive the request
+// the decision's durable write-backs outlive the request
 
 // cancelOnDecide wraps the fixture's approval service so the client
 // "disconnects" the instant Decide() commits — the real shape of the defect:
@@ -52,7 +52,7 @@ func (s ctxHonouringStore) AddWorkspaceEgressDecision(ctx context.Context, id uu
 
 // ctxHonouringRecorder drops an audit event written on a dead context, the way
 // a Postgres INSERT on a cancelled context does. The write-backs' audit rows
-// are half of what B3-F2 lost: a fail-SILENT-BUT-AUDITED contract that fails
+// are half of what was lost: a fail-SILENT-BUT-AUDITED contract that fails
 // silent AND unaudited is just fail-silent.
 type ctxHonouringRecorder struct{ inner *recRecorder }
 
@@ -63,7 +63,7 @@ func (r ctxHonouringRecorder) Record(ctx context.Context, ev types.AuditEvent) e
 	return r.inner.Record(ctx, ev)
 }
 
-// TestDecideWriteBacksSurviveAClientDisconnect pins B3-F2: `always` is the one
+// TestDecideWriteBacksSurviveAClientDisconnect pins `always` is the one
 // decision scope that promises something OUTLIVING the run, and the promise was
 // kept on r.Context() — so an operator who clicked Always and closed the tab got
 // a 200, a green console, and no durable grant. The audit rows that were

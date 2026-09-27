@@ -17,7 +17,7 @@ import (
 )
 
 // hungControlPlane accepts the TLS connection and then never answers — a wedged
-// wardynd, a hung DB behind it, or an in-path middlebox. It is the shape F070
+// wardynd, a hung DB behind it, or an in-path middlebox. It is the shape already
 // fixed for the egress_domain hold and that the BROKER credential path still
 // had no ceiling for at all.
 func hungControlPlane(t *testing.T) *httptest.Server {
@@ -33,7 +33,7 @@ func hungControlPlane(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// TestBrokerCredentialPathIsBoundedByTheApprovalBudget pins the F070 sibling:
+// TestBrokerCredentialPathIsBoundedByTheApprovalBudget pins the sibling:
 // WARDYN_GIT_APPROVAL_TIMEOUT has to bound the brokered-credential path, not
 // only the timer inside waitForGitApproval.
 //
@@ -42,10 +42,10 @@ func hungControlPlane(t *testing.T) *httptest.Server {
 // handlers pass r.Context() while the agent-facing listener sets
 // ReadTimeout/WriteTimeout to 0. So against a control plane that accepts and
 // never answers, a clone blocked forever even with the timeout set to 1s —
-// strictly worse than the 785s the egress_domain hold had before F070, and the
+// strictly worse than the 785s the egress_domain hold had before its fix, and the
 // wave routed the git_pat lane into the same unbounded path.
 //
-// The assertion is the one F070's own pin makes: bounded by the operator's
+// The assertion is the one the egress_domain hold's own pin makes: bounded by the operator's
 // budget (plus slack), and still FAILING CLOSED — a 502, no credential, no
 // forward.
 func TestBrokerCredentialPathIsBoundedByTheApprovalBudget(t *testing.T) {

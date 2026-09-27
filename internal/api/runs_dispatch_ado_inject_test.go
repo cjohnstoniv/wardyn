@@ -326,7 +326,7 @@ func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
 // driven through the REAL sidecar booted from this lane's own authored output:
 // dispatch -> runner.BuildProxyConfig -> proxy.LoadConfigBytes -> NewServer.
 // It also proves the sidecar boots with a dozen bare injection rules bound to
-// port-qualified allowlist entries (the F106/B10-F1 contradiction class).
+// port-qualified allowlist entries.
 func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	const marker = "ADO-SECRET-MARKER"
 	var resolves int

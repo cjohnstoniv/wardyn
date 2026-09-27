@@ -64,7 +64,7 @@ func withMintOK(wsHandler http.HandlerFunc) http.HandlerFunc {
 // --------------------------------------------------------------------------
 
 func TestBuildWSURL(t *testing.T) {
-	// B12a-F10: attachCmd now refuses a non-UUID run id via parseID before
+	// attachCmd now refuses a non-UUID run id via parseID before
 	// buildWSURL ever sees it (the attach endpoint only ever accepts a UUID),
 	// so these fixtures use UUID-shaped ids — the only ones production code
 	// still reaches this function with. buildWSURL itself stays a plain string
@@ -250,7 +250,7 @@ func TestRunAttach_RejectedHandshakeReturnsAPIError(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F1: TERM/HUP/INT are wired INSIDE runAttach (never a root
+// TERM/HUP/INT are wired INSIDE runAttach (never a root
 // ExecuteContext) so a signal cancels the session through the SAME path a
 // clean pump end already takes: pumpCtx cancels, the pump halves end, and the
 // terminal is restored before the command returns. Signals aren't portable to
@@ -347,7 +347,7 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F1 (review R-02): a signal (or any other caller cancellation) that
+// A signal (or any other caller cancellation) that
 // lands WHILE the WebSocket handshake is still in flight must also be a
 // clean detach, not a mislabelled "couldn't reach the control plane" — the
 // exact mislabelling the whole point of scoping the signal wiring locally
@@ -382,7 +382,7 @@ func TestRunAttach_CancelledCtxDuringDialIsCleanDetach(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F1 (review R-01): the pinning test for the SIGNAL WIRING itself — not
+// The pinning test for the SIGNAL WIRING itself — not
 // just the cancellation mechanism it feeds — needs a real signal delivered
 // to a real process. TestHelperAttachSignal is the child body, re-exec'd
 // under an env guard by the two subprocess tests below; it is not a test in
@@ -607,7 +607,7 @@ func TestRunAttach_SecondSIGTERMKillsAWedgedSession(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F10: attach validates the run id client-side, exactly like `ssh`
+// attach validates the run id client-side, exactly like `ssh`
 // already does (ssh_test.go's TestRunSSH_RefusesANonUUIDRunID) — the id is
 // spliced straight into the WebSocket dial URL (buildWSURL) with no further
 // encoding, and the attach endpoint only ever accepts a UUID.

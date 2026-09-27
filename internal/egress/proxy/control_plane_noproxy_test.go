@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestControlPlaneClientNeverRidesTheCorpProxy (B10-F3): the run token, the
+// TestControlPlaneClientNeverRidesTheCorpProxy: the run token, the
 // minted credential VALUES, approvals and decision logs must never transit a
 // corporate proxy.
 //

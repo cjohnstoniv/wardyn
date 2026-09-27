@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// B3-F3: a relayed WebSocket keeps its run alive
+// a relayed WebSocket keeps its run alive
 
 // upgradeBackend is the "sandbox app" half of the relayed-upgrade harness: it
 // answers ONE request with 101 Switching Protocols over a hijacked connection
@@ -41,7 +41,7 @@ func upgradeBackend(t *testing.T, held <-chan struct{}) http.Handler {
 	})
 }
 
-// TestUIGateway_RelayedWebSocketKeepsTheRunAlive pins B3-F3: the relay touched
+// TestUIGateway_RelayedWebSocketKeepsTheRunAlive pins the relay touched
 // updated_at per INBOUND REQUEST, and a relayed WebSocket is one request for
 // its whole life — so under auto_stop_after_sec (3600 in the shipped recordmode
 // example) the idle reaper stopped the run out from under an editor a human was

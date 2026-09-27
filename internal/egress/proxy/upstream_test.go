@@ -101,7 +101,7 @@ func newUpstreamProxy(t *testing.T, up *upstreamProxy) *Proxy {
 // test can say which layer it is actually exercising. A guard test for a
 // BUILTIN denial has to run under allow_all_egress: under a default-deny
 // allowlist every host it names is refused by policy whether the guard exists
-// or not (F004).
+// or not.
 func newUpstreamProxyPolicy(t *testing.T, up *upstreamProxy, spec types.RunPolicySpec) *Proxy {
 	t.Helper()
 	buf := &bytes.Buffer{}
@@ -243,7 +243,7 @@ func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 }
 
 // TestUpstreamNeverHandsANonCanonicalLiteralToTheCorpProxy is the END of the
-// F143 gap: the table above proves the DECISION, this proves the WIRE.
+// literal-IP gap: the table above proves the DECISION, this proves the WIRE.
 //
 // The upstream lane is the one place the exposure is real — evaluate hands the
 // destination to the operator's proxy BY NAME, unresolved, so whatever the corp

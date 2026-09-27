@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// B11a-F13. The upload target is the run's OWN wardyn-proxy — a known
+// The upload target is the run's OWN wardyn-proxy — a known
 // on-segment address — yet this client used http.DefaultTransport, whose Proxy
 // is ProxyFromEnvironment. Every sandbox carries HTTP_PROXY=$WARDYN_PROXY_URL,
 // so with the DEFAULT proxy URL the control-plane PUT went to the proxy anyway

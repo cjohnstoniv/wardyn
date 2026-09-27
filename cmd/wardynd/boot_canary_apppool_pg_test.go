@@ -78,8 +78,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		return v.String()
 	}
 
-	// The app role's search_path finds a table named audit_events that carries
-	// NO chain trigger — the F024-shaped drift, and the state 0058 exists to
+	// NO chain trigger — the drift, and the state 0058 exists to
 	// repair. Catalog checks against the migrated schema still pass; the write
 	// the app pool would actually make does not chain.
 	if _, err := admin.Exec(ctx, `CREATE TABLE `+appSchema+`.audit_events (

@@ -16,8 +16,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCapabilityWorkspaceValueIsCanonicalized is F142.
-//
 // The SUBJECT half of a capability grant is canonicalized at the write boundary
 // (group subjects through oidc.CanonicalGroupSubject, user subjects lowercased)
 // and the egress_host VALUE gets the proxy's own shape check. The workspace

@@ -90,7 +90,7 @@ var declaredNonAuditTx = map[string]string{
 		"own connection and its own transactions, which are classified on their own",
 	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations to restore " +
 		"a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot commit a superseded " +
-		"function body (B8-F1). The replay set contains no DML at all — no INSERT, UPDATE or DELETE, on audit_events " +
+		"function body. The replay set contains no DML at all — no INSERT, UPDATE or DELETE, on audit_events " +
 		"or anything else — so this transaction writes no chain-linked row and its isolation level decides nothing. " +
 		"That is not taken on trust: the set is DISCOVERED by content (db.triggerMigrationFiles), so " +
 		"assertReplaySetIsPureDDL below re-derives it and checks, and a future migration that redefines the chain " +
