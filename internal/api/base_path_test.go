@@ -91,7 +91,7 @@ func TestBasePathLeavesNoRouteAtTheRoot(t *testing.T) {
 		n++
 		path := strings.ReplaceAll(param.ReplaceAllString(route, "x"), "/*", "/x")
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		panicFails(t, srv.Handler()).ServeHTTP(rec, httptest.NewRequest(method, path, nil))
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s %s answered %d at the host root, want 404", method, path, rec.Code)
 		}
