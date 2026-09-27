@@ -177,7 +177,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Any other failure keeps the run, with its approvals cancelled and broker credentials revoked,
   and marks its containment unresolved: `run.lost` / `run.ended` carry `containment:
   "unresolved"`, and the run's new `containment_error` / `containment_error_at` fields
-  (migration `0086_agent_runs_containment_error`) hold the error. The lease sweep retries the
+  (migration `0088_agent_runs_containment_error`) hold the error. The lease sweep retries the
   stop every pass. `run.containment.reassert` records a repeat failure and the resolution, which
   clears both fields. On Docker a failed proxy stop now escalates to a kill. If the proxy survives
   that too, a lost run's agent is stopped. Neither step removes a container.

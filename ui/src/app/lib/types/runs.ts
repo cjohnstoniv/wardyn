@@ -190,7 +190,7 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
-  // Set while a kept run's stop could not be confirmed (migration 0086,
+  // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
   // lease sweep retries every pass and clears both once the stop lands.
   containment_error?: string;

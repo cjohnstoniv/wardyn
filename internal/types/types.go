@@ -270,7 +270,7 @@ type AgentRun struct {
 	// ContainmentError is set while a kept run's stop could not be confirmed
 	// (its proxy, or its agent, may still be up): the latest stop error, and
 	// ContainmentErrorAt the first failure. The lease sweep retries the stop
-	// every pass and clears both once it lands (#1060, migration 0086).
+	// every pass and clears both once it lands (#1060, migration 0088).
 	ContainmentError   string     `json:"containment_error,omitempty"`
 	ContainmentErrorAt *time.Time `json:"containment_error_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider

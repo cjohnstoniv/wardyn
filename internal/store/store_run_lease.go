@@ -55,7 +55,7 @@ type RunLeaser interface {
 	// on the next sweep pass is what makes that safe to just drop.
 	StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error)
 	// SetRunContainmentError records that a kept run's stop (its proxy, or its
-	// agent) failed with msg (#1060, migration 0086): only while it is RUNNING
+	// agent) failed with msg (#1060, migration 0088): only while it is RUNNING
 	// and kept. The message is refreshed on every call; containment_error_at
 	// keeps the first failure's time.
 	SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string, now time.Time) error

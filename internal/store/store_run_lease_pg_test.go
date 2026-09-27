@@ -250,7 +250,7 @@ func TestPG_EndedRunExtensionHonorsTheKeptMark(t *testing.T) {
 	}
 }
 
-// TestPG_RunContainmentError pins migration 0086 (#1060): the error is set only
+// TestPG_RunContainmentError pins migration 0088 (#1060): the error is set only
 // on a RUNNING kept run, refreshed with the first failure's time kept, read
 // back on the run, and cleared once — only the clear that found it set says so,
 // so the resolution is audited once. A revive's claim clears it too.
