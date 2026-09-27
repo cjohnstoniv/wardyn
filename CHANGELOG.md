@@ -214,6 +214,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (target `runs.model_provider`, with `provider`, `kind` and, for a credential the caller can
   repair, `remedy` `model_credential`). The 422 body is unchanged, and the not-granted refusal stays
   its one `capability_model_provider` row.
+- **Rolling back to 0.7.11 over a converted database is explained, not mistaken for a wrong age
+  key (#674).** 0.7.11 fails closed over envelope v1 rows with `… age decrypt: failed to read
+  header: parsing age header: file is empty` or `… unexpected intro: "…"`, which reads like a key
+  problem. OPERATIONS "Upgrades" now names both endings and says: do not replace the key; start
+  0.7.12 or later again, or restore the pre-upgrade dump. `TestPG_OldBinaryAgainstV1Store` boots
+  the published 0.7.11 image over a converted store to pin it, and `TestPG_UpgradeFrom_0_7_12`
+  upgrades a database as 0.7.12 left it (its `0065_secret_envelope_v1` backport included) and
+  checks that a second boot changes nothing.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
