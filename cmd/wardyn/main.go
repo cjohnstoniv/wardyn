@@ -189,6 +189,7 @@ func rootCmd() *cobra.Command {
 		policyCmd(client),
 		workspaceCmd(client),
 		sourceCmd(client),
+		driveCmd(client),
 		secretCmd(client),
 		attachCmd(client),
 		sshCmd(client),

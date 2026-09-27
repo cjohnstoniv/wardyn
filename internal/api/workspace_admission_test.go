@@ -159,11 +159,12 @@ func admitRunDoor(name string, memberReachable bool, body func(repo string) stri
 				ID: uuid.New(), Name: "app", OwnedBy: govMemberSub,
 				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: repo}},
 			}}
-			session := govSession(t, govMemberSub, []string{"eng"}, false)
+			// The operator launches with the admin token: an SSO session in the
+			// Admin view cannot launch at all (refuseAdminViewLaunch).
 			if operator {
-				session = admitAdminSession(t)
+				return srv, do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body(repo))
 			}
-			return srv, doSSO(t, srv, http.MethodPost, "/api/v1/runs", session, body(repo))
+			return srv, doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, govMemberSub, []string{"eng"}, false), body(repo))
 		},
 	}
 }

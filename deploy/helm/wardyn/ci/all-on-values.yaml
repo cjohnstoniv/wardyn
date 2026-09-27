@@ -136,8 +136,17 @@ k8s:
 
 # User drives, the "other side" of THEIR off-by-default switch: the k8s-runner
 # Role gains persistentvolumeclaims get+create (see templates/rbac.yaml).
+#
+# reclaim is the ONE switch in this file that is deliberately pinned OFF, and it
+# is stated rather than omitted so the exception is visible. This render is what
+# `make helm-lint` reads the DEFAULT verb list out of — exactly ["get","create"]
+# — and one render cannot assert two verb lists. The ON case (which adds
+# "delete", the only verb in this chart that can destroy a member's stored
+# bytes) has its own render beside that assertion.
 userDrives:
   enabled: true
+  reclaim:
+    enabled: false
 
 # SSH access, the "other side" of ITS off-by-default switch: a second port on
 # the same Service/Deployment (see templates/service.yaml, deployment.yaml).

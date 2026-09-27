@@ -12,7 +12,7 @@
 //
 // It is the "did the agent really do the work, and were the walls real?" layer
 // that test/e2e/e2e.sh (security invariants only, with a fail-fast print task)
-// never covered. See the plan: buzzing-twirling-stonebraker.md.
+// never covered.
 //
 // Target stack: start it with `scripts/run-host.sh` (host-mode, docker runner,
 // oracle + claude-code images mapped). The orchestrator runs on the HOST, so it

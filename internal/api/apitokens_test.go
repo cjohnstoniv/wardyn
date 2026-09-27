@@ -45,6 +45,8 @@ type tokenMemStore struct {
 	touched map[uuid.UUID]time.Time
 }
 
+func (*tokenMemStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
+
 func newTokenMemStore() *tokenMemStore {
 	return &tokenMemStore{
 		byID:    map[uuid.UUID]types.APIToken{},

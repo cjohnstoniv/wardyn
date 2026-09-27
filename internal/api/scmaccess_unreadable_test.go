@@ -43,9 +43,11 @@ func wedgedADORunHarness(t *testing.T) (*Server, *ownerStore, *fakeRunner) {
 }
 
 func TestGitCredentialGate_WedgedSecretStore_CreateRun503(t *testing.T) {
-	srv, _, fr := wedgedADORunHarness(t)
+	srv, st, fr := wedgedADORunHarness(t)
 	body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", adoOperatorSession(t), body)
+	// The named human launches through the token lane: an SSO session in the
+	// Admin view cannot launch at all (refuseAdminViewLaunch).
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", adoOperatorToken(st), body)
 	assertGitCredential503(t, w)
 	if fr.createCalls != 0 {
 		t.Errorf("CreateSandbox calls = %d, want 0", fr.createCalls)

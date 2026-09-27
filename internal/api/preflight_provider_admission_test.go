@@ -27,11 +27,12 @@ func firePreflightAndCreate(t *testing.T, sc types.SiteConfig, repo, body string
 			ID: uuid.New(), Name: "app", OwnedBy: govMemberSub,
 			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: repo}},
 		}}
-		session := govSession(t, govMemberSub, []string{"eng"}, false)
+		// The operator uses the admin token: an SSO session in the Admin view
+		// cannot launch or preview a launch (refuseAdminViewLaunch).
 		if operator {
-			session = admitAdminSession(t)
+			return do(t, srv, http.MethodPost, path, adminToken, body)
 		}
-		return doSSO(t, srv, http.MethodPost, path, session, body)
+		return doSSO(t, srv, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
 	}
 	return fire("/api/v1/runs/preflight"), fire("/api/v1/runs")
 }

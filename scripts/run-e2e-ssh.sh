@@ -48,14 +48,13 @@
 # every exit path, success or failure — never touches any other stack.
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "run-e2e-ssh: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent SSH e2e (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
+  skip_lane "run-e2e-ssh: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent SSH e2e (skipping)."
+fi
 wardyn_pick_docker_host
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
@@ -64,17 +63,18 @@ command -v sftp >/dev/null 2>&1 || die "sftp client not found"
 command -v jq >/dev/null 2>&1 || die "jq not found"
 
 # ── dedicated stack identity — NEVER the operator's/another job's stack ──────
-PROJECT="wardynv05e2e"
+PROJECT="${WARDYN_NS:-wardyn-ssh-e2e-$$}"
 COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
-API_PORT=18080
-PG_PORT=15432
-SSH_PORT=12222
+API_PORT="${WARDYN_UP_PORT:-$(pick_free_port)}"
+PG_PORT="${WARDYN_PG_PORT:-$(pick_free_port)}"
+SSH_PORT="${WARDYN_SSH_PORT:-$(pick_free_port)}"
+UI_SANDBOX_PORT="${WARDYN_UI_SANDBOX_PORT:-$(pick_free_port)}"
 # The registry sidecar publishes a host port too, and nothing overrode it: on
 # a shared daemon this stack collided with the operator's own `wardyn-registry`
 # on the 5010 default and `compose up` died with "port is already allocated"
 # before wardynd ever started (observed live). Namespaced like the other three
 # — the one gap docs/ENV.md's WARDYN_REGISTRY_PORT row explicitly warns about.
-REGISTRY_PORT=15010
+REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-$(pick_free_port)}"
 
 # Project-unique agent image tag/repo (NOT the shared wardyn/agent-*:local
 # convention every other e2e script trusts): on a box where wardyn_pick_docker_host
@@ -84,21 +84,24 @@ REGISTRY_PORT=15010
 # script: the shared tag briefly resolved to a pre-SSH-gateway image with
 # neither socat nor sftp-server, failing every sftp/-L check with a clean but
 # confusing "executable file not found in $PATH"). A repository name nobody
-# else has any reason to write to removes the collision entirely. wardynd and
-# wardyn-proxy now get the same treatment: reusing the shared :local tag meant
-# this lane graded whatever another job last built (observed live: 12 checks
-# passed against a pre-0043 binary, then the override assertions died on a
-# missing `role` column). docker-compose.yaml takes WARDYN_WARDYND_IMAGE /
-# WARDYN_PROXY_IMAGE overrides; both default to the :local names, so no other
-# caller changes.
-AGENT_IMAGE="wardynv05e2e/agent-claude-code:pinned"
+# else has any reason to write to removes the collision entirely. It stays
+# per-run rather than stable: a stable tag behind the inspect short-circuit
+# below would silently reuse an image built from an older Dockerfile, the
+# same stale-image failure this comment opens with; the layer cache keeps the
+# rebuild cheap. wardynd and wardyn-proxy get the same treatment: reusing the
+# shared :local tag meant this lane graded whatever another job last built
+# (observed live: 12 checks passed against a pre-0043 binary, then the
+# override assertions died on a missing `role` column). docker-compose.yaml
+# takes WARDYN_WARDYND_IMAGE / WARDYN_PROXY_IMAGE overrides; both default to
+# the :local names, so no other caller changes.
+AGENT_IMAGE="${PROJECT}/agent-claude-code:pinned"
 WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
 PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
-    WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" \
+    WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_SANDBOX_PORT}" \
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_SSH_LISTEN=":2222" WARDYN_SSH_ADVERTISE="127.0.0.1:${SSH_PORT}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
@@ -114,6 +117,7 @@ pass() { note "[pass]" "$1"; }
 fail() { note "[FAIL]" "$1"; FAILED=1; }
 
 teardown() {
+  [[ -n "${MASTER_PID:-}" ]] && kill "${MASTER_PID}" >/dev/null 2>&1 || true
   [[ -n "${FWD_PID:-}" ]] && kill "${FWD_PID}" >/dev/null 2>&1 || true
   [[ -n "${WEB_PID:-}" ]] && kill "${WEB_PID}" >/dev/null 2>&1 || true
   [[ -n "${SSH2_PID:-}" ]] && kill "${SSH2_PID}" >/dev/null 2>&1 || true
@@ -128,18 +132,31 @@ teardown() {
   # of this script both left their sandbox + proxy containers running after a
   # clean pass/fail exit, until this fix).
   if [[ -n "${RUN_ID:-}" ]]; then
+    local -a run_containers
+    mapfile -t run_containers < <(docker ps -aq --no-trunc --filter "label=wardyn.run-id=${RUN_ID}")
+    log "owned run container IDs at teardown: ${run_containers[*]}"
     curl -sS -X POST "${BASE}/api/v1/runs/${RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
     sleep 3
+    if [[ ${#run_containers[@]} -gt 0 ]]; then
+      docker rm -f "${run_containers[@]}" >/dev/null 2>&1 || true
+    fi
   fi
+  log "owned compose container IDs at teardown: $(compose ps -aq | tr '\n' ' ')"
   log "tearing down ${PROJECT} (compose down --volumes; this project only)"
   compose down --volumes >/dev/null 2>&1 || true
+  # All three are this run's own per-project tags -- named by variable, never
+  # a pattern sweep. Removing a tag leaves the build cache, so reruns stay cheap.
+  docker rmi -f "${AGENT_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}" >/dev/null 2>&1 || true
   rm -rf "${TMPDIR}"
 }
+# An explicit namespace may name an earlier invocation. Never adopt or clean it.
+existing="$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}")" || die "inspect container ownership failed"
+[[ -z "${existing}" ]] || die "${PROJECT} already owns containers; choose a fresh WARDYN_NS"
+for kind in network volume; do
+  existing="$(docker "${kind}" ls -q --filter "label=com.docker.compose.project=${PROJECT}")" || die "inspect ${kind} ownership failed"
+  [[ -z "${existing}" ]] || die "${PROJECT} already owns ${kind} resources; choose a fresh WARDYN_NS"
+done
 trap teardown EXIT
-
-# Clean any stragglers from a prior aborted run of THIS script (same pattern
-# as scripts/test-concurrent.sh) — never touches a differently-named project.
-compose down --volumes >/dev/null 2>&1 || true
 
 # ── build what we need ────────────────────────────────────────────────────────
 # wardynd/wardyn-proxy: always built, to this project's OWN tags — never the
@@ -155,6 +172,7 @@ docker image inspect "${AGENT_IMAGE}" >/dev/null 2>&1 || \
 # ── bring up the dedicated stack ─────────────────────────────────────────────
 log "bringing up ${PROJECT} (api :${API_PORT}, pg :${PG_PORT}, ssh :${SSH_PORT})"
 compose up -d postgres wardynd || die "compose up failed for ${PROJECT}"
+log "created compose container IDs: $(compose ps -aq | tr '\n' ' ')"
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not become healthy"; }
 # Retry a few times (own curl, own connection each attempt) rather than trusting
 # wait_healthy's last successful probe to still hold for the very next request.
@@ -223,6 +241,7 @@ for _ in $(seq 1 60); do
 done
 [[ "${state}" == "RUNNING" ]] || die "run ${RUN_ID} did not reach RUNNING in time (last state=${state})"
 pass "run ${RUN_ID} is RUNNING"
+log "created run container IDs: $(docker ps -aq --no-trunc --filter "label=wardyn.run-id=${RUN_ID}" | tr '\n' ' ')"
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8)
 ssh_run() { ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" "$@"; }
@@ -259,7 +278,7 @@ fi
 # the launching `sh -c` returns immediately instead of blocking on a still-open
 # pipe (see internal/api/sshgateway_channels.go's ExecStream contract).
 ssh_run "nohup socat TCP-LISTEN:9191,reuseaddr,fork EXEC:'/bin/cat' >/tmp/e2e-socat.log 2>&1 </dev/null & sleep 1; echo listener-started"
-FWD_LOCAL_PORT=19191
+FWD_LOCAL_PORT="$(pick_free_port)"
 ssh -N -L "${FWD_LOCAL_PORT}:127.0.0.1:9191" "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" &
 FWD_PID=$!
 fwd_up=0
@@ -541,6 +560,63 @@ wait "${SSH2_PID}" 2>/dev/null || true
 SSH2_PID=""
 exec 4>&- 4<&-
 exec 5>&- 5<&-
+
+# A multiplexed transport must survive key removal while both kinds of NEW
+# channel fail. ProxyCommand=false forbids ssh from hiding failure by reconnecting.
+CONTROL_SOCKET="${TMPDIR}/offboarding.sock"
+REVOKE_FORWARD_PORT="$(pick_free_port)"
+ssh -M -N -S "${CONTROL_SOCKET}" -L "${REVOKE_FORWARD_PORT}:127.0.0.1:9191" \
+  "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" \
+  >"${TMPDIR}/offboarding-master.log" 2>&1 &
+MASTER_PID=$!
+master_ready=0
+for _ in $(seq 1 20); do
+  ssh -S "${CONTROL_SOCKET}" -O check -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" >/dev/null 2>&1 && { master_ready=1; break; }
+  sleep 0.1
+done
+[[ "${master_ready}" == "1" ]] || die "offboarding SSH transport did not start"
+multiplex_ssh() {
+  ssh -S "${CONTROL_SOCKET}" -o ProxyCommand=false "${SSH_OPTS[@]}" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" "$@"
+}
+if out=$(multiplex_ssh "echo wardyn-before-revoke"); [[ $? == 0 && "${out}" == *wardyn-before-revoke* ]]; then
+  pass "offboarding: session channel works on the original transport"
+else
+  fail "offboarding: session positive control failed"
+fi
+exec 9<>"/dev/tcp/127.0.0.1/${REVOKE_FORWARD_PORT}"
+printf 'wardyn-before-revoke\n' >&9
+reply=""
+read -r -t 5 reply <&9 || true
+exec 9>&- 9<&-
+[[ "${reply}" == "wardyn-before-revoke" ]] || fail "offboarding: forwarding positive control failed"
+status=$(api DELETE /api/v1/people/admin-token/ssh-keys)
+if [[ "${status}" == 200 ]] && jq -e '.count == 1' "${TMPDIR}/resp.json" >/dev/null; then
+  pass "offboarding: admin removal deletes the principal's registered key"
+else
+  fail "offboarding: admin removal status=${status} body=$(cat "${TMPDIR}/resp.json")"
+fi
+if multiplex_ssh "echo should-never-run" >"${TMPDIR}/offboarding-session.log" 2>&1; then
+  fail "offboarding: revoked key opened another session"
+fi
+exec 9<>"/dev/tcp/127.0.0.1/${REVOKE_FORWARD_PORT}"
+printf 'wardyn-after-revoke\n' >&9
+reply=""
+read -r -t 5 reply <&9 || true
+exec 9>&- 9<&-
+[[ "${reply}" != "wardyn-after-revoke" ]] || fail "offboarding: revoked key opened another forward"
+status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
+if [[ "${status}" == 200 ]] && jq -e '
+  [.[] | select(.action == "ssh.channel.reject" and .outcome == "failure") | .data.channel_type] |
+  (index("session") != null and index("direct-tcpip") != null)
+' "${TMPDIR}/resp.json" >/dev/null && \
+  ssh -S "${CONTROL_SOCKET}" -O check -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" >/dev/null 2>&1; then
+  pass "offboarding: revoked key cannot open session or forwarding channels on its still-connected transport"
+else
+  fail "offboarding: missing per-channel refusals or original transport disappeared"
+fi
+kill "${MASTER_PID}" >/dev/null 2>&1 || true
+wait "${MASTER_PID}" 2>/dev/null || true
+MASTER_PID=""
 
 # ── summary ───────────────────────────────────────────────────────────────────
 if [[ "${FAILED}" -eq 0 ]]; then

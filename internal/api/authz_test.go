@@ -326,6 +326,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// Offboarding (CS-5): erase every credential one person holds. It only
 	// subtracts, and names no value back — the same shape as the revokes above.
 	"DELETE /api/v1/people/{principal}/credentials": {class: classSecurity},
+	"DELETE /api/v1/people/{principal}/ssh-keys":    {class: classSecurity},
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
@@ -411,6 +412,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/drives/grants":        {class: classSecurity},
 	"DELETE /api/v1/drives/grants/{id}": {class: classSecurity},
 	"POST /api/v1/drives/preview":       {class: classSecurity},
+	// The DESTROY verb (#166), classAdmin like the four host-naming /drives
+	// routes above, and for a sharper reason than any of them: it deletes a named person's stored
+	// bytes and nothing undoes it. Deliberately NOT securityOps — the tier
+	// line is "never the host", and this reaches the host's volumes and the
+	// cluster's claims — and deliberately not member-reachable at any
+	// distance: a member's own drive is theirs to fill, never theirs to drop.
+	"POST /api/v1/drives/{id}/reclaim": {class: classAdmin},
 	// Directory autocomplete (§I) — classSecurity, and the contrast with the
 	// four classAdmin /access routes above is the whole tier argument in one
 	// pair: those decide who DERIVES admin, this one only READS the directory
@@ -1259,11 +1267,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// /model-providers, SUPER for the agent roster's reason (= 41). #575 then
 	// added the standing-runs pair (GET /admin/runs/proxy-window, POST
 	// /admin/runs/restart), born SUPER because a restart replaces proxies on runs
-	// the caller does not own (= 43 SUPER). A route silently reclassified in the
+	// the caller does not own (= 43 SUPER). #166 then added POST
+	// /drives/{id}/reclaim, the drive DESTROY verb, born SUPER beside the
+	// family it belongs to (= 44 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 35 || super != 43 {
-		t.Errorf("tier split = %d security / %d admin, want 35 / 43 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 36 || super != 44 {
+		t.Errorf("tier split = %d security / %d admin, want 36 / 44 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1742,6 +1752,7 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 	return types.SSHPublicKey{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
+func (s *authzStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
 func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
 	return nil
 }
