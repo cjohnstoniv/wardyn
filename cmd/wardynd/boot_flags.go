@@ -430,7 +430,7 @@ func parseBootFlags() *bootFlags {
 		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
 		openaiGatewayFormat:     flagEnv("openai-gateway-format", "WARDYN_OPENAI_GATEWAY_FORMAT", "", `same as -anthropic-gateway-format, for OpenAI's gateway (default "Bearer %s")`),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
-		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/OPERATIONS.md"),
+		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/OPERATIONS.md"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		driveProbeImage: flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),

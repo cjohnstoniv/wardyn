@@ -86,6 +86,13 @@ type fakeDocker struct {
 
 	containers map[string]*createdContainer // id (== name) -> record
 
+	// stdin is what was written to each container's stdin through
+	// ContainerAttach (the proxy's config, #1176), by container id; attached
+	// lists every attach in order, with started showing whether the container
+	// had already been started when it was made.
+	stdin    map[string][]byte
+	attached []fakeAttach
+
 	// startedNames records every ContainerStart in order, and SURVIVES rollback
 	// (unlike containers, which a rollback removes). Lets a test prove a container
 	// was never started, not merely started-then-reaped.
@@ -225,7 +232,51 @@ func newFakeDocker() *fakeDocker {
 		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
 		volumes:    map[string]client.VolumeCreateOptions{},
+		stdin:      map[string][]byte{},
 	}
+}
+
+// fakeAttach records one ContainerAttach.
+type fakeAttach struct {
+	id      string
+	started bool
+}
+
+// ContainerAttach hands back a connection whose writes land in f.stdin[id].
+func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.containers[id]
+	if c == nil || c.removed {
+		return client.ContainerAttachResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	f.attached = append(f.attached, fakeAttach{id: id, started: c.state != nil && c.state.Running})
+	return client.ContainerAttachResult{
+		HijackedResponse: client.NewHijackedResponse(&fakeStdinConn{f: f, id: id}, "application/vnd.docker.raw-stream"),
+	}, nil
+}
+
+// fakeStdinConn is an attach connection that records what is written to it.
+type fakeStdinConn struct {
+	fakeConn
+	f  *fakeDocker
+	id string
+}
+
+func (c *fakeStdinConn) Write(b []byte) (int, error) {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	c.f.stdin[c.id] = append(c.f.stdin[c.id], b...)
+	return len(b), nil
+}
+
+func (c *fakeStdinConn) CloseWrite() error { return nil }
+
+// stdinOf is what was written to container id's stdin.
+func (f *fakeDocker) stdinOf(id string) []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stdin[id]
 }
 
 func (f *fakeDocker) Info(ctx context.Context, _ client.InfoOptions) (client.SystemInfoResult, error) {
@@ -402,6 +453,7 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := opts.Name
+	delete(f.stdin, name) // a new container under the name has an empty stdin
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}

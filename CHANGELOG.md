@@ -19,6 +19,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a Kubernetes driver, exactly as the Getting-started funnel does. The Governance profile editor gains
   an "Allowed barriers" control: one radio over the existing `min_confinement_class` ceiling field, so
   an admin sets the floor without hand-editing the ceiling's JSON.
+- **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
+  params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
+  (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,
+  `workspace` and `q` (capped at 400 bytes) — reorder and narrow the listing for the upcoming
+  home/runs redesign; with none of them present the endpoint answers exactly as before. `view=user`
+  now forces `owner=me` for EVERY caller, including an admin or security-operator token (previously
+  only a member was scoped). Two new response headers, `X-Wardyn-Hidden-Older` and
+  `X-Wardyn-Hidden-Killed`, report how
+  many rows the `ended_within` window and the 24h killed-run default hid. `GET /approvals` gains the
+  same opt-in `?view=user`, which scopes the queue to the caller's own runs' approvals for every
+  caller. Every `AgentRun` now carries `ended_at` (migration `0092_agent_runs_ended_at`), stamped by
+  the run's terminal state transition; a lease-ended run's end time is still its lease end
+  (`lost_at`), not this column.
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
   button while a 201's advisory `warnings[]` sit listed in the rail; it always calls
@@ -1736,9 +1749,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `authz.denied` with the new reason `run_kept` (the kept reason rides beside it as
   `lost_reason`), as token renew already did. The three tail-upload doors keep their five-minute
   grace, counted from when the run was kept. Revive is unchanged: it still mints a fresh token for
-  the new proxy and retires the old one by its jti. The run token, MITM CA key and upstream-proxy
-  URL still sit in the stopped proxy container's Docker env for the grace window; that part of
-  #1176 is still open.
+  the new proxy and retires the old one by its jti.
+- **No proxy container holds the run token, the MITM CA key or the upstream-proxy credential at
+  rest (#1176).** The Docker driver used to hand the proxy sidecar its rendered config in its
+  environment (`WARDYN_PROXY_CONFIG_JSON`), and kept an ended or lost run's stopped proxy for the
+  whole grace window (7 days by default) so a revive could read it back; anyone with Docker access
+  could `docker inspect` it. Now:
+  - The driver writes the config to the proxy's stdin once at start
+    (`WARDYN_PROXY_CONFIG_STDIN`), so neither the container's config nor its environment carries
+    it. The proxy exits non-zero when no config arrives, and the container has no restart policy.
+  - A kept run's proxy is stopped and removed, not kept.
+  - A revive rebuilds the proxy from a new per-run `run_proxy_configs` row (migration
+    `0093_run_proxy_configs`). The
+    row is sealed with AES-256-GCM under a new `wardyn-run-config-key` boot key, which the secret
+    store keeps under its key-encryption key like every boot key. The row is deleted when the run
+    goes terminal, with a purge at boot and on the orphan-sweep cadence as the backstop. The
+    revive keeps the run's MITM CA, so an agent still running after an outage keeps trusting its
+    new proxy.
+  - Kubernetes is unchanged: it already stages the config from a per-run Secret into an in-memory
+    volume (#688), and never keeps a run.
+  - **Upgrading:** a run started before this release has no stored config and cannot be revived
+    (`409`); start a new run. `WARDYN_PROXY_IMAGE` must name a proxy from this release or later:
+    an older proxy does not read stdin and exits at start. The nightly e2e and `test-drive.sh` no
+    longer read a run token out of the proxy container, because there is none to read. Their
+    direct run-token upload and post-kill probes are dropped, and Go tests cover them.
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
   (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
   kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env

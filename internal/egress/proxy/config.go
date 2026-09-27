@@ -23,7 +23,7 @@ import (
 )
 
 // Config is the wardyn-proxy sidecar configuration, loaded from a JSON file
-// via the -config flag. The run token authenticates the sidecar to the
+// via the -config flag, or from stdin on Docker. The run token authenticates the sidecar to the
 // control plane's internal endpoints (verified via identity.Provider.Verify
 // with audience "wardyn-internal"); it is NOT a secret usable outside the
 // platform. Injected PER-RUN credential VALUES never appear here — each is
@@ -32,11 +32,10 @@ import (
 // UpstreamProxyURL below can embed the OPERATOR's own corporate-proxy
 // credential, a genuine third-party secret that IS part of this struct (see
 // its own doc). RunToken and MITMCAKeyPEM likewise ARE part of this struct,
-// so they persist wherever the sidecar's own rendered config does — its
-// container's env on Docker — for as long as that container exists, which
-// under the long-holds design can outlive the run itself (an ended or lost
-// run's proxy is stopped, not removed, so a revive can read this config
-// back).
+// so they persist wherever the sidecar's own rendered config does: the
+// proxy's memory, and the run's sealed run_proxy_configs row (#1176), which a
+// revive rebuilds the proxy from and which is deleted when the run goes
+// terminal. No container holds it at rest.
 type Config struct {
 	// RunID is the governed run this sidecar serves.
 	RunID uuid.UUID `json:"run_id"`
@@ -124,10 +123,10 @@ type Config struct {
 	// PRIVATE address). When set, forward-egress dials are issued as
 	// CONNECT <real-host> to this proxy; control-plane calls to wardynd never
 	// traverse it. Any embedded credential persists wherever this struct's own
-	// rendered config does — proxy memory while running, and the container's
-	// own env for as long as it exists (like RunToken, above) — and is masked
-	// from all decision-log/stdout output. Empty => direct dial
-	// (backward-compatible).
+	// rendered config does — proxy memory while running, and the run's sealed
+	// run_proxy_configs row until the run goes terminal (#1176; like RunToken,
+	// above) — and is masked from all decision-log/stdout output. Empty =>
+	// direct dial (backward-compatible).
 	//
 	// SOURCE vs TRANSPORT: the only source is the persisted site-config
 	// (upstream_proxy_secret_ref, admin-authored via PUT /api/v1/site-config).
@@ -135,8 +134,8 @@ type Config struct {
 	// (internal/api/runs_dispatch.go) through resolveUpstreamProxyURL (which
 	// lives in internal/api/runs_bedrock.go), audited as
 	// run.upstream_proxy.resolve on resolve success/failure, and merely
-	// TRANSPORTED here by the run's ProxyConfig (WARDYN_PROXY_CONFIG_JSON,
-	// internal/runner/docker/driver.go).
+	// TRANSPORTED here by the run's ProxyConfig (on the sidecar's stdin on
+	// Docker, internal/runner/docker/driver_proxy_revive.go).
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
 	// UpstreamProxyNoProxy is the upstream's BYPASS list
 	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain

@@ -132,9 +132,9 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMou
 // plain site_config.UpstreamProxyURL or (when it carries a credential) as
 // site_config.UpstreamProxySecretRef naming the secret holding it;
 // resolveUpstreamProxyURL prefers the plain URL when set. The resolved
-// cred-bearing URL lands in the sidecar's WARDYN_PROXY_CONFIG_JSON env var, the
-// SAME posture as RunToken today: proxy-process-only, never on the sandbox
-// side, masked from decision-log/stdout by the proxy — a deliberate,
+// cred-bearing URL lands in the sidecar's rendered config, the SAME posture as
+// RunToken: the proxy's memory and the run's sealed stored config (#1176),
+// never on the sandbox side, masked from decision-log/stdout by the proxy — a deliberate,
 // already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
 // new one. Fail SAFE: neither field configured, an unresolvable secret, a
 // non-http URL, or a URL the sidecar itself would refuse (from either source —

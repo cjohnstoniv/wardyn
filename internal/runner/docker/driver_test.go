@@ -293,17 +293,21 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 		t.Errorf("agent CapDrop = %v, want [ALL]", agent.host.CapDrop)
 	}
 
-	// Proxy env carries the FULL sidecar config as one JSON var: run token,
+	// The proxy gets the FULL sidecar config on stdin (#1176): run token,
 	// control-plane URL, and the run's egress policy (a proxy without a
-	// policy fails closed, which this guards).
-	var cfgJSON string
-	for _, e := range proxy.cfg.Env {
-		if strings.HasPrefix(e, "WARDYN_PROXY_CONFIG_JSON=") {
-			cfgJSON = strings.TrimPrefix(e, "WARDYN_PROXY_CONFIG_JSON=")
-		}
-	}
+	// policy fails closed, which this guards). Its env holds only the marker.
+	cfgJSON := string(f.stdinOf(proxyContainerName(runID)))
 	if cfgJSON == "" {
-		t.Fatalf("proxy env missing WARDYN_PROXY_CONFIG_JSON: %v", proxy.cfg.Env)
+		t.Fatalf("proxy got no config on stdin; env %v", proxy.cfg.Env)
+	}
+	if !slices.Contains(proxy.cfg.Env, proxyConfigStdinEnv+"=1") || !proxy.cfg.OpenStdin || !proxy.cfg.StdinOnce {
+		t.Errorf("proxy env %v, OpenStdin %v, StdinOnce %v; want the stdin marker and a once-only open stdin",
+			proxy.cfg.Env, proxy.cfg.OpenStdin, proxy.cfg.StdinOnce)
+	}
+	for _, e := range proxy.cfg.Env {
+		if strings.Contains(e, "tok") {
+			t.Errorf("proxy env carries the run token: %s", e)
+		}
 	}
 	var pcfg struct {
 		RunToken        string         `json:"run_token"`
@@ -1197,8 +1201,8 @@ func TestEndSandbox_StopsTheAgentAndTheProxyAndKeepsThem(t *testing.T) {
 	if agent == nil || agent.removed || agent.state == nil || agent.state.Status != "exited" {
 		t.Fatalf("agent after the end = %+v; want stopped and still present", agent)
 	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed || p.state == nil || p.state.Running {
-		t.Error("the proxy sidecar must be stopped at the end — it is the agent's only network path — and kept for a revive to read")
+	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
+		t.Error("the proxy sidecar must be stopped and removed at the end: it is the agent's only network path, and nothing a revive needs is in it (#1176)")
 	}
 	if _, ok := f.networks[internalNetName(runID)]; !ok {
 		t.Error("the per-run network was removed at the end; teardown owns it")
@@ -1217,9 +1221,9 @@ func TestEndSandbox_StopsTheAgentAndTheProxyAndKeepsThem(t *testing.T) {
 
 // TestStopProxy_StopsOnlyTheProxy is a run lost to a control-plane outage
 // on Docker: the proxy sidecar, the agent's only network path, is stopped and
-// kept (its config is what a revive reads back), while the agent container
-// keeps running so a proxy-only revive can pick it up. A second stop is a
-// no-op.
+// removed (a revive rebuilds it from the control plane's stored config,
+// #1176), while the agent container keeps running so a proxy-only revive can
+// pick it up. A second stop is a no-op.
 func TestStopProxy_StopsOnlyTheProxy(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
@@ -1236,8 +1240,8 @@ func TestStopProxy_StopsOnlyTheProxy(t *testing.T) {
 			t.Fatalf("StopProxy #%d: %v", i+1, err)
 		}
 	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed || p.state == nil || p.state.Running {
-		t.Errorf("proxy after StopProxy = %+v; want it stopped and kept", p)
+	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed || (p.state != nil && p.state.Running) {
+		t.Errorf("proxy after StopProxy = %+v; want it stopped and removed", p)
 	}
 	if agent := f.containers[sb.Ref]; agent == nil || agent.removed || agent.state == nil || !agent.state.Running {
 		t.Fatalf("agent after StopProxy = %+v; want it still running", agent)

@@ -250,8 +250,8 @@ fi
 AGENT="wardyn-agent-${RUN_ID}"
 
 # (h) GAP-1 closure: the auto-launched proxy sidecar must be RUNNING (it used
-# to crash-loop on missing -config). The driver now delivers the full config —
-# including this run's egress policy — via WARDYN_PROXY_CONFIG_JSON.
+# to crash-loop on missing -config). The driver delivers the full config —
+# including this run's egress policy — on the sidecar's stdin (#1176).
 log "(h) auto-launched wardyn-proxy sidecar is healthy"
 PROXY_STATE="$(docker inspect "wardyn-proxy-${RUN_ID}" --format '{{.State.Status}} restarts={{.RestartCount}}' 2>/dev/null || echo missing)"
 if [[ "${PROXY_STATE}" == running* ]]; then ok "proxy sidecar ${PROXY_STATE}"; else
@@ -260,13 +260,11 @@ if docker logs "wardyn-proxy-${RUN_ID}" 2>&1 | grep -q "listening"; then
   ok "proxy logs show it is listening (config accepted, policy loaded)"; else
   bad "proxy logs missing 'listening': $(docker logs "wardyn-proxy-${RUN_ID}" 2>&1 | tail -3)"; fi
 
-# Capture the run token from the proxy sidecar's config env (inside the
-# WARDYN_PROXY_CONFIG_JSON payload). This is exactly how a real sidecar
-# obtains it; we reuse it to exercise run-token-gated internal endpoints.
-TOKEN="$(docker inspect "wardyn-proxy-${RUN_ID}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-         | sed -n 's/^WARDYN_PROXY_CONFIG_JSON=//p' \
-         | python3 -c 'import sys,json;print(json.load(sys.stdin)["run_token"])' 2>/dev/null || true)"
-[[ -n "${TOKEN}" ]] || note "run token not found in proxy config env"
+# The sidecar's config must not be readable from its container (#1176): no
+# run token in its environment, however the config is delivered.
+if docker inspect "wardyn-proxy-${RUN_ID}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+     | grep -q 'run_token'; then bad "proxy container env carries its config (run token)";
+else ok "proxy container env carries no config"; fi
 
 # ── 3a/b. L0 structural egress + metadata block (LIVE agent) ───────────────--
 log "(a) agent has NO default route"
@@ -296,7 +294,7 @@ else ok "metadata IP unreachable (curl rc=${MRC}, num_connects=0, no route)"; fi
 
 # ── 4. allow/deny/pending/metadata through the AUTO-LAUNCHED sidecar ───────--
 # GAP-1 is closed: the driver delivers the run's full proxy config (incl. the
-# egress policy from the run's RunPolicy) via WARDYN_PROXY_CONFIG_JSON, so the
+# egress policy from the run's RunPolicy) on the sidecar's stdin, so the
 # probes below go through the sidecar wardynd launched — the real shipped path.
 # The run's policy (demo.json) has first_use_approval=true, so the unknown
 # domain yields a PENDING decision + a raised egress_domain ApprovalRequest
@@ -377,24 +375,15 @@ if [[ "${EGRESS_ALLOW}" -ge 1 ]]; then ok "(d) ${EGRESS_ALLOW} egress.allow audi
 else bad "(d) expected >=1 egress.allow audit event, got ${EGRESS_ALLOW}"; fi
 
 # ── 5. recording artifact round-trip ───────────────────────────────────────--
-log "(f) recording artifact upload (run-token) + serve (admin)"
-cat > "${WORKDIR}/e2e.cast" <<'CAST'
-{"version": 2, "width": 80, "height": 24, "timestamp": 1781291592, "title": "wardyn-e2e"}
-[0.1, "o", "wardyn e2e recording artifact\r\n"]
-CAST
-UP="$(hc -o /dev/null -w '%{http_code}' -X PUT "${BASE}/api/v1/internal/recordings/${RUN_ID}" \
-       -H "Authorization: Bearer ${TOKEN}" --data-binary @"${WORKDIR}/e2e.cast")"
-GET="$(hc -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-        "${BASE}/api/v1/runs/${RUN_ID}/recording/${RUN_ID}")"
+log "(f) recording artifact serve (admin)"
+# The direct run-token upload this section used to make needs the run's token,
+# which is no longer readable from the proxy container (#1176: the config
+# reaches the proxy on stdin only). Auto delivery through the brokered proxy
+# upload route is exercised live by the finite recording run (i) below, and the
+# run-token doors by internal/api's TestInternalAuth_* tests.
 NOAUTH="$(hc -o /dev/null -w '%{http_code}' "${BASE}/api/v1/runs/${RUN_ID}/recording/${RUN_ID}")"
-if [[ "${UP}" == "204" && "${GET}" == "200" && "${NOAUTH}" == "401" ]]; then
-  ok "(f) recording store round-trip OK (upload=204 serve=200 noauth=401)"
-else
-  bad "(f) recording round-trip failed (upload=${UP} serve=${GET} noauth=${NOAUTH})"
-fi
-note "(f) this assertion exercises the endpoints directly; AUTO delivery via the"
-note "(f)      brokered proxy upload route (no shared volume, cross-run 403) is"
-note "(f)      exercised live by the finite recording run (i) below."
+if [[ "${NOAUTH}" == "401" ]]; then ok "(f) recording serve refuses an unauthenticated read (401)";
+else bad "(f) recording serve without auth = ${NOAUTH}, want 401"; fi
 
 # ── 6. OIDC login flow against Dex ──────────────────────────────────────────--
 log "(g) OIDC login flow against Dex -> session cookie authenticates GET /runs"
@@ -683,9 +672,9 @@ log "(e) kill cascade"
 # error; the agent + sidecar are still torn down and identity is still revoked).
 docker rm -f "${PROXY_NAME}" >/dev/null 2>&1 || true
 PROXY_NAME=""
-PRE="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decisions" \
-        -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-        -d '{"request":{"host":"prekill.example","port":443,"method":"CONNECT"},"decision":"deny","rule_source":"e2e:prekill"}')"
+# The run token is not readable from the proxy container (#1176), so the
+# token's own refusal after the kill is pinned by internal/api's kill and
+# TestInternalAuth_* tests, not here.
 # The kill is made with the ADMIN TOKEN, which actorFromRequest audits as
 # actor_type `system` (principal admin-token); a local-mode or OIDC session
 # audits `human`. The audit check below accepts both — pinning `human` kept this
@@ -693,18 +682,15 @@ PRE="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decisi
 KILL="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/runs/${RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}")"
 sleep 2
 GONE="$(docker ps -a --filter "name=${AGENT}" --format '{{.Names}}')"
-POST="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decisions" \
-         -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-         -d '{"request":{"host":"postkill.example","port":443,"method":"CONNECT"},"decision":"deny","rule_source":"e2e:postkill"}')"
 KSTATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
 KILL_AUDIT="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${RUN_ID}" \
   | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.kill" and e["actor_type"] in ("human","system")))')"
-echo "pre-kill token=${PRE} kill=${KILL} agent_gone=$([[ -z "${GONE}" ]] && echo yes || echo no) post-kill token=${POST} state=${KSTATE} run.kill_audit=${KILL_AUDIT}"
-if [[ "${PRE}" == "202" && "${KILL}" == "202" && -z "${GONE}" && "${POST}" == "401" && "${KSTATE}" == "KILLED" && "${KILL_AUDIT}" -ge 1 ]]; then
-  ok "(e) kill cascade: container gone + run token revoked (401) + state KILLED + run.kill audit"
+echo "kill=${KILL} agent_gone=$([[ -z "${GONE}" ]] && echo yes || echo no) state=${KSTATE} run.kill_audit=${KILL_AUDIT}"
+if [[ "${KILL}" == "202" && -z "${GONE}" && "${KSTATE}" == "KILLED" && "${KILL_AUDIT}" -ge 1 ]]; then
+  ok "(e) kill cascade: container gone + state KILLED + run.kill audit"
 else
-  bad "(e) kill cascade incomplete (pre=${PRE} kill=${KILL} gone='${GONE}' post=${POST} state=${KSTATE} audit=${KILL_AUDIT})"
+  bad "(e) kill cascade incomplete (kill=${KILL} gone='${GONE}' state=${KSTATE} audit=${KILL_AUDIT})"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────--
