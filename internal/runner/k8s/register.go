@@ -8,6 +8,7 @@ package k8s
 import (
 	"os"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
@@ -22,13 +23,16 @@ import (
 // a brokered:recording deny for a feature that was switched off.
 func buildConfig(d substrate.Deps) Config {
 	return Config{
-		Namespace:             resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
-		ProxyImage:            d.ProxyImage,
-		ImagePullSecret:       os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
-		Record:                d.Record,
-		ConfinementRuntimes:   d.ConfinementRuntimes,
-		AllowUnenforcedNetPol: os.Getenv("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") == "1",
-		AckAmbientDefaultDeny: os.Getenv("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") == "1",
+		Namespace:           resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
+		ProxyImage:          d.ProxyImage,
+		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
+		Record:              d.Record,
+		ConfinementRuntimes: d.ConfinementRuntimes,
+		// cliutil.EnvBool, not a literal "1" compare (#202): the shared
+		// 1/true/yes/on token set, and a garbage value exits 2 at boot
+		// instead of silently staying off.
+		AllowUnenforcedNetPol: cliutil.EnvBool("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", false),
+		AckAmbientDefaultDeny: cliutil.EnvBool("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", false),
 	}
 }
 

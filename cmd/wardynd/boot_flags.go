@@ -549,11 +549,22 @@ func parseBootFlags() *bootFlags {
 	}
 	flag.Parse()
 
+	// internal/api reads its env toggles per request; a garbage value in one
+	// exits 2 here, in every auth mode, rather than on the first request.
+	api.ValidateEnvToggles()
+
 	// An empty -listen/WARDYN_LISTEN is not a bind — see normalizeListenAddr.
 	// Done HERE, once, so every listen classifier and the http.Server itself
 	// read the same real address instead of net/http's implicit 0.0.0.0:80.
 	*f.listen = normalizeListenAddr(*f.listen)
 
+	finalizeBootFlags(f)
+	return f
+}
+
+// finalizeBootFlags applies the post-parse fallbacks and file-backed secret
+// resolution parseBootFlags itself has no funlen budget left for.
+func finalizeBootFlags(f *bootFlags) {
 	// Standard-AWS fallback. An operator whose environment is already configured
 	// for AWS shouldn't have to restate the same values under a Wardyn-specific
 	// name. WARDYN_BEDROCK_* (and its flag) stay authoritative — these apply only
@@ -565,11 +576,11 @@ func parseBootFlags() *bootFlags {
 	// explicit `-bedrock-region=` — not off what the compiled-in default was.
 	// (flagEnv now reads an empty env as "unset, keep the default" like every
 	// other helper in cliutil, so the env half alone would work as a default
-	// argument; the flag half still would not.) Here in
-	// parseBootFlags rather than resolveLocalMode (where the sibling Bedrock
-	// auto-detect lives) because that function returns early when local mode is
-	// off — which is every auth-configured deployment, i.e. exactly the
-	// enterprise Bedrock audience.
+	// argument; the flag half still would not.) Here, alongside parseBootFlags
+	// rather than resolveLocalMode (where the sibling Bedrock auto-detect
+	// lives) because that function returns early when local mode is off —
+	// which is every auth-configured deployment, i.e. exactly the enterprise
+	// Bedrock audience.
 	//
 	// Cannot silently enable Bedrock: that needs region AND model, and there is
 	// no standard env for the model.
@@ -589,7 +600,6 @@ func parseBootFlags() *bootFlags {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
 		os.Exit(1)
 	}
-	return f
 }
 
 // demoAdminToken is the admin bearer the compose stack and the docs ship
