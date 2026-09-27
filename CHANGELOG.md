@@ -24,6 +24,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
+  run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
+  answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the
+  UI gateway's launcher then failed with "container is not running". agent-vscode inherited the
+  stub when it moved onto agent-base; agent-novnc always had it. The stub now implements mode 3
+  itself: it prepares the workspace, writes the prep-done marker, and idles until TERM or INT.
+
+- **Cancelling a sign-in or run that is still starting now stops its sandbox create (#1182).** A kill
+  of a STARTING run left its in-flight sandbox create running until its own readiness wait expired
+  (up to about 3 minutes on Kubernetes), holding its pods and the node's room, so a retry could sit
+  "Waiting for a machine with room" and time out. The kill now cancels the create, and the
+  substrate's rollback removes what it had made. On Kubernetes the client rate limit is raised from
+  client-go's 5/10 per API group to one shared 50 QPS / burst 100 limiter, and a readiness wait that
+  times out under client-side throttling now names the pod's reason (for example
+  "Unschedulable … Insufficient cpu") instead of "client rate limiter Wait returned an error".
 - **The AWS SSO reauth-hold docker tests now start the agent image the way a Bedrock SSO run
   does (#1193, refs #1185).** They bind-mounted a host-written `~/.aws` over the image's home and
   ran `claude` directly, so a red run read as "the pinned Claude Code CLI cannot resolve an SSO
