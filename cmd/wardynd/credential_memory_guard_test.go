@@ -150,22 +150,23 @@ func scanDecryptSites(t *testing.T, root string, extra map[string]bool) (sites [
 
 // shippedFiles returns, relative to root, every non-test Go file of each module
 // package a shipped binary links: go list -deps ./cmd/... for every build the
-// repo ships (CGO_ENABLED=0; linux, and darwin for the CLI; tagless, docker,
-// k8s, docker+k8s), whatever a file's own build constraints. Unlike a walk, it
-// follows an import into testdata, a . or _ directory or a symlink, which the
-// go tool compiles when the import names it.
+// repo ships (CGO_ENABLED=0; linux, and darwin for the CLI, each on amd64 and
+// arm64; tagless, docker, k8s, docker+k8s), whatever a file's own build
+// constraints. Unlike a walk, it follows an import into testdata, a . or _
+// directory or a symlink, which the go tool compiles when the import names it.
 func shippedFiles(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	files := map[string]bool{}
-	for _, goos := range []string{"linux", "darwin"} {
+	for _, platform := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
+		goos, goarch, _ := strings.Cut(platform, "/")
 		for _, tags := range []string{"", "docker", "k8s", "docker,k8s"} {
 			cmd := exec.Command("go", "list", "-deps", "-buildvcs=false", "-tags="+tags, "-f",
 				`{{.ImportPath}}{{range .GoFiles}}{{"\t"}}{{$.Dir}}/{{.}}{{end}}{{range .IgnoredGoFiles}}{{"\t"}}{{$.Dir}}/{{.}}{{end}}`, "./cmd/...")
 			var stderr strings.Builder
-			cmd.Dir, cmd.Env, cmd.Stderr = root, append(os.Environ(), "PWD="+root, "GOOS="+goos, "CGO_ENABLED=0"), &stderr
+			cmd.Dir, cmd.Env, cmd.Stderr = root, append(os.Environ(), "PWD="+root, "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0"), &stderr
 			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("go list -deps -tags=%q ./cmd/... (GOOS=%s): %v\n%s", tags, goos, err, stderr.String())
+				t.Fatalf("go list -deps -tags=%q ./cmd/... (%s): %v\n%s", tags, platform, err, stderr.String())
 			}
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				f := strings.Split(line, "\t")
@@ -239,6 +240,11 @@ func testSupportProblems(root string, shipped map[string]bool) []string {
 func TestDecryptSitesArePinned(t *testing.T) {
 	root := repoRoot(t)
 	shipped := shippedFiles(t, root)
+	for rel := range credentialEntryPoints {
+		if !shipped[rel] {
+			t.Fatalf("go list -deps ./cmd/... did not list %s: the shipped-file set is broken", rel)
+		}
+	}
 	for _, p := range testSupportProblems(root, shipped) {
 		t.Error(p)
 	}
