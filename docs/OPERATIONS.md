@@ -3415,8 +3415,10 @@ it.
   ends the daemon. The console listener (`WARDYN_LISTEN`) is unchanged.
 - **The proxy's end.** Dispatch puts the CA's public certificate in each run's
   sealed proxy config (`control_plane_ca_pem`: the docker driver's
-  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret — where the per-run
-  MITM CA already travels). The proxy trusts that certificate and nothing else
+  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret, staged by a
+  nonroot init container into an owner-only file the sidecar reads via
+  `-config` — where the per-run MITM CA already travels). The proxy trusts
+  that certificate and nothing else
   for every control-plane call: the resolve, mints, token renewal, decisions,
   approvals and uploads. Not the system roots, and not `WARDYN_TRUSTED_CA_FILE`:
   that bundle is for egress, because a TLS-inspecting box sits between the proxy

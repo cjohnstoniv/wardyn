@@ -1408,8 +1408,12 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get proxy pod: %v", err)
 	}
-	if n := len(proxyPod.Spec.Containers[0].Env); n != 3 {
-		t.Errorf("proxy pod carries %d env vars, want the 3 it always has: %+v",
+	// Two, not three: WARDYN_RUN_ID and WARDYN_CONTROL_PLANE_URL. The config
+	// itself is no longer an env var at all (T-28, issue #688) — it reaches
+	// the container as a file via the init-container staging step, mounted
+	// read-only off the shared emptyDir tested in netpol_invariant_probe_test.go.
+	if n := len(proxyPod.Spec.Containers[0].Env); n != 2 {
+		t.Errorf("proxy pod carries %d env vars, want the 2 it always has: %+v",
 			n, proxyPod.Spec.Containers[0].Env)
 	}
 }
