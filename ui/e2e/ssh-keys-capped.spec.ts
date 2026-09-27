@@ -12,10 +12,16 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute } from "./fixtures";
 // after checking that the real response already carries `capped` as a boolean,
 // the field the chip reads. Frozen strings: docs/design/admin-access-canon.md.
 // Its own key, not ssh-keys.spec.ts's: the two specs may run side by side.
+//
+// M-5 (#636, S-2, approved 2026-09-27): /ssh-keys is gone (no alias) —
+// SshKeysPane is mounted at /account now. The chip and tooltip were rewritten
+// too: "Member access" -> "User access", pointing at Admin Settings' new
+// Admin SSH keys card instead of a door M-5 removed.
 const PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvUZbH/FCPeFHqDUX5bD2AnpEfl06Qpg/DGH7HACslV e2e-capped";
 const KEY_NAME = "e2e-capped-laptop";
-const CHIP = "Member access";
-const TOOLTIP = "Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.";
+const CHIP = "User access";
+const TOOLTIP =
+  "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -46,7 +52,7 @@ test.describe("SSH keys — capped-key chip", () => {
       });
 
       await gotoConsole(page);
-      await navToRoute(page, "/ssh-keys");
+      await navToRoute(page, "/account");
       const row = page.getByRole("row").filter({ hasText: KEY_NAME });
       await expect(row).toBeVisible();
       await expect(row.getByText(CHIP)).toHaveCount(0);

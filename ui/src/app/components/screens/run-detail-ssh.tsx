@@ -224,7 +224,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             The command below is real, but no key is registered to connect with yet.
           </p>
           <Button asChild size="sm" className="mt-2">
-            <Link to="/ssh-keys">
+            <Link to="/account">
               <KeyRound className="size-3.5" /> Manage SSH keys
             </Link>
           </Button>
@@ -272,7 +272,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       )}
 
       {sshOn && (
-        <Link to="/ssh-keys" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
+        <Link to="/account" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
           Manage SSH keys
         </Link>
       )}

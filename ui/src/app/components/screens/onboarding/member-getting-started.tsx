@@ -618,7 +618,7 @@ export function MemberGettingStarted() {
               size="sm"
               className="mt-3"
             >
-              <Link to="/ssh-keys">
+              <Link to="/account">
                 <KeyRound className="size-3.5" /> {T.CONNECT_ACTION}
               </Link>
             </Button>

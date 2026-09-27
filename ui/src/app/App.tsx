@@ -125,9 +125,16 @@ const SecretsScreen = React.lazy(() =>
     default: m.SecretsScreen,
   })),
 );
-const SettingsScreen = React.lazy(() =>
-  import("./components/screens/settings/settings-screen").then((m) => ({
-    default: m.SettingsScreen,
+// M-5 (#636): the settings split — one screen per view (§4.3), replacing the
+// single SettingsScreen that used to mount unchanged at both routes.
+const AdminSettingsScreen = React.lazy(() =>
+  import("./components/screens/settings/admin-settings-screen").then((m) => ({
+    default: m.AdminSettingsScreen,
+  })),
+);
+const YourAccountScreen = React.lazy(() =>
+  import("./components/screens/settings/your-account-screen").then((m) => ({
+    default: m.YourAccountScreen,
   })),
 );
 const WorkspacesScreen = React.lazy(() =>
@@ -150,11 +157,6 @@ const AuditScreen = React.lazy(() =>
 const RecordingScreen = React.lazy(() =>
   import("./components/screens/recording").then((m) => ({
     default: m.RecordingScreen,
-  })),
-);
-const SSHKeysScreen = React.lazy(() =>
-  import("./components/screens/ssh-keys").then((m) => ({
-    default: m.SSHKeysScreen,
   })),
 );
 // The guided Getting Started funnel — an operator-chosen route, not a gate:
@@ -697,8 +699,9 @@ export default function App() {
               element={<FirstRunLanding status={setupStatus} />}
             />
             {/* The Admin view mounts today's screens unchanged; the server
-                scopes their data by the caller's real role. /admin/settings
-                and /account both mount the unsplit Settings until M-5. */}
+                scopes their data by the caller's real role. M-5 (#636) split
+                /admin/settings and /account into their own screens — see
+                AdminSettingsScreen/YourAccountScreen below. */}
             <Route path="/admin" element={<FirstRunLanding status={setupStatus} admin />} />
             <Route path="/admin/runs" element={<RunsScreen />} />
             <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
@@ -713,11 +716,11 @@ export default function App() {
             <Route path="/admin/secrets" element={suspend(<SecretsScreen />)} />
             <Route path="/admin/audit" element={suspend(<AuditScreen />)} />
             <Route path="/admin/recordings" element={suspend(<RecordingScreen />)} />
-            <Route path="/admin/settings" element={suspend(<SettingsScreen />)} />
+            <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
-            <Route path="/account" element={suspend(<SettingsScreen />)} />
+            <Route path="/account" element={suspend(<YourAccountScreen />)} />
             <Route path="/runs" element={<RunsScreen />} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route
@@ -748,9 +751,10 @@ export default function App() {
                 /integrations(/:id), /settings, /audit and /recordings are
                 deleted, clean break — each lives only at its /admin/* twin
                 now (mounted above). A stale bookmark or link falls to the
-                catch-all below. /secrets, /workspaces(/:id) and /ssh-keys
-                stay: they're in the User view's own URL scheme
-                (admin-member-modes-design.md §2.3). */}
+                catch-all below. /secrets and /workspaces(/:id) stay: they're
+                in the User view's own URL scheme (admin-member-modes-design.md
+                §2.3). M-5 (#636) deleted /ssh-keys the same way — no alias;
+                SshKeysPane is mounted once now, in /account. */}
             <Route
               path="/secrets"
               element={
@@ -772,14 +776,6 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <WorkspaceDetailScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/ssh-keys"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <SSHKeysScreen />
                 </React.Suspense>
               }
             />

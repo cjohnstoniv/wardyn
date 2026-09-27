@@ -3,11 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// SSH keys management (account menu -> "SSH keys"): the signed-in human's
-// OWN registered public keys — list, add, remove. Not operator-gated: an SSH
-// key is a personal credential binding, not deployment configuration (the
-// server enforces the same scope independently — sshkeys.go's handlers key
-// every read/write off the caller's own principal).
+// SSH keys management: the signed-in human's OWN registered public keys —
+// list, add, remove. Not operator-gated: an SSH key is a personal credential
+// binding, not deployment configuration (the server enforces the same scope
+// independently — sshkeys.go's handlers key every read/write off the
+// caller's own principal).
+//
+// M-5 (#636): /ssh-keys is gone (deleted with no alias) — SshKeysPane is now
+// mounted once, in Your account (your-account-screen.tsx). AddSSHKeyDialog
+// and RemoveSSHKeyDialog are exported so admin-ssh-keys-card.tsx's "Admin SSH
+// keys" card (S-1) can reuse the same add/remove dialogs rather than a second
+// copy — the server stamps a key's role off the caller's session, so the two
+// cards differ only in which keys they list, never in how a key is added or
+// removed.
 import * as React from "react";
 import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -39,18 +47,6 @@ import { capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import { useOperator } from "../wardyn/operator-context";
 
-// The page at /ssh-keys. The body is SshKeysPane so Settings can render the
-// same card ("Your SSH keys") without a second copy of the list, the dialogs,
-// or their reload wiring — the account menu keeps both entries, and they show
-// exactly the same thing.
-export function SSHKeysScreen() {
-  return (
-    <div className="mx-auto max-w-[900px] px-6 py-6">
-      <SshKeysPane />
-    </div>
-  );
-}
-
 export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -79,7 +75,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
       <PageHeader
         as={heading}
         title="Your SSH keys"
-        description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; there is no admin view of anyone else's."
+        description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's."
         actions={
           <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
             <Plus className="size-4" /> Add key
@@ -141,10 +137,14 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                       )}
                       {/* #584: added in the user view, so capped at member
                           rights for good (docs/SSH.md §Bounds). Frozen strings:
-                          docs/design/admin-access-canon.md. */}
+                          docs/design/admin-access-canon.md. M-5 (#636, S-2):
+                          "Member access" pointed at a door M-5 removed (the
+                          user view was the only place a member could add ANY
+                          key); rewritten to "User access", tooltip pointing
+                          at S-1's new Admin SSH keys card instead. */}
                       {k.capped && (
-                        <Chip title="Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.">
-                          Member access
+                        <Chip title="Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.">
+                          User access
                         </Chip>
                       )}
                     </span>
@@ -183,7 +183,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   );
 }
 
-function AddSSHKeyDialog({
+export function AddSSHKeyDialog({
   open,
   onOpenChange,
   onAdded,
@@ -280,7 +280,7 @@ function AddSSHKeyDialog({
 // that shared one hard-codes the operator-only gate every OTHER delete in
 // the console needs, but an SSH key is the signed-in human's own — removing
 // it is never an operator-only act.
-function RemoveSSHKeyDialog({
+export function RemoveSSHKeyDialog({
   keyToDelete,
   onOpenChange,
   onRemoved,

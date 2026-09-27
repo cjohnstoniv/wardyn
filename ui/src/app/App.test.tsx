@@ -203,16 +203,16 @@ describe("roleCanReach — pure", () => {
 
   // M3: MEMBER_REACHABLE_PREFIXES must be the member REACHABLE set, not
   // merely the member NAV set — /secrets (self-service WRITE/DELETE since
-  // migration 0050) and /account + /ssh-keys (rendered in the account menu
-  // for every role) have no sidebar entry but ARE reachable, or a member's
-  // own mid-session 401 on any of the three would read as "no longer yours"
-  // and send them to /runs instead of carrying on. M-1b: /settings is
-  // deleted; /account is its member-side twin.
-  it("a member reaches the three self-service routes with no sidebar entry", () => {
+  // migration 0050) and /account (rendered in the account menu for every
+  // role) have no sidebar entry but ARE reachable, or a member's own
+  // mid-session 401 on either would read as "no longer yours" and send them
+  // to /runs instead of carrying on. M-1b: /settings is deleted; /account is
+  // its member-side twin. M-5 (#636) deleted /ssh-keys the same way, with no
+  // alias — SshKeysPane is mounted once now, in /account.
+  it("a member reaches the self-service routes with no sidebar entry", () => {
     // ticket: M3
     expect(roleCanReach("/secrets", "user")).toBe(true);
     expect(roleCanReach("/account", "user")).toBe(true);
-    expect(roleCanReach("/ssh-keys", "user")).toBe(true);
   });
 
   // Negative control: a route with no special tier (neither member-scoped

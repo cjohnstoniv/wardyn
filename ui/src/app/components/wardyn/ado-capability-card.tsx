@@ -474,7 +474,9 @@ function AdoScopeMenu({
 // bare `<Link to="/settings">` landed at the top of a five-card page with
 // no way to find the one card this door is actually about, and the two CTAs
 // named the same act two different ways. M-1b: it's your own connection
-// (#386), so the anchor moved to /account when /settings was deleted.
+// (#386), so the anchor moved to /account when /settings was deleted. M-5
+// (#636) later split that page in two; AdoConnectionCard is your-account-
+// screen.tsx's now — still your own connection, still at /account.
 function AdoConsentCard({
   item,
   viewerPrincipal,

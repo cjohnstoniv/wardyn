@@ -53,8 +53,8 @@ only `String` and `Where` traded places.
 | refusal: bad URL | `PUT /site-config` 400, scheme failures only, a new http:// link included (#489 dropped "http:// or ") | sign_in_help_url: must be an https:// address — it is shown to people who have not signed in |
 | `sign_in_help_url.label` | `/setup/status` row label (`signInHelpHTTPCheck`), the card's own title | When someone can't sign in |
 | `sign_in_help_url.warn` | setup row `detail`, warn, never blocking (#489) | The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page. |
-| SSH keys chip | SSH keys screen, a key whose `capped` is true (#584) | Member access |
-| SSH keys chip tooltip | the chip's `title` (#584) | Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH. |
+| SSH keys chip | SSH keys screen, a key whose `capped` is true (#584; rewritten M-5/#636 S-2, 2026-09-27) | User access |
+| SSH keys chip tooltip | the chip's `title` (#584; rewritten M-5/#636 S-2, 2026-09-27) | Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view. |
 
 ## Implementation strings (not in the mock)
 
