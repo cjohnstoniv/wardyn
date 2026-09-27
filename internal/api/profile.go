@@ -128,7 +128,7 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	// repos and applies to whichever ceiling sits underneath it.
 	base, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {
-		writeCeilingError(w, cerr)
+		writeCeilingError(w, r, cerr)
 		return
 	}
 	ceiling := widenCeilingRepoAllowlist(base.Spec, synthGitHubRepos(synth))

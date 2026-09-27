@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -69,7 +70,7 @@ func newRulesetMinter(t *testing.T, f *rulesetFake) *githubMinter {
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_probe","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_probe","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		case strings.Contains(r.URL.Path, "/rulesets/"):
 			// Measured: with includes_parents=false this endpoint 404s for a
 			// ruleset inherited from the ORGANIZATION, which is exactly the kind
@@ -349,7 +350,7 @@ func TestVerifyRefRuleset_MintsMetadataReadOnlyAndRevokes(t *testing.T) {
 			n, _ := r.Body.Read(buf)
 			gotPerms = string(buf[:n])
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_probe","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_probe","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			_, _ = w.Write([]byte(rulesNone))
 		}

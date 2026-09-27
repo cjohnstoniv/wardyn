@@ -1,15 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The workspace access rule used to be spelled with three different predicates,
-// and a security_admin got three different answers about ONE member-owned row:
-// the LIST handed it over (isSecurityOperator), the direct READ answered the
-// foreign-workspace 404 (ownsWorkspaceOrAdmin -> isOperator), and the EGRESS
-// WRITE succeeded (securityOps, no ownership check at all).
+// The workspace access rule is spelled with one predicate for the list, the
+// direct read and the egress write, so a security_admin gets one answer about
+// one member-owned row. Three predicates (isSecurityOperator for the list,
+// ownsWorkspaceOrAdmin -> isOperator for the read, securityOps with no ownership
+// check for the write) would hand it the list, answer the read with the
+// foreign-workspace 404, and let the write succeed.
 //
-// The read was the odd one out, and it was the harmful one: the tier could write
-// a workspace's denylist but could not read /observed-egress, the observed
-// traffic that is the INPUT to that decision.
+// The read is the harmful odd one out: the tier could write a workspace's
+// denylist but could not read /observed-egress, the observed traffic that is the
+// input to that decision.
 package api
 
 import (
@@ -137,8 +138,8 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	}
 
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
-	member := ssoSession(t, memberSub, "owner@corp.example", oidc.RoleMember)
-	other := ssoSession(t, "sub-someone-else", "else@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "owner@corp.example", oidc.RoleUser)
+	other := ssoSession(t, "sub-someone-else", "else@corp.example", oidc.RoleUser)
 
 	for _, key := range routes {
 		method, pattern, _ := strings.Cut(key, " ")
@@ -173,7 +174,7 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 		})
 	}
 
-	// THE GETTER'S FOURTH CONSUMER, on its own terms (F287). GET
+	// The getter's fourth consumer, on its own terms (F287). GET
 	// .../env-as-code left classMember because its emitted files render the
 	// operator's authored environment whole — the FROM line naming the internal
 	// registry coordinate the workspace reads blank, the site-config artifact
@@ -195,7 +196,7 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 		}
 	})
 
-	// THE WRITE PREDICATE, in the same test and deliberately so.
+	// The write predicate, in the same test and deliberately so.
 	t.Run("the write tier did NOT widen with the read", func(t *testing.T) {
 		srv, st := newWorkspaceReadServer(t, memberSub)
 		p := fmt.Sprintf("/api/v1/workspaces/%s", st.ws.ID)
@@ -241,7 +242,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 	srv, st := newTopologyWorkspaceServer(t, "sub-ws-owner")
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 
-	// THE ASYMMETRY IS REAL, and this is the half that makes the rule load-
+	// The asymmetry is real, and this is the half that makes the rule load-
 	// bearing rather than decorative: the same session, the same datum, two
 	// answers.
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/sources", sec, ""); w.Code != http.StatusForbidden {
@@ -258,7 +259,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
 	}
 
-	// ── the HOST axis, field by field ──
+	// the host axis, field by field
 	for i, src := range got.Sources {
 		if src.Type == types.WorkspaceSourceTypeLocalDir && src.Path != "" {
 			t.Errorf("sources[%d].path = %q, want blank — this is the exact datum /sources answers this tier 403 for",
@@ -279,8 +280,8 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		}
 	}
 
-	// ── what the tier KEEPS, because withholding it would break the decision
-	// this tier is widened to make ──
+	// what the tier keeps, because withholding it would break the decision
+	// this tier is widened to make
 	if got.Name != "payments" {
 		t.Errorf("name = %q, want the workspace to remain identifiable", got.Name)
 	}
@@ -298,7 +299,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 			"and it cannot decide blind (requirements=%v)", got.Requirements)
 	}
 
-	// ── the scanned profile republishes both axes under its own keys ──
+	// the scanned profile republishes both axes under its own keys
 	var profile map[string]json.RawMessage
 	if len(got.Profile) > 0 {
 		if err := json.Unmarshal(got.Profile, &profile); err != nil {

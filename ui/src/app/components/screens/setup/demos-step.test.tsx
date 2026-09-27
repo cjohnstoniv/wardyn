@@ -61,7 +61,7 @@ const REFUSED_AT_CREATE = DEMOS.find((d) => d.id === "sts-fail-closed")!;
 function renderDemo(
   demo: Demo = FIRST,
   barrierReady = true,
-  opts: { githubAppReady?: boolean; operator?: boolean; onDemoLaunched?: () => void } = {},
+  opts: { githubAppReady?: boolean; operator?: boolean; onDemoLaunched?: () => void; noJump?: boolean } = {},
 ) {
   return render(
     <MemoryRouter>
@@ -70,7 +70,7 @@ function renderDemo(
           demo={demo}
           barrierReady={barrierReady}
           githubAppReady={opts.githubAppReady ?? true}
-          onJump={vi.fn()}
+          onJump={opts.noJump ? undefined : vi.fn()}
           onDemoLaunched={opts.onDemoLaunched ?? vi.fn()}
         />
       </OperatorProvider>
@@ -133,6 +133,15 @@ describe("DemoDetail — the single demo renderer", () => {
     renderDemo(FIRST, false);
     expect(await screen.findByTestId("demos-step-not-ready")).toBeInTheDocument();
     expect(screen.getByTestId(`demo-start-${FIRST.id}`)).toBeDisabled();
+  });
+
+  // No onJump (the User view's Getting Started): the hint names the admin-side
+  // Environment step in plain text, never a button that goes nowhere.
+  it("without onJump the not-ready hint names the Environment step but offers no button", async () => {
+    renderDemo(FIRST, false, { noJump: true });
+    const hint = await screen.findByTestId("demos-step-not-ready");
+    expect(within(hint).getByText("Environment step")).toBeInTheDocument();
+    expect(within(hint).queryByRole("button", { name: "Environment step" })).not.toBeInTheDocument();
   });
 
   it("an active demo shows the terminal, live approvals, the inline audit panel, and End demo", async () => {
@@ -270,7 +279,7 @@ describe("DemoDetail — the single demo renderer", () => {
     renderDemo(APP_GATED, true, { githubAppReady: false, operator: true });
     const gate = await screen.findByTestId("demo-needs-github-app");
     expect(gate).not.toHaveTextContent(/ask an operator/i);
-    expect(within(gate).getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
+    expect(within(gate).getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/admin/settings");
   });
 
   // A refused run-create: sts-fail-closed's lesson IS the 422 — the mint is

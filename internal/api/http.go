@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -87,7 +88,7 @@ func oidcNameFromContext(ctx context.Context) string {
 	return n
 }
 
-// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleMember)
+// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleUser)
 // derived for the same verified OIDC session, published by humanOrAdminAuth next
 // to the principal/email for the same reason those two keys exist: isOperator
 // reads this (never oidc's own context key) so the auth middleware stays the
@@ -171,16 +172,16 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
-// withHumanIdentity publishes the five keys that TOGETHER describe an
+// withHumanIdentity publishes the six keys that TOGETHER describe an
 // authenticated human: who they are (sub), the email an admin may have written
-// a grant against, the role isOperator gates on, the group snapshot the
-// capability resolver matches, and whether that snapshot is COMPLETE. It exists
-// so the SSO-session branch and the api-token branch of humanOrAdminAuth cannot
-// DRIFT: a sixth identity key added to one path and forgotten on the other is
-// exactly how a token would silently resolve to a different permission set than
-// the session that minted it — and for a DENY grant, silently resolving to "no
-// match" is a breach, not a degradation. Both branches call this and nothing
-// else.
+// a grant against, the role isOperator gates on, their user type, the group
+// snapshot the capability resolver matches, and whether that snapshot is
+// COMPLETE. It exists so the SSO-session branch and the api-token branch of
+// humanOrAdminAuth cannot DRIFT: an identity key added to one path and
+// forgotten on the other is exactly how a token would silently resolve to a
+// different permission set than the session that minted it — and for a DENY
+// grant, silently resolving to "no match" is a breach, not a degradation. Both
+// branches call this and nothing else.
 //
 // groupsTruncated is a parameter rather than something derived from groups
 // because it CANNOT be derived: a truncated snapshot and a complete one are
@@ -190,10 +191,11 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 // Session EXPIRY is deliberately NOT here. It is a property of a cookie, not of
 // an identity: an api token has no session to expire, so the key stays zero for
 // one and is set by the SSO branch alone (see oidcExpiryCtxKey).
-func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string, groupsTruncated bool) context.Context {
+func withHumanIdentity(ctx context.Context, sub, email, role, userType string, groups []string, groupsTruncated bool) context.Context {
 	ctx = withOIDCHuman(ctx, sub)
 	ctx = withOIDCEmail(ctx, email)
 	ctx = withOIDCRole(ctx, role)
+	ctx = withOIDCUserType(ctx, userType)
 	ctx = withOIDCGroupsTruncated(ctx, groupsTruncated)
 	return withOIDCGroups(ctx, groups)
 }
@@ -201,7 +203,13 @@ func withHumanIdentity(ctx context.Context, sub, email, role string, groups []st
 // errorBody is the uniform JSON error envelope.
 type errorBody struct {
 	Error  string `json:"error"`
-	Reason string `json:"reason,omitempty"` // a machine-readable class for the few refusals a console surface acts on; absent everywhere else
+	Reason string `json:"reason,omitempty"` // machine-readable refusal class; the SDK exposes it as APIError.Reason; coverage phased in under #204
+	// Provider and Kind (#532) name the model provider a run.create/Review 422
+	// is ABOUT, so the console can open the door of that provider instead of
+	// guessing from the roster. Present only on a model-provider refusal whose
+	// provider is known — never on an unrelated 4xx.
+	Provider string `json:"provider,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -216,7 +224,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorBody{Error: msg})
+	writeErrorReason(w, status, "", msg)
+}
+
+// writeErrorReason is writeError with a machine reason (errorBody.Reason) on the
+// wire. A refusal that carries a reason goes through here rather than a bare
+// writeJSON(errorBody{...}), so #173's driver-text guard
+// (server_error_driver_text_guard_test.go) still sees the call.
+func writeErrorReason(w http.ResponseWriter, status int, reason, msg string) {
+	writeJSON(w, status, errorBody{Error: msg, Reason: reason})
 }
 
 // bearerToken extracts a bearer token from the Authorization header.
@@ -405,7 +421,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// top of the branch so no handler, and no context the branch
 			// publishes, ever sees a forged request.
 			if err := s.sameOriginOrRefuse(r); err != nil {
-				// Audited on the EXISTING auth.failed action: this refusal
+				// Audited on the EXISTING auth.fail action: this refusal
 				// short-circuits ABOVE adminAuth, the chokepoint that emits for
 				// every other public-API refusal, so without this call a
 				// threat-model-registered control would leave no trail at all.
@@ -413,6 +429,11 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				// reason overrides csrfAuditReason (auditAuthFailedAs).
 				s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
 				writeError(w, http.StatusForbidden, err.Error())
+				return
+			}
+			// A user view whose type was deleted is refused here, before any
+			// handler reads the tier; GET /me alone drops back (user_view.go).
+			if r = s.userViewGate(w, r, oidc.UserTypeFromContext(r.Context())); r == nil {
 				return
 			}
 			// Publish the verified human on an api-owned context key so
@@ -430,6 +451,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			ctx := withHumanIdentity(r.Context(), sub,
 				oidc.EmailFromContext(r.Context()),
 				oidc.RoleFromContext(r.Context()),
+				oidc.UserTypeFromContext(r.Context()),
 				oidc.GroupsFromContext(r.Context()),
 				oidc.GroupsTruncatedFromContext(r.Context()))
 			// The display name rides along for /me only — outside
@@ -469,7 +491,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 // comment already reads "operator" to mean "admin", and the two are now exactly
 // the same tier.
 //
-// isOperator reads the caller's ROLE (oidc.RoleAdmin / oidc.RoleMember,
+// isOperator reads the caller's ROLE (oidc.RoleAdmin / oidc.RoleUser,
 // derived at OIDC login by internal/auth/oidc's deriveRole and carried on the
 // session cookie) — never the OperatorEmails list directly. Config.OperatorEmails
 // (WARDYN_OIDC_OPERATOR_EMAILS) still matters: cmd/wardynd feeds the SAME list
@@ -478,7 +500,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 // deleted, it now flows through Session.Role like every other role signal
 // instead of being re-checked here a second time. With WARDYN_OIDC_ROLE_MAP
 // unset, deriveRole derives the role from this operator allowlist ALONE (an
-// email on it => RoleAdmin, everyone else => RoleMember); only with NEITHER a
+// email on it => RoleAdmin, everyone else => RoleUser); only with NEITHER a
 // role map nor an allowlist does every signed-in human default to RoleAdmin
 // (true pre-0.5) — see oidc.deriveRole.
 //
@@ -490,14 +512,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 		if !s.isOperator(r.Context()) {
 			// Do not name the allowlist/role-map's members — the caller learns
 			// only that they are not an admin.
-			writeError(w, http.StatusForbidden, "requires admin role")
 			// authz.denied: a member denied a reachable admin surface. Low-noise
-			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
+			// by design (see the audit doc in runs_create.go's denyUserRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+			s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, ""))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -562,7 +582,7 @@ func (s *Server) isOperator(ctx context.Context) bool {
 // why (approvals.go carries only same-line pointers — it sits two lines under
 // the file-size gate):
 //
-//   - approvals.go's list, authorizeMemberDecision and the
+//   - approvals.go's list, authorizeUserDecision and the
 //     decision_scope=always gate. The latter two are a LOCKSTEP PAIR: deciding
 //     an approval and persisting that decision are the same authority, one
 //     merely durable, and a tier that may decide but not record would re-decide
@@ -596,9 +616,7 @@ func (s *Server) isSecurityOperator(ctx context.Context) bool {
 func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.isSecurityOperator(r.Context()) {
-			writeError(w, http.StatusForbidden, "requires admin role")
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "security_admin_surface", r.Method))))
+			s.refuse(w, r, authz.Deny(authz.ReasonSecurityAdminSurface, r.URL.Path, ""))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -609,7 +627,7 @@ func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 // empty configured AdminToken denies everything (fail closed): the public API
 // must not be unauthenticated. SSO/Dex replaces this in a later milestone.
 //
-// Every 401 here is audited as auth.failed (#19a) — this is the ONE chokepoint
+// Every 401 here is audited as auth.fail (#19a) — this is the ONE chokepoint
 // every public-API auth failure funnels through (humanOrAdminAuth composes
 // oidc.Middleware(adminAuth(...)), and a rejected session cookie still falls
 // through to here), so one emit call covers both "adminAuth 401s" and
@@ -636,7 +654,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 	})
 }
 
-// auditAuthFailed emits auth.failed (actor system) for an authentication
+// auditAuthFailed emits auth.fail (actor system) for an authentication
 // failure on the public API. reason is the adminAuth-local bounded enum
 // ("admin_token_not_configured", "missing_bearer_token",
 // "invalid_admin_token"); it is overridden by a more specific
@@ -666,7 +684,7 @@ func (s *Server) auditAuthFailed(r *http.Request, reason string) {
 }
 
 // adminAuthActor / internalAuthActor / groundtruthAuthActor /
-// internalApprovalActor name WHICH boundary refused, as the auth.failed row's
+// internalApprovalActor name WHICH boundary refused, as the auth.fail row's
 // Actor. They exist because the row's reason enum alone cannot say
 // whether a refusal came from the PUBLIC lane (a human or an API token) or from
 // the INTERNAL lane (a sandbox sidecar or the host sensor) — and those are
@@ -682,6 +700,10 @@ const (
 	// above it — and a row naming the wrong one sends an incident review to the
 	// credential-stuffing runbook for what is a cross-origin page.
 	csrfActor = "wardyn/csrf"
+	// oidcCallbackActor is the SSO sign-in callback, refusing a login the
+	// IdP approved because of what the role map makes of it (a user type
+	// that is ambiguous or does not exist).
+	oidcCallbackActor = "wardyn/oidcCallback"
 )
 
 // auditAuthFailedAs is the ONE rate-bound emit every authentication refusal
@@ -748,7 +770,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// wrote it verbatim as well — counted twice, once as a row and once in the
 	// count — and skipped the suppressed counter for it.
 	if absorbed {
-		// Counted in the SAME series the limiter's drops are: a dropped auth.failed
+		// Counted in the SAME series the limiter's drops are: a dropped auth.fail
 		// row is a countable fact whichever mechanism dropped it, and an operator
 		// alerting on volume must not have to know which one did. The summary row
 		// carries the count as well, so the trail is not the only witness.
@@ -761,20 +783,20 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 		// is bounding: a credential-stuffing run and a handful of typos look
 		// identical in the audit log, and the attack looks QUIETER the harder
 		// it is pushed. This counter is what carries the real rate — a flat
-		// auth.failed row count with this series climbing is the signal, and it
+		// auth.fail row count with this series climbing is the signal, and it
 		// is a series precisely so it can be alerted on rather than grepped
 		// for. Same treatment the spool's torn/quarantined drops already get
 		// (metrics.go): a discarded event is a countable fact.
 		s.metrics.authFailedSuppressedInc()
 		return
 	}
-	ev := s.auditEvent(nil, types.ActorSystem, actor, "auth.failed", r.URL.Path,
+	ev := s.auditEvent(nil, types.ActorSystem, actor, "auth.fail", r.URL.Path,
 		"failure", mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 }
 
-// auditRunIdentityExpired records run.identity.expired ONCE per run when a
+// auditRunIdentityExpired records run.identity.expire ONCE per run when a
 // NON-TERMINAL run presents an expired identity on the internal lane.
 //
 // This keeps quieting the sidecar from hiding a real failure. The proxy's
@@ -786,10 +808,12 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 // rollout) holds a dead identity for the rest of its life, and every /internal/*
 // call it makes 401s. That fact surfaces as one row, keyed to the run, which
 // the cockpit's evidence rail already renders — never an undifferentiated
-// pile of auth.failed rows.
+// pile of auth.fail rows.
 //
-// The run is LEFT RUNNING: mid-flight work is the owner's to abandon, and the
-// remedy the docs give is kill + start a new run. Deliberately quiet otherwise:
+// The row does not end the run. The lapsed-token sweep does, once the token has
+// gone unrenewed past runTokenLapseAfter (run_lost.go): an interactive run is
+// kept as lost (outage) with its proxy stopped, a headless one is failed.
+// Deliberately quiet otherwise:
 //
 //   - the once-guard is per run id and in memory, so a wardynd restart may emit a
 //     second row for the same run. Acceptable — two rows for one incident, never a
@@ -800,7 +824,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 //     population a flood would come from.
 //   - only an *identity.ExpiredTokenError reaches here with a run id at all. A
 //     revoked, forged or wrong-audience token names no run of ours and stays
-//     exactly as coarse as the auth.failed row beside it.
+//     exactly as coarse as the auth.fail row beside it.
 func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 	var exp *identity.ExpiredTokenError
 	if !errors.As(verifyErr, &exp) || s.cfg.Store == nil {
@@ -828,7 +852,7 @@ func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 	if isTerminalRunState(run.State) {
 		return
 	}
-	ev := s.auditEvent(&exp.RunID, types.ActorSystem, "wardynd", "run.identity.expired",
+	ev := s.auditEvent(&exp.RunID, types.ActorSystem, "wardynd", "run.identity.expire",
 		exp.RunID.String(), "failure", mustJSON(map[string]any{
 			"run_state": string(run.State),
 			"path":      r.URL.Path,
@@ -840,7 +864,7 @@ func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 }
 
 // claimIdentityExpired returns true for the FIRST caller to claim a run's single
-// run.identity.expired row, and false for every caller after it. Consult and
+// run.identity.expire row, and false for every caller after it. Consult and
 // insert are one locked operation so two concurrent refusals cannot both win.
 //
 // Bounded like lastTouch (internal.go's shouldTouch), and for the same reason:
@@ -959,11 +983,13 @@ func claimsFromContext(r *http.Request) (*identity.Claims, error) {
 	return c, nil
 }
 
-// ceilingMemoMiddleware installs the per-request ceiling memo. Separate from
-// humanOrAdminAuth's body only so the three auth modes (local, SSO, admin token)
-// cannot each forget it — it wraps the whole chain once, above the branch.
+// ceilingMemoMiddleware installs the per-request ceiling memo, and the bit that
+// keeps a user_type_unknown refusal to one audit row per request
+// (callerSubjects). Separate from humanOrAdminAuth's body only so the three
+// auth modes (local, SSO, admin token) cannot each forget it — it wraps the
+// whole chain once, above the branch.
 func ceilingMemoMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(withCeilingMemo(r.Context())))
+		next.ServeHTTP(w, r.WithContext(withUserTypeRefusalOnce(withCeilingMemo(r.Context()))))
 	})
 }

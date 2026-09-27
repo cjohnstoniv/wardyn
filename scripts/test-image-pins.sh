@@ -135,4 +135,57 @@ case "$out" in
 esac
 echo "ok  an unparseable published-image list fails loudly"
 
+# ── #357: the GPL offer's hand-listed websockify entry tracks the Dockerfile ─
+#
+# The gate reads MANUAL_ENTRIES' websockify row out of gpl-source-offer.sh and
+# the pin + download URL out of the novnc Dockerfile. Other sections of this
+# fixture already fail (case 6's release.yml), so these cases assert on the
+# websockify message alone.
+mkdir -p "$TMP/deploy/images/novnc"
+cat > "$TMP/deploy/images/novnc/Dockerfile" <<'EOF'
+ARG WEBSOCKIFY_VERSION=0.13.0
+RUN curl -fsSL "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz" -o /tmp/websockify.tar.gz
+EOF
+write_manual_entry() { # the whole MANUAL_ENTRIES row
+  printf 'MANUAL_ENTRIES=(\n  "%s"\n)\n' "$1" > "$TMP/scripts/gpl-source-offer.sh"
+}
+good_url=https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz
+
+# 7. version and URL both match the Dockerfile => no websockify complaint.
+write_manual_entry "agent-novnc|websockify|0.13.0|LGPL-3.0|$good_url"
+out="$(gate_says || true)"
+case "$out" in
+  *websockify*) fail "a websockify entry matching the Dockerfile pin must not be flagged. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a matching websockify entry passes"
+
+# 8. the version drifts.
+write_manual_entry "agent-novnc|websockify|0.12.0|LGPL-3.0|$good_url"
+out="$(gate_says || true)"
+case "$out" in
+  *"websockify 0.12.0"*"WEBSOCKIFY_VERSION=0.13.0"*) ;;
+  *) fail "a websockify version that drifts from the Dockerfile pin must FAIL. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a drifted websockify version fails"
+
+# 9. the version matches but the source URL still names the old archive: the
+#    offer would point at the wrong source.
+write_manual_entry "agent-novnc|websockify|0.13.0|LGPL-3.0|https://github.com/novnc/websockify/archive/refs/tags/v0.12.0.tar.gz"
+out="$(gate_says || true)"
+case "$out" in
+  *"websockify source URL"*"v0.12.0.tar.gz"*) ;;
+  *) fail "a websockify source URL that drifts from the Dockerfile's download must FAIL. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a drifted websockify source URL fails"
+
+# 10. no websockify row the gate can parse (e.g. a changed MANUAL_ENTRIES
+#     format) must say so, not pass blind.
+write_manual_entry "agent-novnc websockify 0.13.0"
+out="$(gate_says || true)"
+case "$out" in
+  *"no 'agent-novnc|websockify|...' entry"*) ;;
+  *) fail "an unparseable websockify entry must fail loudly. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  an unparseable websockify entry fails loudly"
+
 echo "test-image-pins: PASS"

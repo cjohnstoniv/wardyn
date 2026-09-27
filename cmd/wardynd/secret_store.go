@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
@@ -22,17 +24,31 @@ import (
 )
 
 // openSecretStore builds the configured external store client (if any) and
-// the secret store over it, as a serving boot and every maintenance mode do.
-func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (secretstore.Store, error) {
-	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
+// the audited secret store over it (buildSecretStore), as a serving boot does.
+func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec audit.Recorder) (secretstore.Store, error) {
+	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
 	if err != nil {
 		return nil, err
+	}
+	c, err := buildStoreClients(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+}
+
+// buildStoreClients builds the configured external store client and key
+// service, as both a serving boot and a maintenance mode open them.
+func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) {
+	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return storeClients{}, err
 	}
 	k, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
 	if err != nil {
-		return nil, err
+		return storeClients{}, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, storeClients{ext: ext, kek: k, kekWrites: writes, timeout: *f.vault.timeout})
+	return storeClients{ext: ext, kek: k, kekWrites: writes, timeout: *f.vault.timeout}, nil
 }
 
 // storeClients are the configured clients a secret store is built over.
@@ -47,15 +63,64 @@ type storeClients struct {
 	timeout time.Duration
 }
 
-// buildSecretStore constructs the secret store and readies its rows
-// (convertSecretStore). The age identity comes from -age-key. In local mode
-// ("pg") an empty key is generated and logged (operators MUST persist it
-// across restarts to keep prior ciphertext readable). In store mode (an
-// external store selected, design §2.3a.7) no key is generated: every value
-// lives in the organisation's store, and a missing key only matters while
-// local rows remain, which convertSecretStore refuses by name. ext is the
-// configured external client, or nil.
-func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, c storeClients) (secretstore.Store, error) {
+// readPlatformKey parses WARDYN_PLATFORM_KEY_FILE (design §2.13 c), or returns
+// nil when it is unset. It is a second age identity for the boot keys alone,
+// so it must be a durable key of its own: it is refused without a
+// WARDYN_AGE_KEY (store mode keeps the boot keys in the organisation's store;
+// an ephemeral age key would strand the rows beside them), when it is the age
+// key itself, or when it is a published one.
+func readPlatformKey(path, ageKey string) (*age.X25519Identity, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(ageKey) == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE is set but WARDYN_AGE_KEY is not — the platform key separates the boot keys from a durable age key; in store mode they already live in the organisation's store, so unset it")
+	}
+	key, err := readAgeKeyFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE: %w", err)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE %s does not exist or holds no age identity — mint one with `wardynd -gen-age-key`", path)
+	}
+	if isKnownPublicAgeKey(key) {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE holds a publicly-known key (published in this repo's git history); mint your own with `wardynd -gen-age-key`")
+	}
+	id, err := age.ParseX25519Identity(key)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE: %w", err)
+	}
+	if ageID, err := age.ParseX25519Identity(strings.TrimSpace(ageKey)); err == nil && ageID.String() == id.String() {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE holds the same key as WARDYN_AGE_KEY, which separates nothing; mint a second one with `wardynd -gen-age-key`")
+	}
+	return id, nil
+}
+
+// buildSecretStore is newSecretStore wrapped in secretstore.Audited, in every
+// store mode, so every read through it is recorded once on rec, whatever the
+// backend holding the value.
+func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, c storeClients, rec audit.Recorder) (secretstore.Store, error) {
+	s, err := newSecretStore(ctx, pool, ageKey, platform, storeName, c, rec)
+	if err != nil {
+		return nil, err
+	}
+	return secretstore.Audited(s, rec), nil
+}
+
+// newSecretStore constructs the secret store over the clients c and readies
+// its rows (convertSecretStore), whose reads it records on rec. The age
+// identity comes from -age-key. In local mode ("pg") an empty key is generated
+// and logged (operators MUST persist it across restarts to keep prior
+// ciphertext readable). In store mode (an external store selected, design
+// §2.3a.7), or with a key service that wraps new rows, no key is generated: a
+// missing key only matters while local rows remain, which convertSecretStore
+// refuses by name. platform is the separate platform identity
+// (readPlatformKey), or nil. The store is returned unwrapped: a serving boot
+// reads through buildSecretStore, and only the maintenance modes use it bare,
+// for the pg store's Migrate and Reconcile, which never Get
+// (secretStoreMaintenance).
+func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, c storeClients, rec audit.Recorder) (secretstore.Store, error) {
 	storeMode := storeName != "" && storeName != "pg"
 	keyService := c.kek != nil && c.kekWrites
 	var id *age.X25519Identity
@@ -87,28 +152,41 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName
 		}
 	}
 	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites}
+	// A typed nil in the interface would read as "a key is configured".
 	if id != nil {
-		// A typed nil in the interface would read as "a key is configured".
 		deps.AgeIdentity = id
+	}
+	if platform != nil {
+		deps.PlatformIdentity = platform
 	}
 	s, err := secretstore.New(storeName, deps)
 	if err != nil {
 		return nil, fmt.Errorf("secret store: %w", err)
 	}
-	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService); err != nil {
+	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService, rec); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
+
+// ephemeralKeyRecoverySQL deletes every row sealed under a local key: the way
+// out when the age key they were written under was ephemeral and is gone. Its
+// local/platform: rows under a separate WARDYN_PLATFORM_KEY_FILE key are still
+// recoverable with that file (docs/OPERATIONS.md says how to keep them). The
+// refusal below names it, and docs/OPERATIONS.md carries it verbatim.
+const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
 
 // convertSecretStore readies the pg store's rows before anything reads them —
 // before loadOrCreateSecret above all, whose boot keys share the table. It
 // converts every legacy (v0) row to envelope v1, aborting boot on one that will
 // not decrypt; and it refuses an ephemeral age key while rows sealed under an
 // age key exist, rather than let a fresh key strand them. In store mode with
-// no age key (id nil) it refuses while any local row remains. An alternate
-// backend keeps its own format and is left alone.
-func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool) error {
+// no age key (id nil) it refuses while any local row remains; with a key
+// service that wraps every write, it refuses an age key no row is sealed
+// under any more (refuseIdleAgeKey). An alternate
+// backend keeps its own format and is left alone. Each converted row was a
+// read of its value, recorded as a secret.read with purpose boot.
+func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool, rec audit.Recorder) error {
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
 		return nil
@@ -133,16 +211,40 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 			return err
 		}
 		if n > 0 {
-			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; set WARDYN_AGE_KEY to the key they were written with", n)
+			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are sealed under an age key — "+
+				"an ephemeral key would make every one unreadable; set WARDYN_AGE_KEY to the key they were written with. "+
+				"If they were written under an earlier ephemeral key, no such key exists and they are unrecoverable: "+
+				"delete them (%s) and boot with a persistent key from `wardynd -gen-age-key`", n, ephemeralKeyRecoverySQL)
 		}
 		return nil
 	}
-	n, err := ps.ConvertV0(ctx, id)
+	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), id)
 	if err != nil {
 		return fmt.Errorf("refusing to start: %w", err)
 	}
-	if n > 0 {
-		slog.Info("wardynd: converted stored secrets to envelope v1; an older wardynd can no longer read them", slog.Int("secrets", n))
+	for _, row := range converted {
+		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, nil)
+	}
+	if len(converted) > 0 {
+		slog.Info("wardynd: converted stored secrets to envelope v1; an older wardynd can no longer read them", slog.Int("secrets", len(converted)))
+	}
+	return refuseIdleAgeKey(ctx, ps)
+}
+
+// refuseIdleAgeKey refuses boot when a key service wraps every write
+// (WARDYN_KEK=transit) and WARDYN_AGE_KEY is set with no stored row left under
+// it: the key then only lets whoever also holds the database forge a row the
+// store still reads under it — Wardyn's boot keys among them.
+func refuseIdleAgeKey(ctx context.Context, ps *secretstorepg.Store) error {
+	if ps.KeyService() == "" {
+		return nil
+	}
+	n, err := ps.LocalRows(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errors.New("refusing to start: WARDYN_KEK=transit and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys")
 	}
 	return nil
 }
@@ -152,10 +254,10 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 // setting: the token comes from a projected service-account login or a file
 // (design rule 20).
 type vaultFlags struct {
-	addr, namespace, auth, authMount, role, k8sTokenFile, tokenFile, caCertFile *string
-	kvMount, kvPrefix                                                           *string
-	maxVersions                                                                 *int
-	timeout                                                                     *time.Duration
+	addr, namespace, auth, authMount, role, rolePlatform, k8sTokenFile, tokenFile, caCertFile *string
+	kvMount, kvPrefix                                                                         *string
+	maxVersions                                                                               *int
+	timeout                                                                                   *time.Duration
 	// kek is WARDYN_KEK; transitMount and transitKey name the Transit key it
 	// selects (or, with kek=local, reads).
 	kek, transitMount, transitKey *string
@@ -168,6 +270,7 @@ func registerVaultFlags() vaultFlags {
 		auth:         flagEnv("vault-auth", "WARDYN_VAULT_AUTH", vaultkv.AuthKubernetes, `Vault auth method: "kubernetes" (a projected service-account token) or "token-file" (a Vault Agent sink or CSI file)`),
 		authMount:    flagEnv("vault-auth-mount", "WARDYN_VAULT_AUTH_MOUNT", "kubernetes", "mount path of Vault's Kubernetes auth method"),
 		role:         flagEnv("vault-role", "WARDYN_VAULT_ROLE", "", "Vault Kubernetes-auth role wardynd logs in as"),
+		rolePlatform: flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/OPERATIONS.md"),
 		k8sTokenFile: flagEnv("vault-k8s-token-file", "WARDYN_VAULT_K8S_TOKEN_FILE", "", "path of the projected service-account token (audience vault) for Kubernetes auth; re-read at every login"),
 		tokenFile:    flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read on every 403"),
 		caCertFile:   flagEnv("vault-cacert-file", "WARDYN_VAULT_CACERT_FILE", "", "PEM bundle added to the system roots for the Vault client only; empty = WARDYN_TRUSTED_CA_FILE, else system roots"),
@@ -249,6 +352,7 @@ func vaultConfig(v vaultFlags, trustedCAFile string) vaultkv.Config {
 	return vaultkv.Config{
 		Addr: strings.TrimSpace(*v.addr), Namespace: strings.TrimSpace(*v.namespace),
 		Auth: strings.TrimSpace(*v.auth), AuthMount: strings.TrimSpace(*v.authMount), Role: strings.TrimSpace(*v.role),
+		RolePlatform: strings.TrimSpace(*v.rolePlatform),
 		K8sTokenFile: strings.TrimSpace(*v.k8sTokenFile), TokenFile: strings.TrimSpace(*v.tokenFile), CACertFile: ca,
 		Mount: strings.TrimSpace(*v.kvMount), Prefix: strings.TrimSpace(*v.kvPrefix),
 		MaxVersions: *v.maxVersions, Timeout: *v.timeout,
@@ -289,20 +393,20 @@ func buildExternalStore(ctx context.Context, v vaultFlags, az azureFlags, truste
 }
 
 // storesExternally describes the external store every write goes to, or ""
-// in local mode (the STORE_EXTERNAL setup row).
+// in local mode (the STORE_EXTERNAL setup row). The audited store forwards it.
 func storesExternally(s secretstore.Store) string {
-	if ps, ok := s.(*secretstorepg.Store); ok {
-		return ps.StoresExternally()
+	if d, ok := s.(interface{ StoresExternally() string }); ok {
+		return d.StoresExternally()
 	}
 	return ""
 }
 
 // keyService describes the key service that wraps every write ("Vault
 // Transit at vault.example:8200"), or "" when the local key does (the
-// kek_service setup row).
+// kek_service setup row). The audited store forwards it.
 func keyService(s secretstore.Store) string {
-	if ps, ok := s.(*secretstorepg.Store); ok {
-		return ps.KeyService()
+	if d, ok := s.(interface{ KeyService() string }); ok {
+		return d.KeyService()
 	}
 	return ""
 }

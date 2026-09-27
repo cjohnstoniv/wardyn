@@ -84,6 +84,37 @@ func TestUnescapeName_RefusesStructure(t *testing.T) {
 	}
 }
 
+// A decoded segment that is not valid UTF-8 is refused rather than passed on
+// to a caller that assumes text — a store column above all, where it would
+// otherwise surface as a Postgres error instead of a 400 (#563).
+func TestADONames_RefusesInvalidUTF8(t *testing.T) {
+	for _, raw := range []string{"%C0%AF", "%FF", "a%FFb"} {
+		if got, err := UnescapeName(raw); err == nil {
+			t.Errorf("UnescapeName(%q) = %q, want a refusal", raw, got)
+		}
+		if k := NameKey(raw); k != "" {
+			t.Errorf("NameKey(%q) = %q, want none", raw, k)
+		}
+	}
+}
+
+// splitRepoAddress must end the host at the first "/", "?" OR "#" — a "#" or
+// "?" reaching it before any "/" must not smuggle a "%"-escaped address
+// through as if the host that followed the "@" were legitimate: the host is
+// read back out by the "@"-strip a few lines later, so a fragment or query
+// placed before the path can make a non-Azure-DevOps address look like one
+// (#563).
+func TestADONames_HostEndsAtQueryOrFragment(t *testing.T) {
+	for _, raw := range []string{
+		"https://github.com#@dev.azure.com/acme/x%20y",
+		"https://github.com?@dev.azure.com/acme/x%20y",
+	} {
+		if got, ok := CanonicalRepoURL(raw, nil); ok {
+			t.Errorf("CanonicalRepoURL(%q) = %q, ok — want refused, not read as an Azure DevOps address", raw, got)
+		}
+	}
+}
+
 // One repository is one key, however it was spelled or cased.
 func TestNameKey_OneKeyPerName(t *testing.T) {
 	want := "card auth (v2).service"

@@ -196,13 +196,13 @@ func execRun(t *testing.T, agentExecID string) types.AgentRun {
 	}
 }
 
-// TestReconcileOnBoot_ExecRunFinalizesFromAgentExit is the regression:
-// after a restart, a RUNNING exec-based run whose agent has exited (but whose idle
-// sandbox container is still up) MUST finalize + revoke + tear down, not strand.
-// The reconciler now observes AgentStatus (the persisted exec id) instead of
-// container Status, which for an idle `sleep infinity` reports RUNNING forever.
-// Counterfactual: the runner's container Status IS RUNNING here — with the old
-// code the run is re-attached and never finalized, so `transitioned` stays false.
+// TestReconcileOnBoot_ExecRunFinalizesFromAgentExit: after a restart, a RUNNING
+// exec-based run whose agent has exited (but whose idle sandbox container is still
+// up) must finalize + revoke + tear down, not strand. The reconciler observes
+// AgentStatus (the persisted exec id), not container Status, which for an idle
+// `sleep infinity` reports RUNNING forever. Counterfactual: the runner's container
+// Status is RUNNING here — a reconciler reading it would re-attach the run and
+// never finalize it, so `transitioned` would stay false.
 func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 	h := newHarness(t)
 	fr := &execExitRunner{fakeRunner: &fakeRunner{}, agentExit: 0}
@@ -269,8 +269,8 @@ func (r *errProbeRunner) AgentStatus(context.Context, string, string) (runner.St
 	return runner.Status{}, errors.New("docker: daemon unreachable")
 }
 
-// TestReconcileOnBoot_TransientProbeErrorDoesNotFinalize is the runs-fsm regression
-// the completed crown review surfaced: a transient AgentStatus error at boot must
+// TestReconcileOnBoot_TransientProbeErrorDoesNotFinalize: a transient AgentStatus
+// error at boot must
 // NOT finalize a possibly-healthy RUNNING run (that would false-kill it + revoke its
 // creds on a daemon blip). A genuinely-gone sandbox reports a terminal STATE, not an
 // error, so an error means "couldn't determine" → re-attach a watcher and retry.
@@ -402,8 +402,8 @@ func TestRunWatcherSweeper_PeriodicClaimAdoptsAndLeases(t *testing.T) {
 	}
 }
 
-// TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans is the crash-window
-// regression the age gate opened: wardynd dies while a run is mid-build, and the
+// TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans covers the crash
+// window the age gate opens: wardynd dies while a run is mid-build, and the
 // restart 15s later finds it too young to touch. Nothing else can ever reap it —
 // the watcher sweep requires a non-empty sandbox_ref and the idle reaper only
 // lists RUNNING — so with a boot-only pass that run sits PENDING forever, holding a
@@ -500,21 +500,21 @@ func (r *mainProcessRunner) AgentStatus(_ context.Context, _, execID string) (ru
 	return runner.Status{State: types.RunRunning}, nil
 }
 
-// TestSweepRunWatchers_ExecLessRunNotFinalized is the W15-c regression: a
-// healthy EXEC-LESS (krun/CC3) launch has Runner.Exec return "" with NO
-// error — dispatch must not let that collide with the strand guard's "never
-// exec'd" signal. This drives the REAL path end to end — startAgentOrIdle
-// persists whatever dispatch decides via SetRunAgentExecID, then
-// sweepRunWatchers reads that SAME persisted value back — rather than
-// hand-setting AgentExecID, so it actually exercises the value the fix
-// changed (runs_dispatch.go's mainProcessExecID sentinel), not merely the
-// guard's "== \"\"" condition in isolation.
+// TestSweepRunWatchers_ExecLessRunNotFinalized: a healthy exec-less
+// (krun/CC3) launch has Runner.Exec return "" with no error — dispatch must
+// not let that collide with the strand guard's "never exec'd" signal. This
+// drives the real path end to end — startAgentOrIdle persists whatever
+// dispatch decides via SetRunAgentExecID, then sweepRunWatchers reads that
+// same persisted value back — rather than hand-setting AgentExecID, so it
+// exercises the value dispatch persists (runs_dispatch.go's
+// mainProcessExecID sentinel), not merely the guard's "== \"\"" condition
+// in isolation.
 //
-// Counterfactual (base 6d76911): startAgentOrIdle persists the bare "" Exec
-// returned, and the strand guard finalizes FAILED + tears down ANY
-// non-interactive task run with AgentExecID=="" without ever probing the
-// runner — killing this healthy run outright (transitioned=true,
-// to=FAILED), which is exactly what this test must catch red.
+// Counterfactual: if startAgentOrIdle persisted the bare "" Exec returned,
+// the strand guard would finalize FAILED + tear down any non-interactive
+// task run with AgentExecID=="" without ever probing the runner — killing
+// this healthy run outright (transitioned=true, to=FAILED), which is
+// exactly what this test must catch red.
 func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
 	h := newHarness(t)
 	run := execRun(t, "") // overwritten by startAgentOrIdle below, as in real dispatch
@@ -529,7 +529,7 @@ func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
 
 	// The dispatch phase under test: persists the real post-Exec value for an
 	// exec-less launch, exactly as it does mid-dispatchRun.
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
 
 	if err := srv.sweepRunWatchers(context.Background()); err != nil {
 		t.Fatalf("sweepRunWatchers: %v", err)
@@ -605,7 +605,11 @@ func TestOrphanedBuildSweeper_RunsOnCadence(t *testing.T) {
 	srv := &Server{cfg: Config{ImageBuilder: sweeper}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.orphanedBuildSweeper(ctx, time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		srv.orphanedBuildSweeper(ctx, time.Millisecond)
+		close(done)
+	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for sweeper.count() < 3 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -616,7 +620,11 @@ func TestOrphanedBuildSweeper_RunsOnCadence(t *testing.T) {
 	cancel()
 	// Cancellation must actually stop it — this goroutine lives for the life of
 	// the daemon, so a ctx it ignores would outlive every test that starts one.
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweeper ignored ctx cancel")
+	}
 	stopped := sweeper.count()
 	time.Sleep(20 * time.Millisecond)
 	if after := sweeper.count(); after != stopped {
@@ -666,7 +674,7 @@ func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
 	cfg.BaseCtx = bootTestCtx(t)
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
 
 	// Retried exactly once before giving up — a single attempt turns a blip into
 	// a dead run, and an unbounded loop holds the dispatcher open forever.
@@ -721,7 +729,7 @@ func TestDispatchExecIDWritePersistsOnTheHappyPath(t *testing.T) {
 	cfg.BaseCtx = bootTestCtx(t)
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
 
 	if fake.setExecIDCalls != 1 {
 		t.Errorf("SetRunAgentExecID attempts = %d, want 1 on the happy path", fake.setExecIDCalls)

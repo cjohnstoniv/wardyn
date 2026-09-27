@@ -1,14 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F2-sso-to-ceiling PROBE 3 — destination: internal/auth/oidc/groups_overage_probe_test.go
+// Groups overage. A failure here means the overage marker no longer reaches
+// sessionGroups.
 //
-// *** GREEN PIN. This started as the probe for hypothesis H1 of
-// *** local/review-0.7/deep/F2-sso-to-ceiling.md, red on the RC; the fix landed
-// *** and it is now a REGRESSION pin, unchanged. A failure here means the
-// *** overage marker stopped reaching sessionGroups.
-//
-// INVARIANT UNDER TEST: a login whose ID token carries an IdP-side GROUPS
+// Invariant under test: a login whose ID token carries an IdP-side groups
 // OVERAGE marker instead of the groups themselves (Entra ID emits
 // `_claim_names: {"groups": "src1"}` + `_claim_sources` and OMITS `groups`
 // when the user is in more groups than the token limit — 150 for JWTs) must
@@ -17,17 +13,10 @@
 // rather than as "asked, there were none" and hands the member the deployment
 // ceiling.
 //
-// Today (CallbackHandler's groups-claim decode in oidc.go, then sessionGroups
-// in derive.go) the absent `groups` decodes to nil, sessionGroups returns
-// (empty non-nil, truncated=false), and the walled group has evaporated exactly
-// the way PF-26 closed for the cookie byte cap.
-//
-// Run:
-//
-//	cd <repo root> && \
-//	cp local/review-0.7/deep/F2-sso-to-ceiling/groups_overage_probe_test.go internal/auth/oidc/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestF2_GroupsOverage' -count=1 -p 4 -v ; \
-//	rm -f internal/auth/oidc/groups_overage_probe_test.go
+// If the absent `groups` decoded to nil in CallbackHandler's groups-claim
+// decode (oidc.go) and sessionGroups (derive.go) returned (empty non-nil,
+// truncated=false), the walled group would evaporate exactly the way it would
+// at the cookie byte cap.
 package oidc_test
 
 import (
@@ -72,11 +61,12 @@ func f2BuildOverageIDToken(t *testing.T, e *idpEnv, sub, email string) string {
 	return tok
 }
 
-func TestF2_GroupsOverageMarkerStampsTruncated(t *testing.T) {
+func TestGroupsOverageMarkerStampsTruncated(t *testing.T) {
+	// ticket: F2
 	env := newIdPEnv(t)
-	// A member-role map so the login is admitted with RoleMember (an admin
+	// A member-role map so the login is admitted with RoleUser (an admin
 	// would short-circuit the ceiling anyway and prove nothing).
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": "member"}, "member", nil)
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": "user"}, "user", nil)
 
 	// Entra overage shape: NO "groups" key at all, a _claim_names/_claim_sources
 	// pointer pair instead.

@@ -15,14 +15,12 @@ func init() {
 	secretstore.Register("pg", func(d secretstore.Deps) (secretstore.Store, error) {
 		// A configured external store is read-only here: pointer rows written
 		// in store mode stay readable, and every write seals in Postgres (§2.2)
-		// under the key service when it writes, else under the local KEK.
+		// under the key service when it writes, else under the local KEKs.
 		s := &Store{pool: d.Pool, ext: d.External, extTimeout: d.ExternalTimeout}
 		if d.AgeIdentity != nil || !d.KEKWrites {
-			l, err := New(d.Pool, d.AgeIdentity)
-			if err != nil {
+			if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
 				return nil, err
 			}
-			s.addKEK(l.kek, true)
 		}
 		// A key service alone (no age key): local rows cannot be read, and
 		// wardynd refuses to boot while any exist.
@@ -45,11 +43,9 @@ func RegisterExternal(name string) {
 		}
 		s := &Store{pool: d.Pool, ext: d.External, writeExt: true, extTimeout: d.ExternalTimeout}
 		if d.AgeIdentity != nil {
-			k, err := localKEK(d.AgeIdentity)
-			if err != nil {
+			if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
 				return nil, err
 			}
-			s.addKEK(k, true)
 		}
 		s.withKEK(d)
 		return s, nil

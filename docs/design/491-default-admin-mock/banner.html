@@ -1,0 +1,115 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Default-role-admin warning — banner + setup row</title>
+<!--
+  #491 mock packet · static, for owner review.
+  The banner is drawn with EveryoneAdminBanner's real classes (border-b border-border
+  bg-warning-subtle px-4 py-2 text-sm text-warning, AlertTriangle, underline CTA); the
+  setup row is drawn with step-bodies.tsx's CheckRow (flex items-start gap-2.5 rounded-lg
+  border border-border p-3). New copy for #491's case is highlighted.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Default-role-admin warning — mock packet for #491</h1>
+    <div class="sub">Say "approve the packet", or name the decisions you'd change. Static: nothing here is wired.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a class="cur" href="banner.html">Banner + setup row</a><a href="canon.md">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>Legend</span><b>New copy for #491's case is <span style="background:var(--info-subtle);border-radius:4px;padding:0 2px">highlighted like this</span></b></div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Case A (#484, unchanged)</span><b>No role map, no admin list</b></div>
+  <p class="secsub" style="margin-bottom:10px">Today's warn condition. Reproduced as-is — no change proposed here.</p>
+  <div class="frame">
+    <div class="eab">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div class="body">
+        <p class="t">Everyone who signs in is an admin</p>
+        <p class="b">Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox.</p>
+      </div>
+      <button class="act" type="button">Set who is an admin</button>
+    </div>
+    <div class="pad">
+      <ul style="list-style:none;margin:0;padding:0">
+        <li class="checkrow">
+          <svg class="ic warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <div class="body">
+            <p class="lbl">Who is an admin</p>
+            <p class="det">Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin.</p>
+            <p class="fix"><b>Fix: </b>Map people to admin or user on the People step, so only the people you name can change this deployment.</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Case B (#491, new)</span><b>A role map is set, and <span class="mono">WARDYN_OIDC_DEFAULT_ROLE=admin</span></b></div>
+  <p class="secsub" style="margin-bottom:10px">Today this reads <span class="chip success"><span class="dot"></span>ok</span> and no banner shows — role rows exist, so <span class="mono">ssoRBACCheck</span>'s current condition is satisfied. Every sign-in the role map doesn't match still falls through to admin. Same banner component, same title, same CTA; the body sentence and the setup row change.</p>
+  <div class="frame">
+    <div class="eab">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div class="body">
+        <p class="t">Everyone who signs in is an admin</p>
+        <p class="b"><span class="new-str">The default role is admin, so anyone your identity provider lets in whom the role map doesn't match can still change policies, read and write secrets, decide approvals, and open a shell in any running sandbox.</span></p>
+      </div>
+      <button class="act" type="button">Set who is an admin</button>
+    </div>
+    <div class="pad">
+      <ul style="list-style:none;margin:0;padding:0">
+        <li class="checkrow">
+          <svg class="ic warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <div class="body">
+            <p class="lbl">Who is an admin</p>
+            <p class="det"><span class="new-str">A role map is set, but the default role is admin, so a sign-in the map doesn't match is still an admin.</span></p>
+            <p class="fix"><b>Fix: </b><span class="new-str">Set WARDYN_OIDC_DEFAULT_ROLE to user or a user type (chart: env.WARDYN_OIDC_DEFAULT_ROLE), so a sign-in the role map doesn't match becomes a user, not an admin.</span></p>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <p class="secsub" style="margin-top:10px">For comparison, the row this state would otherwise read today (before #491):</p>
+  <div class="frame">
+    <div class="pad" style="padding:12px 24px">
+      <ul style="list-style:none;margin:0;padding:0">
+        <li class="checkrow">
+          <svg class="ic ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+          <div class="body">
+            <p class="lbl">Who is an admin</p>
+            <p class="det">People are mapped to admin or user, so a person's role comes from their sign-in.</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

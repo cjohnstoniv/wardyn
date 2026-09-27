@@ -18,7 +18,7 @@ package proxy
 // Port-less by contract, and it consults allowedExactAnyPort for that reason
 // (B10-F1): its one caller (buildInjector) holds a rule host and no port, while
 // the producer that authors both halves writes the allowlist entry
-// PORT-QUALIFIED ("m.corp:443", F106) and the injection rule BARE. Reading only
+// PORT-QUALIFIED ("m.corp:443") and the injection rule BARE. Reading only
 // the port-less map would make those two contradict, so buildInjector — and
 // therefore NewServer, and therefore the sidecar of every run on an estate with
 // a corporate artifact mirror — would fail closed at boot. An entry the operator

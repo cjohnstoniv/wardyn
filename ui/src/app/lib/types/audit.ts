@@ -28,6 +28,9 @@ export interface AuditEvent {
   // GET /api/v1/audit/chain/verify, never by reading these back off a row.
   prev_hash?: string;
   row_hash?: string;
+  // The enrolled device that forwarded this row (AuditEvent.DeviceID), read
+  // from the stored row; absent on rows this control plane wrote itself.
+  device_id?: string;
 }
 
 // Tool-rule decisions
@@ -127,7 +130,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).
   if (source.startsWith("brokered:")) return { label: "Brokered", tone: "neutral" };
   if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
-  if (source.startsWith("egress.decisions.dropped:")) return { label: "Decisions dropped", tone: "neutral" };
+  if (source.startsWith("egress:dropped-decisions-")) return { label: "Decisions dropped", tone: "neutral" };
   return { label: source, tone: "neutral" };
 }
 
@@ -148,7 +151,7 @@ export interface EgressDecision {
   domain: string;
   decision: "allow" | "deny" | "pending";
   bytes?: number;
-  // B3: the approval an `egress.pending` row raised (the audit row's own
+  // B3: the approval an `egress.hold` row raised (the audit row's own
   // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow/deny rows and on
   // an older trail. It exists because a pending ROW is history, not state — the
   // hold it records may have been approved a minute later — so this is the only
@@ -194,11 +197,18 @@ export interface RunEnding {
    */
   detail?: string;
   /**
-   * For `credential`: the DECLARED mechanism of the run that was refused
-   * (`data.mechanism` — "bedrock_sso", "anthropic_api_key", …), so a surface
-   * offering a repair binds to the failed run's own lane rather than to
-   * whatever the viewer's claude-code row says today. Absent on an older
-   * trail, which reads as "not a lane this console has a door for".
+   * For `credential`: the model provider the refusal names (`data.provider`,
+   * #532). A provider run's door is keyed by this alone (#543); `mechanism`
+   * below is not read when it is set.
+   */
+  provider?: string;
+  /**
+   * For `credential` with no `provider`: the DECLARED legacy mechanism of the
+   * run that was refused (`data.mechanism` — "bedrock_sso",
+   * "anthropic_api_key", …), so a surface offering a repair binds to the
+   * failed run's own lane rather than to whatever the viewer's claude-code row
+   * says today. Absent on an older trail, which reads as "not a lane this
+   * console has a door for".
    */
   mechanism?: string;
 }

@@ -23,7 +23,8 @@ const KEY_NAME = "e2e-laptop";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
-test.describe("SSH keys — add, reload, delete (X2-F2)", () => {
+test.describe("SSH keys — add, reload, delete", () => {
+  // ticket: X2-F2
   test("a key added here persists across a reload and is truly gone after delete", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/ssh-keys");

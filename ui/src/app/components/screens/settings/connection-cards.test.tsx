@@ -9,7 +9,7 @@
 // fields — a card that disagrees with the app-shell chip is the exact class of
 // bug the old two-model /integrations page kept producing.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const setSecretMock = vi.fn();
@@ -36,15 +36,22 @@ import { ModelProviderCard, S } from "./connection-cards";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { SetupStatus } from "../../../lib/types";
+import { WithDoor } from "../../../../test/door-harness";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-function model(status: SetupStatus = baseStatus()) {
-  return render(<ModelProviderCard status={status} siteConfig={null} onChanged={vi.fn()} />);
+// The card's sign-in buttons open the shell's one door (#544); the door reads
+// the shell's status, which is the same server answer the card renders.
+function model(status: SetupStatus = baseStatus(), onChanged: () => void = vi.fn()) {
+  return render(
+    <WithDoor status={status}>
+      <ModelProviderCard status={status} siteConfig={null} onChanged={onChanged} />
+    </WithDoor>,
+  );
 }
 
 // #337: renders as a MEMBER (operator=false) — every other test in this file
-// renders unwrapped, which OperatorContext's fail-open default reads as an
+// renders unwrapped, which useOperator()'s fail-open default reads as an
 // operator (see operator-context.tsx). Needed to pin what a non-operator
 // caller actually sees, not just what an operator sees with `disabled` read
 // off the DOM.
@@ -120,7 +127,8 @@ describe("ModelProviderCard", () => {
 
   // F4-F13 (Appendix A V8): the group had no roving tabindex or arrow keys —
   // every radio was its own Tab stop, and Left/Right did nothing.
-  describe("the lane group has roving tabindex and arrow keys (F4-F13)", () => {
+  describe("the lane group has roving tabindex and arrow keys", () => {
+    // ticket: F4-F13
     it("only the checked radio is a Tab stop; the rest are -1", () => {
       model();
       const radios = screen.getAllByRole("radio");
@@ -241,20 +249,51 @@ describe("ModelProviderCard", () => {
     expect(screen.queryByLabelText(/^region$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^model$/i)).not.toBeInTheDocument();
   });
+
+  // #355: SecretLane's "Stored as <name>" caption rendered beside an UNSTORED
+  // Save button too — the ternary that also serves the Replace flow's
+  // "Replaces <name>" fell to "Stored as" in its else arm, which is exactly
+  // the unstored case. A reader took the caption as "already saved". Every
+  // SecretLane shares this component (Anthropic/OpenAI keys here, the git
+  // PAT/SSH lanes on /providers), so the fix and its pin both live in the
+  // shared component, not a Bedrock-only spot (PR #352 review, finding 5).
+  describe('#355: "Stored as" only beside an actually-stored secret', () => {
+    it("unstored: no \"Stored as\" caption beside Save", async () => {
+      model();
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      expect(screen.getByLabelText("Anthropic API key")).toBeInTheDocument();
+      expect(screen.queryByText(/Stored as/)).not.toBeInTheDocument();
+    });
+
+    it("stored, not editing: \"Stored as <name>\" shows beside Replace/Disconnect", async () => {
+      model(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+      expect(screen.getByText(/Stored as/)).toHaveTextContent("anthropic-api-key");
+    });
+
+    it("stored, editing (Replace clicked): \"Replaces <name>\", never \"Stored as\"", async () => {
+      model(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      await user.click(screen.getByRole("button", { name: "Replace" }));
+      expect(screen.getByText(/Replaces/)).toHaveTextContent("anthropic-api-key");
+      expect(screen.queryByText(/Stored as/)).not.toBeInTheDocument();
+    });
+  });
 });
 
-// F2 (Appendix A #2): three call sites open HarnessLoginPane; two pass
-// startURLManaged, this card didn't — an admin signing in from Settings under
-// a per_user row was asked to retype the org's AWS access portal URL, and the
-// server (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's
-// own sso_start_url overrides it. Fix = pass the prop on the same condition
-// the Agents tab already uses.
-describe("ModelProviderCard — F2: the sign-in door under a per_user row", () => {
+// F2 (Appendix A #2): an admin signing in from Settings under a per_user row
+// was asked to retype the org's AWS access portal URL, and the server
+// (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's own
+// sso_start_url overrides it. The card now opens the shell's one door (#544),
+// which passes startURLManaged on the same condition for every entrance.
+describe("ModelProviderCard — the sign-in door under a per_user row", () => {
+  // ticket: F2
   it("passes startURLManaged so the dead start-URL prompt never renders", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: true }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: true })));
   });
 
   // R3: "no per_user row" covers two distinct cases — no `harnesses` field at
@@ -264,14 +303,14 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
     model();
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   it("an explicit shared row still asks", async () => {
     model(sharedRowStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   // R1: a disabled row prompts for the start URL again, exactly like a
@@ -280,7 +319,7 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
     model(disabledPerUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   // R3: the `mechanism` conjunct has its own failing case — bedrock_bearer
@@ -294,7 +333,7 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
     );
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   // F4: the card says the lane is declared elsewhere and read per-person.
@@ -326,7 +365,8 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
 // R9 (fix-first review pass): under per_user, resolveBedrockAuth skips the
 // bearer arm outright (Appendix A finding 3) — a stored key still deletes
 // fine, but the card must say it is never READ while the row is per_user.
-describe("ModelProviderCard — R9: the bearer key is unused under per_user", () => {
+describe("ModelProviderCard — the bearer key is unused under per_user", () => {
+  // ticket: R9
   it("renders S.BEDROCK_BEARER_UNUSED_PER_USER under a per_user row", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
@@ -360,7 +400,7 @@ describe("ModelProviderCard — #337: a member's own bearer field under a per_us
 
   // PR #352 review, finding 1: this fixture used to carry region/model/
   // creds_present alongside bearer_present in a MEMBER render — a shape the
-  // server's own redaction (redactSetupStatusForMember, setup.go) never
+  // server's own redaction (redactSetupStatusForUser, setup.go) never
   // sends, since those three are always dropped for a non-operator. Shaped
   // the way a member's response actually reads now: Ready survives always,
   // BearerPresent survives only under their own per_user bearer row.
@@ -497,7 +537,8 @@ describe("ModelProviderCard — PR #352 review: the bearer field explains itself
 // model_access — so an admin's browser badged "Connected" from a shared
 // admin-token read that can never itself hold an AWS session, and (the sharp
 // edge this pins) a member whose OWN sign-in has lapsed still saw green.
-describe("ModelProviderCard — F5: the badge follows the caller's own model_access", () => {
+describe("ModelProviderCard — the badge follows the caller's own model_access", () => {
+  // ticket: F5
   const bedrockConfigured = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true } };
 
   it("live: Connected", () => {
@@ -616,7 +657,8 @@ describe("ModelProviderCard — the login dialog's geometry", () => {
 // exactly those two and nothing else. The honest signal is the row's
 // `bedrockLane`, which activeBedrockLane() leaves undefined until a
 // credential lane is actually active.
-describe("ModelProviderCard — U2-01: Connected needs an active credential lane, not region+model", () => {
+describe("ModelProviderCard — Connected needs an active credential lane, not region+model", () => {
+  // ticket: U2-01
   const bedrockLane = () => within(screen.getByRole("radio", { name: /AWS Bedrock/ }));
 
   it("region + model with NO credential of any kind: NOT Connected", () => {
@@ -639,12 +681,14 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
-  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected (RIDER B7-F6)", () => {
+  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected", () => {
+    // ticket: B7-F6 (rider)
     model(baseStatus({ bedrock: { ready: true, creds_present: false } }));
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
-  it("ready:false with region+model and no lane stays NOT Connected (the U2-01 control, spelled out)", () => {
+  it("ready:false with region+model and no lane stays NOT Connected (the negative control, spelled out)", () => {
+    // ticket: U2-01
     model(baseStatus({ bedrock: { ready: false, region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
     expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
   });
@@ -667,7 +711,8 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
 // (harnessLoginMechanismPrincipalRefusal). agents-tab.tsx:253 already drops
 // its whole model-access block for this state; the card keeps the sentence
 // (the badge needs a reason) but drops the imperative and the door.
-describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot open", () => {
+describe("ModelProviderCard — not_applicable keeps no door it cannot open", () => {
+  // ticket: U2-03
   const notApplicable = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true }, model_access: { state: "not_applicable" } };
 
   it("renders the mechanism sentence with no imperative", async () => {
@@ -690,16 +735,37 @@ describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot op
   });
 });
 
+// #544: the card mounts no pane of its own — each lane's button opens the
+// shell's one door for its own sign-in.
+describe("ModelProviderCard — both sign-in buttons open the one door", () => {
+  it("Claude subscription's Sign in opens the Claude door", async () => {
+    model();
+    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+    expect(await screen.findByRole("dialog", { name: "Sign in to Claude" })).toBeInTheDocument();
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic" })));
+  });
+
+  it("AWS Bedrock's Sign in with SSO opens the AWS door", async () => {
+    model();
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(await screen.findByRole("dialog", { name: "Sign in to AWS" })).toBeInTheDocument();
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ provider: "aws" })));
+  });
+});
+
 // U2-09 (blind round 2, lens-U2): CAPTURE_CHECK_UNREACHABLE leaves the pane
 // on the error phase with the capture possibly landed — onDone never fires,
 // so the parent never refreshes and the card keeps reading not-connected
 // until a manual reload. Cancel makes no claim about the capture either way;
 // it just costs one GET.
-describe("ModelProviderCard — U2-09: dismissing the login dialog re-reads status", () => {
+describe("ModelProviderCard — dismissing the login dialog re-reads status", () => {
+  // ticket: U2-09
   async function openLogin(onChanged: () => void) {
-    render(<ModelProviderCard status={baseStatus()} siteConfig={null} onChanged={onChanged} />);
+    model(baseStatus(), onChanged);
     await user.click(screen.getByRole("button", { name: /^sign in$/i }));
     await screen.findByRole("dialog");
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalled());
     expect(onChanged).not.toHaveBeenCalled();
   }
 

@@ -83,6 +83,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     // suite never has to stand up the health / ssh-key fetches.
     principal: null,
     operator: false,
+    view: "user",
     grants: [],
     egress: [],
     heldCount: 0,
@@ -206,7 +207,8 @@ describe("RunCanvas — saving", () => {
 // effect must stay guarded rather than setPreset(situational) on every flip,
 // or `dirty=false` + commit() would replace the in-progress arrangement on
 // screen (the server keeps the edit; only the screen would jump).
-describe("RunCanvas — F1-F5 a situational flip mid-edit does not clobber the in-progress arrangement", () => {
+describe("RunCanvas — a situational flip mid-edit does not clobber the in-progress arrangement", () => {
+  // ticket: F1-F5
   it("freezes the preset while editing, and re-syncs the moment editing ends", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<RunCanvas ctx={ctx({ finished: false })} />);
@@ -360,6 +362,21 @@ describe("RunCanvas — the SSH tile follows the card's own owner-OR-admin gate"
           operator: false,
           principal: "bob@example.com",
           run: { ...RUN, created_by: "someone-else@example.com", state: "RUNNING" } as WidgetContext["run"],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  // M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries
+  // no Connect-via-SSH door at all, even for a super admin on their OWN run.
+  it("keeps it away from the admin view, even on the admin's own run", () => {
+    expect(
+      RUN_WIDGETS.ssh.available?.(
+        ctx({
+          view: "admin",
+          operator: true,
+          principal: "admin@example.com",
+          run: { ...RUN, created_by: "admin@example.com", state: "RUNNING" } as WidgetContext["run"],
         }),
       ),
     ).toBe(false);

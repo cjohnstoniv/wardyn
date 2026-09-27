@@ -28,6 +28,16 @@ export const RECORDING_DISABLED_TITLE = "Session recording is disabled on this d
 export const RECORDING_DISABLED_DESC =
   "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_STORE=pg to turn it on.";
 
+// #459 — the launch and preflight failure lines already show the server's own
+// sentence, unchanged and visible; a screen reader arriving on the rail heard
+// neither, since both were a bare <p> with no role="alert". These sr-only
+// prefixes are spoken FIRST (Q459-1), so "what failed" precedes "why", and are
+// never rendered visibly — the visible text stays exactly the server's sentence.
+export const RAIL = {
+  LAUNCH_ERROR_LABEL: "Launch failed",
+  PREFLIGHT_ERROR_LABEL: "Preflight failed",
+} as const;
+
 export const RAIL_CREDENTIAL = {
   // residency "proxy": late-bound, swapped onto the wire, never resident.
   // U-15: "minted" was true of the Bedrock exchange this lane is NOT — a static

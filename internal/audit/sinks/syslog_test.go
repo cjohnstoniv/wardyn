@@ -18,13 +18,11 @@ import (
 
 // syslogAvailable reports whether a local syslog socket exists, so the tests
 // below skip rather than fail on a platform without one (CI containers, macOS
-// without syslogd). It lived in syslog.go, whose own comment said "used only in
-// tests" while it shipped inside wardynd; this is where its only two callers
-// are.
+// without syslogd). It lives here, beside its only two callers, not in
+// syslog.go where it would ship inside wardynd.
 //
-// ONE arm, not one per GOOS: the linux and darwin branches it replaces were
-// byte-identical dials of the local socket, and every other platform has none
-// to find.
+// One arm, not one per GOOS: the linux and darwin dials of the local socket
+// are byte-identical, and every other platform has none to find.
 func syslogAvailable() bool {
 	switch runtime.GOOS {
 	case "linux", "darwin":
@@ -83,8 +81,8 @@ func TestSyslogSink_Emit(t *testing.T) {
 	}
 }
 
-// TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector is the regression test
-// for the HIGH finding: a remote (tcp) syslog collector that accepts the
+// TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector: a remote (tcp) syslog
+// collector that accepts the
 // connection but never reads must NOT be able to block the Emit caller. Emit is
 // reached synchronously from request handlers via Fanout.Emit, so blocking here
 // stalls the API request path.
@@ -96,10 +94,9 @@ func TestSyslogSink_Emit(t *testing.T) {
 // that every Emit returns within a tight bound and that the drop/timeout
 // counter advances — proving the caller is never parked on the hung collector.
 //
-// RED-FIRST: against the previous implementation Emit called s.w.Info directly
-// (no buffer, no timeout), so once the collector's socket buffer filled, Emit
-// would block on the TCP write and this test would hang (and never increment a
-// drop counter).
+// An Emit that called s.w.Info directly (no buffer, no timeout) would block on
+// the TCP write once the collector's socket buffer filled, and this test would
+// hang (and never increment a drop counter).
 func TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector(t *testing.T) {
 	// Listener that accepts connections but never reads — simulates a hung
 	// remote collector. We hold the accepted conns open (without reading) so the
@@ -177,6 +174,12 @@ func TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector(t *testing.T) {
 // must be bounded by syslogWriteTimeout and counted as a drop, so the writer
 // cannot wedge permanently on one TCP write.
 func TestSyslogSink_RemoteWriteTimeoutCounts(t *testing.T) {
+	// Shrink the wait: the property under test is "a blocked write is counted
+	// as a drop", not the exact production timeout (restored after — see
+	// TestSyslogWriteTimeout_ProductionValueUnchanged).
+	prevTimeout := setSyslogWriteTimeout(50 * time.Millisecond)
+	t.Cleanup(func() { setSyslogWriteTimeout(prevTimeout) })
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -219,7 +222,7 @@ func TestSyslogSink_RemoteWriteTimeoutCounts(t *testing.T) {
 
 	// The write timeout is syslogWriteTimeout; wait a bit longer than that for a
 	// timeout to register.
-	deadline := time.Now().Add(syslogWriteTimeout + 3*time.Second)
+	deadline := time.Now().Add(syslogWriteTimeout() + 3*time.Second)
 	for s.Drops() == 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -235,17 +238,22 @@ type wedgedWriter struct{ release chan struct{} }
 func (w *wedgedWriter) Info(string) error { <-w.release; return nil }
 func (w *wedgedWriter) Close() error      { return nil }
 
-// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon is the
-// regression: the LOCAL-socket path (Network=="") must not block Emit when the
-// syslog daemon wedges. Emit is reached synchronously from request handlers via
-// Fanout.Emit, so a blocked local write stalls the API request path (and the
-// kill cascade) even after the PG write already succeeded.
+// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon: the local-socket
+// path (Network=="") must not block Emit when the syslog daemon wedges. Emit
+// is reached synchronously from request handlers via Fanout.Emit, so a blocked
+// local write stalls the API request path (and the kill cascade) even after
+// the PG write already succeeded.
 //
-// RED-FIRST: against the previous implementation the local path called
-// s.w.Info directly with no buffer/timeout, so once the daemon wedged Emit would
-// block on the write and this test would hang. Routing the local socket through
-// the same bounded async buffer as the remote path fixes it.
+// A local path that called s.w.Info directly with no buffer/timeout would
+// block on the write once the daemon wedged, and this test would hang; the
+// local socket goes through the same bounded async buffer as the remote path.
 func TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon(t *testing.T) {
+	// Shrink the wait: the property under test is "a wedged write is counted
+	// as a drop", not the exact production timeout (restored after — see
+	// TestSyslogWriteTimeout_ProductionValueUnchanged).
+	prevTimeout := setSyslogWriteTimeout(50 * time.Millisecond)
+	t.Cleanup(func() { setSyslogWriteTimeout(prevTimeout) })
+
 	ww := &wedgedWriter{release: make(chan struct{})}
 	// Network=="" is the local /dev/log transport — the path that was synchronous.
 	s := newSyslogSinkWith(ww, "", "")
@@ -273,7 +281,7 @@ func TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon(t *testing.T) {
 
 	// The wedged write parks the writer; the bounded buffer fills and overflow is
 	// dropped + counted — never silently discarded, never blocking the caller.
-	deadline := time.Now().Add(syslogWriteTimeout + 3*time.Second)
+	deadline := time.Now().Add(syslogWriteTimeout() + 3*time.Second)
 	for s.Drops() == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -306,5 +314,28 @@ func makeSyslogEvent(action string) types.AuditEvent {
 		Actor:     syslogPadActor,
 		Action:    action,
 		Outcome:   "success",
+	}
+}
+
+// TestSyslogWriteTimeout_ProductionValueUnchanged pins the production
+// default of syslogWriteTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
+func TestSyslogWriteTimeout_ProductionValueUnchanged(t *testing.T) {
+	if got := syslogWriteTimeout(); got != 2*time.Second {
+		t.Fatalf("syslogWriteTimeout() = %v, want the production 2s default", got)
+	}
+}
+
+// TestWebhookConfig_TimeoutDefaultUnchanged guards the production default:
+// a test may shrink WebhookConfig.Timeout (see cmd/wardynd's
+// TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector), but omitting it must
+// still give the real 15s client timeout. It lives here, not in
+// webhook_test.go, because withDefaults is unexported and that file is the
+// external sinks_test package.
+func TestWebhookConfig_TimeoutDefaultUnchanged(t *testing.T) {
+	cfg := &WebhookConfig{URL: "https://example.invalid/ingest"}
+	got := cfg.withDefaults()
+	if got.Timeout != "15s" {
+		t.Fatalf("WebhookConfig{}.withDefaults().Timeout = %q, want the production 15s default", got.Timeout)
 	}
 }

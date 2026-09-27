@@ -184,7 +184,7 @@ func adoTestRun(t *testing.T) adoEntraRun {
 	return run
 }
 
-// THE DISPATCH GOLDEN: one api_key grant per exact host, each carrying the
+// The dispatch golden: one api_key grant per exact host, each carrying the
 // immutable snapshot and require_tls; egress and MITM entries port-qualified;
 // the sandbox holding only an inert placeholder.
 func TestAuthorADOEntraInjection_Golden(t *testing.T) {
@@ -250,7 +250,7 @@ func TestAuthorADOEntraInjection_Golden(t *testing.T) {
 	}
 }
 
-// A MISSING PER-RUN CA IS A REFUSAL, not a blind tunnel.
+// A missing per-run CA is a refusal, not a blind tunnel.
 func TestAuthorADOEntraInjection_RefusesWithoutCertificateAuthority(t *testing.T) {
 	for name, ca := range map[string][2]string{"no cert": {"", "KEY"}, "no key": {"CERT", ""}} {
 		st := &adoTestStore{}
@@ -291,7 +291,7 @@ func TestAuthorADOEntraInjection_RefusesUnissuableConfigurations(t *testing.T) {
 	}
 }
 
-// AN UNCONFIGURED DEPLOYMENT IS BYTE-FOR-BYTE UNCHANGED: the lane resolves to
+// An unconfigured deployment is byte-for-byte unchanged: the lane resolves to
 // nothing, and the dispatch call with the lane off returns every input as it
 // was and writes no grant.
 func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
@@ -322,10 +322,10 @@ func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
 	}
 }
 
-// CLEARTEXT THROUGH THE PLAIN LANE IS REFUSED WITH NO CREDENTIAL ON THE WIRE,
+// Cleartext through the plain lane is refused with no credential on the wire,
 // driven through the REAL sidecar booted from this lane's own authored output:
 // dispatch -> runner.BuildProxyConfig -> proxy.LoadConfigBytes -> NewServer.
-// It also proves the sidecar BOOTS with a dozen bare injection rules bound to
+// It also proves the sidecar boots with a dozen bare injection rules bound to
 // port-qualified allowlist entries (the F106/B10-F1 contradiction class).
 func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	const marker = "ADO-SECRET-MARKER"
@@ -378,7 +378,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
 		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
 		MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM), MITMHosts: lane.mitmHosts,
-		ADOGrants: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
+		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
 	}, port)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)
@@ -441,7 +441,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	assertADOPlainLaneRefused(t, cfg.Listen, seen)
 }
 
-// THE WIRED SOURCE ON A DEPLOYMENT WITH NO ENTRA ROW IS INDISTINGUISHABLE FROM
+// The wired source on a deployment with no Entra row is indistinguishable from
 // NO SOURCE: same sign-in answer, and the console login is not widened.
 func TestADOSignIn_UnconfiguredSourceAnswersLikeNoSource(t *testing.T) {
 	answer := func(src ADOEntraSource) (int, string, bool) {

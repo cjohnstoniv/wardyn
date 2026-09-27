@@ -20,25 +20,6 @@
 export const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
-// DRAFT (M2 canon pending) — P5: POST /setup/harness-login answers with the run
-// id BEFORE the sandbox exists (internal/api/harnesscred_launch.go), so the pane
-// has a real wait to narrate; it used to mount the terminal on a run that was
-// still PENDING, which handleAttachTicket 409s, and a failed mint is TERMINAL in
-// AttachTerminal — the operator's only signal was a dead panel.
-//
-// U-12 (W6 blind lens): it named the wait "the first start after an upgrade",
-// which is false on a FIRST install (nothing was upgraded), and named a pull
-// that does not happen on a Docker/compose host with the image already local. It
-// is also shown for the anthropic flow, whose image is the ordinary agent one.
-// What is true of every one of those is that a first start MAY pull.
-//
-// Declared HERE, not in the pane: ui/e2e/providers.spec.ts asserts through it
-// (U-15) and a Playwright spec cannot import the pane — it reaches
-// AttachTerminal's xterm.css, which Node's loader cannot load. The pane
-// re-exports it.
-export const LOGIN_SANDBOX_STARTING =
-  "Starting the sign-in sandbox. A first start may need to pull the image, which can take a few minutes.";
-
 // DRAFT (M2 canon pending) — U-8: the aws blurb's opening clause under
 // `startURLManaged` (every per_user member). The unmanaged clause asks the
 // reader to give Wardyn their organization's access portal URL — and under a
@@ -54,3 +35,27 @@ export const AWS_BLURB_MANAGED_OPENING =
 // console types the login command only if this never appears; see the pane's
 // grace-timer comment for why.
 export const SELFRUN_MARKER = "wardyn: sign-in running";
+
+// Canon (#628, the approved sign-in progress packet) — the door's own progress,
+// ready and opened states. The click that opens the dialog opens no tab any
+// more: the provider tab opens only from the "Open … sign-in" button, once its
+// page exists. `provider` is the flow's short name ("AWS", "Claude"). Here, not
+// in the pane, because the live walk asserts through them.
+export const SIGNIN_PROGRESS = {
+  STEP_START: "Starting the sign-in sandbox",
+  STEP_DOWNLOAD: "Downloading the sign-in image",
+  STEP_DOWNLOAD_ACTIVE: "Downloading the sign-in image — first time only",
+  STEP_DOWNLOAD_FAILED: "Downloading the sign-in image — failed",
+  STEP_WAIT: (provider: string) => `Waiting for ${provider}`,
+  // No runner reports pull progress today (the docker driver drains the pull
+  // stream, the kubelet reports none), so this sentence is the whole of state 2.
+  DOWNLOAD_HINT: "Can take a few minutes the first time.",
+  WAIT_HINT: (provider: string) => `Waiting on ${provider} to hand back a verification link.`,
+  OPEN: (provider: string) => `Open ${provider} sign-in`,
+  COPY_LEAD: "If nothing opens:",
+  COPY_LINK: "copy the link",
+  TAB_OPEN: (provider: string) => `The ${provider} sign-in tab is open. Waiting for your approval there.`,
+  REOPEN: "Reopen tab",
+  RETRY: "Retry",
+  CANCEL: "Cancel",
+} as const;

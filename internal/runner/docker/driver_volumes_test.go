@@ -259,7 +259,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 		}
 	})
 
-	// A DIFFERENT DRIVE's volume, Wardyn-shaped in every other way. Object names
+	// A different drive's volume, Wardyn-shaped in every other way. Object names
 	// are per-PRINCIPAL (DriveObjectName), so two drives whose home templates
 	// collide resolve to one name — and adopting on the name alone would hand
 	// this member the other drive's storage, plus a place to write into it when
@@ -609,7 +609,7 @@ func TestCreateSandbox_NoDriveTouchesNothing(t *testing.T) {
 	if f.volumeCreates != 0 {
 		t.Errorf("a run with no drive made %d VolumeCreate calls, want 0", f.volumeCreates)
 	}
-	// NO MOUNTS AT ALL, not merely none at the reserved target. "Byte-identical
+	// No mounts at all, not merely none at the reserved target. "Byte-identical
 	// to before this feature" is a claim about the whole slice, and the
 	// reserved-target lookup below cannot make it: a bind of the host root at
 	// /work/host, appended to every sandbox, is invisible to findMount and this

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -160,22 +161,21 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 }
 
 // runDriveGet runs `drive get` against url and returns what it printed and
-// any error. `--json` output goes through emitJSON, which targets os.Stdout
-// directly rather than cobra's OutOrStdout sink (run_wait_ready_test.go,
-// sshkey_test.go note the same thing) — captureStdout (commands_test.go) is
-// this tree's existing fix for that.
+// any error. `--json` output goes through emitJSON, which writes to
+// cmd.OutOrStdout() (#200), so cobra's own SetOut sink captures it directly.
 func runDriveGet(t *testing.T, url string) (stdout string, err error) {
 	t.Helper()
 	root := rootCmd()
+	out := &strings.Builder{}
 	root.SetArgs([]string{"drive", "get", "--url", url, "--token", "tok"})
+	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
-	stdout = captureStdout(t, func() { err = root.Execute() })
-	return stdout, err
+	err = root.Execute()
+	return out.String(), err
 }
 
 // runDriveApply marshals doc to a temp file, runs `drive apply` on it, and
-// returns what it printed and any error (see runDriveGet on why stdout needs
-// captureStdout).
+// returns what it printed and any error (see runDriveGet).
 func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout string, err error) {
 	t.Helper()
 	b, merr := json.Marshal(doc)
@@ -187,10 +187,12 @@ func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout str
 		t.Fatalf("write doc: %v", werr)
 	}
 	root := rootCmd()
+	out := &strings.Builder{}
 	root.SetArgs([]string{"drive", "apply", path, "--url", url, "--token", "tok"})
+	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
-	stdout = captureStdout(t, func() { err = root.Execute() })
-	return stdout, err
+	err = root.Execute()
+	return out.String(), err
 }
 
 // seedDrives exercises every types.DriveBackend, not just docker_volume, the
@@ -330,5 +332,58 @@ func TestDriveApply_RejectsUnknownField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "drivs") {
 		t.Errorf("error %q does not name the unknown field", err)
+	}
+}
+
+// TestDriveGet_ReadsEveryAllocationPage pins issue #508 F5: GET /drives serves
+// allocations one page at a time and flags the rest with X-Wardyn-Truncated.
+// `drive get` sells its output as a snapshot to restore from, so it must read
+// every page — and print nothing when the pages do not add up to grant_total,
+// rather than a document `apply` would turn into a partial restore.
+func TestDriveGet_ReadsEveryAllocationPage(t *testing.T) {
+	const pageSize = 2
+	all := make([]sdk.UserDriveGrant, 5)
+	for i := range all {
+		all[i] = sdk.UserDriveGrant{ID: uuid.New(), SubjectType: "user", Subject: string(rune('a' + i)), Enabled: true}
+	}
+	serve := func(total int, ignoreOffset bool) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			off := 0
+			if o := r.URL.Query().Get("offset"); o != "" && !ignoreOffset {
+				off, _ = strconv.Atoi(o)
+			}
+			end := min(off+pageSize, len(all))
+			if end < len(all) {
+				w.Header().Set("X-Wardyn-Truncated", "true")
+			}
+			_ = json.NewEncoder(w).Encode(sdk.DrivesDocument{Grants: all[off:end], GrantTotal: total, RunnerTarget: "docker"})
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+
+	out, err := runDriveGet(t, serve(len(all), false).URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var doc sdk.DrivesDocument
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("unmarshal get output: %v", err)
+	}
+	if !reflect.DeepEqual(doc.Grants, all) {
+		t.Fatalf("get printed %d allocations, want all %d in order", len(doc.Grants), len(all))
+	}
+
+	for name, srv := range map[string]*httptest.Server{
+		"an allocation added while paging": serve(len(all)+1, false),
+		"a server that ignores offset":     serve(len(all), true),
+	} {
+		out, err := runDriveGet(t, srv.URL)
+		if err == nil {
+			t.Errorf("%s: get succeeded, want a refusal", name)
+		}
+		if strings.TrimSpace(out) != "" {
+			t.Errorf("%s: get printed an incomplete document:\n%s", name, out)
+		}
 	}
 }

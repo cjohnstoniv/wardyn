@@ -20,6 +20,10 @@ import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { RUN_FACTS } from "../wardyn/copy/door";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
@@ -49,7 +53,8 @@ const runningInteractive: AgentRun = {
   interactive: true,
 };
 
-describe("SummaryHeader — attachable chip predicate (W25-1)", () => {
+describe("SummaryHeader — attachable chip predicate", () => {
+  // ticket: W25-1
   it("shows the plain 'Interactive' chip (no attachable claim) for a member", () => {
     renderHeader(
       <OperatorProvider operator={false}>
@@ -153,7 +158,8 @@ describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)"
 // "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.
-describe("SummaryHeader — clone door (0.7.3 F7)", () => {
+describe("SummaryHeader — clone door", () => {
+  // ticket: 0.7.3 F7
   // The component itself gates on the `terminal` PROP, never on
   // `run.state` directly (run-detail-summary-header.tsx:233) — this loop pins
   // the CALLER's contract (every one of the 5 states in TERMINAL_RUN_STATES
@@ -482,5 +488,41 @@ describe("SummaryHeader — the autonomy chip beside the barrier chip", () => {
     for (const meta of Object.values(AUTONOMY_META)) {
       expect(screen.queryByText(meta.label)).toBeNull();
     }
+  });
+});
+
+// #543 (design §5.7, decision 5): the run's model provider, a neutral chip in
+// the header's chip bar — named from the shell's /setup/status, and marked
+// removed once the provider is gone from it.
+describe("SummaryHeader — the run's model provider chip", () => {
+  const { gateway } = MODEL_PROVIDERS;
+  function withStatus(status: SetupStatus | null, run: AgentRun) {
+    renderHeader(
+      <ModelAccessProvider status={status} onRefresh={() => {}}>
+        <OperatorProvider operator={false}>
+          <SummaryHeader run={run} terminal={false} onKill={() => {}} />
+        </OperatorProvider>
+      </ModelAccessProvider>,
+    );
+  }
+
+  it("names the provider the run chose", () => {
+    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: gateway.id });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.name, false))).toBeInTheDocument();
+  });
+
+  it("a provider deleted since: (removed), by the id the run recorded", () => {
+    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: "old-gateway" });
+    expect(screen.getByText(RUN_FACTS.PROVIDER("old-gateway", true))).toBeInTheDocument();
+  });
+
+  it("claims nothing removed before /setup/status answers", () => {
+    withStatus(null, { ...runningInteractive, model_provider_id: gateway.id });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.id, false))).toBeInTheDocument();
+  });
+
+  it("a run under no provider block has no chip", () => {
+    withStatus(providerStatus([{ provider: gateway }]), runningInteractive);
+    expect(screen.queryByText(/^Model provider · /)).toBeNull();
   });
 });

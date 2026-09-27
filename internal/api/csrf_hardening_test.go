@@ -158,7 +158,7 @@ func TestAttachOrigin_LocalModeHasNoSecondName(t *testing.T) {
 	}
 }
 
-// TestCSRFGuard_RefusalNamesTheCSRFBoundary (lens-S S-11). The auth.failed row's
+// TestCSRFGuard_RefusalNamesTheCSRFBoundary (lens-S S-11). The auth.fail row's
 // Actor names WHICH boundary refused (AUDIT-ACTIONS.md). adminAuth did not
 // refuse this one — the session was VALID and the CSRF guard short-circuits
 // above it — so the row claimed the wrong boundary.
@@ -178,21 +178,21 @@ func TestCSRFGuard_RefusalNamesTheCSRFBoundary(t *testing.T) {
 		t.Fatalf("code = %d, want 403", w.Code)
 	}
 	for _, ev := range audit.events {
-		if ev.Action != "auth.failed" {
+		if ev.Action != "auth.fail" {
 			continue
 		}
 		if ev.Actor != "wardyn/csrf" {
-			t.Errorf("auth.failed Actor = %q, want wardyn/csrf — adminAuth did not refuse this", ev.Actor)
+			t.Errorf("auth.fail Actor = %q, want wardyn/csrf — adminAuth did not refuse this", ev.Actor)
 		}
 		return
 	}
-	t.Fatal("no auth.failed row for a CSRF refusal")
+	t.Fatal("no auth.fail row for a CSRF refusal")
 }
 
 // TestAttachWS_CrossOriginRefusalIsAudited (review R-3). The attach socket is
 // the most dangerous cookie-authenticated capability in the product, and its
 // cross-origin refusal used to be SILENT: 403 and nothing in the trail, while
-// the REST guard emitted auth.failed/cross_origin_refused/wardyn/csrf at both
+// the REST guard emitted auth.fail/cross_origin_refused/wardyn/csrf at both
 // of its arms. Driven through the real router on the ?ticket= lane, which is
 // the browser's own.
 func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
@@ -219,11 +219,11 @@ func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
 		t.Errorf("body = %q, want the CSRF guard's own sentence", w.Body.String())
 	}
 	for _, ev := range audit.snapshot() {
-		if ev.Action != "auth.failed" {
+		if ev.Action != "auth.fail" {
 			continue
 		}
 		if ev.Actor != csrfActor {
-			t.Errorf("auth.failed Actor = %q, want %q", ev.Actor, csrfActor)
+			t.Errorf("auth.fail Actor = %q, want %q", ev.Actor, csrfActor)
 		}
 		var data map[string]any
 		if err := json.Unmarshal(ev.Data, &data); err != nil {

@@ -102,8 +102,8 @@ func rawCiphertext(t *testing.T, pool *pgxpool.Pool, name string) []byte {
 // at-rest invariant: Put then Get returns the plaintext verbatim, while the raw
 // row is a v1 envelope — enc_version 1, this store's kek_id, a 60-byte wrapped
 // DEK (nonce ‖ 32-byte key ‖ tag) and a ciphertext exactly nonce + value + tag
-// long that does not contain the plaintext. This is the regression that secrets
-// are encrypted at rest, never stored in the clear.
+// long that does not contain the plaintext. This pins that secrets are
+// encrypted at rest, never stored in the clear.
 func TestPGPutGetRoundTripAndCiphertextAtRest(t *testing.T) {
 	s, pool, _ := newPGStore(t)
 	ctx := context.Background()

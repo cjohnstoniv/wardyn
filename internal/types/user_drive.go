@@ -538,7 +538,7 @@ type DriveMount struct {
 // bad PUT can blank) is the wrong home for a security ceiling. The API write
 // boundary composes the two — shape here, ceiling there — and an UNSET env
 // means no host_path drive may be authored at all, the same fail-closed posture
-// WARDYN_MEMBER_WORKSPACE_ROOTS takes.
+// WARDYN_USER_WORKSPACE_ROOTS takes.
 type UserDriveHostRootCheck func(hostRoot string) error
 
 // ─── derivation ───────────────────────────────────────────────────────────────
@@ -749,7 +749,7 @@ func DriveObjectName(d UserDrive, home string) string {
 }
 
 // DriveObjectID is the drive's own id, dashless — the fixed-width fragment
-// DriveObjectSchemeID puts where DriveSlug used to go. 32 lowercase hex
+// DriveObjectSchemeID puts where DriveSlug would otherwise go. 32 lowercase hex
 // characters always: uuid.UUID.String() is fixed-format (8-4-4-4-12 hex,
 // lowercase), so stripping its four hyphens leaves a length and character
 // class that can never vary with what an admin typed into the drive's name or

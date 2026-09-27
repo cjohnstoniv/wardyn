@@ -16,17 +16,17 @@ import "time"
 // it survives the revoke: the admin's "revoke every session for this human"
 // silently does not.
 //
-// The fix is not to stamp the app value with now() — that would re-open F143,
-// where a caller who holds a mint request body open across POST /sessions/revoke
-// gets a created_at AFTER the cutoff, which is why the API stamps at request
+// The fix is not to stamp the app value with now() — that would let a caller
+// who holds a mint request body open across POST /sessions/revoke get a
+// created_at AFTER the cutoff, which is why the API stamps at request
 // ADMISSION rather than at INSERT. What both need is the app's measurement of
 // an ELAPSED TIME, which no skew rides in on, rendered against the database's
 // own now():
 //
 //	created_at = now() - <the request's age>
 //
-// That keeps admission-time semantics (F143) and puts the value on the database
-// clock (F289). The same arithmetic, used the other way round, is how a
+// That keeps admission-time semantics and puts the value on the database
+// clock. The same arithmetic, used the other way round, is how a
 // cookie's app-stamped `iat` is compared against a database-stamped cutoff.
 
 // AppClockAgeSQL renders an app-measured age, in MICROSECONDS, as an interval to

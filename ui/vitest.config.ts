@@ -30,13 +30,15 @@ export default defineConfig({
       reportsDirectory: "../test/reports/ui/coverage",
       reporter: ["text-summary", "html", "lcov"],
       include: ["src/app/**/*.{ts,tsx}"],
-      // test-fixtures.ts is test-only but lives beside the screens it seeds, so
-      // it matches `include` and none of the name/path excludes — leave it in and
-      // 30 fully-covered lines that ship in no bundle pad the denominator.
+      // test-fixtures.ts and copy-doc-parity.ts are test-only but live beside
+      // the screens/modules they seed or check, so they match `include` and
+      // none of the name/path excludes below — excluded by exact name so
+      // lines that ship in no bundle don't pad the denominator.
       exclude: [
         "src/app/components/ui/**",
         "**/*.test.{ts,tsx}",
         "**/test-fixtures.ts",
+        "**/copy-doc-parity.ts",
         "src/test/**",
       ],
     },

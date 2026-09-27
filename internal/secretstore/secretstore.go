@@ -23,19 +23,20 @@
 // ARCHITECTURE.md invariant 1 is the authoritative list of which credentials
 // those are and what bounds each one. Deliberately NOT restated here: a second
 // copy of that list is the thing that drifts out of date.
-// Audit coverage of reads is partial and honestly bounded: the proxy-side
-// api_key injection path emits a dedicated secret.read event
-// (internal/api/injection.go); the broker's git_pat and GitHub App private-key
-// reads are audited via the higher-level credential.mint event instead of an
-// individual secret.read (see internal/broker); and boot-time reads — the
-// platform signing/session keys (cmd/wardynd) — are currently NOT audited. Do
-// not treat "every read is an audit event" as a guarantee.
+// Every read is audited once (credential-storage design §2.6): wardynd wraps
+// the store in Audited, which records a secret.read for each Get with the
+// purpose its caller put in the context (WithPurpose). The injection sinks
+// record their own richer secret.read and mark the context SiteAudited so the
+// decorator stays silent. cmd/wardynd's secret-read guard pins that every Get
+// site does one or the other.
 package secretstore
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is the typed sentinel a Store.Get returns (wrapped) when no secret
@@ -43,9 +44,9 @@ import (
 // error. Every Store implementation must honor it (the conformance suite checks).
 var ErrNotFound = errors.New("secretstore: secret not found")
 
-// ErrUnavailable marks a TRANSIENT failure of an external store (sealed,
-// throttled, 5xx, network, timeout): the value may well be there, the store
-// just could not answer. Every other Get error is DEFINITIVE — the row, the
+// ErrUnavailable marks a TRANSIENT failure: an external store sealed,
+// throttled, 5xx, unreachable or timing out, or the database holding the rows
+// not answering. The value may well be there; the store just could not answer. Every other Get error is DEFINITIVE — the row, the
 // value, the binding or the access is gone, and retrying will not bring it
 // back. A 401/403 is definitive by design, so revoking Wardyn's access at the
 // store bites at once (design §2.3a.4, K8).
@@ -59,11 +60,24 @@ var ErrRowNotWritten = errors.New("secretstore: the value reached the external s
 type Store interface {
 	Name() string
 	Put(ctx context.Context, name string, value []byte) error
-	// Get returns the plaintext. Callers are responsible for emitting the
-	// corresponding audit event before using the value.
+	// Get returns the plaintext. The context says why (WithPurpose) or that
+	// the caller records the read itself (SiteAudited); see Audited.
 	Get(ctx context.Context, name string) ([]byte, error)
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]string, error)
+	// DeleteEverywhere removes every namespace's row of each name — the
+	// operator's and every principal's — whatever view it is called on, and
+	// returns how many rows it removed. It is the one cross-owner write: a
+	// model provider whose address changes must take every person's
+	// credential for it with it, and no caller knows every owner to Delete
+	// them one by one.
+	DeleteEverywhere(ctx context.Context, names []string) (int, error)
+	// Holders is DeleteEverywhere's read twin: for each of names, every
+	// namespace holding a row of it — the operator's ("") included — whatever
+	// view it is called on. A name nobody holds is absent. It reads rows,
+	// never a value, so a store-mode backend's external store is not asked:
+	// the model providers list counts the people connected to each provider.
+	Holders(ctx context.Context, names []string) (map[string][]string, error)
 	// For returns a view of the store scoped to owner, the per-principal
 	// namespace introduced by migration 0050 (member BYOK). owner "" is the
 	// OPERATOR namespace — the zero value of every existing caller, so a call
@@ -112,6 +126,11 @@ type External interface {
 	// Check reports whether the value behind ref exists and is bound to
 	// (owner, name), without reading it (-reconcile).
 	Check(ctx context.Context, owner, name, ref string) error
+	// Ref is the object DERIVED from (owner, name): where the row's value
+	// must live, whatever the row records (-reconcile). A store whose object
+	// names carry state no row can derive (Key Vault's generation) takes that
+	// part from ref, and refuses a ref whose derivable part is not the row's.
+	Ref(owner, name, ref string) (string, error)
 	// Delete removes every version of the value behind ref. Idempotent.
 	Delete(ctx context.Context, owner, name, ref string) error
 	// Walk lists every value this install holds in the store (-reconcile).
@@ -121,12 +140,19 @@ type External interface {
 // PlatformNames are the boot keys wardynd mints and reads at every boot
 // (cmd/wardynd loadOrCreateSecret). An external store files them under their
 // own kind, so the org can audit, filter and (with a second identity)
-// restrict them apart from people's credentials (design §2.13).
+// restrict them apart from people's credentials; local mode wraps them under
+// a KEK of their own (design §2.13).
+// cmd/wardynd's TestBootKeysAreThePlatformSet derives the boot keys from the
+// loadOrCreateSecret call sites and fails if this map differs.
 var PlatformNames = map[string]bool{
 	"wardyn-signing-key":    true,
 	"wardyn-session-key":    true,
 	"wardyn-ui-session-key": true,
 	"wardyn-ssh-host-key":   true,
+	"wardyn-internal-ca":    true,
+	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid),
+	// bootstrapped through loadOrCreateSecret like the keys above.
+	"wardyn-org-device-credential": true,
 }
 
 // Kind is the store-side kind of the row (owner, name): "platform" for a boot
@@ -183,4 +209,84 @@ type ExternalEntry struct {
 	// (Key Vault's soft delete), for RecoverableDays more days (0: unknown).
 	SoftDeleted     bool
 	RecoverableDays int
+}
+
+type expiryKey struct{}
+
+// WithExpiry returns a context under which a Put records at as the latest time
+// the value can still be used or renewed (the row's expires_at): the daily
+// sweep deletes it after that. A Put without it records no expiry, so a
+// replace always describes the value it wrote.
+func WithExpiry(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, expiryKey{}, at)
+}
+
+// ExpiryFrom is the expiry WithExpiry put on ctx, if any.
+func ExpiryFrom(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(expiryKey{}).(time.Time)
+	return at, ok && !at.IsZero()
+}
+
+// Expired names one row a sweep deleted because its expiry had passed.
+type Expired struct {
+	Owner, Name string
+	ExpiresAt   time.Time
+}
+
+// EraseReport is what EraseOwner removed.
+type EraseReport struct {
+	// Count is how many credentials were deleted.
+	Count int
+	// Store, Purged and RecoverableDays aggregate the external store's
+	// DeleteReports: Store is "" when nothing reported, Purged is false when
+	// any value was left recoverable, RecoverableDays is the longest window.
+	Store           string
+	Purged          bool
+	RecoverableDays int
+}
+
+// ErrOperatorNamespace refuses an erase of the operator namespace (""): it
+// holds the platform keys and the deployment's shared credentials, not one
+// person's.
+var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is not a person's and cannot be erased")
+
+// EraseOwner deletes every credential in owner's own namespace (design §2.5,
+// CS-5 offboarding). Each Delete removes the external value before the row, so
+// a failure keeps the row and a retry resumes. It never reports success with a
+// row left behind: every failure is returned, and a namespace that is not empty
+// afterwards (a write racing the erase) is an error naming how many remain.
+func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
+	rep := EraseReport{Purged: true}
+	if owner == "" {
+		return rep, ErrOperatorNamespace
+	}
+	view := st.For(owner)
+	names, err := view.List(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("list %q: %w", owner, err)
+	}
+	var errs []error
+	for _, n := range names {
+		dctx, dr := WithDeleteReport(ctx)
+		if err := view.Delete(dctx, n); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		rep.Count++
+		if dr.Store != "" {
+			rep.Store = dr.Store
+			rep.Purged = rep.Purged && dr.Purged
+			rep.RecoverableDays = max(rep.RecoverableDays, dr.RecoverableDays)
+		}
+	}
+	if len(errs) == 0 {
+		left, err := view.List(ctx)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("re-list %q: %w", owner, err))
+		case len(left) > 0:
+			errs = append(errs, fmt.Errorf("%d credentials of %q were written while the erase ran; erase again", len(left), owner))
+		}
+	}
+	return rep, errors.Join(errs...)
 }

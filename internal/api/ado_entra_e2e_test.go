@@ -89,7 +89,7 @@ func TestADOEntraLane_EndToEnd(t *testing.T) {
 	runID := uuid.New()
 	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, adoTestRun(t), true,
 		adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, map[string]string{}, nil)
-	if !ok || len(lane.gate) != 1 {
+	if !ok || lane.gate == nil {
 		t.Fatalf("dispatch: ok=%v gate=%+v", ok, lane.gate)
 	}
 
@@ -167,7 +167,7 @@ func startADOLaneSidecar(t *testing.T, runID uuid.UUID, lane adoEntraLane, polic
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
 		RunToken: "run-token", ControlPlaneURL: cpURL, Policy: policy, Injection: lane.injections,
 		MITMCACertPEM: caCert, MITMCAKeyPEM: caKey, MITMHosts: lane.mitmHosts,
-		ADOGrants: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCAPEM,
+		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCAPEM,
 	}, port)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)

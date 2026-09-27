@@ -28,6 +28,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek/kektest"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 // outageBound is how long a call against a paused server may take to come
@@ -98,6 +100,8 @@ func pause(t *testing.T, container string) func() {
 // the associated_data binding, a rotation and min_decryption_version, a paused
 // server (transient) and a deleted key (definitive).
 func TestLive_TransitKEKConformance(t *testing.T) {
+	testfloor.Mark(t, "kek-vault")
+	testfloor.Mark(t, "kek-openbao")
 	a := liveAdminEnv(t)
 	mount, cfg := liveTransitKey(t, a)
 	hooks := kektest.Hooks{
@@ -120,6 +124,8 @@ func TestLive_TransitKEKConformance(t *testing.T) {
 // Boot refuses while the key service is unreachable, within outageBound, and
 // comes up once it answers again.
 func TestLive_TransitBootRefusedWhileUnreachable(t *testing.T) {
+	testfloor.Mark(t, "kek-vault")
+	testfloor.Mark(t, "kek-openbao")
 	a := liveAdminEnv(t)
 	c := liveContainer(t)
 	mount, cfg := liveTransitKey(t, a)
@@ -141,6 +147,8 @@ func TestLive_TransitBootRefusedWhileUnreachable(t *testing.T) {
 // (the sink's 503, SINK.KEK_UNREACHABLE), never not-found or a refusal, and
 // arrives within outageBound.
 func TestLive_TransitStoreOutageIsTransient(t *testing.T) {
+	testfloor.Mark(t, "kek-vault")
+	testfloor.Mark(t, "kek-openbao")
 	a := liveAdminEnv(t)
 	c := liveContainer(t)
 	pool := throwawayDB(t)
@@ -170,6 +178,8 @@ func TestLive_TransitStoreOutageIsTransient(t *testing.T) {
 // the rows before it, a re-run moves only the rest, and a third moves
 // nothing. Then min_decryption_version retires v1 with every row readable.
 func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
+	testfloor.Mark(t, "kek-vault")
+	testfloor.Mark(t, "kek-openbao")
 	a := liveAdminEnv(t)
 	pool := throwawayDB(t)
 	mount, cfg := liveTransitKey(t, a)
@@ -190,16 +200,19 @@ func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	rewrap := func() (secretstorepg.RewrapResult, error) {
+		return secretstorepg.RewrapKeys(ctx, keys(pool, nil, tr, true))
+	}
 	setWrap(bad)
-	res, err := s.Rewrap(ctx)
+	res, err := rewrap()
 	if err == nil || !strings.Contains(err.Error(), `name="b"`) || res.Rewrapped != 1 {
 		t.Fatalf("Rewrap over an unreadable row = (%+v, %v); want an abort naming b after 1 row", res, err)
 	}
 	setWrap(good)
-	if res, err = s.Rewrap(ctx); err != nil || res.Rewrapped != 2 || res.KeyVersion != 2 {
+	if res, err = rewrap(); err != nil || res.Rewrapped != 2 || res.KeyVersion != 2 {
 		t.Fatalf("re-run = (%+v, %v); want the 2 rows left, to v2", res, err)
 	}
-	if res, err = s.Rewrap(ctx); err != nil || res.Rewrapped != 0 {
+	if res, err = rewrap(); err != nil || res.Rewrapped != 0 {
 		t.Fatalf("third run = (%+v, %v); want nothing to move", res, err)
 	}
 	a.must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": 2})
@@ -217,6 +230,8 @@ func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 // Every read of a stored credential is one Transit decrypt in the server's
 // audit log: nothing caches a data key and hides a read from it.
 func TestLive_TransitAuditsEveryUnwrap(t *testing.T) {
+	testfloor.Mark(t, "kek-vault")
+	testfloor.Mark(t, "kek-openbao")
 	a := liveAdminEnv(t)
 	log := os.Getenv("WARDYN_TEST_VAULT_AUDIT_FILE")
 	if log == "" {

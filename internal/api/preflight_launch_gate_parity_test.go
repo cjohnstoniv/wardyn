@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -40,11 +41,10 @@ import (
 // in its own right, so each one is either previewed by preflight or named in
 // preflightGateExceptions with its own reason.
 //
-// This is B1-F3's NARROWING. `decodeAndValidateCreateRun` used to be one blanket
-// entry in the exception map, which licensed the WHOLE wrapper — and so licensed
-// exactly the gap B1-F3 turned out to be: requestRepoProviderRefusals lives
-// inside it, preflight never called it, and this guard was structurally unable
-// to say so. One exception per real gap, never one per wrapper.
+// This is deliberately narrow: one exception per real gap, never one per
+// wrapper. A blanket entry for `decodeAndValidateCreateRun` would license the
+// whole wrapper — including requestRepoProviderRefusals, which lives inside it —
+// and leave this guard structurally unable to say that preflight never calls it.
 //
 // The value is the file the wrapper is declared in, so a move reds here naming
 // the file rather than as a bare parse failure.
@@ -65,6 +65,11 @@ var preflightGateExceptions = map[string]string{
 	// that blanks the Review panel.
 	"resolveEnforcedConfinement": "preflight calls enforcedConfinement directly; the runner-capability + cloud_sts tail gates are reported by the checklist instead (doc comment)",
 }
+
+// preflightGateExceptionsMax caps preflightGateExceptions, which may only
+// shrink or stay (authorization-kernel design G3). Lower it when an entry
+// goes; raising it needs a reviewed reason.
+const preflightGateExceptionsMax = 2
 
 func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	fset := token.NewFileSet()
@@ -111,6 +116,11 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 			"or add each to preflightGateExceptions with the reason Review is allowed to skip it.", missing)
 	}
 
+	if len(preflightGateExceptions) > preflightGateExceptionsMax {
+		t.Errorf("preflightGateExceptions has %d entries, the cap is %d — reproduce the new gate in preflight instead of exempting it",
+			len(preflightGateExceptions), preflightGateExceptionsMax)
+	}
+
 	// The exception list must not rot: an entry naming a helper launch no longer
 	// calls is a stale licence to diverge.
 	for name := range preflightGateExceptions {
@@ -118,6 +128,53 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 			t.Errorf("preflightGateExceptions names %q, which handleCreateRun no longer calls before the mint — drop the entry", name)
 		}
 	}
+
+	// ORDER, not only the set (#515): when two gates can both refuse, the one
+	// that runs first decides the answer, so Review must meet them in launch's
+	// order or it previews a different refusal than the launch gives.
+	launchOrder := orderedServerCalls(t, fset, create, mint)
+	previewOrder := orderedServerCalls(t, fset, preflight, token.NoPos)
+	shared := func(seq, other []string) []string {
+		var out []string
+		for _, name := range seq {
+			if slices.Contains(other, name) {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	if l, p := shared(launchOrder, previewOrder), shared(previewOrder, launchOrder); !slices.Equal(l, p) {
+		t.Errorf("handlePreflightRun calls the shared gates in a different order than handleCreateRun:\n launch:    %v\n preflight: %v", l, p)
+	}
+}
+
+// orderedServerCalls is serverCalls in source order, each name at its FIRST
+// call, with each preflightInlinedWrappers call replaced in place by the
+// wrapper's own calls (the order launch actually meets them in).
+func orderedServerCalls(t *testing.T, fset *token.FileSet, fn *ast.FuncDecl, before token.Pos) []string {
+	t.Helper()
+	var out []string
+	add := func(name string) {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || (before != token.NoPos && call.Pos() >= before) {
+			return true
+		}
+		name := serverMethodName(call)
+		if file, inlined := preflightInlinedWrappers[name]; inlined {
+			for _, inner := range orderedServerCalls(t, fset, parseHandler(t, fset, file, name), token.NoPos) {
+				add(inner)
+			}
+		} else if name != "" {
+			add(name)
+		}
+		return true
+	})
+	return out
 }
 
 // parseHandler returns the named top-level method's body from an internal/api

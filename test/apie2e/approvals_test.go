@@ -207,7 +207,7 @@ func TestApprovals_AlreadyDecided_409(t *testing.T) {
 	_, _ = h.pool.Exec(ctx, `DELETE FROM agent_runs WHERE id=$1`, runID)
 }
 
-// ─── seed helpers ─────────────────────────────────────────────────────────────
+// seed helpers
 
 // seedRun inserts a RUNNING run owned by the harness, using unique ids so tests
 // are isolated within the shared DB.

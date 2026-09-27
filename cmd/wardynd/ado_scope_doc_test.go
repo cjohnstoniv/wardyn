@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
 
-// adoScopeRow matches a scope table row in docs/adoption/azure-devops-entra.md:
+// adoScopeRow matches a scope table row in docs/AZURE-DEVOPS.md:
 // a first cell holding one backticked vso.* scope.
 var adoScopeRow = regexp.MustCompile("(?m)^\\| `(vso\\.[a-z_]+)` \\|")
 
@@ -22,7 +22,7 @@ var adoScopeRow = regexp.MustCompile("(?m)^\\| `(vso\\.[a-z_]+)` \\|")
 // An admin adds exactly the scopes that page lists, so a missing one is a
 // capability that 403s at Azure DevOps on every install that followed the doc.
 func TestADOEntraDocListsEveryRequestedScope(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "adoption", "azure-devops-entra.md"))
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "AZURE-DEVOPS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestADOEntraDocListsEveryRequestedScope(t *testing.T) {
 	for _, q := range scopes {
 		s := strings.TrimPrefix(q, adoscope.ResourceID+"/")
 		if !documented[s] {
-			t.Errorf("docs/adoption/azure-devops-entra.md has no scope table row for %s, which adoscope.ScopesFor can request", s)
+			t.Errorf("docs/AZURE-DEVOPS.md has no scope table row for %s, which adoscope.ScopesFor can request", s)
 		}
 	}
 }

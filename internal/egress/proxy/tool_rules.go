@@ -56,10 +56,9 @@ func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool s
 // writeToolDecision answers a tool-approval request the run's own policy already
 // decided, without creating an approval row for a human.
 //
-// The response carries a TERMINAL `state` and no `id`. wardyn-toolgate reads
-// `state` first and requires an id only when it is absent, so a policy decision
-// short-circuits the poll loop — and a gate built before tool_rules existed is
-// unaffected, because the no-rule path never produces this response.
+// The response carries a TERMINAL `state` and no `id`. wardyn-toolgate polls
+// whenever an id is present (a created row also carries "state":"PENDING") and
+// reads a state with no id as this decision, so it short-circuits the poll loop.
 func writeToolDecision(w http.ResponseWriter, state string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

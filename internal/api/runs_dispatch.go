@@ -46,16 +46,23 @@ type dispatchParams struct {
 	// that defaults to the weaker posture is a control whose default is "off by
 	// omission", and the omission is invisible.
 	PATBroker        bool
-	GitPATGrants     map[string]string          // {host: grant_id} for non-GitHub PAT hosts
-	SSHGrants        map[string]string          // {host: grant_id} for SSH clone hosts
-	Injections       []runner.InjectionGrant    // proxy-side credential injections
-	Interactive      bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
-	TaskMode         string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
-	InteractiveStart string                     // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
-	SeedAutoTools    bool                       // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
-	ToolApprovals    string                     // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
-	BedrockRef       *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
-	ExtraEnv         map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
+	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
+	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
+	Injections       []runner.InjectionGrant // proxy-side credential injections
+	Interactive      bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
+	TaskMode         string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
+	InteractiveStart string                  // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
+	SeedAutoTools    bool                    // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
+	ToolApprovals    string                  // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
+	// ApprovalExpiryAfter mirrors Config.ApprovalExpiryAfter (dispatchRun sets
+	// it from s.cfg) — the SAME ceiling the approval-expiry sweeper actually
+	// expires a PENDING approval at. Carried onto the sandbox env only when
+	// ToolApprovals=="hold" (WARDYN_APPROVAL_EXPIRY_AFTER, applyDispatchModeEnv)
+	// so wardyn-toolgate's -deadline default and agent-run's MCP_TOOL_TIMEOUT
+	// track the real ceiling instead of their own hardcoded literal (RL-1).
+	ApprovalExpiryAfter time.Duration
+	BedrockRef          *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
+	ExtraEnv            map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
 	// Toolchains is the requirements-driven subset of the toolchain-fidelity
 	// env this run needs (runToolchainNeeds over its workspaces' profiles).
 	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
@@ -63,15 +70,15 @@ type dispatchParams struct {
 	// full accommodation set — "unknown" must not break the proven CI and
 	// ad-hoc lanes. Non-nil = only what the scans actually detected lands.
 	Toolchains *toolchainNeeds
-	// MemberMounts, when its Roots are non-nil, marks this as a run against a
+	// UserMounts, when its Roots are non-nil, marks this as a run against a
 	// MEMBER-OWNED workspace and carries the operator/MDM-set roots that member's
 	// local_dir binds must resolve inside plus which sources those binds are
-	// (memberMountPosture, workspace_refs.go). Roots ride straight onto
-	// SandboxSpec.MemberMountRoots and Sources stamp runner.Mount.MemberAuthored,
+	// (userMountPosture, workspace_refs.go). Roots ride straight onto
+	// SandboxSpec.UserMountRoots and Sources stamp runner.Mount.MemberAuthored,
 	// so the driver re-checks every MEMBER-authored bind against the canonicalized
 	// real path as late as this process can. The ZERO value is every operator run
 	// — the driver then takes exactly today's path.
-	MemberMounts memberMountPosture
+	UserMounts userMountPosture
 	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
 	// ephemeral workspace source(s) declare — no host mount, no clone; the
 	// sandbox just needs the directory to exist. Surfaced as
@@ -127,8 +134,9 @@ type dispatchParams struct {
 // set RUNNING but SKIPS the agent Exec entirely (no `claude -p`) and does NOT
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
-// The sandbox comes up idle (the container holds open via `sleep infinity`) so a
-// human can `wardyn attach <id>` and drive it. A non-interactive run is
+// The sandbox comes up idle (the container holds open via the TERM-aware idle
+// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn attach
+// <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
 //
@@ -138,7 +146,7 @@ type dispatchParams struct {
 // reassertCeilingDenies then runs after it (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
 // below every WIDENING phase — see its own ordering argument). The ProxyConfig
-// snapshot then captures that final policy, and the run.policy.effective audit
+// snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
 //
@@ -196,13 +204,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
 	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
 	// ground-truth stream. wardynd knows the resolved confinement class here, so
-	// it records the one-time kernel.sensor.blind audit event itself — making the
+	// it records the one-time kernel.sensor.bypass audit event itself — making the
 	// gap VISIBLE regardless of whether the operator set the sidecar env var
 	// WARDYN_GROUNDTRUTH_BLIND_RUNS (that path is kept too). Matches the data
 	// shape the sidecar emits (reason="cc3-kata-host-ebpf-blind", run_id) so the
 	// downstream audit/correlation is identical.
 	if run.ConfinementClass == types.CC3 {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "kernel.sensor.blind",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "kernel.sensor.bypass",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": "cc3-kata-host-ebpf-blind", "run_id": run.ID.String(),
 			})))
@@ -228,6 +236,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// shape: one authoritative write, read by both the env half below and the
 	// ProxyConfig half further down, with no second variable to fall out of step.
 	p.PATBroker = !s.cfg.DisableGitPATBroker
+	// The same ceiling the approval-expiry sweeper actually expires a PENDING
+	// approval at, mirrored to a hold-mode run's own sandbox (see the field
+	// doc above) — set here rather than by each caller, for the same "one
+	// authoritative write" reason PATBroker is.
+	p.ApprovalExpiryAfter = approvalExpiryCeiling(s.cfg.ApprovalExpiryAfter)
 	// And the same stamp for the grants themselves, for the same reason. A
 	// git_pat grant for a BROKERED forge is withheld from the sandbox and audited
 	// as withheld (dropBrokeredGrants, below) — but ProxyConfig.PATGrants was
@@ -248,12 +261,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	patKept, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	p.GitPATGrants = patKept
 	droppedSSH, _ := applyDispatchModeEnv(sandboxEnv, run, p)
-	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
+	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.drop", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
 			"belt-and-braces: those denies are name-keyed, so under allow_all_egress a resident key could still have "+
 			"reached the forge by raw IP. Drop the github_token grant to push with your own key instead")
-	s.auditBrokeredGrantDrop(ctx, run.ID, "git_pat", "run.git_pat.brokered_forge", droppedPAT,
+	s.auditBrokeredGrantDrop(ctx, run.ID, "git_pat", "run.git_pat.drop", droppedPAT,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge's HTTPS hosts). Withholding the PAT is load-bearing, not "+
 			"belt-and-braces: wardyn-git-helper's refusal only binds a caller that goes through git, and those denies "+
@@ -263,6 +276,21 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
+	// The agent-side half of this run's autonomy level — see agentPolicyFor.
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.holdLane())
+	if apErr != nil {
+		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
+		// driver/substrate text (a Docker daemon socket error, a k8s API
+		// error) — logged here for the operator, never handed to the member
+		// as their FailureHint (the #445 class SD-4's guard exists to catch).
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
+			"this run was not launched: its runner's capabilities could not be confirmed, "+
+				"so whether it can deliver this run's managed settings (%s) is unknown",
+			agentPolicyBasis(run.AutonomyLevel, p.holdLane())))
+		return
+	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -336,7 +364,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// subscription sentinel, the Bedrock bearer and the artifact tokens are all
 	// consequences of that one decision, each failing the run closed on its own
 	// authoring failure. ok=false means the run is already marked FAILED.
-	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil, adoInject)
+	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil, adoInject, ceiling.bedrock)
 	if !ok {
 		return
 	}
@@ -350,7 +378,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy
 	// phases so nothing above can re-add a managed host. See
-	// confineGitBrokerEgress; the run.policy.effective audit below records the
+	// confineGitBrokerEgress; the run.policy.resolve audit below records the
 	// narrowed envelope, so the removal is disclosed, not silent.
 	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
@@ -382,7 +410,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
-	mounts := buildRunMounts(policy, llm, p.MemberMounts)
+	mounts := buildRunMounts(policy, llm, p.UserMounts)
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
@@ -421,18 +449,22 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
 		Drive:     p.Drive,
+		// The managed settings this run's autonomy level generates; nil for a
+		// run with none, or on a runner that cannot deliver them root-owned.
+		ManagedFiles: agentPolicy.files,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
 		// these roots — see runner/member_mount.go.
-		MemberMountRoots: p.MemberMounts.Roots,
+		UserMountRoots: p.UserMounts.Roots,
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
 		Interactive: p.Interactive,
 		ProxyConfig: runner.ProxyConfig{
-			RunToken:        p.RunToken,
-			ControlPlaneURL: s.cfg.ControlPlaneURL,
+			RunToken:          p.RunToken,
+			ControlPlaneURL:   s.cfg.ControlPlaneURL,
+			ControlPlaneCAPEM: s.cfg.ControlPlaneCAPEM,
 			// The proxy sidecar enforces THIS run's egress policy; a proxy
 			// without a policy fails closed (no egress at all).
 			Policy:    policy,
@@ -467,7 +499,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
-			ADOGrants: ado.gate,
+			ADOGrant: ado.gate,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
@@ -479,14 +511,19 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// nil on a GetSiteConfig error — fail safe, no lift).
 			InternalHosts:        siteCfg.InternalHosts,
 			UpstreamProxyNoProxy: siteCfg.UpstreamProxyNoProxy,
-			// Operator-configured internal model gateway(s) — WARDYN_ANTHROPIC_
-			// BASE_URL/WARDYN_OPENAI_BASE_URL, validated at boot. Empty => every
-			// brokered LLM route dials the vendor host, byte-identical to today.
-			LLMUpstreams: s.cfg.LLMGateways,
+			// Where this run's brokered LLM routes dial: the boot gateway(s) on the
+			// legacy path, the chosen model provider's own address on the provider
+			// path (see dispatchLLMPlan.llmUpstreams). Empty => the vendor host.
+			LLMUpstreams: plan.llmUpstreams,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
 			LLMUnavailableDetail: plan.llmUnavailableDetail,
+			// Nobody drives a task run, so a push its push_rules would hold
+			// for review is refused instead (push_hold.go). Set only when the
+			// policy has review paths, the one thing it changes: an older
+			// proxy refuses the key, and must not refuse every task run.
+			Unattended: !p.Interactive && policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
@@ -518,7 +555,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// field's own doc comment says NEVER logged, so the audited copy is a
 	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
 	// snapshot below references still carries the real values.
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
 		})))
@@ -564,6 +601,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
 	s.auditDriveMount(ctx, run.ID, p.Drive)
+	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
+	if !agentPolicy.execLess {
+		auditAgentPolicy()
+		auditAgentPolicy = nil
+	}
 
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
@@ -627,7 +669,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, auditAgentPolicy)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -666,14 +708,17 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // concrete runner substrate and must stay target-agnostic.
 const mainProcessExecID = "main-process"
 
-func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool) {
+// onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
+// exec-less runner that is the moment its container — and the managed files
+// delivered into it — first exists.
+func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, onAgentStarted func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
 		if byoi {
 			s.byoiSelftest(ctx, run, ref, false /* warn-only */)
 		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"sandbox_ref": ref,
 				"note":        "interactive run: no agent task exec'd; awaiting attach",
@@ -710,6 +755,9 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			s.failAndRevoke(ctx, run.ID, types.RunRunning, "the agent process could not be started in the sandbox: "+xerr.Error())
 			return
 		}
+		if onAgentStarted != nil {
+			onAgentStarted()
+		}
 		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
 		// (ExecInspect) across a wardynd restart: an idle-container exec run whose
 		// agent already exited must finalize + revoke, not strand RUNNING.
@@ -744,7 +792,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			// above uses, so a FAILED run never leaves a live agent behind.
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			s.failAndRevoke(ctx, run.ID, types.RunRunning,
-				"the agent started but its exec id could not be persisted, so the run could not be tracked: "+xerr.Error())
+				"the agent started but its exec id could not be persisted, so the run could not be tracked")
 			return
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
