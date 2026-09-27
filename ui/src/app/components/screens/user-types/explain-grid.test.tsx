@@ -11,6 +11,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+// F2: a refused add shows the server's sentence inside the dialog, never a
+// toast (permissions.test.tsx's own pattern for the same spy).
+const toastErrorMock = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { error: (...a: unknown[]) => toastErrorMock(...a), success: vi.fn(), warning: vi.fn() },
+}));
+
 const explainMock = vi.fn();
 const getPermissionsMock = vi.fn();
 const deleteGrantMock = vi.fn();
@@ -90,6 +97,7 @@ beforeEach(() => {
   getPermissionsMock.mockReset();
   deleteGrantMock.mockReset();
   upsertGrantMock.mockReset();
+  toastErrorMock.mockReset();
   listWorkspacesMock.mockReset().mockResolvedValue([{ id: "ws-1", name: "Portfolio tools" }]);
   getModelProvidersMock
     .mockReset()
@@ -364,13 +372,22 @@ describe("ExplainGrid — several audiences (G-5)", () => {
     expect(within(await row("workspace", "ws-2")).getByText(EXPLAIN.ONLY("ann, bo and cy"))).toBeInTheDocument();
   });
 
-  it("four or more names the first two and counts the rest, with the full list a hover and an accessible name away", async () => {
+  it("four or more names the first two and counts the rest, with the full list a mouse hover and, as real sr-only text, a screen reader away", async () => {
     const names = ["ann", "bo", "cy", "dee"];
     answer([{ kind: "workspace", value: "ws-2", state: "not_available", restricted: true }], audienceGrants(names));
     renderGrid();
-    const visible = await within(await row("workspace", "ws-2")).findByText(EXPLAIN.ONLY("ann, bo and 2 more"));
+    const cellEl = within(await row("workspace", "ws-2"));
+    // The truncated text: a mouse-only hover (title), no accessible name of
+    // its own (F1 — an aria-label here couldn't reach a keyboard or screen
+    // reader user, since the span is plain and non-focusable).
+    const visible = await cellEl.findByText(EXPLAIN.ONLY("ann, bo and 2 more"));
     expect(visible).toHaveAttribute("title", names.join(", "));
-    expect(visible).toHaveAttribute("aria-label", EXPLAIN.ONLY(names.join(", ")));
+    expect(visible).toHaveAttribute("aria-hidden", "true");
+    expect(visible).not.toHaveAttribute("aria-label");
+    // The full, untruncated list: real text content (sr-only), found the same
+    // way a screen reader's text query would find it — not an attribute.
+    const full = cellEl.getByText(EXPLAIN.ONLY(names.join(", ")));
+    expect(full).toHaveClass("sr-only");
   });
 });
 
@@ -428,5 +445,22 @@ describe("ExplainGrid — Add (G-7)", () => {
     expect(await screen.findByText(PERM.TYPE_DENY_TITLE)).toBeInTheDocument();
     expect(screen.getByText(PERM.TYPE_DENY_BODY)).toBeInTheDocument();
     expect(upsertGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a refused add shows the server's sentence in the dialog, which stays open (F2)", async () => {
+    answer([{ kind: "agent", value: "*", state: "everyone" }]);
+    renderGrid();
+    await row("agent", "*");
+    await userEvent.click(screen.getByRole("button", { name: EXPLAIN.ADD }));
+    const dialog = await screen.findByRole("dialog");
+    upsertGrantMock.mockRejectedValue(new HttpError(403, "security admins only"));
+    await userEvent.type(within(dialog).getByLabelText(KIND.agent.valueLabel), "claude-code");
+    await userEvent.click(within(dialog).getByRole("button", { name: PERM.ADD_CTA }));
+
+    // The packet's "Refused" state (§2): the server's own sentence, verbatim,
+    // in the dialog — never a toast, and the dialog does not close.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("security admins only");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 });

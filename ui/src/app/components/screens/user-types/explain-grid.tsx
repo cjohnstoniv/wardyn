@@ -54,15 +54,19 @@ const same = (a: string, b: string) => a.trim() === b.trim();
 // grant or restriction gives it a row beyond "*".
 const HIDE_WHEN_DEFAULT_ONLY: CapabilityKind = "integration";
 
-// G-5: "only A and B" (two), "only A, B and C" (three); four or more names the
-// first two and counts the rest. `full` is every audience, comma-joined and
-// unelided — the hover title and, via aria-label, what a keyboard user reads.
-function onlyPhrase(who: string[]): { visible: string; full: string } {
+// G-5: "only A and B" (two), "only A, B and C" (three) name every audience —
+// nothing is elided, so there is nothing more to disclose. Four or more names
+// the first two and counts the rest; `elided` says so, and `full` (every
+// audience, comma-joined) is then what an sr-only twin renders as real text —
+// a keyboard or screen-reader user reaches it the same way a sighted mouse
+// user reaches the truncated span's `title`, not through an aria-label a
+// plain, non-focusable span can't expose (F1, FINAL-PR-907.md).
+function onlyPhrase(who: string[]): { visible: string; full: string; elided: boolean } {
   const full = who.join(", ");
-  if (who.length === 1) return { visible: EXPLAIN.ONLY(who[0]), full };
-  if (who.length === 2) return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_LIST(who[0], who[1], "")), full };
-  if (who.length === 3) return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_LIST(who[0], who[1], who[2])), full };
-  return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_MORE(who[0], who[1], String(who.length - 2))), full };
+  if (who.length === 1) return { visible: EXPLAIN.ONLY(who[0]), full, elided: false };
+  if (who.length === 2) return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_LIST(who[0], who[1], "")), full, elided: false };
+  if (who.length === 3) return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_LIST(who[0], who[1], who[2])), full, elided: false };
+  return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_MORE(who[0], who[1], String(who.length - 2))), full, elided: true };
 }
 
 export function ExplainGrid({ subject, name, disabled }: { subject: string; name: string; disabled: boolean }) {
@@ -193,16 +197,22 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
                     {phrase && (
                       <>
                         {" · "}
-                        {/* G-5: the full audience list is a hover (title) and
-                            an accessible name (aria-label) away, unelided,
-                            even when the visible text counts the rest. */}
-                        <span
-                          className="text-xs text-muted-foreground"
-                          title={phrase.full}
-                          aria-label={EXPLAIN.ONLY(phrase.full)}
-                        >
-                          {phrase.visible}
-                        </span>
+                        {phrase.elided ? (
+                          <>
+                            {/* F1: the truncated text is a mouse-only hover
+                                (title); it carries no accessible name of its
+                                own (aria-hidden), so a keyboard or
+                                screen-reader user reaches the real,
+                                untruncated sentence below instead — never a
+                                truncated one. */}
+                            <span className="text-xs text-muted-foreground" title={phrase.full} aria-hidden="true">
+                              {phrase.visible}
+                            </span>
+                            <span className="sr-only">{EXPLAIN.ONLY(phrase.full)}</span>
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{phrase.visible}</span>
+                        )}
                       </>
                     )}
                   </span>

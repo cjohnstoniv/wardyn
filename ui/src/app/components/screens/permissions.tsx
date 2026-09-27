@@ -22,6 +22,7 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { HttpError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -165,10 +166,20 @@ function Fact({ icon: Icon, children }: { icon: React.ElementType; children: Rea
 
 // A consequence note under a kind. `tone` carries the meaning: plain for the
 // advisory/posture facts, red for the two that bite (a deny with the switch
-// off, and enforcing with nothing granted).
-function Note({ tone = "plain", children }: { tone?: "plain" | "red"; children: React.ReactNode }) {
+// off, and enforcing with nothing granted) — and, with `role="alert"`, G-7's
+// refused-add sentence in the Add form.
+function Note({
+  tone = "plain",
+  role,
+  children,
+}: {
+  tone?: "plain" | "red";
+  role?: string;
+  children: React.ReactNode;
+}) {
   return (
     <p
+      role={role}
       className={cn(
         "mt-2 max-w-[78ch] rounded-lg px-3 py-2 text-xs leading-relaxed",
         tone === "red" ? "bg-danger-subtle text-danger" : "bg-muted text-muted-foreground",
@@ -633,6 +644,10 @@ export function AddGrantForm({
   const [saving, setSaving] = React.useState(false);
   const [duplicate, setDuplicate] = React.useState(false);
   const [confirmWall, setConfirmWall] = React.useState(false);
+  // G-7's "Refused" state: the server's own sentence, in the form, verbatim —
+  // never a toast, so the caller never has to look away from the dialog they
+  // are still looking at (the dialog itself never closes on a refusal).
+  const [error, setError] = React.useState<string | null>(null);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -641,6 +656,7 @@ export function AddGrantForm({
   const submit = async () => {
     setSaving(true);
     setDuplicate(false);
+    setError(null);
     try {
       const res = await api.upsertGrant({
         subject_type: subjectType,
@@ -655,7 +671,7 @@ export function AddGrantForm({
       setValue("");
       onAdded();
     } catch (e) {
-      toast.error("Failed to add grant", { description: getErrorMessage(e) });
+      setError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -759,6 +775,13 @@ export function AddGrantForm({
         </Button>
         {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
       </div>
+      {/* G-7's "Refused" state (packet §2): the server's own sentence, in the
+          form the caller is still looking at. The dialog never closes on it. */}
+      {error && (
+        <Note tone="red" role="alert">
+          {error}
+        </Note>
+      )}
       <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
         <AlertDialogContent>
           <AlertDialogHeader>

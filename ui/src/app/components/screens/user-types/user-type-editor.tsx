@@ -62,6 +62,9 @@ export function UserTypeEditor({
   const [name, setName] = React.useState(type?.name ?? "");
   const [description, setDescription] = React.useState(type?.description ?? "");
   const [priority, setPriority] = React.useState(type ? String(type.priority) : "0");
+  // F3 (FINAL-PR-907.md): a new type only — an existing one's id never
+  // changes (ID_HINT says so), so there is nothing here to edit once saved.
+  const [id, setId] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -73,6 +76,7 @@ export function UserTypeEditor({
         name: name.trim(),
         description: description.trim(),
         priority: Number(priority) || 0,
+        ...(!type && id.trim() ? { id: id.trim() } : {}),
       };
       if (type) {
         await api.updateUserType(type.id, input);
@@ -115,6 +119,25 @@ export function UserTypeEditor({
           />
         </Field>
       </div>
+
+      {/* Packet §3 "Editor · a new type": Id sits right under Name. An
+          existing type's id never changes, so this field only exists to be
+          set once, before the first save. */}
+      {!type && (
+        <div className="mt-4">
+          <Field label={UT.FIELD_ID} htmlFor="user-type-id" hint={UT.ID_HINT}>
+            <Input
+              id="user-type-id"
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              disabled={disabled}
+              className="font-mono"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+        </div>
+      )}
 
       <div className="mt-4">
         <Field label={UT.FIELD_DESCRIPTION} htmlFor="user-type-description" hint={UT.DESCRIPTION_HINT}>

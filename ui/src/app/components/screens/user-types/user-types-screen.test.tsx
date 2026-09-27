@@ -149,6 +149,29 @@ describe("UserTypesScreen — create", () => {
     expect(screen.queryByTestId("user-type-editor")).not.toBeInTheDocument();
   });
 
+  it("F3: offers an Id field, sends it only when set, and never renders it once the type is saved", async () => {
+    renderScreen([STANDARD]);
+    await screen.findByText(STANDARD.name);
+    await userEvent.click(screen.getByRole("button", { name: UT.NEW_CTA }));
+    expect(screen.getByText(UT.ID_HINT)).toBeInTheDocument();
+
+    createUserTypeMock.mockResolvedValue(type());
+    listUserTypesMock.mockResolvedValue([STANDARD, type()]);
+    await userEvent.type(screen.getByLabelText(UT.FIELD_NAME), "Portfolio manager");
+    await userEvent.type(screen.getByLabelText(UT.FIELD_ID), "portfolio-manager");
+    await userEvent.click(screen.getByRole("button", { name: UT.SAVE }));
+
+    expect(createUserTypeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Portfolio manager", id: "portfolio-manager" }),
+    );
+
+    // An existing type's id never changes (ID_HINT says so): its editor has
+    // no Id field to show.
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} Portfolio manager` }));
+    expect(await screen.findByTestId("user-type-editor")).toBeInTheDocument();
+    expect(screen.queryByLabelText(UT.FIELD_ID)).not.toBeInTheDocument();
+  });
+
   it("a save failure keeps the editor open and shows the server's own message", async () => {
     renderScreen([STANDARD]);
     await screen.findByText(STANDARD.name);

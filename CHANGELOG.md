@@ -618,7 +618,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   profile assigned to it, and a "What this type gets" grid answering every resource family for that
   type (everyone / this type / blocked / admins only / not available), backed by
   `GET /permissions/explain`. A restricted resource the type isn't listed for names who it is for, a
-  block carries the wall note, and a row written for the type can be removed from the grid. The
+  block carries the wall note, and a row written for the type can be removed from the grid. Each
+  family carries an Add button that opens Permissions' own "Add a grant" dialog with Who and
+  Capability fixed, and `GET /permissions/explain` rows now carry a non-secret display `label` for a
+  git provider or model provider value (its kind and organisation or host, or its own name), so a
+  security admin reads the same words an operator does instead of an id. The
   Permissions, Governance and Drive-allocation "Who" pickers now offer "User type" alongside
   User/Group/Everyone, with a closed picker of the org's types rather than free text, and an
   existing row names the type by its name; adding a deny for a user type asks to confirm first,

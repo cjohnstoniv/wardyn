@@ -31,11 +31,12 @@ compares it with its namespace in both directions.
   in its place. Any other value shows as written, in mono.
 - A restricted value this type is not listed for reads `Not available`, then ` · `, then `ONLY(who)`.
   `who` is each audience of the value's allow rows: a type by its name (`AVAILABILITY.CHIP_TYPE`),
-  a group as `AVAILABILITY.CHIP_GROUP`, and a person as `AVAILABILITY.CHIP_USER`. One or two audiences
-  read in full; three read as `WHO_LIST`; four or more read as `WHO_MORE`, naming the first two and
-  counting the rest (G-5). The full, unelided list is always a hover (the row's `title`) and an
-  accessible name (`aria-label`) away, so a keyboard or screen-reader user never loses an audience the
-  visible text counted instead of naming.
+  a group as `AVAILABILITY.CHIP_GROUP`, and a person as `AVAILABILITY.CHIP_USER`. One audience reads by
+  itself; two or three read as `WHO_LIST`; four or more read as `WHO_MORE`, naming the first two and
+  counting the rest (G-5). Only the elided (four-or-more) case has anything left to disclose: the
+  full, unelided list is a hover away (the truncated span's `title`) for a mouse user, and a same-DOM
+  `sr-only` span carries it as real text for a keyboard or screen-reader user — never only an
+  attribute a plain, non-focusable span can't expose.
 - Under the first family that has a Blocked row there is one amber note: `WALL_HEAD` in bold, then
   `WALL_BODY`.
 - A row decided by a grant written for this type carries `REMOVE`. It opens the Permissions
@@ -44,7 +45,8 @@ compares it with its namespace in both directions.
 - Every family carries an `ADD` button that opens Permissions' own "Add a grant" dialog
   (`permissions.tsx`'s `AddGrantForm`), with Who (this type) and Capability (the family) fixed and
   read-only — the same strings, including `PERM.TYPE_DENY_TITLE`/`_BODY` before a type-level deny,
-  and the same wire write. The grid reloads after a save (G-7).
+  and the same wire write. The grid reloads after a save. A refused write shows the server's own
+  sentence inside the dialog, which stays open — never a toast (G-7).
 - Under the grid, `LEGEND` is the one true statement about the tones above, and `FOOTER_OTHER_SIDE`
   — packet A's own second footer, kept verbatim — is true now that Add exists: adding a row here is
   the same grant Permissions would write (G-6).
@@ -117,8 +119,8 @@ freezes exactly as shipped.
 | `DESCRIPTION_HINT` | editor field, under Description | Shown to a person of this type on their Getting started page. |
 | `FIELD_PRIORITY` | editor field | Priority |
 | `PRIORITY_HINT` | editor field, under Priority | Breaks a sign-in tie between two custom types — higher wins. Standard user never takes part in a tie. |
-| `FIELD_ID` | editor field | Id |
-| `ID_HINT` | editor field, under Id | Role mappings and grants use this to refer to the type. It's made from the name unless you set it, and it can't change once saved. |
+| `FIELD_ID` | editor field, new type only | Id |
+| `ID_HINT` | editor field, under Id, new type only | Role mappings and grants use this to refer to the type. It's made from the name unless you set it, and it can't change once saved. |
 | `SAVE` | editor button | Save |
 | `CANCEL` | editor button | Cancel |
 | `DELETE_CONFIRM(name)` | delete, confirm | Delete {name}? If a role mapping, grant, assignment, drive grant or run still names it, the delete is refused and nothing changes. |
