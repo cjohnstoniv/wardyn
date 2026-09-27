@@ -24,6 +24,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
+  run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
+  answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the
+  UI gateway's launcher then failed with "container is not running". agent-vscode inherited the
+  stub when it moved onto agent-base; agent-novnc always had it. The stub now implements mode 3
+  itself: it prepares the workspace, writes the prep-done marker, and idles until TERM or INT.
+
 - **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
   recovers a KILLED run whose kill tail never finished (#710).** That route is
   the sweep's only caller: it does not run at boot or on a timer, so recovery
