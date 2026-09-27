@@ -683,6 +683,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   host. `make lint` gains `scripts/check-fixture-dates.sh`, which fails a test file that gains a
   literal date.
 
+- A managed laptop whose audit table is reset so that its seq restarts, and which then writes up to or
+  past its old forwarding cursor before the forwarder runs, no longer halts forwarding with a 422
+  `chain_mismatch` (#520). The forwarder's cursor now keeps the row hash the organisation
+  acknowledged beside the seq (`org_federation.last_forwarded_row_hash`, migration
+  `0086_org_federation_row_hash`); when the laptop's row at that seq is gone or carries another hash,
+  the forwarder resends from the new genesis and the organisation records a
+  `device.audit.chain_reset`. A laptop upgrading onto this migration resends once from the start;
+  the organisation skips the rows it already holds.
+
 ### Added
 
 - **Console e2e suite hardening (#728).** Every spec built on `fixtures.ts`'s shared `test` now
