@@ -5,13 +5,15 @@
 -- L1a): NULL for a live run. The backfill from updated_at is approximate for
 -- historical rows (updated_at has several unrelated writers) but is accepted
 -- for history — every writer from this migration forward stamps it exactly at
--- the terminal transition. The partial indexes cover the landing page's
--- end-time ordering and its per-creator variant without indexing the (much
--- larger, and irrelevant to this) NULL/live set.
+-- the terminal transition.
+--
+-- No index on the plain column: the landing page's ordering and windowing
+-- read `CASE WHEN lost_reason='ended' THEN lost_at ELSE ended_at END`, not
+-- ended_at alone, so a plain (or partial) btree on ended_at cannot serve
+-- either read — confirmed by EXPLAIN ANALYZE against a 200k-row seed. Add an
+-- expression index on that CASE if a real deployment's EXPLAIN ever asks for
+-- one; today's owner-scoped scan already rides agent_runs_created_by_idx.
 ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
 
 UPDATE agent_runs SET ended_at = updated_at
  WHERE ended_at IS NULL AND state IN ('COMPLETED', 'FAILED', 'KILLED', 'STOPPED', 'ARCHIVED');
-
-CREATE INDEX IF NOT EXISTS agent_runs_ended_at_idx ON agent_runs (ended_at DESC) WHERE ended_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS agent_runs_created_by_ended_at_idx ON agent_runs (created_by, ended_at DESC) WHERE ended_at IS NOT NULL;

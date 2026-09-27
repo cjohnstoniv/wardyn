@@ -17,7 +17,7 @@ import (
 )
 
 // killedVisibleFor is how long a KILLED run stays visible on the landing page
-// by default (H-2): a run that ended KILLED longer ago than this is hidden
+// by default: a run that ended KILLED longer ago than this is hidden
 // unless the caller opts in with include_killed=1. Fixed, not configurable —
 // it is a display default, not a retention policy.
 const killedVisibleFor = 24 * time.Hour
@@ -27,16 +27,16 @@ const killedVisibleFor = 24 * time.Hour
 // status filter, no age window, killed rows still subject to killedVisibleFor).
 type RunFilter struct {
 	// Owner exact-matches created_by. Empty = every creator. The api layer
-	// resolves ?owner=me|all (and the view=user H-4 force) to this before
+	// resolves ?owner=me|all (and the view=user owner force) to this before
 	// calling down — RunFilter itself has no opinion on who "me" is.
 	Owner string
 	// Statuses is a subset of "active", "ended", "failed", "killed" (OR'd
-	// together); empty = no status filter. "needs" is #1197 L1b's (it reads
-	// the attention projection this lane does not compute) and is rejected at
-	// the api layer, never reaches here.
+	// together); empty = no status filter. "needs" reads an attention
+	// projection this lane does not compute, and is rejected at the api
+	// layer, never reaches here.
 	Statuses []string
 	// EndedWithin bounds ended rows' age; <= 0 means "all" (unbounded). Live
-	// rows are NEVER windowed by this, regardless of value (H-2).
+	// rows are NEVER windowed by this, regardless of value.
 	EndedWithin time.Duration
 	// IncludeKilled disables killedVisibleFor's default hide.
 	IncludeKilled bool
@@ -55,11 +55,11 @@ type RunFilter struct {
 // "active" predicate the status filter's "active" value selects.
 const runLiveSQL = `(state = ANY(%[1]s) AND lost_reason IS DISTINCT FROM 'ended')`
 
-// runEndTimeSQL is F1197-L1-F4's correction: a lease-ended run stays RUNNING
-// until the ended-run grace stops it, so ITS end time is lost_at (the lease
-// end), never ended_at (which that later grace stop would set, moving "ended
-// at its end time" to the wrong moment). Every other terminal row's end time
-// is ended_at.
+// runEndTimeSQL corrects a lease-ended run's end time: it stays RUNNING until
+// the ended-run grace stops it, so ITS end time is lost_at (the lease end),
+// never ended_at (which that later grace stop would set, moving "ended at
+// its end time" to the wrong moment). Every other terminal row's end time is
+// ended_at.
 const runEndTimeSQL = `CASE WHEN lost_reason = 'ended' THEN lost_at ELSE ended_at END`
 
 // nonTerminalStateList renders types.NonTerminalRunStates as the []string the
@@ -144,7 +144,7 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 }
 
 // ageWindowSQL is TRUE for a row the ended_within window keeps: every live
-// row (H-2: never windowed) plus an ended row whose end time falls inside the
+// row (never windowed) plus an ended row whose end time falls inside the
 // window. secsParam is a nullable int placeholder — NULL means "all" (no
 // window at all).
 func ageWindowSQL(nonTerminal, secsParam string) string {
@@ -163,11 +163,11 @@ func killedVisibleSQL(includeParam, killedSecsParam string) string {
 		includeParam, runEndTimeSQL, runEndTimeSQL, killedSecsParam)
 }
 
-// runOrderSQL is the landing page's order (design.md §3.1 / attention-decision
-// F1's "needs first is client sectioning"): every live row before every ended
-// row, live rows by created_at DESC, ended rows by their end time DESC, id
-// DESC as the final tie-break so two rows with an identical timestamp still
-// sort deterministically across pages.
+// runOrderSQL is the landing page's order — "needs first" is a client-side
+// sectioning of this same live set, not a separate server order: every live
+// row before every ended row, live rows by created_at DESC, ended rows by
+// their end time DESC, id DESC as the final tie-break so two rows with an
+// identical timestamp still sort deterministically across pages.
 func runOrderSQL(nonTerminal string) string {
 	live := fmt.Sprintf(runLiveSQL, nonTerminal)
 	return fmt.Sprintf("NOT %[1]s ASC, CASE WHEN %[1]s THEN created_at ELSE %[2]s END DESC, id DESC", live, runEndTimeSQL)
@@ -204,10 +204,13 @@ type RunsFilteredPager interface {
 // Compile-time assertion: PG satisfies RunsFilteredPager.
 var _ RunsFilteredPager = PG{}
 
-// ListRunsFiltered is ListRunsPage narrowed and reordered per f. Both partial
-// indexes migration 0092 adds (agent_runs_ended_at_idx and its created_by
-// sibling) back the ended-row half of runOrderSQL; the live half rides the
-// pre-existing agent_runs_state_idx / agent_runs_created_at_idx.
+// ListRunsFiltered is ListRunsPage narrowed and reordered per f. The
+// owner-scoped read rides the pre-existing agent_runs_created_by_idx
+// (EXPLAIN ANALYZE against a 200k-row seed: a bitmap index scan there, then
+// an in-memory filter and sort); an org-wide read is a parallel sequential
+// scan with a top-N heapsort. Both are linear in the caller's history, which
+// the spec accepted — see migration 0092's own doc for why no ended_at index
+// backs the CASE-expression ordering/window this function builds.
 func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.AgentRun, error) {
 	var args []any
 	nonTerminal := bindArg(&args, nonTerminalStateList())
