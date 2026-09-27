@@ -209,6 +209,7 @@ var decryptSites = map[string]string{
 	"internal/secretstore/pg/convert.go|ageDecrypt|age.Decrypt":           "the one-time conversion of a pre-envelope (age) row to envelope v1",
 	"internal/secretstore/pg/external.go|Store.openExternal|External.Get": "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
 	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap": "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
+	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open": "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",
 }
 
 // testSupportFiles are the files the scan skips: test support that calls a

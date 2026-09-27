@@ -577,6 +577,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
 	// it runs on the failure path too (runStatusDetailWriter has the contract).
+	// The proxy config is stored before any proxy holds it (#1176): a revive
+	// rebuilds the proxy from this row alone.
+	if err := s.keepRunProxyConfig(ctx, run.ID, spec.ProxyConfig); err != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy config could not be stored")
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		return
+	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = onWaiting
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)

@@ -93,11 +93,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (2) wardyn-proxy sidecar: attached to the per-run internal network now;
-	// the control-plane-facing network is joined after create. It carries the
-	// run token + control-plane URL as non-secret env (the token is verifiable
-	// but not usable outside the platform, per runner.ProxyConfig).
+	// the control-plane-facing network is joined after create. Its config
+	// reaches it on stdin, never in its environment (#1176).
+	proxyEnvs, proxyCfg, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
+	if err != nil {
+		return fail(err)
+	}
 	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
-		proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort), netip.Addr{})
+		proxyEnvs, proxyCfg, netip.Addr{})
 	if err != nil {
 		return fail(err)
 	}
@@ -359,8 +362,8 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 
 // EndSandbox is the lease end (runner.SandboxEnder): stop the agent as
 // StopSandbox does but leave the container in place, so its writable layer
-// (the checkout, the harness transcript) survives, then stop the proxy
-// sidecar. Agent first, as StopSandbox orders it, so a recorder flushing on
+// (the checkout, the harness transcript) survives, then stop and remove the
+// proxy sidecar (stopProxy). Agent first, as StopSandbox orders it, so a recorder flushing on
 // SIGTERM still delivers through the proxy. The per-run network stays for
 // teardown to remove with the agent. Fails closed: a run id it cannot resolve
 // is an error, never a success that left the proxy up.
@@ -372,11 +375,10 @@ func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
 	return d.stopProxy(ctx, ref)
 }
 
-// StopProxy stops the agent ref's proxy sidecar and nothing else
-// (runner.ProxyStopper): the agent keeps running with no network path. The
-// stopped container is kept, because its env is where the run's rendered
-// proxy config (and the MITM CA key inside it) rests and ReplaceProxy reads it
-// back from there; teardown removes it. Fails closed like EndSandbox: when the
+// StopProxy stops and removes the agent ref's proxy sidecar and nothing else
+// (runner.ProxyStopper): the agent keeps running with no network path. A
+// revive rebuilds the proxy from the control plane's stored config, so no
+// stopped container is kept for it (#1176). Fails closed like EndSandbox: when the
 // proxy can be neither stopped nor killed, the agent is stopped too (kept, not
 // removed), so no work runs while its egress is unconfirmed, and the proxy's
 // error is still returned (#1060).
@@ -393,9 +395,11 @@ func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 }
 
 // stopProxy stops the agent ref's proxy sidecar, escalating to SIGKILL when
-// the graceful stop fails (#1060). Neither call removes the container, so its
-// env survives for ReplaceProxy. A kill refused because the proxy is already
-// stopped is that stop confirmed.
+// the graceful stop fails (#1060), then removes it: the graceful stop first
+// lets it flush its last decisions, and nothing a revive needs is in it
+// (#1176). A kill refused because the proxy is already stopped is that stop
+// confirmed; a missing proxy is already gone. A failed remove is an error, so
+// the caller's re-assert retries it.
 func (d *Driver) stopProxy(ctx context.Context, ref string) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
@@ -404,11 +408,16 @@ func (d *Driver) stopProxy(ctx context.Context, ref string) error {
 	name := proxyContainerName(id)
 	timeout := int(stopTimeout.Seconds())
 	_, err = d.cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
-	if err == nil || isNotFound(err) {
+	if isNotFound(err) {
 		return nil
 	}
-	if _, kerr := d.cli.ContainerKill(ctx, name, client.ContainerKillOptions{Signal: "KILL"}); kerr != nil && !isNotFound(kerr) && !isNotRunning(kerr) {
-		return fmt.Errorf("docker: stop proxy: %w; kill proxy: %w", err, kerr)
+	if err != nil {
+		if _, kerr := d.cli.ContainerKill(ctx, name, client.ContainerKillOptions{Signal: "KILL"}); kerr != nil && !isNotFound(kerr) && !isNotRunning(kerr) {
+			return fmt.Errorf("docker: stop proxy: %w; kill proxy: %w", err, kerr)
+		}
+	}
+	if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: remove stopped proxy: %w", err)
 	}
 	return nil
 }

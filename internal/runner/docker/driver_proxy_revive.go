@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
@@ -20,23 +21,34 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// proxyConfigEnv is the proxy sidecar's config variable: the one place its
-// rendered config, and the per-run MITM CA key inside it, rests.
-const proxyConfigEnv = "WARDYN_PROXY_CONFIG_JSON"
+// proxyConfigStdinEnv tells the proxy sidecar its config arrives on stdin
+// (#1176): the rendered config (run token, per-run MITM CA key, upstream-proxy
+// credential) is written there once at start and lives only in the proxy's
+// memory, so neither the container's config nor its environment holds it.
+const proxyConfigStdinEnv = "WARDYN_PROXY_CONFIG_STDIN"
+
+// proxyConfigWriteTimeout bounds the stdin write of the config to a proxy.
+const proxyConfigWriteTimeout = 30 * time.Second
 
 var _ runner.ProxyReviver = (*Driver)(nil)
 var _ runner.SandboxStarter = (*Driver)(nil)
 
 // startProxy creates the wardyn-proxy sidecar for runID on the per-run
-// network, joins it to the control-plane-facing network and starts it. ip,
-// when valid, is the address it must take on the per-run network (the one the
-// agent's hosts entry pins). On any failure it removes what it created.
-func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, ip netip.Addr) (string, error) {
+// network, joins it to the control-plane-facing network, starts it and hands
+// it cfgJSON on stdin. ip, when valid, is the address it must take on the
+// per-run network (the one the agent's hosts entry pins). On any failure it
+// removes what it created.
+func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, cfgJSON []byte, ip netip.Addr) (string, error) {
 	cfg := &container.Config{
 		Image:    d.cfg.ProxyImage,
 		Hostname: "wardyn-proxy",
 		Labels:   labels,
 		Env:      env,
+		// stdin is the config's only way in: open, and closed for good once
+		// the one write below detaches, so a later start of this container
+		// reads nothing and the proxy exits non-zero.
+		OpenStdin: true,
+		StdinOnce: true,
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
 		cfg.Entrypoint = []string{"/usr/local/bin/wardyn-proxy"}
@@ -54,6 +66,9 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		ReadonlyRootfs: false,
 		Tmpfs:          map[string]string{"/tmp": "rw,nosuid,nodev,noexec,size=64m"},
 		AutoRemove:     false,
+		// Never restarted by the daemon: a restart would re-run it with no
+		// config (stdin is gone), and only the control plane starts a proxy.
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
 		// Map host.docker.internal to the docker host gateway so the brokered
 		// control-plane forward (resolveTrustedURL) can reach a wardynd running on
 		// the host in host mode. Docker Desktop injects this alias automatically;
@@ -100,11 +115,34 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		remove()
 		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	if _, err := d.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+	if err := d.startWithConfig(ctx, resp.ID, cfgJSON); err != nil {
 		remove()
-		return "", fmt.Errorf("docker: start proxy: %w", err)
+		return "", err
 	}
 	return resp.ID, nil
+}
+
+// startWithConfig attaches to the created proxy's stdin, starts it, writes
+// cfgJSON there and closes it: the proxy reads its config to EOF. Attaching
+// before the start is what `docker run -i` does, so no byte is written before
+// the proxy's stdin exists.
+func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte) error {
+	att, err := d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true})
+	if err != nil {
+		return fmt.Errorf("docker: attach proxy stdin: %w", err)
+	}
+	defer att.Close()
+	if _, err := d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("docker: start proxy: %w", err)
+	}
+	_ = att.Conn.SetWriteDeadline(time.Now().Add(proxyConfigWriteTimeout))
+	if _, err := att.Conn.Write(cfgJSON); err != nil {
+		return fmt.Errorf("docker: write proxy config: %w", err)
+	}
+	if err := att.CloseWrite(); err != nil {
+		return fmt.Errorf("docker: close proxy stdin: %w", err)
+	}
+	return nil
 }
 
 // EnsureProxyImage — see runner.ProxyReviver. ReplaceProxy also ensures the
@@ -115,38 +153,19 @@ func (d *Driver) EnsureProxyImage(ctx context.Context) error {
 	return d.ensureImage(ctx, d.cfg.ProxyImage, func() {})
 }
 
-// ProxyConfig reads the agent ref's proxy sidecar's rendered config back from
-// its env (runner.ProxyReviver). The sidecar may be running or stopped (a
-// lost run's, see StopProxy); a missing one is an error, because nothing
-// else holds the per-run MITM CA the sandbox trusts.
-func (d *Driver) ProxyConfig(ctx context.Context, ref string) ([]byte, error) {
-	id, err := d.proxyRunID(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	res, err := d.cli.ContainerInspect(ctx, proxyContainerName(id), client.ContainerInspectOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("docker: inspect proxy: %w", err)
-	}
-	if res.Container.Config != nil {
-		for _, kv := range res.Container.Config.Env {
-			if v, ok := strings.CutPrefix(kv, proxyConfigEnv+"="); ok {
-				return []byte(v), nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("docker: proxy of agent %s carries no %s", ref, proxyConfigEnv)
-}
+// CanReplaceProxy — see runner.ProxyReviver: Docker always can.
+func (d *Driver) CanReplaceProxy(context.Context, string) error { return nil }
 
-// ReplaceProxy swaps the agent ref's proxy sidecar for a new one running
-// cfgJSON on the current proxy image (runner.ProxyReviver). The old sidecar
-// is removed first: it holds the name, and its address is the one the agent
-// pins. The new one takes that address, read from the agent's own hosts entry
-// (immutable, and still there after a stopped proxy gave its address back),
-// and re-joins the control-plane-facing network as at create. Every check
-// that can fail without touching the old sidecar runs before the remove. A
-// new one that does not start leaves the old one restored, stopped (see
-// restoreProxy).
+// ReplaceProxy swaps the agent ref's proxy sidecar, if it still has one, for
+// a new one running cfgJSON on the current proxy image (runner.ProxyReviver).
+// The old sidecar is removed first: it holds the name, and its address is the
+// one the agent pins. The new one takes that address, read from the agent's
+// own hosts entry (immutable, and still there after the old proxy gave its
+// address back), carries the agent's labels as a proxy, and re-joins the
+// control-plane-facing network as at create. Every check that can fail
+// without touching the old sidecar runs before the remove. Nothing is put
+// back when the new one does not start: the config is the control plane's,
+// not the container's (#1176), so a later revive rebuilds from it.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
@@ -166,13 +185,9 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if !ip.IsValid() {
 		return fmt.Errorf("docker: agent %s pins no proxy address", ref)
 	}
-	old, err := d.cli.ContainerInspect(ctx, proxyContainerName(id), client.ContainerInspectOptions{})
-	if err != nil {
-		return fmt.Errorf("docker: inspect proxy: %w", err)
-	}
-	var labels map[string]string
-	if old.Container.Config != nil {
-		labels = old.Container.Config.Labels
+	var agentLabels map[string]string
+	if agent.Container.Config != nil {
+		agentLabels = agent.Container.Config.Labels
 	}
 	if err := d.ensureImage(ctx, d.cfg.ProxyImage, func() {}); err != nil {
 		return err
@@ -181,35 +196,18 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("%w: docker: remove proxy: %w", runner.ErrProxyReplaceFailed, err)
 	}
-	if _, err := d.startProxy(ctx, id, labels, proxyEnvFromJSON(id, cfgJSON, cp.ControlPlaneURL), ip); err != nil {
-		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, d.restoreProxy(ctx, id, old.Container, err))
+	if _, err := d.startProxy(ctx, id, wardynLabels(id, componentProxy, agentLabels),
+		proxyEnvFromJSON(id, cp.ControlPlaneURL), cfgJSON, ip); err != nil {
+		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
 	return nil
-}
-
-// restoreProxy re-creates the removed proxy old under its name, from its own
-// config, and does not start it. The run still has no egress, as
-// ErrProxyReplaceFailed says: its token is the retiring one, and nothing here
-// could pin its address. But its config, and the per-run MITM CA inside it,
-// can be read back again, so a later revive can bring the run back instead of
-// it staying dead until a re-launch. It returns cause, with the restore's own
-// failure when that fails too.
-func (d *Driver) restoreProxy(ctx context.Context, runID uuid.UUID, old container.InspectResponse, cause error) error {
-	if _, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config:     old.Config,
-		HostConfig: old.HostConfig,
-		Name:       proxyContainerName(runID),
-	}); err != nil {
-		return fmt.Errorf("%w; restoring the old proxy also failed: %w", cause, err)
-	}
-	return cause
 }
 
 // StartSandbox starts the agent ref's kept, stopped container again
 // (runner.SandboxStarter): `docker start`, which re-runs its main process
 // (`agent-run --idle`) over the writable layer the run left behind. It
-// refuses unless the run's proxy sidecar is running: a stopped proxy has given
-// its address back, and an agent started first could take the address its own
+// refuses unless the run's proxy sidecar is running: a stopped or removed
+// proxy has given its address back, and an agent started first could take the address its own
 // hosts entry pins as wardyn-proxy. The recording dirs are prepared again as
 // at create.
 func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
