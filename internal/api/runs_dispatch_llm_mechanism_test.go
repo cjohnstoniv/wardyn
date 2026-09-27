@@ -399,6 +399,35 @@ func TestLLMMechanismRefusal_NamesBothLanes(t *testing.T) {
 	}
 }
 
+// TestCreateDoorIsModelRun pins the ONE predicate llmMechanismGateApplies and
+// enforceRunModelProvider (run_model_provider.go) now share (#767 step 2): a
+// bug in either used to have to be found and fixed twice, since each carried
+// its own copy of this same question.
+func TestCreateDoorIsModelRun(t *testing.T) {
+	wsID := uuid.New()
+	for _, tc := range []struct {
+		name string
+		req  createRunRequest
+		want bool
+	}{
+		{name: "a non-interactive workspace launch IS a model run at this door (#767)",
+			req: createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: false}, want: true},
+		{name: "an interactive workspace run is human-driven, so it IS a model run",
+			req: createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: true}, want: true},
+		{name: "an ordinary agent run", req: createRunRequest{Agent: "claude-code", Task: "fix it"}, want: true},
+		{name: "an exec run runs a plain shell command",
+			req: createRunRequest{Agent: "claude-code", TaskMode: "exec", Task: "ls"}, want: false},
+		{name: "a harness login run is never a model run, whatever isModelRun would answer",
+			req: createRunRequest{Agent: "claude-code", Task: harnessLoginTask, WorkspaceID: &wsID, Interactive: false}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := createDoorIsModelRun(tc.req); got != tc.want {
+				t.Errorf("createDoorIsModelRun(%+v) = %v, want %v", tc.req, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestEnforceCreateLLMMechanism_RefusesBeforeARunExists is the create/Review
 // half: the same declaration, the same sentence, answered as a 422 — and, in
 // legacy open mode, nothing refused at all.

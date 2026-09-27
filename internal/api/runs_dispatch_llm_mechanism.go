@@ -400,23 +400,32 @@ func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run typ
 	return false
 }
 
+// createDoorIsModelRun answers isModelRun's own question for a create-door
+// REQUEST rather than a resolved run: workspace id AND source id are nil by
+// construction on this door (seedRequestWorkspace, runs_create.go, never sets
+// run.WorkspaceID from req.WorkspaceID — that column is the TRUSTED
+// scan/verify/record linkage a user-facing create must never claim — and a
+// source-bound run, record/verify/build, is launched by newStepRun, never
+// decoded from this door's body), so this door can never produce the
+// (workspace_id/source_id + non-interactive) shape isModelRun reads as a scan.
+// Passing req.WorkspaceID through used to tell a caller of this an ordinary
+// `--workspace` launch (docs/OPERATIONS.md, the console's workspace_id) was a
+// scan, while dispatch — reading the run's own, never-set WorkspaceID —
+// decided the opposite and dispatched it as a model run anyway. A login run
+// is also never a model run here, whatever isModelRun would answer.
+//
+// llmMechanismGateApplies and enforceRunModelProvider (run_model_provider.go)
+// both ask exactly this (#767 step 2): one predicate, so a fix to one can no
+// longer leave the other asking the old, wrong question.
+func createDoorIsModelRun(req createRunRequest) bool {
+	return req.Task != harnessLoginTask && isModelRun(req.TaskMode, nil, nil, req.Interactive)
+}
+
 // llmMechanismGateApplies is enforceConfiguredLLMMechanism's three-term gate
 // asked of a run REQUEST instead of a resolved transport, so create and Review
 // refuse exactly the runs dispatch would. See that function for each term.
 func llmMechanismGateApplies(req createRunRequest) bool {
-	// Workspace id AND source id are nil by construction on this door:
-	// seedRequestWorkspace (runs_create.go) never sets run.WorkspaceID from
-	// req.WorkspaceID — that column is the TRUSTED scan/verify/record linkage a
-	// user-facing create must never claim — and a source-bound run
-	// (record/verify/build) is launched by newStepRun, never decoded from this
-	// door's body. So this door can never produce the (workspace_id/source_id +
-	// non-interactive) shape isModelRun reads as a scan; passing req.WorkspaceID
-	// through told this gate an ordinary `--workspace` launch (docs/OPERATIONS.md,
-	// the console's workspace_id) was a scan and skipped it, while dispatch —
-	// reading the run's own, never-set WorkspaceID — decided the opposite and
-	// dispatched it as a model run anyway (#767).
-	if req.Task == harnessLoginTask ||
-		!isModelRun(req.TaskMode, nil, nil, req.Interactive) {
+	if !createDoorIsModelRun(req) {
 		return false
 	}
 	_, needsModel := agentLLMProvider(req.Agent)
