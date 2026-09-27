@@ -228,9 +228,7 @@ func TestCreateRun_StoredReservedRepoTargetIsSaidOutLoud(t *testing.T) {
 			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "octocat/hello", Target: target}},
 		}
 		srv := New(cfg)
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "sub-stored-repo", "admin@corp.example", oidc.RoleAdmin),
-			`{"agent":"claude-code","task":"t"}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","task":"t"}`)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201 (a stale stored target drops the repo, it does not refuse the run): %s",
 				w.Code, w.Body.String())

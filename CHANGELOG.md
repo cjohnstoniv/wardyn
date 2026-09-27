@@ -1244,6 +1244,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   note:** run this wardynd with the wardyn-proxy image from the same release. An older proxy image
   has no `-stage-config-src`, so its init container exits and every Kubernetes run starts with no
   egress (it fails closed rather than erroring at create).
+- **An Admin-view browser session no longer starts runs (#639).** `POST /runs` and
+  `POST /runs/preflight` answer `409` with reason `admin_view` and "Runs start in the user view. Use
+  User view at the top of the console to start one." when an SSO session of an admin or security
+  admin is in the Admin view. The User view, users, the admin token and `wdn_` tokens launch as
+  before, so the CLI and CI are unaffected; a request that carries the session cookie is refused
+  even if it also carries a bearer.
 - **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
   Both resolve an authored secret name through the run owner's namespace, falling back to the
   operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
@@ -1483,7 +1489,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `device.enrolment_token.revoke` — admin or `security_admin`, and on the CLI as `wardyn device
   enrol-token-list` / `enrol-token-revoke <id>`. A leaked token no longer stays redeemable for its
   full 72 hours.
-
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

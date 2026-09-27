@@ -2631,6 +2631,12 @@ that is one shared credential with no per-person role to pause, so nothing is
 clamped or POSTed, and `POST /me/view` answers those callers `400` if
 called directly.
 
+**Runs start in the User view.** A signed-in SSO admin or security admin in the
+**Admin view** cannot start or preview a run: `POST /runs` and `POST /runs/preflight`
+answer `409` with reason `admin_view`. Switch to the User view to launch. The
+refusal keys on the browser session only — the admin token, a `wdn_` token and a
+single-operator install launch as before.
+
 **Viewing as a user type (0.8).** `POST /me/view` with `{"view": "user",
 "user_type": "<id>"}` enters the user view looking through that type: its
 grants, governance profile, drives and run limits bind you exactly as they bind
