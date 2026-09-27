@@ -376,7 +376,7 @@ func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
 		t.Errorf("UpdateWorkspace persisted egress_edited_at %v, want %v — without this column in its SET clause a composition edit clears approved_egress and the next boot re-widens it", stamped.EgressEditedAt, stamp)
 	}
 
-	// AND THE STAMPING ARM (B8-F3), which is the OTHER half and the one the
+	// And the stamping arm (B8-F3), which is the other half and the one the
 	// handler now uses: handleUpdateWorkspace no longer stamps in Go, it asks —
 	// and the value must come from the DATABASE. The Go-side fake models this,
 	// so an api-level test cannot tell the CASE expression from the fake's own

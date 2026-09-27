@@ -34,7 +34,7 @@ const (
 	secAdminMail = "sec@corp.example"
 )
 
-// ─── the predicate ─────────────────────────────────────────────────────────
+// the predicate
 
 // TestIsSecurityOperator is isSecurityOperator's twin of TestIsOperator
 // (rbac_test.go). The two predicates agree on everything EXCEPT the
@@ -51,7 +51,7 @@ func TestIsSecurityOperator(t *testing.T) {
 		{"sso admin: both tiers", operatorCtx("sub-1", rbacOperator, oidc.RoleAdmin), true, true},
 		// THE distinguishing row.
 		{"sso security_admin: security tier only", operatorCtx(secAdminSub, secAdminMail, oidc.RoleSecurityAdmin), true, false},
-		{"sso member: neither", operatorCtx("sub-2", rbacViewer, oidc.RoleMember), false, false},
+		{"sso member: neither", operatorCtx("sub-2", rbacViewer, oidc.RoleUser), false, false},
 		// Defense-in-depth, same as isOperator's: decodeSession refuses an
 		// empty role outright, but both predicates must fail CLOSED if it ever
 		// reached them.
@@ -86,7 +86,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 	}{
 		{"admin passes", oidc.RoleAdmin, http.StatusOK},
 		{"security_admin passes", oidc.RoleSecurityAdmin, http.StatusOK},
-		{"member is refused", oidc.RoleMember, http.StatusForbidden},
+		{"member is refused", oidc.RoleUser, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -136,7 +136,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 	}
 }
 
-// ─── the role-snapshot split (PF-7 / PF-19) ────────────────────────────────
+// the role-snapshot split (PF-7 / PF-19)
 
 // TestAPITokenStampsRealSecurityAdminRole: the API token carries the human's
 // WHOLE session identity, so it stamps security_admin verbatim (PF-19).
@@ -146,7 +146,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 func TestAPITokenStampsRealSecurityAdminRole(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
 	for _, tc := range []struct{ role string }{
-		{oidc.RoleAdmin}, {oidc.RoleSecurityAdmin}, {oidc.RoleMember},
+		{oidc.RoleAdmin}, {oidc.RoleSecurityAdmin}, {oidc.RoleUser},
 	} {
 		t.Run(tc.role, func(t *testing.T) {
 			sess := ssoSession(t, "sub-"+tc.role, tc.role+"@corp.example", tc.role)
@@ -172,7 +172,7 @@ func TestSecurityAdminTokenGrantsNoForeignRunReach(t *testing.T) {
 	// The context a security-admin TOKEN publishes (withHumanIdentity, the
 	// same function the session branch uses) must read as not-an-operator, so
 	// every isOperator-gated lane refuses it identically to a member's.
-	ctx := withHumanIdentity(context.Background(), secAdminSub, secAdminMail, oidc.RoleSecurityAdmin, nil, false)
+	ctx := withHumanIdentity(context.Background(), secAdminSub, secAdminMail, oidc.RoleSecurityAdmin, "standard", nil, false)
 	s := &Server{}
 	if s.isOperator(ctx) {
 		t.Fatal("a security_admin token context reads as a super admin")
@@ -225,8 +225,8 @@ func (s *secAdminRunStore) MintAttachTicket(context.Context, string, store.Attac
 // sandbox.
 func TestSSHKeyNeverStampsSecurityAdmin(t *testing.T) {
 	h := newHarness(t)
-	st := &secAdminRunStore{}
-	cfg := baseTestConfig(h, st)
+	// capStore: a security admin's POST asks the `feature` resolver.
+	cfg := baseTestConfig(h, &capStore{Store: &secAdminRunStore{}})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
@@ -240,8 +240,8 @@ func TestSSHKeyNeverStampsSecurityAdmin(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &added); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if added.Role != oidc.RoleMember {
-		t.Fatalf("ssh key stamped role %q for a security admin, want %q (the field means foreign-run reach)", added.Role, oidc.RoleMember)
+	if added.Role != oidc.RoleUser {
+		t.Fatalf("ssh key stamped role %q for a security admin, want %q (the field means foreign-run reach)", added.Role, oidc.RoleUser)
 	}
 }
 
@@ -297,7 +297,7 @@ func TestAttachTicketOwnRunStampsMemberForSecurityAdmin(t *testing.T) {
 	}
 }
 
-// ─── the no-capability-reaches-admin invariant (PF-8) ──────────────────────
+// the no-capability-reaches-admin invariant (PF-8)
 
 // TestCapabilityGrantsNeverReachTheAdminTier: capAllowed/capGranted short-
 // circuit ONLY for a super admin. A security admin is capability-bounded like
@@ -401,16 +401,16 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+uuid.NewString()+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
 		t.Errorf("security_admin POST record on a MISSING workspace = %d, want the same 403", w.Code)
 	}
-	// THE CORROBORATING LEG IS GONE, AND THE TIER STILL HOLDS — re-argued here
-	// rather than assumed, as this comment's earlier revision asked.
+	// The corroborating leg is gone, and the tier still holds — argued here
+	// rather than assumed.
 	//
-	// This used to assert that the same tier gets 404 on GET /workspaces/{id},
-	// offered as a corroborating inconsistency. That read was WIDENED
-	// deliberately (F015, ownsWorkspaceOrSecurityAdmin in helpers.go): a
-	// security admin already listed every workspace and already rewrote any
+	// The same tier does not get 404 on GET /workspaces/{id}: that read is
+	// widened deliberately (ownsWorkspaceOrSecurityAdmin in helpers.go). A
+	// security admin already lists every workspace and already rewrites any
 	// workspace's approved/denied egress, so refusing it the row — and
 	// especially /observed-egress, the traffic that is the INPUT to the egress
-	// decision it makes — left the tier acting blind on its own stated purpose.
+	// decision it makes — would leave the tier acting blind on its own stated
+	// purpose.
 	//
 	// The record tier does not depend on that leg and never did. It rests on
 	// what the ROUTE does: POST .../record launches a credentialed,
@@ -499,7 +499,7 @@ func TestSecurityAdminCanStopAForeignRun(t *testing.T) {
 	// And the member, which is what makes it a TIER statement: a plain member is
 	// refused with the byte-identical 404 a missing run gives, and the run is
 	// untouched.
-	if code, state := kill(t, oidc.RoleMember); code != http.StatusNotFound || state != types.RunRunning {
+	if code, state := kill(t, oidc.RoleUser); code != http.StatusNotFound || state != types.RunRunning {
 		t.Errorf("member kill of a foreign run = %d, state %q; want 404 and the run still RUNNING", code, state)
 	}
 }

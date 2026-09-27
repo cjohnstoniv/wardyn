@@ -22,12 +22,12 @@ import (
 // Every sub-test below builds its own zero-AI Config: no Secrets, no
 // SubscriptionToken, no ManagedToken, and no Bedrock knob touched.
 
-// ─── (a) + (b): dispatch needs a real Store, so this reuses the same
+// (a) + (b): dispatch needs a real Store, so this reuses the same
 // Postgres-gated harness task_mode_test.go and interactive_test.go already use
 // for this class of assertion (pgHarnessWithRunner, interactive_test.go) —
 // skips cleanly when WARDYN_TEST_PG is unset, runs for real in an environment
 // that sets it. Neither harness call configures Secrets/SubscriptionToken/
-// ManagedToken/Composer/Bedrock, so it is already the zero-AI fixture. ───────
+// ManagedToken/Composer/Bedrock, so it is already the zero-AI fixture.
 
 // TestZeroAI_ExecGovernedCommandDispatches is Task 1(a): a task_mode:exec
 // governed-command run creates and dispatches with no AI integration
@@ -75,9 +75,9 @@ func TestZeroAI_InteractiveRunWorks(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	// RUNNING and the run.interactive row are written by the launch, after the 201.
+	// RUNNING and the run.interactive.start row are written by the launch, after the 201.
 	waitForRunState(t, srv, run.ID, types.RunRunning)
-	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive", "success")
+	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive.start", "success")
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
@@ -86,7 +86,7 @@ func TestZeroAI_InteractiveRunWorks(t *testing.T) {
 	}
 }
 
-// ─── (c) + (d): GET /setup/status ────────────────────────────────────────────
+// (c) + (d): GET /setup/status
 
 // zeroAIRelatedCheckIDs are the /setup/status rows whose entire concern is "is
 // an AI/model/harness provider configured" (setup_checks.go / setup.go).

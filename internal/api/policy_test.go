@@ -13,11 +13,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestValidatePolicySpec_GrantScopeShapes pins github_token and cloud_sts
-// grant scopes are now validated at policy-write time (they previously received
-// ONLY the kind-membership + non-negative-TTL check, unlike api_key/git_pat/
-// ssh_key). Reverting the new branches makes every "want error" case accepted
-// and fails here.
+// TestValidatePolicySpec_GrantScopeShapes pins that github_token and cloud_sts
+// grant scopes are validated at policy-write time, like
+// api_key/git_pat/ssh_key, not just checked for kind membership and a
+// non-negative TTL. Dropping those branches makes every "want error" case
+// accepted and fails here.
 func TestValidatePolicySpec_GrantScopeShapes(t *testing.T) {
 	grant := func(kind types.GrantKind, scope string) types.RunPolicySpec {
 		return types.RunPolicySpec{
@@ -48,11 +48,11 @@ func TestValidatePolicySpec_GrantScopeShapes(t *testing.T) {
 		{"cloudsts empty object", grant(types.GrantCloudSTS, `{}`), false},
 		{"cloudsts null", grant(types.GrantCloudSTS, `null`), false},
 		{"cloudsts non-object", grant(types.GrantCloudSTS, `"role-arn"`), true},
-		// bug-policy-2: api_key must fail closed on an undecodable scope, the
-		// SAME as git_pat/ssh_key just below — a missing host/secret_name or
-		// non-JSON scope used to be silently ACCEPTED here (the check only
-		// ran `if derr == nil`), so a malformed default-policy api_key grant
-		// booted wardynd clean and only 422s at first run-creation.
+		// api_key must fail closed on an undecodable scope, the same as
+		// git_pat/ssh_key just below — a missing host/secret_name or non-JSON
+		// scope must not be silently accepted (as a check that only ran `if
+		// derr == nil` would), or a malformed default-policy api_key grant
+		// boots wardynd clean and only 422s at first run-creation.
 		{"api_key valid", grant(types.GrantAPIKey, `{"host":"api.anthropic.com","secret_name":"anthropic-api-key"}`), false},
 		{"api_key missing host", grant(types.GrantAPIKey, `{"secret_name":"anthropic-api-key"}`), true},
 		{"api_key missing secret_name", grant(types.GrantAPIKey, `{"host":"api.anthropic.com"}`), true},
@@ -121,13 +121,12 @@ func TestValidateLLMInspection(t *testing.T) {
 		{"entropy ok", &types.LLMInspectionSpec{Mode: "alert", DetectEntropy: true}, nil, true},
 		{"pii ok", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true}, nil, true},
 		{"sidecar url is a detector, host allowlisted", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, presidio, true},
-		// W12-A-1 belt-and-braces: a well-formed http(s) sidecar URL is STILL
-		// refused when its host is not in the SAME policy's own egress
-		// allowlist — the operator must explicitly bless it, exactly like a
-		// brokered api_key injection requires an exact allowlist entry
-		// (domainAllowedExact). Before this, only the http(s) prefix was
-		// checked, so an operator-authored (or, pre-clamp-fix, a
-		// member-smuggled) ceiling could point the sidecar at an unlisted host.
+		// belt-and-braces: a well-formed http(s) sidecar URL is still refused
+		// when its host is not in the same policy's own egress allowlist — the
+		// operator must explicitly bless it, exactly like a brokered api_key
+		// injection requires an exact allowlist entry (domainAllowedExact).
+		// Checking only the http(s) prefix would let an operator-authored (or
+		// member-smuggled) ceiling point the sidecar at an unlisted host.
 		{"sidecar url host NOT in operator allowlist is rejected", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, nil, false},
 		{"bad sidecar url (no scheme, rejected before the allowlist check)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "presidio:8080"}, nil, false},
 		{"negative max_scan_bytes", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, MaxScanBytes: -1}, nil, false},
@@ -136,7 +135,7 @@ func TestValidateLLMInspection(t *testing.T) {
 		{"require_inspectable needs intercept_tls", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true}, nil, false},
 		{"require_inspectable with intercept_tls ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true, InterceptTLS: true}, nil, true},
 		{"intercept_tls alone ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, InterceptTLS: true}, nil, true},
-		// W12-A-2/W12-S1-1: a raw VALUE can never be authored — only NAMES.
+		// A raw value can never be authored — only names.
 		{"workspace_secret_values rejected on write; author workspace_secret_names instead", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretValues: []string{"super-secret-value"}}, nil, false},
 		{"workspace_secret_names ok (the field an operator actually authors)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretNames: []string{"prod-db-password"}}, nil, true},
 	}

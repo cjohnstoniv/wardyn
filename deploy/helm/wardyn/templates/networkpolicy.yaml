@@ -18,11 +18,14 @@ re-open only what wardynd needs:
     agent pod or proxy sidecar has no business on either. They cannot ride
     the HTTP rule above, because NetworkPolicy ingress rules are ADDITIVE —
     withholding a port from run pods means NO rule may grant it to them.
-  - a SEPARATE ingress rule, HTTP ONLY, when k8s.enabled and
-    k8s.runsNamespace differs from this release's namespace: that namespace's
-    proxy sidecars call back to wardynd for credential mints, approval
-    checks, and recording uploads — never SSH, which is an operator/human
-    surface, not something a run's sidecar has any business reaching
+  - a SEPARATE ingress rule for the internal TLS listener (k8s.enabled), whose
+    peers are this namespace and k8s.runsNamespace — never
+    networkPolicy.ingress.from, so an ingress controller or a scraper added
+    for the console never reaches the port proxies resolve credentials on
+  - a SEPARATE ingress rule, http only, when k8s.enabled and
+    k8s.runsNamespace differs from this release's namespace, so runs in
+    flight at an upgrade from 0.7.11 finish — never SSH, which is an
+    operator/human surface
 */}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
@@ -74,6 +77,23 @@ spec:
       ports:
         - protocol: TCP
           port: http
+    {{- if .Values.k8s.enabled }}
+    # The proxy-facing TLS listener (WARDYN_CONTROL_PLANE_URL), on its OWN rule
+    # with its OWN peers: run proxies resolve credentials here, and nothing an
+    # operator adds to networkPolicy.ingress.from for the console (an ingress
+    # controller, a metrics scraper) is ever granted it. Peers: this namespace
+    # (where runs land when k8s.runsNamespace is empty) and the runs namespace.
+    - from:
+        - podSelector: {}
+        {{- if and .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: internal
+    {{- end }}
     {{- if or $ssh.enabled $ui.enabled }}
     # SSH and the UI-sandbox gateway, on their OWN rule with their OWN peers.
     #
@@ -137,7 +157,10 @@ spec:
     # with no render-time or even boot-time signal). A SEPARATE rule (not
     # folded into the one above): this peer gets http only, never ssh and
     # never the UI-sandbox gateway — a run's proxy sidecar has no business on
-    # either operator/human port.
+    # either operator/human port. Proxies dispatched since 0.7.12 reach wardynd
+    # on the internal TLS port (the rule above); http stays here only so a run
+    # already in flight at the upgrade finishes on the path it was dispatched
+    # with. ponytail: drop this rule once no pre-0.7.12 proxy can be running.
     - from:
         - namespaceSelector:
             matchLabels:

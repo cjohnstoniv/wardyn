@@ -114,7 +114,7 @@ func TestLoadTrustedCA_RefusesGarbage(t *testing.T) {
 }
 
 func TestLoadTrustedCA_RefusesUnparseableCertBlock(t *testing.T) {
-	// A PEM CERTIFICATE block whose payload is not a valid DER certificate —
+	// A PEM certificate block whose payload is not a valid DER certificate —
 	// distinct from "no PEM blocks at all" (TestLoadTrustedCA_RefusesGarbage):
 	// this exercises the per-block x509.ParseCertificate failure path.
 	dir := t.TempDir()

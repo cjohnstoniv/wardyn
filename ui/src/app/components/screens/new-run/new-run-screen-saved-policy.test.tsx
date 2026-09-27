@@ -145,7 +145,8 @@ describe("NewRunScreen — the saved-policy lane", () => {
   // fail-open (true) while /me is unresolved or the fetch failed
   // (operator-context.tsx), which is the wrong direction for a clear that must
   // still fire for a member in that state.
-  it("R1: a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
+  it("a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
+    // ticket: R1
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>
@@ -168,7 +169,8 @@ describe("NewRunScreen — the saved-policy lane", () => {
   // R1 neg — a security_admin's saved-policy body is the real one (the server
   // redacts on isSecurityOperator, which a security_admin passes); the clear
   // must not fire and throw it away.
-  it("R1 neg: a resolved security_admin keeps the real body — no clear", async () => {
+  it("negative control: a resolved security_admin keeps the real body — no clear", async () => {
+    // ticket: R1
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>

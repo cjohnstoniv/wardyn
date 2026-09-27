@@ -54,7 +54,7 @@ import type { Page } from "@playwright/test";
 //      walls are asserted at the API level instead (the resolver, the stored
 //      ceiling, the two write refusals), and the run-level enforcement is
 //      proven in Go — TestGovernanceProfileNonEscape's 16-row escape table on
-//      the decoded run.policy.effective envelope, and
+//      the decoded run.policy.resolve envelope, and
 //      governance_ceiling_test.go's governance_profile_name pin.
 //
 //   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field the rail and
@@ -506,7 +506,7 @@ test.describe("governance — the security admin's console (mocked /me role)", (
     await gotoConsole(page);
     await navToRoute(page, "/approvals");
 
-    // authorizeMemberDecision early-returns for isSecurityOperator
+    // authorizeUserDecision early-returns for isSecurityOperator
     // (approvals.go:392), so this tier decides ANY kind on ANY run org-wide —
     // and is never bounded by the egress_host capability a member would be.
     await expect(page.getByRole("button", { name: /^Approve$/ }).first()).toBeEnabled();
@@ -750,11 +750,12 @@ test.describe("governance — the walls, asserted where this harness can reach t
 
 // R4/F032 — the Limits cell tested only the three BOOLEAN doors, so a profile
 // whose one limit is a run quota read GOV.LIMITS_NONE ("None") while
-// denyMemberRunQuota (internal/api/runs_create_validate.go) was refusing that
+// denyUserRunQuota (internal/api/runs_create_validate.go) was refusing that
 // member's next run with a 422. Real profile, real row: only the rendered table
 // proves the cell, and only a stored max_concurrent_runs proves it round-trips
 // the wire.
-test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () => {
+test.describe("governance — a quota-only profile is not 'None'", () => {
+  // ticket: R4/F032
   test("names the cap in the Limits column, and leaves an unlimited profile reading None", async ({
     page,
   }) => {
@@ -793,7 +794,8 @@ test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () 
 // /providers' Storage tab as the ceiling an admin sets and on /drives at
 // write-time instead), so the round-trip through the EDITOR — real fields,
 // real save, real reload — is the only e2e proof either exists on the wire.
-test.describe("governance — the two storage ceilings round-trip through the editor (0.7.2)", () => {
+test.describe("governance — the two storage ceilings round-trip through the editor", () => {
+  // ticket: 0.7.2
   test("both LimitNumberRows write real integers, and 0 means unlimited on both", async ({ page }) => {
     const name = `storage-ceilings-${randomUUID().slice(0, 8)}`;
     await gotoConsole(page, "admin");

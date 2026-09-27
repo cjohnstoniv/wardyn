@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as WorkspaceProvidersCopy from "./workspace-providers-copy";
 import { AGENTS, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
 import { MEMBER } from "./governance-copy";
 import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
+import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the drives
 // precedent, user-drives-copy.test.ts's parseFrozenTables()): this suite does
@@ -36,31 +36,11 @@ import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 // this suite (`pnpm vitest run`, `pnpm test`, make ci).
 const DOC = resolve(process.cwd(), "../docs/design/workspace-providers-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.5 + §7.7's tables (§7.6 excluded). */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2-§7.5 + §7.7 only — the doc's own stated regex (§9.3's clone note):
-      // §7.1 is reused canon + the server-composed table (no Key column, and
-      // not this module's to carry); §7.6 is the M2-sitting staging table,
-      // parsed by nothing until each row lands with its own lane.
-      inSection = /^### 7\.[2-57]\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2-§7.5 + §7.7 only — the doc's own stated regex (§9.3's clone note):
+// §7.1 is reused canon + the server-composed table (no Key column, and not
+// this module's to carry); §7.6 is the M2-sitting staging table, parsed by
+// nothing until each row lands with its own lane.
+const doc = parseFrozenTables(DOC, /^### 7\.[2-57]\b/);
 
 // The keys whose doc cell carries an "A / B" pluralisation alternation rather
 // than a single renderable string (§5 #9) — checked in their own test below.
@@ -72,21 +52,9 @@ const PLURALISED = ["SAVED_NARROWED(n)", "CARD_PROVIDERS(n)", "CARD_AGENTS(n)", 
 // "{kind}" so it must reproduce the doc cell character for character.
 const NAMESPACES: Record<string, unknown>[] = [PROVIDERS, PROVIDER_MEMBER, AGENTS];
 
-/** `REMOVE_CONFIRM_TITLE(kind)` -> ["REMOVE_CONFIRM_TITLE", ["kind"]]. */
-function splitKey(docKey: string): [string, string[]] {
-  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
-  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
-}
-
 // ONE lookup across the three namespaces is safe because none of their keys
 // collide (61 / 3 / 38); the completeness test below is what keeps that true.
-function render(docKey: string): string {
-  const [name, args] = splitKey(docKey);
-  const ns = NAMESPACES.find((n) => name in n);
-  if (!ns) throw new Error(`${docKey}: no such key in PROVIDERS / PROVIDER_MEMBER / AGENTS`);
-  const value = ns[name];
-  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
-}
+const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 

@@ -163,7 +163,8 @@ describe("PhaseRail", () => {
   // ungated corp_network read as a live, clickable step whose onSelect just
   // silently no-oped (a dead click, not a disabled one). Wired identically on
   // both rails (compact + full); this exercises the full one.
-  it("F3-F3: a step refused by refuseNext renders disabled with the refusal as its title, on both rails", () => {
+  it("a step refused by refuseNext renders disabled with the refusal as its title, on both rails", () => {
+    // ticket: F3-F3
     cleanup();
     const refuseNext = (next: SetupStepId) =>
       next === "workspaces" || next === "review" ? "Prove network access first." : undefined;
@@ -193,7 +194,8 @@ describe("PhaseRail", () => {
     }
   });
 
-  it("F3-F3 negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+  it("negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+    // ticket: F3-F3
     renderRail("environment");
     for (const btn of screen.getAllByRole("button")) {
       expect(btn).not.toBeDisabled();

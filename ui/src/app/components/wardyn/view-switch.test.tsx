@@ -23,7 +23,7 @@ function Where() {
 }
 
 function Dirty() {
-  useUnsavedGuard(true);
+  useUnsavedGuard("view-switch-test", true, () => "unsaved text");
   return null;
 }
 

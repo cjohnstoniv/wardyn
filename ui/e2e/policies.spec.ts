@@ -511,7 +511,8 @@ test("create form surfaces the reserved user-drive target refusal (HTTP 400)", a
 // splice has no real SSO session, so its access stays the permissive "url"
 // tier and it still passes the view gate straight through; only a member's
 // role check is unconditional, admin-member-modes-design.md §2.1).
-test.describe("Policies — member and security-admin reads (X2-F12)", () => {
+test.describe("Policies — member and security-admin reads", () => {
+  // ticket: X2-F12
   test("a member is refused the admin view before the list ever loads", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);

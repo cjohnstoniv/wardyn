@@ -77,7 +77,7 @@ export function ViewSwitch({
     requestLeave(() => {
       // A single-operator install has one authority in both views (D1).
       if (access === "url") {
-        navigate(viewHome(to));
+        void navigate(viewHome(to));
         onNavigate?.();
         return;
       }
@@ -138,9 +138,9 @@ export function useViewResync(access: ViewAccess, loadedMemberMode: boolean): vo
     inFlight.current = true;
     try {
       const me = await health.whoami();
-      if (!me || isSwitching() || (me.member_mode ?? false) === loadedMemberMode) return;
+      if (!me || isSwitching() || (me.user_view ?? false) === loadedMemberMode) return;
       const { pathname, search, hash } = window.location;
-      window.location.assign(viewTarget(me.member_mode ? "user" : "admin", pathname, `${search}${hash}`));
+      window.location.assign(viewTarget(me.user_view ? "user" : "admin", pathname, `${search}${hash}`));
     } finally {
       inFlight.current = false;
     }

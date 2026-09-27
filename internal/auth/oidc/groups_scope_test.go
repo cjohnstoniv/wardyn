@@ -122,7 +122,7 @@ func TestBootWarnsWhenAGroupsScopeIsAdvertisedButNotRequested(t *testing.T) {
 		{
 			name:            "advertised, and the map is keyed on a group name",
 			scopesSupported: []string{"openid", "profile", "email", "groups"},
-			roleMap:         map[string]string{"eng-team": writoidc.RoleMember},
+			roleMap:         map[string]string{"eng-team": writoidc.RoleUser},
 			wantWarn:        true,
 		},
 		{
@@ -134,12 +134,12 @@ func TestBootWarnsWhenAGroupsScopeIsAdvertisedButNotRequested(t *testing.T) {
 			wantWarn:        false,
 		},
 		{
-			// THE ENTRA PATH, and the row that keeps this from being noise:
+			// The Entra path, and the row that keeps this from being noise:
 			// Entra advertises no `groups` scope and emits the claim without
 			// one, so an App-Role/group-keyed map there is correct as written.
 			name:            "not advertised (the Entra shape), map keyed on a claim",
 			scopesSupported: []string{"openid", "profile", "email", "offline_access"},
-			roleMap:         map[string]string{"wardyn.contractors": writoidc.RoleMember},
+			roleMap:         map[string]string{"wardyn.contractors": writoidc.RoleUser},
 			wantWarn:        false,
 		},
 		{
@@ -153,7 +153,7 @@ func TestBootWarnsWhenAGroupsScopeIsAdvertisedButNotRequested(t *testing.T) {
 			// that it gates anything; guessing would cry wolf on every boot.
 			name:            "discovery document omits scopes_supported",
 			scopesSupported: nil,
-			roleMap:         map[string]string{"eng-team": writoidc.RoleMember},
+			roleMap:         map[string]string{"eng-team": writoidc.RoleUser},
 			wantWarn:        false,
 		},
 	}

@@ -15,6 +15,7 @@ import {
   STEP_HEADING,
   STEP_LABEL,
   STEP_ORDER,
+  ceilingNarrows,
   corpNetworkGate,
   stepBadges,
   stepDone,
@@ -24,6 +25,7 @@ import {
 } from "./steps";
 import { DEMOS } from "../demos/demo-catalog";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
 // what these pure functions read.
@@ -41,8 +43,8 @@ function ws(id: string, status: WorkspaceStatus): Workspace {
     kind: "local_dir",
     source: `/tmp/${id}`,
     status,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
   };
 }
 
@@ -315,6 +317,41 @@ describe("walkableDemos — conditional demos are offered only once their precon
       baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
     );
     expect(order).toContain("agent-in-the-box");
+  });
+});
+
+// ceilingNarrows(demo) — pinned to #850's per-demo table (read against the
+// shipped default policy): the demos whose inline policy a user's ceiling
+// would rewrite (and are therefore HIDDEN from the user's Getting Started,
+// per the owner's 2026-09-25 ruling), and the ones it leaves alone.
+// github-app-broker is UNTOUCHED here: #850 keeps that demo's github_token
+// grant with approval forced on rather than dropping it, so the demo still
+// runs — a click of approval, not a narrowed lesson.
+describe("ceilingNarrows — the demos a user's ceiling would rewrite (#850)", () => {
+  const narrowed = [
+    "held-at-the-door",
+    "lines-that-cant-be-crossed",
+    "denied-however-spelled",
+    "record-a-policy",
+    "key-never-in-the-box",
+    "authorized-not-issued",
+    "rest-api-token",
+    "pat-stdout-only",
+    "ssh-briefly-resident",
+    "sts-fail-closed",
+  ];
+  const untouched = [
+    "sealed-box",
+    "fail-then-approve",
+    "agent-in-the-box",
+    "once-or-for-good",
+    "write-only-by-design",
+    "github-app-broker",
+  ];
+
+  it("covers every catalog demo, split per the #850 table", () => {
+    expect([...narrowed, ...untouched].sort()).toEqual(DEMOS.map((d) => d.id).sort());
+    expect(DEMOS.filter(ceilingNarrows).map((d) => d.id).sort()).toEqual([...narrowed].sort());
   });
 });
 

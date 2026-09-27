@@ -47,9 +47,9 @@ var ErrNotFound = errors.New("recording: not found")
 // either a bare runID (batch cast) or a "<runID>~<suffix>" composite.
 //
 // StatAndTail answers "does this key have a recording, how big is it, and what
-// are its last tailBytes" WITHOUT returning the whole payload — R4-F077's
-// server-side half of what used to be a full OpenCast + download per run just
-// to learn a size and a duration. tailBytes is clamped to size when the cast is
+// are its last tailBytes" WITHOUT returning the whole payload — instead of a
+// full OpenCast + download per run just to learn a size and a duration.
+// tailBytes is clamped to size when the cast is
 // smaller; a caller wanting the duration parses the tail for the last output
 // event (internal/recording.LastOutputElapsed) rather than the whole document.
 // Returns ErrNotFound when no recording exists, on the same terms as OpenCast.

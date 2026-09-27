@@ -228,6 +228,39 @@ if [ -f "$RELEASE_WF" ] && [ -f "$GPL_OFFER" ]; then
   fi
 fi
 
+# ── the GPL offer's hand-listed websockify entry matches the Dockerfile pin ─
+#
+# scripts/gpl-source-offer.sh's MANUAL_ENTRIES hand-lists websockify (syft
+# cannot see it — it's a source tarball, not an apt/npm package; see that
+# script's own comment above MANUAL_ENTRIES). Nothing checked that hand-typed
+# row against deploy/images/novnc/Dockerfile's own `ARG WEBSOCKIFY_VERSION`
+# pin and download URL, so a bump in one could silently drift from the other
+# with the GPL offer naming the wrong source archive and no gate catching it
+# (#357). Both the version and the source URL are compared: the URL is the
+# Dockerfile's own download line with the pinned version substituted.
+GPL_OFFER_SCRIPT=scripts/gpl-source-offer.sh
+NOVNC_DOCKERFILE=deploy/images/novnc/Dockerfile
+if [ -f "$GPL_OFFER_SCRIPT" ] && [ -f "$NOVNC_DOCKERFILE" ]; then
+  manual_row=$(grep -oE '"agent-novnc\|websockify\|[^"]+"' "$GPL_OFFER_SCRIPT" | head -1 | tr -d '"' || true)
+  IFS='|' read -r _ _ manual_ver _ manual_url <<<"$manual_row"
+  dockerfile_ver=$(grep -oE '^ARG WEBSOCKIFY_VERSION=[0-9A-Za-z.+-]+' "$NOVNC_DOCKERFILE" | head -1 | sed -E 's/^ARG WEBSOCKIFY_VERSION=//' || true)
+  url_template=$(grep -oE 'https://[^" ]*websockify[^" ]*\$\{WEBSOCKIFY_VERSION\}[^" ]*' "$NOVNC_DOCKERFILE" | head -1 || true)
+  dockerfile_url=${url_template//'${WEBSOCKIFY_VERSION}'/$dockerfile_ver}
+  if [ -z "$manual_ver" ] || [ -z "$manual_url" ]; then
+    echo "FAIL: $GPL_OFFER_SCRIPT: no 'agent-novnc|websockify|...' entry found in MANUAL_ENTRIES — the GPL offer would silently drop websockify's row." >&2
+    fail=1
+  elif [ -z "$dockerfile_ver" ] || [ -z "$url_template" ]; then
+    echo "FAIL: $NOVNC_DOCKERFILE: no 'ARG WEBSOCKIFY_VERSION=' pin or websockify download URL found — cannot cross-check the GPL offer's hand-listed websockify row." >&2
+    fail=1
+  elif [ "$manual_ver" != "$dockerfile_ver" ]; then
+    echo "FAIL: $GPL_OFFER_SCRIPT's MANUAL_ENTRIES lists websockify $manual_ver but $NOVNC_DOCKERFILE pins WEBSOCKIFY_VERSION=$dockerfile_ver. Update MANUAL_ENTRIES to match." >&2
+    fail=1
+  elif [ "$manual_url" != "$dockerfile_url" ]; then
+    echo "FAIL: $GPL_OFFER_SCRIPT's MANUAL_ENTRIES names websockify source URL $manual_url but $NOVNC_DOCKERFILE downloads $dockerfile_url. Update MANUAL_ENTRIES to match." >&2
+    fail=1
+  fi
+fi
+
 # ── the `make setup` shell path pulls no floating third-party image ─────────
 #
 # scripts/up.sh puts a container ON wardyn-internal to ask wardynd questions —
@@ -284,8 +317,8 @@ done < <(grep -h -v '^[[:space:]]*#' ./deploy/images/*/Dockerfile 2>/dev/null \
 # The setup-path section below exempts `ghcr.io/cjohnstoniv/*` because those
 # refs are pinned by the RELEASE TAG the run resolved. That reasoning does NOT
 # carry to deploy/desktop/install.sh, whose default enrolment image is the
-# CONTINUOUS `:latest` publish-image.yml pushes on every merge to main and never
-# cosign-signs — and it runs AS ROOT to mint the device's age identity
+# CONTINUOUS `:latest` publish-image.yml pushes after CI passes on main and
+# never cosign-signs — and it runs AS ROOT to mint the device's age identity
 # (F113/F184). Hard-failing on the default itself would need a release digest,
 # which is a network value this gate cannot resolve; what IS checkable offline is
 # that the installer still tells the person running it.

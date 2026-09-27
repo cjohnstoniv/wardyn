@@ -151,7 +151,7 @@ func NAT64EmbeddedV4(ip net.IP) (net.IP, bool) {
 // PrivateReserved rather than a subset of it.
 //
 // It lives here because it has two consumers whose agreement is a trust
-// boundary and used to be a comment: the control plane validates the operator's
+// boundary: the control plane validates the operator's
 // configured gateway at boot (internal/api), and the proxy re-checks the
 // RESOLVED answer per request before dialling it with the brokered model
 // credential (internal/egress/proxy). Those were byte-identical copies coupled

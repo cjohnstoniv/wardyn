@@ -557,11 +557,12 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
 // cancels its still-PENDING approvals rather than stranding them until
 // ExpireStale's 24h sweep.
 // ---------------------------------------------------------------------------
-test.describe("B3 — the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+test.describe("the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+  // ticket: B3
   test("1 PENDING + 1 APPROVED on the same run reads '1 held', never 2", async ({ page }) => {
     clearPending();
     const runId = runningRunId();
-    // tool_call is ALWAYS held (isHeld's unconditional true arm) — the
+    // tool_call is ALWAYS held (isHeld is true for any PENDING tool_call) — the
     // cleanest way to seed a guaranteed hold without also depending on
     // requested_scope.mode/timing (the egress_domain wait_for_review arm).
     const heldId = randomUUID();
@@ -581,7 +582,7 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
 
       // The Egress widget's chip: exactly "1 held" — a stale audit-count
       // implementation would read "2" here (one row per decision recorded),
-      // or would count the APPROVED row's own historical egress.pending audit
+      // or would count the APPROVED row's own historical egress.hold audit
       // entry as still "held" forever. "N held" is this widget's own phrase
       // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
       await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toBeVisible();
@@ -598,7 +599,8 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
   });
 });
 
-test.describe("B4 — killing a run cancels its still-PENDING approvals", () => {
+test.describe("killing a run cancels its still-PENDING approvals", () => {
+  // ticket: B4
   test("kill ⇒ the PENDING approval becomes CANCELLED with no decision buttons, and the nav badge returns to 0", async ({
     page,
   }) => {
@@ -648,7 +650,7 @@ test.describe("B4 — killing a run cancels its still-PENDING approvals", () => 
 
 // ---------------------------------------------------------------------------
 // F-12 pinning — LiveApprovals' row-level gate follows canDecideApproval
-// (server truth: authorizeMemberDecision, internal/api/approvals.go), not a
+// (server truth: authorizeUserDecision, internal/api/approvals.go), not a
 // blanket !operator disable. A member may decide an egress_domain approval on
 // a run they own; credential and tool_call stay admin-only regardless.
 //

@@ -14,7 +14,8 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, navToRoute } from "./fix
 const POLICY_NAME = `e2e-run-profile-${Date.now()}`;
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
-test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
+test.describe("Run detail — Make a policy from this run", () => {
+  // ticket: X2-F6
   // Fix pass (review F4): this file's own backend is fresh per run-ui-e2e.sh
   // invocation, but policies.spec.ts's file-wide invariant (a clean policy
   // table, so its empty-state specs hold) only survives a plain

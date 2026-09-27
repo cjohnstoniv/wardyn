@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// Regression for the envbuild SSRF/RCE finding: caller-supplied git URLs/refs
+// The envbuild SSRF/RCE rule: caller-supplied git URLs/refs
 // flow into envbuilder (ENVBUILDER_GIT_URL/REF). Only https://git:// remote
 // clones are allowed; file://, ssh://, scp-like, and ext:: transports — and any
 // control chars / leading-dash refs — must be rejected.

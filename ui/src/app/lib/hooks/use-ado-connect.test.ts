@@ -145,7 +145,8 @@ describe("useAdoConnect", () => {
   // newest one. This repro drives connectFallback() twice, unmounts, then
   // proves zero more scmAccess.getMine() calls happen over the window the
   // bug used to leak through (the review's repro measured 10 over 15s).
-  it("F2: a second connectFallback() call settles the first poll — no leaked interval after unmount", async () => {
+  it("a second connectFallback() call settles the first poll — no leaked interval after unmount", async () => {
+    // ticket: F2
     getMineMock.mockResolvedValue([]);
 
     const { result, unmount } = renderHook(() => useAdoConnect());
@@ -173,7 +174,8 @@ describe("useAdoConnect", () => {
 
   // Review follow-up N6: the outstanding connect() promise resolves (false)
   // on unmount, rather than hanging forever with no one left to await it.
-  it("N6: resolves the outstanding connect() promise on unmount, instead of leaving it pending", async () => {
+  it("resolves the outstanding connect() promise on unmount, instead of leaving it pending", async () => {
+    // ticket: N6
     const popup = fakePopup();
     vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
     getMineMock.mockResolvedValue([]); // never live — the popup stays "open" from this hook's view
@@ -294,7 +296,8 @@ describe("useAdoConnect", () => {
     expect(result.current.connecting).toBe(true);
   });
 
-  describe("connectFallback (review follow-up N1)", () => {
+  describe("connectFallback", () => {
+    // ticket: N1 (review follow-up)
     it("never opens a popup", async () => {
       const openSpy = vi.spyOn(window, "open");
       getMineMock.mockResolvedValue([{ state: "live" }]);

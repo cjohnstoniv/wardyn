@@ -81,7 +81,8 @@ describe("SetupLayout", () => {
     // F3-F9: the gate row is announced to a screen reader the moment its
     // verdict changes — a probe landing, a redirect proving reached — without
     // requiring the operator to re-focus the footer to discover it settled.
-    it("F3-F9: the head/reason gate row renders inside a role=status/aria-live=polite region", () => {
+    it("the head/reason gate row renders inside a role=status/aria-live=polite region", () => {
+      // ticket: F3-F9
       renderLayout({
         current: "environment",
         nextGate: { blocked: true, head: "Connectivity isn't proven yet", reason: "One probe, and this step is done.", tone: "warning" },

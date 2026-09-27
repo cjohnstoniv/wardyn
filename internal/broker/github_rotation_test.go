@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // genPEM generates a fresh RSA private key PEM, so two calls produce
@@ -28,14 +30,13 @@ func genPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 }
 
-// TestGitHubMinter_CredentialRotationPickedUpWithoutRestart is the
-// W12-W12-B-5 regression: on base 763beb5, githubMinter.client() caches the
-// app-authenticated client after the FIRST mint and never looks at the
-// secret store again, so rotating (or replacing) github-app-key never takes
-// effect without a wardynd restart. The fixed client() re-reads both secrets
-// every mint (cheap local Gets) and rebuilds only when their hash changed —
-// this pins that a credential rotation between two mints actually rebuilds
-// the cached client.
+// TestGitHubMinter_CredentialRotationPickedUpWithoutRestart:
+// githubMinter.client must not cache the app-authenticated client after the
+// first mint and never look at the secret store again, or rotating (or
+// replacing) github-app-key never takes effect without a wardynd restart.
+// client() re-reads both secrets every mint (cheap local Gets) and rebuilds
+// only when their hash changed — this pins that a credential rotation between
+// two mints actually rebuilds the cached client.
 func TestGitHubMinter_CredentialRotationPickedUpWithoutRestart(t *testing.T) {
 	ctx := context.Background()
 	store := newMemSecrets()
@@ -48,7 +49,7 @@ func TestGitHubMinter_CredentialRotationPickedUpWithoutRestart(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_ok","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_ok","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -90,14 +91,14 @@ func TestGitHubMinter_CredentialRotationPickedUpWithoutRestart(t *testing.T) {
 	}
 }
 
-// TestGitHubMinter_CredentialRotationInvalidatesInstallationCache is the
-// bug-broker-1 regression: rotating the App credentials must clear
-// installByOrg in the SAME step as the client() rebuild, not rely on the
-// next mint's CreateInstallationToken 401/404 to self-heal. On base
-// e2b3a91, the mint immediately after a rotation still uses the id cached
-// under the pre-rotation App and fails outright (a non-401/404 error from
-// the stale-under-the-new-App id, which isStaleInstallation does not treat
-// as a self-heal signal) instead of re-resolving the installation up front.
+// TestGitHubMinter_CredentialRotationInvalidatesInstallationCache: rotating
+// the App credentials must clear installByOrg in the same step as the
+// client() rebuild, not rely on the next mint's CreateInstallationToken
+// 401/404 to self-heal. Otherwise the mint immediately after a rotation uses
+// the id cached under the pre-rotation App and fails outright (a non-401/404
+// error from the stale-under-the-new-App id, which isStaleInstallation does
+// not treat as a self-heal signal) instead of re-resolving the installation
+// up front.
 func TestGitHubMinter_CredentialRotationInvalidatesInstallationCache(t *testing.T) {
 	ctx := context.Background()
 	store := newMemSecrets()
@@ -116,10 +117,10 @@ func TestGitHubMinter_CredentialRotationInvalidatesInstallationCache(t *testing.
 			}
 		case strings.HasSuffix(r.URL.Path, "/installations/42/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_first","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_first","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		case strings.HasSuffix(r.URL.Path, "/installations/77/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_after_rotation","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_after_rotation","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			// A non-401/404 status: isStaleInstallation must NOT classify this
 			// as a self-heal signal, so relying on the reactive drop alone
@@ -157,14 +158,12 @@ func TestGitHubMinter_CredentialRotationInvalidatesInstallationCache(t *testing.
 	}
 }
 
-// TestGitHubMinter_StaleInstallationIDDroppedOn401 is the second half of
-// W12-W12-B-5: a cached installation id can go stale even without a
-// credential rotation (the App was uninstalled and reinstalled on the org),
-// and GitHub answers 401/404 for a dead id. On base 763beb5 that stale id
-// stays cached forever (installByOrg is never invalidated), so every
-// subsequent mint repeats the same failure until a restart. The fix drops the
-// entry on a 401/404 from CreateInstallationToken so the NEXT mint
-// re-resolves it.
+// TestGitHubMinter_StaleInstallationIDDroppedOn401 is the second half: a
+// cached installation id can go stale even without a credential rotation (the
+// App was uninstalled and reinstalled on the org), and GitHub answers 401/404
+// for a dead id. Kept cached forever, that id would repeat the same failure
+// on every later mint until a restart; the entry is dropped on a 401/404 from
+// CreateInstallationToken so the next mint re-resolves it.
 func TestGitHubMinter_StaleInstallationIDDroppedOn401(t *testing.T) {
 	ctx := context.Background()
 	store := newMemSecrets()
@@ -187,7 +186,7 @@ func TestGitHubMinter_StaleInstallationIDDroppedOn401(t *testing.T) {
 			_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
 		case strings.HasSuffix(r.URL.Path, "/installations/99/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_recovered","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_recovered","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

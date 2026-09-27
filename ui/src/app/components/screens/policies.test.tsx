@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
+import { aheadByHours } from "../../lib/test-clock";
 
 // go-live findings pinned here:
 //  - ui-secretsPolicies-1: table row must keep its "row" a11y role (no
@@ -39,8 +40,8 @@ function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
     id: "pol-1",
     name: "payments-strict",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     spec: {
       allowed_domains: ["api.anthropic.com"],
       first_use_approval: "deny_with_review",
@@ -146,7 +147,8 @@ describe("PoliciesScreen — required fields + error announcement (ui-secretsPol
 // is now the one edit surface, and can't be dismissed by accident") blocks
 // dismissal outright rather than confirming: onPointerDownOutside/
 // onEscapeKeyDown preventDefault while dirty, scoped to this dialog only.
-describe("PoliciesScreen — F5-F9: the policy editor can't be dismissed by accident once dirty", () => {
+describe("PoliciesScreen — the policy editor can't be dismissed by accident once dirty", () => {
+  // ticket: F5-F9
   beforeEach(() => {
     listPoliciesMock.mockReset();
     listPoliciesMock.mockResolvedValue([]);

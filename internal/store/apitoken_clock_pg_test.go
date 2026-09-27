@@ -49,7 +49,8 @@ func TestPG_CreateAPITokenWritesCreatedAtOnTheDatabaseClock(t *testing.T) {
 		out, err := st.CreateAPIToken(ctx, types.APIToken{
 			ID:        uuid.New(),
 			Principal: "auth0|" + uuid.NewString(),
-			Role:      "member",
+			Role:      "user",
+			UserType:  "standard",
 			Name:      name,
 			CreatedAt: createdAt,
 		}, "wdn_"+uuid.NewString())

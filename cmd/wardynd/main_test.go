@@ -13,13 +13,14 @@ import (
 	"testing"
 
 	"filippo.io/age"
-	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // fakeSecretStore is a hand-rolled secretKeyStore fake. getErr/getVal model the
 // store's Get; putCalls records every Put so a test can assert that a fail-closed
 // path NEVER overwrites existing ciphertext. It mimics the pg store's contract:
-// a TRUE not-found wraps pgx.ErrNoRows; any other error (e.g. an age-decrypt
+// a TRUE not-found wraps secretstore.ErrNotFound; any other error (e.g. an age-decrypt
 // failure) is a generic error that must NOT be treated as "key absent".
 type fakeSecretStore struct {
 	getVal   []byte
@@ -42,14 +43,15 @@ func (f *fakeSecretStore) Put(_ context.Context, name string, value []byte) erro
 	return f.putErr
 }
 
-// notFoundErr mirrors how the pg secret store reports a missing row: it wraps
-// pgx.ErrNoRows so callers can distinguish "absent" from "present-but-broken".
+// notFoundErr mirrors how every secret store reports a missing row: it wraps
+// secretstore.ErrNotFound so callers can distinguish "absent" from
+// "present-but-broken".
 func notFoundErr() error {
-	return fmt.Errorf("pg secretstore: secret %q not found: %w", "k", pgx.ErrNoRows)
+	return fmt.Errorf("vaultkv secretstore: secret %q not found: %w", "k", secretstore.ErrNotFound)
 }
 
 // decryptErr mirrors a transient/permanent age-decrypt failure: a generic error
-// that does NOT wrap pgx.ErrNoRows. Treating this as "absent" would overwrite
+// that does NOT wrap secretstore.ErrNotFound. Treating this as "absent" would overwrite
 // the existing ciphertext and silently invalidate every issued SVID/session.
 func decryptErr() error {
 	return errors.New("pg secretstore: decrypt k: age decrypt: no identity matched")
@@ -231,7 +233,7 @@ func TestBuildSecretStore_RefusesEveryKnownPublicAgeKey(t *testing.T) {
 		// smuggle a published key past the guard.
 		for _, given := range []string{key, "  " + key + "\n"} {
 			// A nil pool is fine: the guard fails closed BEFORE any pool use.
-			_, err := buildSecretStore(nil, given, "test-store")
+			_, err := buildSecretStore(t.Context(), nil, given, nil, "test-store", storeClients{}, &capturingRecorder{})
 			if err == nil {
 				t.Fatalf("buildSecretStore accepted published key %q", key)
 			}

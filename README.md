@@ -28,7 +28,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.10/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.12/install.sh | sh
 ```
 
 Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
@@ -77,7 +77,7 @@ encrypted. Full role map, substrate and values table:
 
 ### Joining a Wardyn someone else runs
 
-Install nothing — sign in with SSO and read **[`docs/MEMBERS.md`](docs/MEMBERS.md)**: what a member can do, your first run, and what to ask your admin for.
+Install nothing — sign in with SSO and read **[`docs/USERS.md`](docs/USERS.md)**: what a member can do, your first run, and what to ask your admin for.
 
 **Building from source is a contributor path** — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Clone, then `make setup`
 (a failed image pull falls back to building from this checkout; `WARDYN_BUILD_LOCAL=1` forces it).

@@ -56,6 +56,7 @@ import { TopBar } from "./top-bar";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
+import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -66,7 +67,7 @@ export interface ShellMeta {
   trustDomain: string;
   identityProvider: string;
   // principal is the OWNERSHIP key (the OIDC sub, "admin-token", "local:…"):
-  // it feeds PrincipalContext and every `usePrincipal() === run.created_by`
+  // it feeds MeIdentity.principal and every `usePrincipal() === run.created_by`
   // gate. email and name are DISPLAY ONLY — what the header shows for "you",
   // in that order of preference — and are "" outside SSO or when the IdP sent
   // none, so the header falls back to the principal there (0.7.1).
@@ -84,7 +85,7 @@ export interface ShellMeta {
   // returns null, so `resolved` flips on a FAILED fetch too. Anything that
   // picks a lane off `operator` rather than merely offering a control needs
   // this one instead (R4-F110; see operator-context.tsx's
-  // OperatorResolvedContext for the attach-WS case that named it).
+  // MeIdentity.operatorResolved for the attach-WS case that named it).
   identityResolved: boolean;
   // Fail-open (see operator-context.tsx): starts true and stays true unless
   // /me resolves and explicitly says otherwise — an unresolved or failed
@@ -103,7 +104,7 @@ export interface ShellMeta {
   // When the SSO session dies outright (no refresh) — null for
   // local/token auth, which has no session to expire.
   sessionExpiresAt: Date | null;
-  // M3 — see operator-context.tsx's MemberLocalDirRootContext. null until /me
+  // M3 — see operator-context.tsx's MeIdentity.memberLocalDirRoot. null until /me
   // resolves and stays null (fail-closed: unavailable) if it never does.
   memberLocalDirRoot: string | null;
   // 0.7 — the caller's own allocation and the profile door beside it, the same
@@ -113,7 +114,7 @@ export interface ShellMeta {
   // The trade that buys is FRESHNESS PER PAGE LOAD, not per navigation — a
   // member paused mid-session keeps the offer until they reload and learns at
   // launch, which is the direction of error this feature can afford (see
-  // operator-context.tsx's UserDriveContext for the whole argument).
+  // operator-context.tsx's UserDriveMeta for the whole argument).
   userDrive: MeUserDrive | null;
   userDriveDeniedByProfile: string;
   // R4/F091 — the THIRD drive key: WHY /me could not answer, "" when it could.
@@ -141,6 +142,12 @@ export interface ShellMeta {
    *  confirm" (a k8s daemon that omitted the verdict) apart. */
   runner: string;
   networkPolicy: string;
+  /** #510-F6 — /healthz's `demo_video_base_url`, read once here rather than
+   *  once per episode card (use-demo-video-base-url.ts's old per-hook fetch
+   *  issued 24 requests on one Getting Started mount). undefined means "no
+   *  mirror configured"; lib/demo-videos.ts's episodeUrl falls back to its
+   *  own hardcoded GitHub base either way. */
+  demoVideoBaseUrl?: string;
   /** /healthz's `sso`: OIDC is configured. With it, the admin token is not a
    *  person and has no User view (console-view.tsx#viewAccess). */
   sso: boolean;
@@ -174,6 +181,7 @@ function useMeta(): [ShellMeta, () => void] {
     memberPreviewAvailable: false,
     runner: "",
     networkPolicy: "",
+    demoVideoBaseUrl: undefined,
     sso: false,
   });
   React.useEffect(() => {
@@ -204,11 +212,13 @@ function useMeta(): [ShellMeta, () => void] {
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
-          memberMode: me?.member_mode ?? false,
-          memberModeNoCredential: me?.member_mode_no_credential ?? false,
-          memberPreviewAvailable: me?.member_preview_available ?? false,
+          memberMode: me?.user_view ?? false,
+          memberModeNoCredential: me?.user_view_no_credential ?? false,
+          memberPreviewAvailable: me?.user_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
+          // "" (unset) reads the same as absent: both mean "no mirror".
+          demoVideoBaseUrl: h.demo_video_base_url || undefined,
           sso: h.sso ?? false,
         });
       })
@@ -312,7 +322,7 @@ const USER_NAV: NavItem[] = [
 // view.
 const ADMIN_LOWER: NavItem[] = [
   { to: "/admin/setup", label: "Setup", icon: Compass },
-  { to: "/admin/settings", label: "Settings", icon: Settings },
+  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings },
 ];
 const USER_LOWER: NavItem[] = [
   { to: "/setup", label: "Getting started", icon: Compass },
@@ -377,6 +387,10 @@ const ModelAccessBanner = React.lazy(() =>
 // mock approval's third ruling.
 const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
+);
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
 
 const navLinkClass = (isActive: boolean) =>
@@ -572,6 +586,7 @@ export function AppShell({
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
       userDriveUnavailable={meta.userDriveUnavailable}
       confinementPosture={confinementPosture}
+      demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
         <ViewAccessProvider value={access}>
@@ -678,15 +693,25 @@ export function AppShell({
           that arrives WITH its first sentence (as a lazy chunk does) announces
           nothing. The wrapper is here from the first paint; the chunk fills it. */}
             <div role="status">
+              {/* §4.2 (M-3): each band is passed the session's resolved view
+              (useShellView, not the raw URL) so a clamped admin who types an
+              /admin/* path while still in the User view — the interstitial
+              case — reads the view they are actually in, not the one in the
+              address bar. */}
               <React.Suspense fallback={null}>
-                <ModelAccessBanner />
+                <ModelAccessBanner view={view} />
+              </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are
               looking at, or block the very thing a run needs to start, and
               this one has no per-person urgency. */}
               <React.Suspense fallback={null}>
-                <ConfinementPostureBanner />
+                <ConfinementPostureBanner view={view} />
               </React.Suspense>
             </div>
             <div className="flex min-h-0 flex-1">

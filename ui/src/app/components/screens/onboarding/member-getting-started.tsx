@@ -28,7 +28,7 @@ import {
   ShieldCheck,
   Terminal,
 } from "lucide-react";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import {
   Chip,
   DoneChip,
@@ -42,7 +42,7 @@ import {
   MODEL_ACCESS_CHIP_LABEL,
   modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
-import { HarnessLoginPane } from "../settings/harness-login-pane";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
@@ -66,7 +66,8 @@ import { YourModelKey, modelKeyProvider } from "./your-model-key";
 import { modelKeyState, ownKeyApplies } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
-import { walkableDemos } from "../setup/steps";
+import { ceilingNarrows, walkableDemos } from "../setup/steps";
+import { useViewAccess } from "../../wardyn/console-view";
 
 // M-6 (D5, admin-member-modes-design.md §4.8): a demo is a sandbox run, a
 // user act, so it renders here now — reusing the funnel's own DemoDetail
@@ -84,7 +85,7 @@ type Variant = "default" | "outline";
 
 // U-1 (W6 blind lens) — WHOSE credential the state describes, which the label
 // table alone cannot say. Under a row that is NOT per_user the server still
-// projects `live`/`expiring` (memberModelAccess, internal/api/modelaccess.go):
+// projects `live`/`expiring` (userModelAccess, internal/api/modelaccess.go):
 // that is the ADMIN's shared credential, graded for this member. Rendering
 // MODEL_ACCESS_LIVE ("Your AWS sign-in") there claimed a sign-in the member does
 // not have, directly above a card reading "Provided by your admin" and a New Run
@@ -104,15 +105,26 @@ function modelAccessChip(
 
 export function MemberGettingStarted() {
   const [searchParams] = useSearchParams();
+  // M-6 (D5): "url" is D1, the single-operator install — the same admin
+  // token runs both views, so there is no ceiling for a demo run of theirs
+  // to fall under and every demo stays fully interactive. Every other access
+  // tier is a real member (or an SSO admin viewing the member page) whose
+  // OWN runs are bound by boundUserSpec — ceilingNarrows below decides
+  // per-demo which ones that would actually rewrite.
+  const ceilingApplies = useViewAccess() !== "url";
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
-  // The member's own AWS sign-in pane (C4.3) — opens IN PLACE under the card,
-  // per the mock; HarnessLoginPane is reused unchanged.
-  const [awsLoginOpen, setAwsLoginOpen] = React.useState(false);
+  // The member's own AWS sign-in (C4.3) opens the shell's one door (#544 —
+  // this page mounted its own pane before). This page keeps its own status
+  // read, so a completed sign-in re-reads it.
+  const door = useModelAccessDoor();
+  const openAwsDoor = () => door.openDoor({ for: { login: "aws" }, onSignedIn: () => setRetryTick((n) => n + 1) });
 
   React.useEffect(() => {
     let active = true;
-    setupApi.getSetupStatus().then((s) => {
+    // getSetupStatus only ever rejects on a 401, already routed to the
+    // module-level onUnauthorized handler (core.ts) before it gets here.
+    void setupApi.getSetupStatus().then((s) => {
       if (active) setStatus(s);
     });
     return () => {
@@ -129,7 +141,7 @@ export function MemberGettingStarted() {
   const memberLocalDirRoot = useMemberLocalDirRoot();
   React.useEffect(() => {
     reloadWorkspaces();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
 
   const [mine, setMine] = React.useState<string[] | null>(null);
@@ -176,7 +188,7 @@ export function MemberGettingStarted() {
 
   // This member's own drive (nil-means-no-allocation), off the shell's ONE GET
   // /me rather than a second one of this page's own — see
-  // operator-context.tsx's UserDriveContext. null for a member with none, for
+  // operator-context.tsx's UserDriveMeta. null for a member with none, for
   // an older daemon, and for a read that failed: all three render as today's
   // page, no chip and no sentence.
   //
@@ -291,17 +303,21 @@ export function MemberGettingStarted() {
   // (setup/steps.ts's PHASES, before M-6), gated by the same precondition
   // that used to drop an unmet one from that walk (walkableDemos — needsModel
   // without a connected model, needsSecret without that secret stored).
-  // KNOWN GAPS, all in #850. internal/api/setup.go's redactSetupStatusForMember
-  // zeroes secrets.present and providers for a caller the server answers as a
-  // user, so a needsSecret demo (five of the eight "secrets" ones) is never
-  // offered to an SSO user, and neither is a needsModel one unless the model
-  // access is a managed subscription or Bedrock. And a demo run by a user goes
-  // through the user ceiling (boundMemberSpec), which changes several demos'
-  // policies (D5); none is watch-only yet. A single-operator install (D1) is
-  // unaffected by all three.
+  // Owner ruling 2026-09-25: a demo the caller's own governance ceiling would
+  // narrow (ceilingNarrows) is dropped from this list too, so it never
+  // renders here — it is not offered watch-only (#850's own mock round
+  // decides that, separately). KNOWN GAPS, all in #850.
+  // internal/api/setup.go's redactSetupStatusForUser zeroes secrets.present
+  // and providers for a caller the server answers as a user, so a
+  // needsSecret demo (five of the eight "secrets" ones) is never offered to
+  // an SSO user, and neither is a needsModel one unless the model access is a
+  // managed subscription or Bedrock. A single-operator install (D1) is
+  // unaffected by all of this — ceilingApplies is false, and its status is
+  // never redacted.
   const walkable = new Set(walkableDemos(status).map((d) => d.id));
-  const egressDemos = DEMOS.filter((d) => d.section === "egress" && walkable.has(d.id));
-  const secretsDemos = DEMOS.filter((d) => d.section === "secrets" && walkable.has(d.id));
+  const visible = (d: Demo) => walkable.has(d.id) && !(ceilingApplies && ceilingNarrows(d));
+  const egressDemos = DEMOS.filter((d) => d.section === "egress" && visible(d));
+  const secretsDemos = DEMOS.filter((d) => d.section === "secrets" && visible(d));
   // /demos and a shared link both redirect into a `?step=<id>` deep link
   // (App.tsx) — honor it here the same way the funnel used to: open that one
   // demo's row, silently ignoring an id this page doesn't offer (unmet
@@ -426,24 +442,7 @@ export function MemberGettingStarted() {
                   either nothing to do, or nothing this member can do about it. */}
               {!ownKeyCounts &&
                 status?.model_access &&
-                MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) &&
-                (awsLoginOpen ? (
-                  <div className="mt-3 max-w-md">
-                    <HarnessLoginPane
-                      provider="aws"
-                      /* This CTA renders for the per_user states only, so the
-                         org's access portal is the admin's stored one and the
-                         server uses it regardless of what is typed — the member
-                         is told, not asked. */
-                      startURLManaged
-                      onDone={() => {
-                        setAwsLoginOpen(false);
-                        setRetryTick((n) => n + 1);
-                      }}
-                      onCancel={() => setAwsLoginOpen(false)}
-                    />
-                  </div>
-                ) : (
+                MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) && (
                   // outline: this card is informational (file header) and
                   // never enters the page's one-teal-at-a-time computation.
                   //
@@ -459,11 +458,11 @@ export function MemberGettingStarted() {
                     variant="outline"
                     className="mt-3"
                     aria-label={T.SIGN_IN_AWS_ARIA_SUMMARY}
-                    onClick={() => setAwsLoginOpen(true)}
+                    onClick={openAwsDoor}
                   >
                     {AGENTS.SIGN_IN_AWS}
                   </Button>
-                ))}
+                )}
               {/* #386: `not_configured`'s cause line + CONNECT_ADO — the fallback
                   states only (§2.2/§7.5); `live` (every source) and
                   `shared_expired` render neither line nor button here, the
@@ -489,10 +488,10 @@ export function MemberGettingStarted() {
                         href={adoBlockedUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="font-medium text-info hover:underline"
+                        className={buttonVariants({ variant: "outline", size: "sm" })}
                         onClick={handleAdoFallbackClick}
                       >
-                        {ADO.CONNECT_ADO}
+                        {ADO.CONNECT_POPUP_OPEN}
                       </a>
                     </p>
                   )}
@@ -559,11 +558,10 @@ export function MemberGettingStarted() {
           mine={mine}
           harnesses={status?.harnesses}
           modelAccess={status?.model_access}
-          onSignInAws={() => setAwsLoginOpen(true)}
-          /* U-13: the pane opens in the card ABOVE this one and moves no focus,
-             so while it is open the card's own button is a no-op that reads as
-             a second, live way in. */
-          signInOpen={awsLoginOpen}
+          onSignInAws={openAwsDoor}
+          /* U-13: while the door is open the card's own button is a second,
+             live-looking way into the same one door. */
+          signInOpen={door.open}
           known={!unreachable}
           variant={variantFor("model-key")}
           onChanged={loadSecrets}
@@ -687,13 +685,14 @@ export function MemberGettingStarted() {
 // M-6 (D5) — one demo row: title + Open/Close, the same "opens IN PLACE
 // below the row" shape EpisodeRow (episode-card.tsx) already uses for
 // episodes on this same page. `barrierReady`/`githubAppReady` mirror what
-// setup-screen.tsx used to pass DemoDetail; `onJump` is a no-op here — the
-// funnel's "finish the Environment step first" hand-off names a step this
-// page doesn't have (the barrier is an admin fact, never a member's to set),
-// so with no barrier this row can only say so, not send anyone anywhere.
-// `onDemoLaunched` is likewise a no-op: useDemoRuns (demo-runner.tsx) already
-// writes the durable per-browser "launched" signal on its own; nothing on
-// this page currently reads it back into a done marker.
+// setup-screen.tsx used to pass DemoDetail. `onJump` is left OFF DemoDetail
+// (not a no-op) — the funnel's "finish the Environment step first" hand-off
+// names a step this page doesn't have (the barrier is an admin fact, never a
+// member's to set), and DemoDetail renders that hint as plain text with no
+// onJump rather than a button that would go nowhere. `onDemoLaunched` is
+// likewise a no-op: useDemoRuns (demo-runner.tsx) already writes the durable
+// per-browser "launched" signal on its own; nothing on this page currently
+// reads it back into a done marker.
 function DemoRow({
   demo,
   barrierReady,
@@ -706,8 +705,19 @@ function DemoRow({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
+  // A ?step=<id> deep link opens a row below the page's three setup cards —
+  // off-screen without this, since the pre-open renders with no scroll of
+  // its own.
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (defaultOpen) rowRef.current?.scrollIntoView({ block: "start" });
+    // Deliberately once, on mount only — `open` toggling later (the member
+    // closing/reopening the row by hand) must not re-scroll them away from
+    // wherever they are.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately once, on mount only; `open` must not re-trigger the scroll
+  }, []);
   return (
-    <div className="border-b border-border py-3 last:border-b-0">
+    <div ref={rowRef} className="border-b border-border py-3 last:border-b-0">
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">{demo.title}</span>
         {open ? (
@@ -727,7 +737,6 @@ function DemoRow({
               demo={demo}
               barrierReady={barrierReady}
               githubAppReady={githubAppReady}
-              onJump={() => {}}
               onDemoLaunched={() => {}}
             />
           </React.Suspense>

@@ -21,8 +21,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
-log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+. "${REPO_ROOT}/scripts/lib/common.sh"
 
 AGENT="${1:-}"
 [ -n "${AGENT}" ] || die "usage: scripts/stage-agent-binary.sh <claude-code|codex-cli> [version]"

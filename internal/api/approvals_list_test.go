@@ -106,22 +106,17 @@ func TestListApprovals_PagedLister(t *testing.T) {
 	}
 }
 
-// TestListApprovals_MemberSeesOnlyTheirOwnRuns is the ownership-scoping pin, and
-// it exists because NOTHING asserted that behaviour in any lane.
+// TestListApprovals_MemberSeesOnlyTheirOwnRuns is the ownership-scoping pin.
 //
 // The two tests above this one both drive the list with adminToken, i.e. the
 // security-tier branch that deliberately skips scoping. authz_test.go classifies
 // GET /api/v1/approvals as classMember, but the classMember arm only calls
 // assertNotBlocked — a status code, never the body — so it cannot see WHICH rows
-// come back. rbac_test.go used to claim in prose that "its real (scoped,
-// non-500) behavior is covered by the chi.Walk-enumerated matrix in
-// authz_test.go instead"; that claim was false and is corrected there.
-// docs/TEST-GAPS.md independently lists ListApprovalsPageByRunCreator as
-// untested in BOTH the union and the Postgres lane.
+// come back.
 //
-// COUNTERFACTUAL, executed: deleting the whole member branch from
-// handleListApprovals — so a member is served the fleet-wide queue — left
-// `go test ./internal/api/` fully green before this test existed.
+// Counterfactual: deleting the whole member branch from handleListApprovals, so
+// a member is served the fleet-wide queue, must fail this test; the authz matrix
+// cannot see it.
 func TestListApprovals_MemberSeesOnlyTheirOwnRuns(t *testing.T) {
 	const memberSub = "sub-list-member"
 	srv, ast, aap, _ := newAuthzMatrixServer(t)
@@ -137,7 +132,7 @@ func TestListApprovals_MemberSeesOnlyTheirOwnRuns(t *testing.T) {
 	mineAP := aap.seed(mineRun)
 	foreignAP := aap.seed(foreignRun)
 
-	member := ssoSession(t, memberSub, "list-member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "list-member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals", member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("member list = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -204,7 +199,7 @@ func TestListApprovals_MemberFailsClosedWithoutTheScopedRead(t *testing.T) {
 	// arm is unreachable outside a test and would otherwise never be exercised.
 	srv.cfg.Approvals = unscopedApprovals{aap}
 
-	member := ssoSession(t, "sub-list-member", "list-member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-list-member", "list-member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals", member, "")
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("member list on an unscoped backend = %d, want 500 — falling through to the fleet-wide "+

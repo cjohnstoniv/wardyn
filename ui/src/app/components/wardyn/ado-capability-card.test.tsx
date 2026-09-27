@@ -136,7 +136,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
 
   // F1 — the consequence sentences use the mock's per-capability noun
   // ("push" for code_write/policy_bypass), never the generic "request".
-  it("F1: the consequence sentences use the capability's own noun, not the generic 'request'", async () => {
+  it("the consequence sentences use the capability's own noun, not the generic 'request'", async () => {
+    // ticket: F1
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -145,7 +146,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(card.textContent).not.toMatch(/every request from this run/);
   });
 
-  it("F1: a pull-request escalation's consequence sentence says 'action'", async () => {
+  it("a pull-request escalation's consequence sentence says 'action'", async () => {
+    // ticket: F1
     renderCard(
       <AdoCapabilityCard
         item={escalation({ requested_scope: { ...escalation().requested_scope, capability: "pr" } as never })}
@@ -185,7 +187,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
   // admin could open the menu but never move focus onto "Once". This test
   // drives the menu with the keyboard alone: no user.click ever lands on a
   // scope option.
-  it("F3: the scope menu is reachable with the keyboard alone — Tab reaches Once, Enter picks it", async () => {
+  it("the scope menu is reachable with the keyboard alone — Tab reaches Once, Enter picks it", async () => {
+    // ticket: F3
     const onApprove = vi.fn();
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={onApprove} onDeny={vi.fn()} />,
@@ -212,7 +215,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(onApprove).toHaveBeenCalledWith([{ scope: "once" }]);
   });
 
-  it("F1: the caret's Once/This run hints also use the capability's own noun", async () => {
+  it("the caret's Once/This run hints also use the capability's own noun", async () => {
+    // ticket: F1
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -236,7 +240,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
 
   // F7 — a deny now sticks for the rest of the run (#414, unless a later
   // run-scoped approve lifts it); the scope readout sits by Approve only.
-  it("F7: Denying says it refuses this push for the rest of the run, unless later allowed for the whole run — and no scope readout sits by Deny", async () => {
+  it("Denying says it refuses this push for the rest of the run, unless later allowed for the whole run — and no scope readout sits by Deny", async () => {
+    // ticket: F7
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -257,7 +262,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
   // F7 — the hold's honest expiry: the card can only ESTIMATE from
   // requested_at, so it never claims a number ("four minutes") it cannot
   // verify (round-2 N5).
-  it("F7: says the request may be waiting, honestly, while requested_at is recent", async () => {
+  it("says the request may be waiting, honestly, while requested_at is recent", async () => {
+    // ticket: F7
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -268,7 +274,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(card.textContent).not.toMatch(/four minutes/);
   });
 
-  it("F7: says no longer waiting once requested_at is more than four minutes old", async () => {
+  it("says no longer waiting once requested_at is more than four minutes old", async () => {
+    // ticket: F7
     renderCard(
       <AdoCapabilityCard
         item={escalation({ requested_at: new Date(Date.now() - 5 * 60_000).toISOString() })}
@@ -380,7 +387,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
   // sentence's own opening word ("Approving Approving lets…", "Denying
   // Denying…"). Assert the FULL rendered sentence text for each, exactly as
   // the mock draws it (index.html:512): one sentence, first word bold.
-  it("N2: Approving/Denying render as ONE sentence each, first word bold, never doubled", async () => {
+  it("Approving/Denying render as ONE sentence each, first word bold, never doubled", async () => {
+    // ticket: N2
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -399,7 +407,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
   });
 
   // F6 — Q3: policy_bypass/policy_admin get a plain Approve + destructive Deny.
-  it("F6: an ordinary capability (code_write) keeps a teal Approve and a plain Deny", async () => {
+  it("an ordinary capability (code_write) keeps a teal Approve and a plain Deny", async () => {
+    // ticket: F6
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -408,7 +417,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByRole("button", { name: "Deny" }).className).not.toMatch(/\bbg-destructive\b/);
   });
 
-  it("F6: policy_bypass gets a plain Approve and a destructive Deny", async () => {
+  it("policy_bypass gets a plain Approve and a destructive Deny", async () => {
+    // ticket: F6
     renderCard(
       <AdoCapabilityCard
         item={escalation({ requested_scope: { ...escalation().requested_scope, capability: "policy_bypass" } as never })}
@@ -424,7 +434,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByRole("button", { name: "Deny" }).className).toMatch(/\bbg-destructive\b/);
   });
 
-  it("F6: policy_admin gets a plain Approve and a destructive Deny", async () => {
+  it("policy_admin gets a plain Approve and a destructive Deny", async () => {
+    // ticket: F6
     renderCard(
       <AdoCapabilityCard
         item={escalation({ requested_scope: { ...escalation().requested_scope, capability: "policy_admin" } as never })}
@@ -489,7 +500,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
 
   // F10 — loading and error states, non-security viewer only (a security
   // operator's decidability never depends on the run fetch).
-  it("F10: a non-security viewer sees a neutral loading state, never 'Not yours', while run is undefined", async () => {
+  it("a non-security viewer sees a neutral loading state, never 'Not yours', while run is undefined", async () => {
+    // ticket: F10
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator={false} run={undefined} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -498,7 +510,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByLabelText("loading")).toBeInTheDocument();
   });
 
-  it("F10: a non-security viewer sees a generic error, never 'Not yours', when run is null", async () => {
+  it("a non-security viewer sees a generic error, never 'Not yours', when run is null", async () => {
+    // ticket: F10
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator={false} run={null} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
@@ -507,7 +520,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByText(/Couldn't load this run/)).toBeInTheDocument();
   });
 
-  it("F10: a security operator sees the real card immediately, even with run undefined", async () => {
+  it("a security operator sees the real card immediately, even with run undefined", async () => {
+    // ticket: F10
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={undefined} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );

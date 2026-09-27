@@ -124,7 +124,7 @@ type h2Fallback struct {
 // nothing the HTTP/1.1 lane could not. p.transport gets a PRIVATE copy of
 // base: its DialTLSContext does TLS itself, but enabling HTTP/2 appends to the
 // transport's own TLSClientConfig.NextProtos on first use, and base is the
-// very config controlTransport (HTTP/1.1 only) shares.
+// egress config every other copy (the fallback, each dial) is cut from.
 func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	p.transport.ForceAttemptHTTP2 = true
 	p.transport.TLSClientConfig = base.Clone()

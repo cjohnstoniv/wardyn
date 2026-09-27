@@ -26,7 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── harness ────────────────────────────────────────────────────────────────
+// harness
 
 // runFilesStore is a one-run store.Store: every other method panics through the
 // embedded nil Store, the sshMemStore/notFoundStore convention in this package.
@@ -98,7 +98,7 @@ func fileByPath(t *testing.T, resp runFilesResponse, path string) runFileStat {
 	return runFileStat{}
 }
 
-// ─── tests ──────────────────────────────────────────────────────────────────
+// tests
 
 // TestRunFiles_JoinsNumstatAndStatus is the ordinary case: the +/− counts come
 // from numstat, the status letter from porcelain, and an UNTRACKED file (which
@@ -202,7 +202,7 @@ func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"files":[]`) {
 		t.Errorf("files serialized as null, not []: %s", w.Body.String())
 	}
-	// NAMING THE PATH is what makes a wrong answer legible. The mount target is
+	// Naming the path is what makes a wrong answer legible. The mount target is
 	// configurable per workspace source (workspace_run.go), so "not a git
 	// repository" on its own cannot be told apart from "we looked in the wrong
 	// directory" — which, silently, is the worst failure this endpoint has.
@@ -227,8 +227,8 @@ func TestRunFiles_ExecStreamUnsupported(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "does not support") {
 		t.Errorf("501 body does not carry the reason: %s", w.Body.String())
 	}
-	if len(audit.events) != 1 || audit.events[0].Action != "run.files" || audit.events[0].Outcome != "failure" {
-		t.Fatalf("audit = %+v, want one run.files/failure row", audit.events)
+	if len(audit.events) != 1 || audit.events[0].Action != "run.files.fail" || audit.events[0].Outcome != "failure" {
+		t.Fatalf("audit = %+v, want one run.files.fail/failure row", audit.events)
 	}
 }
 
@@ -243,7 +243,7 @@ func TestRunFiles_ForeignRun404(t *testing.T) {
 	})
 
 	member := func(ctx context.Context) context.Context {
-		return withOIDCRole(withOIDCHuman(ctx, "sub-someone-else@corp.example"), oidc.RoleMember)
+		return withOIDCRole(withOIDCHuman(ctx, "sub-someone-else@corp.example"), oidc.RoleUser)
 	}
 	w := doRunFiles(srv, run.ID, member)
 	if w.Code != http.StatusNotFound {
