@@ -188,6 +188,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// single-use enrolment token in its BODY, so the route is anonymous by
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
 	"POST /api/v1/devices/enrol": {class: classAnonymous},
+	// Console branding (#1125): the sign-in page draws the brand before anyone
+	// has signed in, so its read and the logo it names are anonymous. The
+	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
+	"GET /api/v1/branding":      {class: classAnonymous},
+	"GET /api/v1/branding/logo": {class: classAnonymous},
 
 	// admin (SUPER only: a security_admin is refused here too)
 	"GET /metrics":                                       {class: classAdmin},
@@ -309,6 +314,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// the inventory and the revoke are the inventory-then-revoke pair /tokens
 	// already puts on the security tier (classSecurity below).
 	"POST /api/v1/admin/devices/enrolment-tokens": {class: classAdmin},
+	// Branding is org-wide presentation config, the site-config PUT's tier.
+	"PUT /api/v1/branding/settings":    {class: classAdmin},
+	"DELETE /api/v1/branding/settings": {class: classAdmin},
 
 	// security (0.7 §B: admin or security_admin; a member still 403s)
 	// The admin twins of /me/tokens: the deployment-wide inventory names other
@@ -445,6 +453,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
+	// The Support link the header shows every signed-in person (#1125).
+	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
 	// self-service registry scoped to the caller's OWN principal AT THE
 	// STORE (sshkeys.go's package doc), same shape as GET/POST /secrets
@@ -1295,11 +1305,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// the caller does not own (= 43 SUPER). #166 then added POST
 	// /drives/{id}/reclaim, the drive DESTROY verb, born SUPER beside the
 	// family it belongs to (= 44 SUPER). #1143's launch preset writes (PUT/DELETE
-	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER). A route silently reclassified in the
+	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER).
+	// #1125's branding writes (PUT/DELETE /branding/settings) are SUPER, the
+	// site-config PUT's tier (= 48 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 38 || super != 46 {
-		t.Errorf("tier split = %d security / %d admin, want 38 / 46 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 38 || super != 48 {
+		t.Errorf("tier split = %d security / %d admin, want 38 / 48 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

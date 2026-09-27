@@ -42,6 +42,7 @@ import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
 import { AdoConnectionCard } from "./ado-connection";
 import { ModelProvidersList } from "./model-providers-list";
+import { BrandingCard } from "./branding-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -261,6 +262,9 @@ export function SettingsScreen() {
               #538: the Claude subscription kind is disabled on the editor's
               kind step until the sign-in image resolves — undefined status
               (an older daemon with no such check) reads as available. */}
+          {/* #1125 (B-1): beside Host and Model providers, super admin only —
+              the server refuses anyone else's save regardless. */}
+          {adminView && adminReads && <BrandingCard />}
           {adminView && adminReads && (
             <ModelProvidersList
               harnesses={status.harnesses}
