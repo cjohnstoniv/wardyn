@@ -14,8 +14,10 @@ package conformance_test
 // abstraction, which only Execs into the AGENT pod) using the exact same
 // wardyn-proxy image and CLI contract (-stage-config-src/-dst) production's
 // internal/runner/k8s.CreateSandbox wires onto the real proxy pod, so a
-// regression in either the image's flag handling or the volume/mode
-// plumbing shows up here even though this test never calls CreateSandbox.
+// regression in the image's flag handling shows up here. It builds its own
+// pod, so the product pod's volume/mode plumbing is pinned by
+// internal/runner/k8s/proxy_config_file_test.go and, live, by
+// TestConformanceK8s through CreateSandbox.
 //
 // Does NOT `kubectl exec` into the distroless wardyn-proxy image (no shell) —
 // the reads happen in two dedicated probe containers running the conformance

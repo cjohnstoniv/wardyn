@@ -92,8 +92,9 @@ func TestCreateSandbox_ProxyConfigIsAnOwnerOnlyFile(t *testing.T) {
 
 	// FSGroup is what makes that 0440 group-read bit effective: a Secret
 	// volume's projected file is always root:root-owned regardless of Mode,
-	// so without a pod-level FSGroup matching the init container's own gid
-	// (65532), a fake clientset never notices, but a REAL kubelet leaves the
+	// so without a pod-level FSGroup (any value: the kubelet adds it as a
+	// supplemental group; 65532 is what the product sets), a fake clientset
+	// never notices, but a REAL kubelet leaves the
 	// file's group at root and the init container fails closed on
 	// "permission denied" reading its own Secret volume — confirmed
 	// empirically against a live cluster (see the T-28/#688 PR body).

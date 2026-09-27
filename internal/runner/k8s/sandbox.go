@@ -69,9 +69,10 @@ const (
 // denied" reading its own Secret volume.
 var proxyConfigSecretFileMode = int32(0o440)
 
-// proxyNonrootGID is the wardyn-proxy image's nonroot distroless GID (same
-// numeric value as its uid, 65532 — Google's documented convention). Set as
-// the proxy pod's FSGroup so the kubelet chowns the Secret-projected config
+// proxyNonrootGID is the proxy pod's FSGroup. The kubelet adds FSGroup as a
+// supplemental group to every container in the pod, so any value works; it
+// mirrors the image's own nonroot gid (65532) only for readability. It makes
+// the kubelet chown the Secret-projected config
 // file's GROUP to it, making proxyConfigSecretFileMode's group-read bit
 // actually effective for the init container that reads it. It does NOT
 // widen who can read the STAGED file: that one is created by the init

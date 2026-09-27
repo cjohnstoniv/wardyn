@@ -1187,7 +1187,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Security
 
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
-  (#688).** The docker driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
+  (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
   kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env
   var still lands in the container's own process environment — visible to `kubectl exec ... env`,
   `/proc/<pid>/environ`, and any env-var credential scanner, which several enterprise security
@@ -1195,7 +1195,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (the same proxy image) now stages the config out of a Secret volume that projects only the
   config key (mode 0440) into a shared in-memory `emptyDir`, as an owner-only (0400) file; the
   main proxy container mounts only that file, read-only, and reads it via `-config` — no env var
-  carries it at all. Docker is unchanged (tracked separately, waiting on #1051/#1059).
+  carries it at all. Docker is unchanged (tracked separately, waiting on #1051/#1059). **Upgrade
+  note:** run this wardynd with the wardyn-proxy image from the same release. An older proxy image
+  has no `-stage-config-src`, so its init container exits and every Kubernetes run starts with no
+  egress (it fails closed rather than erroring at create).
 - **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
   Both resolve an authored secret name through the run owner's namespace, falling back to the
   operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
