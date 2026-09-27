@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`wardyn secret list` no longer drops the caller's own secrets (#1107).** The server has
+  always returned `{"names":[...],"mine":[...]}`, but the SDK's `ListSecretsPage` decoded only
+  `names`, so a member who stored their own secret never saw it in the CLI. A new
+  `ListSecretsScoped`/`ListSecretsScopedPage` pair decodes both (the existing `ListSecrets(Page)`
+  signatures are unchanged); `wardyn secret list` now prints the union of both lists with each
+  name's scope, and **`--json` now emits the server's `{"names":[...],"mine":[...]}` object
+  instead of a bare array of names** — a breaking change to that flag's output shape.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

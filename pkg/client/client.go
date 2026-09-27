@@ -23,7 +23,8 @@
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
-//   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, SetSecret, DeleteSecret
+//   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
+//     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -681,6 +682,29 @@ func (c *Client) ListSecretsPage(ctx context.Context, opts ...ListOpts) (names [
 func (c *Client) ListSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
 	names, _, err := c.ListSecretsPage(ctx, opts...)
 	return names, err
+}
+
+// ListSecretsScopedPage is ListSecretsPage plus the server's `mine` (the
+// caller's own namespace): for an operator the two are identical; for a
+// member `names` narrows to the operator-owned names an eligible grant
+// pairs with, while `mine` is always the caller's own rows. GET
+// /api/v1/secrets, which responds {"names":[...],"mine":[...]}.
+func (c *Client) ListSecretsScopedPage(ctx context.Context, opts ...ListOpts) (names, mine []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+		Mine  []string `json:"mine"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/secrets", opts), nil, &out, &hdr); err != nil {
+		return nil, nil, false, err
+	}
+	return out.Names, out.Mine, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// ListSecretsScoped is ListSecretsScopedPage without the truncation signal.
+func (c *Client) ListSecretsScoped(ctx context.Context, opts ...ListOpts) (names, mine []string, err error) {
+	names, mine, _, err = c.ListSecretsScopedPage(ctx, opts...)
+	return names, mine, err
 }
 
 // SetSecret stores (or overwrites) a named secret. The value is write-only — no
