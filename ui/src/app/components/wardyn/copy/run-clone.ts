@@ -32,9 +32,6 @@ export const RUN = {
   // silently contradicted.
   SAVED_POLICY_GOVERNS: (barrier: string, egress: string) =>
     `The stored spec governs this run — barrier floor ${barrier}, ${egress}. Your attached workspace mounts into it; nothing else on this page is merged.`,
-  // Exactly one installed class meets the floor: nothing to ask, so the Seg
-  // collapses to this sentence instead (new-run-screen.tsx).
-  BARRIER_ONLY_QUALIFIER: "— the only barrier this run can use.",
   // An inconclusive host probe never blocks launch and does not leave every
   // tier guessably selectable either: an untouched pick sends no
   // confinement_class at all, so the server's own read decides.

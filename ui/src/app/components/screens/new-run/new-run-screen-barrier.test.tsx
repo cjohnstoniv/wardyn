@@ -84,11 +84,13 @@ beforeEach(() => {
   myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
-// Every successful parse re-reads the floor the document authors, and the Seg
-// DISABLES every tier below it. A one-time up-clamp alone would re-open the
-// below-floor 422 the moment the operator lowered the Seg afterwards.
-describe("NewRunScreen — the barrier floor disables what it forbids", () => {
-  it("names the floor as its own reason, separate from what the host can build", async () => {
+// #1200 — the shared TierPicker DROPS a tier the floor forbids or the host
+// can't build, rather than showing it disabled with a reason (the global
+// "installed ∧ allowed" rule every user-facing picker now follows). Nothing
+// here qualifies (floor CC3, host CC1-only), so the control collapses to the
+// T-9 requirement card instead of a fully-disabled Seg.
+describe("NewRunScreen — the barrier floor leaves nothing this run can use (T-9)", () => {
+  it("shows the requirement card naming the floor, with no radiogroup at all", async () => {
     renderScreen();
     const box = await screen.findByLabelText(/Spec \(JSON\)/);
     fireEvent.change(box, {
@@ -101,48 +103,15 @@ describe("NewRunScreen — the barrier floor disables what it forbids", () => {
       },
     });
 
-    // The setup-status mock reports CC1 only, so Wall/Vault are unavailable AND
-    // below-floor — one reason each, never two — while Fence, which this host
-    // builds fine, is disabled for the floor alone. Every tier disabled is
-    // fail-closed on purpose; preflight and launch name the cause.
-    expect(await screen.findByText(/Fence is below the policy's floor \(Vault\)/)).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Fence" })).toBeDisabled();
-    expect(screen.getByText(/Wall isn't installed on this host/)).toBeInTheDocument();
-    expect(screen.queryByText(/Wall is below the policy's floor/)).not.toBeInTheDocument();
-  });
-
-  // DONE WHEN: a test fails if an unavailable class becomes selectable again.
-  // Nothing here qualifies (floor CC3, host CC1-only), so every radio is
-  // disabled and a click on any of them must be a no-op — never a selection.
-  it("never selects a disabled (unavailable-or-below-floor) tier on click", async () => {
-    renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
-    fireEvent.change(box, {
-      target: {
-        value: JSON.stringify({
-          allowed_domains: [],
-          first_use_approval: "always_deny",
-          min_confinement_class: "CC3",
-        }),
-      },
-    });
-    await screen.findByText(/Fence is below the policy's floor \(Vault\)/);
-    // Every tier is disabled fail-closed here (floor CC3, host CC1-only) — the
-    // floor up-clamp already forces the ONE checked radio to Vault on its
-    // own. The assertion that matters is that clicking a disabled button
-    // never MOVES that checked state, whichever radio it started on.
-    const checkedBefore = ["Fence", "Wall", "Vault"].map(
-      (name) => screen.getByRole("radio", { name }).getAttribute("aria-checked"),
-    );
-    for (const name of ["Fence", "Wall", "Vault"]) {
-      const radio = screen.getByRole("radio", { name });
-      expect(radio).toBeDisabled();
-      await user.click(radio);
-    }
-    const checkedAfter = ["Fence", "Wall", "Vault"].map(
-      (name) => screen.getByRole("radio", { name }).getAttribute("aria-checked"),
-    );
-    expect(checkedAfter).toEqual(checkedBefore);
+    // The setup-status mock reports CC1 only: nothing installed reaches the
+    // Vault floor, so the picker names the requirement instead of listing
+    // three disabled options.
+    expect(
+      await screen.findByText(/This run's floor requires Vault, and this host can't run it/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Wall" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Vault" })).toBeNull();
   });
 });
 
@@ -263,15 +232,17 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
   });
 
   // The fallback, and it is not silent: a host that cannot BUILD the cloned
-  // tier falls back like any fresh run and the picker says why in its own
-  // words beside the disabled option — and it stops counting as an explicit
+  // tier falls back like any fresh run, and it stops counting as an explicit
   // pick, so the request omits confinement_class and the SERVER'S OWN default
-  // decides, rather than this screen silently substituting a guess.
-  it("falls back and defers to the server when this host cannot build the cloned tier, and says so", async () => {
+  // decides, rather than this screen silently substituting a guess. #1200:
+  // Fence is now the ONLY tier this host can build, so the picker collapses
+  // to its own decided row rather than naming Vault as disabled.
+  it("falls back and defers to the server when this host cannot build the cloned tier", async () => {
     mockConfinementClasses = ["CC1"];
     renderClone();
     await screen.findByRole("button", { name: /Launch run/ });
-    expect(await screen.findByText(/Vault isn't installed on this host\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Fence · set by your admin/)).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Vault" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
