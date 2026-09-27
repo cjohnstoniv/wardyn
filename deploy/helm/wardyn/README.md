@@ -504,9 +504,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   carries no chart labels) so its proxy sidecars can still reach wardynd's
   `internal` TLS port for credential resolves and mints, approval checks, and
   recording uploads. That port has its own NetworkPolicy rule (this namespace
-  plus the runs namespace) and never inherits `networkPolicy.ingress.from`. A
-  separate `http` peer for the runs namespace stays only so a run already in
-  flight at an upgrade from 0.7.11 finishes.
+  plus the runs namespace) and never inherits `networkPolicy.ingress.from`.
+  The runs namespace is granted that port only, never `http`.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
   also what the boot-time egress canary launches. **Required — the chart
   refuses to render without it** (like `serviceAccount.automount` above): the

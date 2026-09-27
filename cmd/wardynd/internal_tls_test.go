@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -189,5 +191,49 @@ func TestInternalListener_RefusesTLS12Client(t *testing.T) {
 	_, err = c.Get(srv.URL + "/healthz")
 	if err == nil || !strings.Contains(err.Error(), "protocol version") {
 		t.Fatalf("a TLS 1.2 client must be refused, got %v", err)
+	}
+}
+
+// The ingest pins this listener from the file wardynd publishes beside the
+// groundtruth token file: it must hold exactly the CA the listener's
+// certificate chains to, and must not appear on a local (loopback http)
+// install or one without a token file.
+func TestPublishHopCA_BesideTheGroundtruthToken(t *testing.T) {
+	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gtFile := filepath.Join(t.TempDir(), "token")
+	if err := publishHopCA(hop, gtFile); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(gtFile), hopCAFileName))
+	if err != nil {
+		t.Fatalf("no CA published beside the token file: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) || strings.Contains(string(b), "PRIVATE KEY") {
+		t.Fatalf("published file must be the CA certificate alone:\n%s", b)
+	}
+	leaf, err := x509.ParseCertificate(hop.server.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatalf("the listener's certificate does not chain to the published CA: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		hop *hopTLS
+		gt  string
+	}{"loopback http": {nil, filepath.Join(t.TempDir(), "token")}, "no token file": {hop, ""}} {
+		if err := publishHopCA(tc.hop, tc.gt); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if tc.gt != "" {
+			if _, err := os.Stat(filepath.Join(filepath.Dir(tc.gt), hopCAFileName)); !os.IsNotExist(err) {
+				t.Errorf("%s: published a CA file", name)
+			}
+		}
 	}
 }
