@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
+  matrix (#1200).** A new shared `TierPicker` component lists only the tiers this host has installed,
+  each with a one-line strength and an info popover, plus a "Compare barriers" dialog holding the full
+  table for reference — never the governance floor (that's stated in Governance, where it's set, and
+  in each person's own picker, where it binds). The card still shows the canon "No sandbox runner"
+  danger card and its fix line when nothing can launch, and the k8s Runner/Egress-containment rows on
+  a Kubernetes driver, exactly as the Getting-started funnel does. The Governance profile editor gains
+  an "Allowed barriers" control: one radio over the existing `min_confinement_class` ceiling field, so
+  an admin sets the floor without hand-editing the ceiling's JSON.
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
   button while a 201's advisory `warnings[]` sit listed in the rail; it always calls

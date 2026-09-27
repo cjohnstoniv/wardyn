@@ -12,10 +12,13 @@
 //   picker  — interactive (New Run, a member's own choice). Collapses to a
 //             single DECIDED row with no control when exactly one tier is
 //             visible, and to a danger card naming the requirement when none
-//             is (T-9: floor and host disagree).
-//   display — read-only (Settings' Host card, member Getting-started's
-//             summary). Every tier handed to it renders as a decided row —
-//             there is nothing to pick, only to state.
+//             is (T-9: floor and host disagree) — member Getting-started's
+//             summary reaches for exactly that empty-tiers branch (tiers=[])
+//             to render the SAME requirement card when its own governance
+//             floor blocks every installed tier, never a hover-only tooltip.
+//   display — read-only (Settings' Host card only). Every tier handed to it
+//             renders as a decided row — there is nothing to pick, only to
+//             state.
 //
 // "Visible" is the CALLER's decision, not this component's: pass `tiers`
 // already filtered to installed (Host card, T-10) or installed ∧ allowed
@@ -40,6 +43,7 @@ import { CC_META, CC_MATRIX_ROWS, CC_MATRIX_WHERE, CONFINEMENT_CONSTANT_NOTE, ty
 import { RESIDUAL_PREFIX } from "./copy";
 import { TIER_PICKER } from "../../lib/tier-picker-copy";
 import { CC_ORDER, type ConfinementClass } from "../../lib/types";
+import { PICK_WHEN } from "../screens/setup/environment-step";
 
 /** Every installed tier that is also allowed. `allowed` undefined/null means
  *  no floor at all — every installed tier is allowed. Order follows CC_ORDER
@@ -104,6 +108,21 @@ export interface TierPickerProps {
   /** picker mode, zero tiers visible (T-9): names what's missing, e.g.
    *  `TIER_PICKER.REQUIREMENT_LINE(CC_META.CC3.label, kvmReason)`. */
   requirementNote?: React.ReactNode;
+  /** picker mode, exactly one tier visible: the line that replaces its
+   *  tagline. Defaults to `TIER_PICKER.DECIDED` ("{Tier} · set by your
+   *  admin") — the CALLER decides this, not this component (#1200 review
+   *  P2-1): that line is a claim about WHY only one tier is left, true only
+   *  when a governance floor actually removed one. A caller whose single
+   *  survivor is for some other reason (the host itself has only one tier
+   *  installed, or the run's OWN authored policy floor) must pass a neutral
+   *  line instead — e.g. `TIER_PICKER.SOLE_QUALIFIER`. */
+  decidedLine?: (tierLabel: string) => string;
+  /** The instruction line under a real (2+-tier) choice. Defaults to
+   *  `TIER_PICKER.PICK_ONE`, which claims the pick "saves it in this browser
+   *  as the default barrier for new runs" — true for Getting started and
+   *  Settings, FALSE for New Run, where nothing persists across runs
+   *  (#1200 review P2-3). Pass an override wherever that claim doesn't hold. */
+  pickOneNote?: React.ReactNode;
   className?: string;
 }
 
@@ -115,6 +134,8 @@ export function TierPicker({
   recommended = null,
   shape,
   requirementNote,
+  decidedLine,
+  pickOneNote,
   className,
 }: TierPickerProps) {
   const [ref, measuredWidth] = useElementWidth<HTMLDivElement>();
@@ -172,7 +193,7 @@ export function TierPicker({
             <TierRow
               key={cc}
               cc={cc}
-              decided={mode === "picker" ? TIER_PICKER.DECIDED(CC_META[cc].label) : undefined}
+              decided={mode === "picker" ? (decidedLine ?? TIER_PICKER.DECIDED)(CC_META[cc].label) : undefined}
               last={i === tiers.length - 1}
               recommended={mode === "display" && recommended === cc}
             />
@@ -204,7 +225,7 @@ export function TierPicker({
           ))}
         </div>
       )}
-      <p className="mt-2 text-xs text-muted-foreground">{TIER_PICKER.PICK_ONE}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{pickOneNote ?? TIER_PICKER.PICK_ONE}</p>
       {compareLink}
       <CompareBarriersDialog open={compareOpen} onOpenChange={setCompareOpen} />
     </div>
@@ -378,6 +399,10 @@ function CompareBarriersDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               <MatrixRow label={<span className="text-warning">{RESIDUAL_PREFIX}</span>}>
                 {(cc) => CC_META[cc].doesntProtect}
               </MatrixRow>
+              {/* #1200 review P1-2 — the full table's own "Pick when" row
+                  (environment-step.tsx's PICK_WHEN), missing from this
+                  dialog's first cut. */}
+              <MatrixRow label="Pick when">{(cc) => PICK_WHEN[cc]}</MatrixRow>
               <tr>
                 <th scope="row" className="px-3 py-2 text-left align-top font-normal text-foreground">
                   {CC_MATRIX_WHERE.label}
