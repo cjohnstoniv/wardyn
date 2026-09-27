@@ -2115,7 +2115,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   signal, never defaulted — a snapshot this build could not fully enumerate still reads as
   incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
   human who never signs in again.
-
 - **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
   `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
   string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
