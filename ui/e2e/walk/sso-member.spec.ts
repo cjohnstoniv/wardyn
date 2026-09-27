@@ -38,7 +38,7 @@
  * ── 0.7.5: THIS FILE IS HALF THE WALK ───────────────────────────────────────
  * The walk now runs `sso-member sso-member-recovery` in ONE invocation, against
  * ONE cluster (scripts/kind-sso-walk.sh). The shared inputs, the two Dex
- * sessions and the read/write helpers moved to ui/e2e/live/helpers.ts so both
+ * sessions and the read/write helpers moved to ui/e2e/walk/helpers.ts so both
  * files use the same ones; this file's own order and assertions are unchanged
  * apart from the two 0.7.5 edits marked in place. THIS FILE RUNS FIRST and
  * leaves the member `live` under the CONTRADICTING pair — the recovery file
@@ -50,8 +50,8 @@ import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view"
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
 // 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
 // constant name from their own canon docs. Both modules are plain constant
-// tables with no CSS import — the rule ui/e2e/live/helpers.ts states for
-// SELFRUN_MARKER, and what keeps `playwright test --project=live --list` green.
+// tables with no CSS import — the rule ui/e2e/walk/helpers.ts states for
+// SELFRUN_MARKER, and what keeps `playwright test --project=walk --list` green.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../../src/app/lib/workspace-providers-copy";
 import {
@@ -77,7 +77,7 @@ test.describe.configure({ mode: "serial" });
 // ── the walk ────────────────────────────────────────────────────────────────
 
 test("the admin declares the per-user Bedrock SSO lane and pins the account", async ({ page, request }) => {
-  expect(ADMIN_TOKEN, "WARDYN_LIVE_ADMIN_TOKEN is unset — run this through scripts/kind-sso-walk.sh").not.toBe("");
+  expect(ADMIN_TOKEN, "WARDYN_WALK_ADMIN_TOKEN is unset — run this through scripts/kind-sso-walk.sh").not.toBe("");
 
   await dexSignIn(page, ADMIN_EMAIL);
   const who = await me(page);

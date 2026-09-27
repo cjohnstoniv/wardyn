@@ -181,7 +181,7 @@ materialize_managed_claude_config() {
 # writes that state file (the managed-subscription path above is the only thing
 # that ever did, and it returns immediately unless WARDYN_CLAUDE_MANAGED_B64 is
 # set), so an INTERACTIVE run came up on a product tour instead of a prompt — the
-# reason ui/e2e/live/sso-member.spec.ts could only ever launch an AUTONOMOUS run.
+# reason ui/e2e/walk/sso-member.spec.ts could only ever launch an AUTONOMOUS run.
 #
 # Measured on claude 2.1.231:
 # `{"hasCompletedOnboarding": true}` alone removes BOTH of those screens, so that

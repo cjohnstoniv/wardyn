@@ -7,7 +7,7 @@
  * THE LIVE AWS SSO WALK, PART THREE — the mid-run hold (field-report finding 4).
  *
  * Runs in the SAME invocation and against the SAME cluster as
- * ui/e2e/live/sso-member.spec.ts and ui/e2e/live/sso-member-recovery.spec.ts
+ * ui/e2e/walk/sso-member.spec.ts and ui/e2e/walk/sso-member-recovery.spec.ts
  * (scripts/kind-sso-walk.sh runs `run-ui-e2e.sh sso-member sso-member-recovery
  * sso-reauth-hold`), LAST, because case K spends about ten minutes of wall clock
  * and because every case here makes its OWN capture — nothing after it should
@@ -123,16 +123,16 @@ async function setReauthAfter(n: number): Promise<void> {
 }
 
 /** A port for this file's own short-lived forwards — never the walk's 8390. */
-const CONTROL_PORT = process.env.WARDYN_LIVE_FAKE_CONTROL_PORT || "8399";
+const CONTROL_PORT = process.env.WARDYN_WALK_FAKE_CONTROL_PORT || "8399";
 
 /** The RELEASE namespace and deployment — the hold's timeout knob is boot env
  *  on wardynd, forwarded into every proxy sidecar (runner.ProxySidecarEnvKnobs),
  *  so a case that wants a short hold edits it there. Defaulted rather than
  *  exported by the walk, and overridable so a renamed install reds a case
  *  instead of making it vacuous. */
-const KUBE_CONTEXT = process.env.WARDYN_LIVE_KUBE_CONTEXT || "kind-wardyn-quickstart";
-const KUBE_RELEASE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_RELEASE_NAMESPACE || "wardyn";
-const KUBE_RELEASE = process.env.WARDYN_LIVE_KUBE_RELEASE || "wardyn";
+const KUBE_CONTEXT = process.env.WARDYN_WALK_KUBE_CONTEXT || "kind-wardyn-quickstart";
+const KUBE_RELEASE_NAMESPACE = process.env.WARDYN_WALK_KUBE_RELEASE_NAMESPACE || "wardyn";
+const KUBE_RELEASE = process.env.WARDYN_WALK_KUBE_RELEASE || "wardyn";
 
 function kubectl(...args: string[]): string {
   return execFileSync("kubectl", ["--context", KUBE_CONTEXT, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
@@ -149,7 +149,7 @@ function setReauthTimeout(value: string): void {
 
 /** The fake's own Deployment — the two negatives below re-time the SESSION, not
  *  the hold, and the fake's TTLs are boot env on it. */
-const KUBE_FAKE = process.env.WARDYN_LIVE_KUBE_FAKE || "wardyn-awsssofake";
+const KUBE_FAKE = process.env.WARDYN_WALK_KUBE_FAKE || "wardyn-awsssofake";
 
 /** Re-time the fake's session and WAIT for the new pod.
  *

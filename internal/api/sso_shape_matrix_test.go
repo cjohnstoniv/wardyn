@@ -26,7 +26,7 @@ import (
 // config over the maximally-mounted matrix server. Which role a sign-in
 // DERIVES on each shape is the other half, pinned against the shipped config
 // files by internal/auth/oidc's TestShippedShapeRoleDerivation; the live role
-// walk (ui/e2e/live/sso-roles.spec.ts, via scripts/kind-sso-walk.sh and
+// walk (ui/e2e/walk/sso-roles.spec.ts, via scripts/kind-sso-walk.sh and
 // scripts/compose-sso-roles.sh) proves sign-in → role → console on each shape.
 //
 // member2 exists for cross-member isolation: it owns nothing, so every

@@ -6,7 +6,7 @@
 /*
  * SHARED HARNESS FOR THE LIVE AWS SSO WALK.
  *
- * Extracted from ui/e2e/live/sso-member.spec.ts in 0.7.5 when a SECOND live
+ * Extracted from ui/e2e/walk/sso-member.spec.ts in 0.7.5 when a SECOND live
  * spec (sso-member-recovery.spec.ts) started against the same cluster, in the
  * same `scripts/run-ui-e2e.sh sso-member sso-member-recovery` invocation. Every
  * comment below moved verbatim with the code it explains — they record failures
@@ -14,7 +14,7 @@
  * same ones back.
  *
  * NOTHING HERE IS A TEST. It is the walk's inputs, its two Dex sessions, the
- * four read helpers and the two write helpers. `ui/e2e/live/**` has ONE owner
+ * four read helpers and the two write helpers. `ui/e2e/walk/**` has ONE owner
  * (lane e2e-sso-path); other lanes hand their constant names over via their
  * own canon docs rather than editing these files.
  */
@@ -25,12 +25,12 @@ import { expect, type Page, type APIRequestContext } from "@playwright/test";
 import { SELFRUN_MARKER, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
-export const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";
-export const PIN_ACCOUNT = process.env.WARDYN_LIVE_PIN_ACCOUNT || "222222222222";
-export const PIN_ROLE = process.env.WARDYN_LIVE_PIN_ROLE || "WardynDev";
-export const SSO_START_URL = process.env.WARDYN_LIVE_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
+export const ADMIN_TOKEN = process.env.WARDYN_WALK_ADMIN_TOKEN || "";
+export const PIN_ACCOUNT = process.env.WARDYN_WALK_PIN_ACCOUNT || "222222222222";
+export const PIN_ROLE = process.env.WARDYN_WALK_PIN_ROLE || "WardynDev";
+export const SSO_START_URL = process.env.WARDYN_WALK_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
 /** The harness's read-only route to the fake's /_seen — see seen() below. */
-export const SEEN_URL = process.env.WARDYN_LIVE_SEEN_URL || "http://127.0.0.1:8390/_seen";
+export const SEEN_URL = process.env.WARDYN_WALK_SEEN_URL || "http://127.0.0.1:8390/_seen";
 
 export const ADMIN_EMAIL = "admin@wardyn.local";
 export const MEMBER_EMAIL = "member@wardyn.local";
@@ -62,8 +62,8 @@ export const OTHER_ROLE = "DevPower";
 // device-code flow. Generous, and bounded — an unbounded wait is how a live
 // suite turns a failure into a hang.
 //
-// Both ceilings are ENVIRONMENT-OVERRIDABLE (WARDYN_LIVE_SANDBOX_UP_MS /
-// WARDYN_LIVE_LOGIN_DONE_MS), because the 300s default was tuned on a
+// Both ceilings are ENVIRONMENT-OVERRIDABLE (WARDYN_WALK_SANDBOX_UP_MS /
+// WARDYN_WALK_LOGIN_DONE_MS), because the 300s default was tuned on a
 // developer box and is too tight for a hosted CI runner: the nightly kind SSO
 // walk schedules the CNI, Postgres, the daemon, Dex and every sandbox pod
 // concurrently on two vCPUs (#285 — the walk's first nightly dispatch timed
@@ -74,8 +74,8 @@ function envMs(name: string, fallback: number): number {
   const raw = Number(process.env[name]);
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 }
-export const SANDBOX_UP = envMs("WARDYN_LIVE_SANDBOX_UP_MS", 300_000);
-export const LOGIN_DONE = envMs("WARDYN_LIVE_LOGIN_DONE_MS", 300_000);
+export const SANDBOX_UP = envMs("WARDYN_WALK_SANDBOX_UP_MS", 300_000);
+export const LOGIN_DONE = envMs("WARDYN_WALK_LOGIN_DONE_MS", 300_000);
 
 /**
  * Sign in through Dex's static-password form.
@@ -173,7 +173,7 @@ export async function ownAWSRow(page: Page): Promise<{
  * every sandbox, the login run and dispatch-time renewal all address the fake by
  * its in-cluster Service name. scripts/kind-sso-walk.sh opens a read-only
  * `kubectl port-forward` purely so the harness can read the counter the fake
- * keeps, and hands the URL over in WARDYN_LIVE_SEEN_URL.
+ * keeps, and hands the URL over in WARDYN_WALK_SEEN_URL.
  *
  * It used to be `kubectl exec deployment/wardyn -- wget`, which CANNOT work on
  * any deployment: the wardynd image is distroless — no wget, no curl, no shell —

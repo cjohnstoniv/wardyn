@@ -10,7 +10,7 @@
  * SSO walk: `sso` (the chart with SSO + the admin token) and `sso-only`
  * (auth.ssoOnly=true, token removed). scripts/compose-sso-roles.sh runs it on
  * `mprime` (the desktop member-mode envelope) and `compose-sso` (the compose
- * --profile sso stack). WARDYN_LIVE_ROLES_RENDER names which one this
+ * --profile sso stack). WARDYN_WALK_ROLES_RENDER names which one this
  * invocation runs against, and the first case refuses to go on if /healthz
  * disagrees — so every assertion below is on the render its title names.
  *
@@ -39,7 +39,7 @@ test.skip(
 );
 test.describe.configure({ mode: "serial" });
 
-const RENDER = process.env.WARDYN_LIVE_ROLES_RENDER || "sso";
+const RENDER = process.env.WARDYN_WALK_ROLES_RENDER || "sso";
 const SSO_ONLY = RENDER === "sso-only";
 // Member mode (docs/DESKTOP.md) keeps the token as the MDM's process credential:
 // it still works as a bearer, but the console never offers it to a human.
@@ -100,7 +100,7 @@ test(`[${RENDER}] the render is the one this invocation claims, and the sign-in 
 });
 
 test(`[${RENDER}] the admin-token principal exists only where a token is configured`, async ({ request }) => {
-  expect(ADMIN_TOKEN, "WARDYN_LIVE_ADMIN_TOKEN is unset — run this through scripts/kind-sso-walk.sh").not.toBe("");
+  expect(ADMIN_TOKEN, "WARDYN_WALK_ADMIN_TOKEN is unset — run this through scripts/kind-sso-walk.sh").not.toBe("");
   const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
   const res = await request.get("/api/v1/me", { headers });
   if (SSO_ONLY) {

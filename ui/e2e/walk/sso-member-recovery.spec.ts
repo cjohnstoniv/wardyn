@@ -9,7 +9,7 @@
  * signed in.
  *
  * Runs in the SAME invocation and against the SAME cluster as
- * ui/e2e/live/sso-member.spec.ts (scripts/kind-sso-walk.sh runs
+ * ui/e2e/walk/sso-member.spec.ts (scripts/kind-sso-walk.sh runs
  * `run-ui-e2e.sh sso-member sso-member-recovery`), immediately after it. Two
  * facts it inherits and does not re-establish:
  *
@@ -129,17 +129,17 @@ const MEMBER_PREVIEW_SIGNIN_REFUSAL =
 
 /** The kind context/namespace the walk installed into, so case E can taint the
  *  node and read the run pod's phase. scripts/kind-sso-walk.sh exports both. */
-const KUBE_CONTEXT = process.env.WARDYN_LIVE_KUBE_CONTEXT || "kind-wardyn-quickstart";
+const KUBE_CONTEXT = process.env.WARDYN_WALK_KUBE_CONTEXT || "kind-wardyn-quickstart";
 // Where RUN pods land (k8s.runsNamespace) — not the release namespace.
-const KUBE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_NAMESPACE || "wardyn-runs";
-const KUBE_NODE = process.env.WARDYN_LIVE_KUBE_NODE || "wardyn-quickstart-control-plane";
+const KUBE_NAMESPACE = process.env.WARDYN_WALK_KUBE_NAMESPACE || "wardyn-runs";
+const KUBE_NODE = process.env.WARDYN_WALK_KUBE_NODE || "wardyn-quickstart-control-plane";
 /** The RELEASE namespace (the daemon Deployment), not the runs one. Case E2
  *  re-points the daemon's agent-image map, which is boot env on that Deployment.
  *  Defaulted rather than exported by the walk, which currently exports only the
  *  three coordinates the taint case needed — overridable for the same reason
  *  those are: a renamed install must red this case, not make it vacuous. */
-const KUBE_RELEASE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_RELEASE_NAMESPACE || "wardyn";
-const KUBE_RELEASE = process.env.WARDYN_LIVE_KUBE_RELEASE || "wardyn";
+const KUBE_RELEASE_NAMESPACE = process.env.WARDYN_WALK_KUBE_RELEASE_NAMESPACE || "wardyn";
+const KUBE_RELEASE = process.env.WARDYN_WALK_KUBE_RELEASE || "wardyn";
 const COLDPULL_TAINT = "wardyn-coldpull=1:NoSchedule";
 
 /** `stdio: "pipe"`, deliberately: an untaint of a node that is not tainted

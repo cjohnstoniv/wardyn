@@ -54,27 +54,27 @@ export default defineConfig({
     video: process.env.CI ? "on-first-retry" : "retain-on-failure",
   },
   projects: [
-    { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "live/**"], use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "walk/**", "live-local/**"], use: { ...devices["Desktop Chrome"] } },
     {
-      // live: the LIVE walks (e2e/live/*.spec.ts) — specs that drive a REAL,
+      // walk: the kind SSO walk (e2e/walk/*.spec.ts) — specs that drive a REAL,
       // already-running Wardyn rather than the hermetic `-runner none` backend.
       // Today that is the kind SSO cluster (scripts/kind-sso-walk.sh): two Dex
       // principals, the k8s runner substrate, real sandboxes, and AWS SSO
       // pointed at test/awsssofake. It is its OWN project so the hermetic
-      // chromium gate never runs it (chromium's testIgnore drops live/**), and
+      // chromium gate never runs it (chromium's testIgnore drops walk/**), and
       // every spec in it self-skips without WARDYN_TEST_K8S=1 — the same guard
       // the other cluster-dependent lanes use, and the reason a bare `pnpm e2e`
       // can never point a browser at somebody's live cluster and start clicking.
       //
       // It inherits the top-level baseURL, which run-ui-e2e.sh's LIVE mode sets
-      // from WARDYN_E2E_LIVE_BASE_URL — one spelling, not two.
+      // from WARDYN_E2E_WALK_BASE_URL — one spelling, not two.
       //
       // No retries and a long timeout, for the reasons the demo project gives:
       // the walk launches real sandboxes on a cluster (image pulls, pod
       // scheduling, a device-code login in a PTY), and a retry would replay a
       // sign-in whose captured credential the first attempt already consumed.
-      name: "live",
-      testMatch: "live/**/*.spec.ts",
+      name: "walk",
+      testMatch: "walk/**/*.spec.ts",
       retries: 0,
       timeout: 30 * 60_000,
       // A single ACTION may never wait out the 30-minute test budget: a missing

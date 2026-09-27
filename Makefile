@@ -1280,7 +1280,7 @@ ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/scr
 	@# spec file without a browser, a live cluster, WARDYN_TEST_K8S or WARDYN_DEMO, in
 	@# seconds — cheap enough to do it for all three off-chromium projects.
 	@echo "Loading the live walk's spec files (playwright --list)..."
-	cd ui && pnpm exec playwright test --project=live --list >/dev/null
+	cd ui && pnpm exec playwright test --project=walk --list >/dev/null
 	@echo "Loading the demo recording's spec files (playwright --list)..."
 	cd ui && pnpm exec playwright test --project=demo --list >/dev/null
 	@echo "Loading the screenshots' spec files (playwright --list)..."

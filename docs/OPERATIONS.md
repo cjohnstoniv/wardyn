@@ -4653,7 +4653,7 @@ how you rescue a failed one).
 The same entry covers the Bedrock stub, because it is the same Service.
 
 **The walk.** `WARDYN_TEST_K8S=1 scripts/kind-sso-walk.sh` does all of the
-above and then drives `ui/e2e/live/sso-member.spec.ts`. **It resets the cluster
+above and then drives `ui/e2e/walk/sso-member.spec.ts`. **It resets the cluster
 first**: it restarts the quickstart's Postgres, which has no volume, so every
 run, workspace, secret and captured session on that cluster is gone — this is a
 throwaway cluster by design, never one you keep state on. Then both principals sign in
