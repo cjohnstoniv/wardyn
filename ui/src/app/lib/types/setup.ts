@@ -461,6 +461,11 @@ export interface SetupStatus {
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };
   age_key: { durable: boolean };
+  // The kind of store this deployment keeps people's credentials in — never a
+  // host, path or vault name (design F-3). Kept through redactSetupStatusForUser,
+  // unlike `checks`: every signed-in person reads it, not just an admin.
+  // Optional: absent on an older daemon that predates the field.
+  credential_storage?: "local" | "key_service" | "vault" | "key_vault";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
   // Optional: absent on an older/fallback status (e.g. READY_FALLBACK, or a

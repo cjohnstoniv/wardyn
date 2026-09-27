@@ -569,6 +569,27 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 	return checks
 }
 
+// credentialStorageMode names the kind of store this deployment keeps
+// people's credentials in, for /setup/status's credential_storage field
+// (design F-3, packet F): "local" | "key_service" | "vault" | "key_vault" —
+// never a host, path or vault name. external and keyService are the same two
+// Server-config strings secretStoreChecks (above) grades; the store kind rides
+// on which of the store's two Describe() spellings external carries ("Vault
+// at …" for vaultkv, "Key Vault …" for azurekv, secretstore/vaultkv and
+// /azurekv), so telling them apart needs no third Server field.
+func credentialStorageMode(external, keyService string) string {
+	switch {
+	case strings.HasPrefix(external, "Key Vault"):
+		return "key_vault"
+	case external != "":
+		return "vault"
+	case keyService != "":
+		return "key_service"
+	default:
+		return "local"
+	}
+}
+
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
 // proxy, egress redirects, default SCM hosts) has been authored yet. "info" for
 // the unconfigured/fully-configured cases — it is optional and skippable, never

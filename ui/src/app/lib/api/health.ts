@@ -340,10 +340,18 @@ export const health = {
     // UI-sandbox gateway discovery (run-detail's "UI apps" lane): absent when
     // the gateway is off (WARDYN_UI_SANDBOX_LISTEN unset) or an older daemon —
     // both read as "no lane", never a false-enabled guess. enter_url_template
-    // is the ONE field the console reads to build the open URL — it never
-    // composes the UI origin itself, only substitutes {run}/{app}/{ticket}
-    // (internal/api/uigateway.go's uiSandboxHealthz).
-    ui_sandbox?: { enabled?: boolean; enter_url_template?: string; host_mode?: boolean };
+    // is the GET form (kept for compatibility); enter_post_url is the same
+    // endpoint with no query string, for the POST hand-off (#1220) — the
+    // console reads it to build an auto-submitted form so the single-use
+    // ticket never lands in a URL. Neither composes the UI origin itself, only
+    // substitutes {run}/{app}/{ticket} (internal/api/uigateway.go's
+    // uiSandboxHealthz).
+    ui_sandbox?: {
+      enabled?: boolean;
+      enter_url_template?: string;
+      enter_post_url?: string;
+      host_mode?: boolean;
+    };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
     // name ("recording", "identity", ...). recording.selected ===
     // "none" is the honest signal that THIS deployment's recording store

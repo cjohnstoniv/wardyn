@@ -179,27 +179,59 @@ Your own image serves an app the same way — see
 ## 3. Open an app
 
 Two calls: mint a single-use attach ticket (the **same** ticket the browser
-terminal uses — there is no second ticket type), then `GET` the enter URL on
-the UI origin.
+terminal uses — there is no second ticket type), then hand it to the enter
+endpoint on the UI origin — as a `POST` form field (preferred: the ticket never
+lands in a URL, browser history, or a reverse-proxy access log) or, for
+compatibility, as a `GET` query string.
 
 ```sh
 TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
+
+# Preferred: POST, form body — the ticket never appears in a URL.
+curl -sf -X POST "$UI_ORIGIN/__wardyn/enter" \
+  --data-urlencode "run=$RUN_ID" --data-urlencode app=vscode --data-urlencode "ticket=$TICKET"
+
+# Compatibility: GET, query string.
 xdg-open "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
 ```
 
-`/healthz` publishes the exact form as `ui_sandbox.enter_url_template`, with
-`{run}`, `{app}` and `{ticket}` placeholders. Read the origin from there rather
-than composing it — it is deliberately not the console's.
+`/healthz` publishes both forms: `ui_sandbox.enter_post_url` is the endpoint
+with **no query string at all** (`run`/`app`/`ticket` go in the
+`application/x-www-form-urlencoded` body instead), and
+`ui_sandbox.enter_url_template` is the `GET` form, with `{run}`, `{app}` and
+`{ticket}` placeholders. Read the origin from one of these rather than
+composing it — it is deliberately not the console's. A ticket in the query
+string on a `POST` is refused outright (no mixed mode): exactly one of the two
+forms is honored per request.
 
-The enter endpoint consumes the ticket and then **re-checks everything the
-ticket cannot prove on its own** against freshly-loaded state: owner-or-admin
-for this run, the run still `RUNNING` with a sandbox, and the app actually
-declared in the run's **effective** policy. Only then does it set the relay
-cookie — `wardyn_ui_sess`, `HttpOnly`, `SameSite=Lax`,
-`Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL` (default 8h) — and
-`302` to `/r/<run-id>/<app><path>`. Every later request rides that cookie, and
-nothing else on this listener authenticates anything.
+Both forms run the **same** consume-then-re-check path: the ticket is consumed,
+then everything it cannot prove on its own is re-checked against
+freshly-loaded state — owner-or-admin for this run, the run still `RUNNING`
+with a sandbox, and the app actually declared in the run's **effective**
+policy. Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
+`SameSite=Lax`, `Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL`
+(default 8h) — and redirects to `/r/<run-id>/<app><path>` (`303` for `POST`,
+`302` for `GET`, so a `POST` redirect is never silently replayed as a `GET`).
+Every later request rides that cookie, and nothing else on this listener
+authenticates anything.
+
+No extra CSRF token guards either form, and `POST` adds no risk `GET` did not
+already have. What the ticket stops: a page that does not hold a
+freshly-minted, still-valid ticket for THIS run cannot forge a session for
+someone ELSE's run — the ticket is single-use, ~30s-TTL, and bound to one run
+and one principal, mintable only through an already-authenticated call to
+`POST /runs/{id}/attach/ticket`.
+
+What it does NOT stop: any Wardyn user can mint a ticket for their OWN run and
+drive a victim's browser to redeem it — by this `POST` form exactly like by the
+unchanged `GET` link — landing the victim's browser on a session for the
+ATTACKER's app (login CSRF / session fixation); the enter endpoint only checks
+that the ticket's principal owns the run it names, never who the browser
+actually belongs to. Host mode ([below](#4-deployment)) bounds this to the
+attacker's own origin — a phishing risk, not a same-origin one. The
+pre-existing shared-origin (path-mode) chain this residual compounds into is
+tracked in #1241, not introduced or widened here.
 
 **One session per app, per run.** The app is in the path and the cookie is
 scoped to it, so a run that declares several `ui_apps` can have them all open at
@@ -210,8 +242,10 @@ so the log says which app a human actually opened.
 ### From the console
 
 The run detail page's **UI apps** lane is the affordance for this flow: one row
-per declared app, and an **Open** button that mints the ticket and opens the
-app in a new tab. Its states and strings are frozen in
+per declared app, and an **Open** button that mints the ticket, then submits a
+hidden auto-submitted `POST` form (built from `ui_sandbox.enter_post_url`) that
+opens the app in a new tab — the ticket never touches this page's URL either.
+Its states and strings are frozen in
 [design/ui-sandboxes-prompt.md](design/ui-sandboxes-prompt.md). The app is
 never embedded in the console page — an `<iframe>` on the console origin is
 precisely what the second listener exists to prevent.

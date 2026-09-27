@@ -19,13 +19,14 @@ import { parseFrozenTables } from "./copy-doc-parity";
 // takes the LAST cell as the frozen value, and the doc used to put `Where`
 // last) so it parses cleanly here.
 //
-// The table's 29 rows are not all this module's to carry: `sso_rbac.*` and
+// The table's 30 rows are not all this module's to carry: `sso_rbac.*` and
 // `sign_in_help_url.*` are server-composed setup-check text
 // (internal/api/setup_checks.go / setup_checks_siteconfig.go), the two
 // `refusal: *` rows are Go 400 messages (internal/api/site_config_signin_
-// help.go), and the two `SSH keys chip*` rows are an inline JSX literal in
-// ssh-keys.tsx with no exported constant. Only the ADMIN_ACCESS_BANNER.*,
-// SIGNIN_HELP.* and SIGNIN_HELP_LINK_LABEL rows (17 of 29, counting #491's
+// help.go), and the three `SSH keys chip*`/`SSH pane description` rows are
+// inline JSX literals in ssh-keys.tsx with no exported constant (M-5, #636,
+// added the third). Only the ADMIN_ACCESS_BANNER.*, SIGNIN_HELP.* and
+// SIGNIN_HELP_LINK_LABEL rows (17 of 30, counting #491's
 // BODY_DEFAULT_ROLE) live in access-posture-copy.ts / people-access-copy.ts,
 // per the build-queue spec and the owner's own scoping — those are the 17
 // pinned below.
@@ -63,8 +64,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("admin-access-copy — admin-access-canon.md, #489", () => {
-  it("finds all 29 rows in the doc's Frozen strings table", () => {
-    expect(doc.size).toBe(29);
+  it("finds all 30 rows in the doc's Frozen strings table", () => {
+    expect(doc.size).toBe(30);
   });
 
   it("the 17 UI-owned rows are byte-exact", () => {

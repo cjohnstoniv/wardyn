@@ -19,8 +19,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending).
-const credInventoryNoMeta = "this deployment's secret store keeps no credential metadata"
+// credInventoryNoMeta is the inventory's 503 when the configured secret store
+// keeps no credential metadata at all (design packet F, canon): the admin
+// view's Stored credentials page shows this sentence verbatim in its empty
+// card, with no Retry — retrying changes nothing about which store is
+// configured.
+const credInventoryNoMeta = "This deployment's secret store keeps no credential metadata, so there is nothing to list."
 
 // The inventory's states. Metadata alone cannot say a credential still works
 // (dispatch finds that out), only whether it is stored and past its expiry.
@@ -91,14 +95,24 @@ func (s *Server) attachOwnCredentialMeta(ctx context.Context, sc types.SiteConfi
 }
 
 // credentialInventoryRow is one person's stored credential for one provider.
+//
+// Email and ProviderName (design F-2, packet F) are added alongside Person
+// (an opaque OIDC subject) and Provider (an id): neither is secret, and
+// without them a security_admin — who has no route to the provider roster or
+// an identity directory — could read only ids, which nobody can offboard
+// from. Both are additive projections of data this route's tier already
+// reaches elsewhere (knownPrincipals, the stored model-provider block); no
+// new read and no widened access.
 type credentialInventoryRow struct {
-	Person     string     `json:"person"`
-	Provider   string     `json:"provider"`
-	State      string     `json:"state"`
-	Store      string     `json:"store"`
-	AddedAt    time.Time  `json:"added_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	Person       string     `json:"person"`
+	Email        string     `json:"email,omitempty"`
+	Provider     string     `json:"provider"`
+	ProviderName string     `json:"provider_name,omitempty"`
+	State        string     `json:"state"`
+	Store        string     `json:"store"`
+	AddedAt      time.Time  `json:"added_at"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 }
 
 // credentialInventoryCounts: distinct people holding any credential, the rows,
@@ -130,9 +144,11 @@ func (s *Server) handleCredentialInventory(w http.ResponseWriter, r *http.Reques
 	}
 	inv := credentialInventory{Credentials: []credentialInventoryRow{}, Counts: credentialInventoryCounts{ByProvider: map[string]int{}}}
 	providerOf := map[string]string{}
+	providerNames := map[string]string{}
 	for _, p := range storedModelProviders(sc).Providers {
 		inv.Counts.ByProvider[p.ID] = 0
 		providerOf[providerCredentialName(p)] = p.ID
+		providerNames[p.ID] = p.Name
 	}
 	if len(providerOf) > 0 {
 		m, ok := s.cfg.Secrets.(secretstore.MetaStore)
@@ -149,12 +165,29 @@ func (s *Server) handleCredentialInventory(w http.ResponseWriter, r *http.Reques
 			writeServerError(w, r, "read credential metadata", err)
 			return
 		}
-		inv.fill(metas, providerOf, s.cfg.Now())
+		inv.fill(metas, providerOf, providerNames, s.emailsByPrincipal(ctx), s.cfg.Now())
 	}
 	writeJSON(w, http.StatusOK, inv)
 }
 
-func (inv *credentialInventory) fill(metas []secretstore.Meta, providerOf map[string]string, now time.Time) {
+// emailsByPrincipal pairs each principal ?owner= already resolves against
+// (knownPrincipals) with its known email, first pairing wins. Used to add
+// credentialInventoryRow.Email (design F-2) — the SAME directory, no new
+// read, and no principal without a paired email gets one invented.
+func (s *Server) emailsByPrincipal(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	for _, p := range s.knownPrincipals(ctx) {
+		if p.email == "" {
+			continue
+		}
+		if _, ok := out[p.principal]; !ok {
+			out[p.principal] = p.email
+		}
+	}
+	return out
+}
+
+func (inv *credentialInventory) fill(metas []secretstore.Meta, providerOf, providerNames, emailOf map[string]string, now time.Time) {
 	people := map[string]bool{}
 	for _, md := range metas {
 		id, ok := providerOf[md.Name]
@@ -166,7 +199,8 @@ func (inv *credentialInventory) fill(metas []secretstore.Meta, providerOf map[st
 			state = credStateExpired
 		}
 		inv.Credentials = append(inv.Credentials, credentialInventoryRow{
-			Person: md.Owner, Provider: id, State: state, Store: md.Store,
+			Person: md.Owner, Email: emailOf[md.Owner], Provider: id, ProviderName: providerNames[id],
+			State: state, Store: md.Store,
 			AddedAt: md.AddedAt, LastUsedAt: md.LastUsedAt, ExpiresAt: md.ExpiresAt,
 		})
 		inv.Counts.ByProvider[id]++
