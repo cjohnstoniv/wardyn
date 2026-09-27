@@ -39,6 +39,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   client-go's 5/10 per API group to one shared 50 QPS / burst 100 limiter, and a readiness wait that
   times out under client-side throttling now names the pod's reason (for example
   "Unschedulable … Insufficient cpu") instead of "client rate limiter Wait returned an error".
+- **The AWS SSO reauth-hold docker tests now start the agent image the way a Bedrock SSO run
+  does (#1193, refs #1185).** They bind-mounted a host-written `~/.aws` over the image's home and
+  ran `claude` directly, so a red run read as "the pinned Claude Code CLI cannot resolve an SSO
+  profile" while real runs were minting role credentials all along (the kind SSO walk's pinned
+  identity case). The files now arrive as dispatch sends them (`WARDYN_AWS_SSO_CONFIG_B64`,
+  materialized by the image's own `agent-run`) with the env dispatch writes, so a break in that
+  delivery path fails them. The tolerance measurement now fits inside `go test`'s default
+  timeout and removes its agent container instead of leaving it holding the parked call.
 - **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
   recovers a KILLED run whose kill tail never finished (#710).** That route is
   the sweep's only caller: it does not run at boot or on a timer, so recovery
