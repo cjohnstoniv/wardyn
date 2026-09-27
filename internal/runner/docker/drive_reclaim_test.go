@@ -8,8 +8,13 @@ package docker
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -199,5 +204,71 @@ func TestReclaimDrive_FailsClosedWhenTheDaemonCannotSayWhatTheVolumeIs(t *testin
 	}
 	if len(f.volumeRemoves) != 0 {
 		t.Errorf("the driver deleted on the strength of the name alone: %v", f.volumeRemoves)
+	}
+}
+
+// TestReclaimDrive_RealDockerRefusesWhileAContainerMountsIt (#721) proves,
+// against an ACTUAL daemon, the mapping every fake case above assumes: Docker's
+// refusal to remove a volume a container still references reaches the caller
+// as runner.ErrDriveInUse (the API's 409), the volume survives it, and the same
+// reclaim deletes it once the container is gone. Skipped unless
+// WARDYN_TEST_DOCKER=1.
+func TestReclaimDrive_RealDockerRefusesWhileAContainerMountsIt(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
+		t.Skip("set WARDYN_TEST_DOCKER=1 to run the real-Docker drive reclaim test")
+	}
+	d, err := New(Config{ProxyImage: "busybox:latest"})
+	if err != nil {
+		t.Fatalf("docker.New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := d.ensureImage(ctx, "busybox:latest", nil); err != nil {
+		t.Fatalf("pull busybox: %v", err)
+	}
+
+	drive := dockerVolumeDrive()
+	drive.ObjectName = "wardyn-drive-reclaim-test-" + uuid.NewString()
+	if err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
+		t.Fatalf("ensureDriveVolume: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.cli.VolumeRemove(context.Background(), drive.ObjectName, client.VolumeRemoveOptions{Force: true})
+	})
+	// Created, never started: a daemon counts a volume as in use by ANY
+	// container that references it, which is also what a stopped-but-kept run
+	// looks like.
+	holder, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:   "wardyn-test-drive-holder-" + uuid.NewString(),
+		Config: &container.Config{Image: "busybox:latest", Cmd: []string{"true"}},
+		HostConfig: &container.HostConfig{
+			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: "/data"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create holder container: %v", err)
+	}
+	removeHolder := func() error {
+		_, err := d.cli.ContainerRemove(context.Background(), holder.ID, client.ContainerRemoveOptions{Force: true})
+		return err
+	}
+	t.Cleanup(func() { _ = removeHolder() })
+
+	if _, err := d.ReclaimDrive(ctx, *drive); !errors.Is(err, runner.ErrDriveInUse) {
+		t.Fatalf("reclaim while a container mounts the volume: err = %v, want ErrDriveInUse", err)
+	}
+	if _, err := d.cli.VolumeInspect(ctx, drive.ObjectName, client.VolumeInspectOptions{}); err != nil {
+		t.Fatalf("the volume did not survive a refused reclaim: %v", err)
+	}
+
+	if err := removeHolder(); err != nil {
+		t.Fatalf("remove holder container: %v", err)
+	}
+	got, err := d.ReclaimDrive(ctx, *drive)
+	if err != nil {
+		t.Fatalf("reclaim after the holder is gone: %v", err)
+	}
+	if got != runner.DriveReclaimDeleted {
+		t.Errorf("outcome = %q, want %q", got, runner.DriveReclaimDeleted)
 	}
 }
