@@ -731,21 +731,107 @@ func TestUIGateway_EnterPOST_RefusesAKeptRun(t *testing.T) {
 // TestUIGateway_EnterPOST_TicketInQueryIsRefused is the no-mixed-mode rule: a
 // ticket in the query string on a POST is refused BEFORE any ticket lookup —
 // proven by redeeming the same ticket successfully right after, which would
-// fail if the refused request had already consumed it.
+// fail if the refused request had already consumed it. Covers a bare
+// `?ticket=<T>`, an empty `?ticket=` with none in the form, and (review F1)
+// `?ticket=&ticket=<T>` — the query check has to test for the KEY's presence
+// (url.Values.Has), not a non-empty first VALUE (url.Values.Get), or a form
+// ticket riding alongside an empty query one would slip through as valid.
 func TestUIGateway_EnterPOST_TicketInQueryIsRefused(t *testing.T) {
 	h := newUIHarness(t, okBackend())
+
+	t.Run("bare query ticket", func(t *testing.T) {
+		ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+		form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}}
+		req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket="+ticket, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("ticket in query on POST: %d %s, want 400", rec.Code, rec.Body.String())
+		}
+		rec2 := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+		if rec2.Code != http.StatusSeeOther {
+			t.Fatalf("ticket unusable after the refused mixed-mode attempt: %d %s", rec2.Code, rec2.Body.String())
+		}
+	})
+
+	t.Run("empty query ticket, none in the form", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket=", strings.NewReader(url.Values{
+			"run": {h.run.ID.String()}, "app": {"code"},
+		}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("empty query ticket: %d %s, want 400", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("empty query ticket alongside a valid form one", func(t *testing.T) {
+		ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+		form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}}
+		req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket=", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("empty query ticket + valid form ticket: %d %s, want 400 (Get(\"ticket\")!=\"\" would wrongly let this through)", rec.Code, rec.Body.String())
+		}
+		rec2 := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+		if rec2.Code != http.StatusSeeOther {
+			t.Fatalf("ticket unusable after the refused mixed-mode attempt: %d %s", rec2.Code, rec2.Body.String())
+		}
+	})
+}
+
+// TestUIGateway_EnterPOST_OversizeBodyRefused pins the body bound (review F3,
+// mutation M4): dropping http.MaxBytesReader survives the rest of this suite
+// silently, because nothing else sends a body anywhere near the 4KB cap.
+// Without the bound, ParseForm falls back to its own 10MB default — a much
+// larger unauthenticated read per request than this endpoint needs.
+func TestUIGateway_EnterPOST_OversizeBodyRefused(t *testing.T) {
+	h := newUIHarness(t, okBackend())
 	ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
-	form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}}
-	req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket="+ticket, strings.NewReader(form.Encode()))
+	form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}}
+	oversize := form.Encode() + "&pad=" + strings.Repeat("x", int(maxUIEnterFormBytes))
+	req := httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(oversize))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("ticket in query on POST: %d %s, want 400", rec.Code, rec.Body.String())
+		t.Fatalf("oversize body: %d %s, want 400", rec.Code, rec.Body.String())
 	}
+	// The oversized request must never have gotten far enough to consume the
+	// ticket it carried.
 	rec2 := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
 	if rec2.Code != http.StatusSeeOther {
-		t.Fatalf("ticket unusable after the refused mixed-mode attempt: %d %s", rec2.Code, rec2.Body.String())
+		t.Fatalf("ticket unusable after the oversize-body refusal: %d %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm pins the OTHER half
+// of "the form is the only source of truth" (review F3, mutations M3/M3b): a
+// query run/app must never override the form's, whether or not a ticket is
+// also present in the query. r.PostForm (not r.Form, which lists the URL
+// query's values before the body's) is what makes this hold.
+func TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	otherRun := types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-2"}
+	h.store.putRun(otherRun)
+
+	form := url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	}
+	req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?run="+otherRun.ID.String()+"&app=evil", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.gateway.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("form vs query run/app: %d %s, want 303 (the form wins)", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Header().Get("Location"), uiRunPrefix+h.run.ID.String()+"/code/ide"; got != want {
+		t.Fatalf("Location %q, want %q — the FORM's run, not the query's", got, want)
 	}
 }
 

@@ -150,6 +150,13 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // that the ticket leaves the URL, so it must not be re-encoded back into
   // one here. submitEnterForm below builds and submits a hidden form instead
   // of calling window.open on a composed URL.
+  //
+  // enter_post_url is absent only against an OLDER daemon than this console
+  // (a dev-setup skew — the console is normally baked into the daemon that
+  // serves it). Falling through to an empty form action would silently POST
+  // run/app/ticket to the console's OWN current URL instead of the gateway,
+  // burning the ticket for nothing; fall back to the GET template that older
+  // daemon actually published instead, and only give up if neither is there.
   async function openApp(app: UIApp) {
     setAppError(null);
     setOpeningApp(app.name);
@@ -159,8 +166,18 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
       // __wardyn/enter", no query) — split/join replaces every occurrence
       // (replaceAll is ES2021; this tsconfig's lib is ES2020).
-      const action = (uiSandbox?.enter_post_url ?? "").split("{run}").join(encodeURIComponent(run.id));
-      submitEnterForm(action, { run: run.id, app: app.name, ticket });
+      if (uiSandbox?.enter_post_url) {
+        const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(run.id));
+        submitEnterForm(action, { run: run.id, app: app.name, ticket });
+      } else if (uiSandbox?.enter_url_template) {
+        const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
+          (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+          uiSandbox.enter_url_template,
+        );
+        window.open(url, "_blank", "noopener");
+      } else {
+        throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+      }
     } catch (err) {
       setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
     } finally {

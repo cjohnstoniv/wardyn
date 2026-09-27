@@ -225,15 +225,27 @@ func (s *Server) UIGatewayHandler() http.Handler {
 // the redirect status (302 for GET, 303 for POST — a POST must not be
 // silently retried as a GET against the relay path).
 //
-// CSRF: neither form needs an extra token. The ticket itself IS the anti-CSRF
-// token — a single-use, ~30s-TTL value bound to one run and one principal,
-// mintable only by an already-authenticated owner-or-admin call to
-// POST /runs/{id}/attach/ticket (which sits behind the console's own CSRF
-// guard). A page that does not hold a freshly-minted ticket cannot forge a
-// working request here no matter what method, origin, or form it uses — the
-// same reason the existing GET hand-off never needed one. csrf.go (this
-// package) says explicitly that its same-origin guard does not, and is not
-// meant to, cover this listener.
+// CSRF: neither form needs an extra token, and POST adds no risk GET did not
+// already have. What the ticket stops: a page that does not hold a
+// freshly-minted, still-valid ticket for THIS run cannot forge a session for
+// someone ELSE's run — the ticket is single-use, ~30s-TTL, bound to one run
+// and one principal, and mintable only by an already-authenticated
+// owner-or-admin call to POST /runs/{id}/attach/ticket (behind the console's
+// own CSRF guard). csrf.go (this package) says explicitly that its
+// same-origin guard does not, and is not meant to, cover this listener.
+//
+// What the ticket does NOT stop: any Wardyn user can mint a ticket for their
+// OWN run and drive a victim's browser to redeem it here — by a POST exactly
+// like this one, or, unchanged, by a plain GET link — landing the victim's
+// browser on a session for the ATTACKER's app (login CSRF / session
+// fixation). uiEnterCommon only checks that the ticket's principal owns the
+// run it names; it has no idea who the browser actually belongs to. Host mode
+// bounds this to the attacker's own origin (a phishing risk, not a same-origin
+// one); the pre-existing shared-origin (path mode) chain — the victim's
+// browser then shares an origin with the victim's OWN other relayed apps, plus
+// what an attacker service worker registered on that shared origin can see of
+// later navigations — is tracked in #1241, not introduced or widened by this
+// PR.
 func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -243,7 +255,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		// No mixed mode: a ticket in the query on a POST is refused outright
 		// rather than silently accepted, so there is exactly one place a caller
 		// can put it and exactly one place it can leak from.
-		if r.URL.Query().Get("ticket") != "" {
+		if r.URL.Query().Has("ticket") {
 			writeError(w, http.StatusBadRequest, "the ticket must be a form field, not a query parameter, on POST")
 			return
 		}

@@ -216,10 +216,22 @@ policy. Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
 Every later request rides that cookie, and nothing else on this listener
 authenticates anything.
 
-No extra CSRF token guards either form: the ticket itself is single-use,
-~30s-TTL, and bound to one run and one principal, mintable only through an
-already-authenticated call to `POST /runs/{id}/attach/ticket`. A page that does
-not hold a freshly-minted ticket cannot forge a working request here.
+No extra CSRF token guards either form, and `POST` adds no risk `GET` did not
+already have. What the ticket stops: a page that does not hold a
+freshly-minted, still-valid ticket for THIS run cannot forge a session for
+someone ELSE's run — the ticket is single-use, ~30s-TTL, and bound to one run
+and one principal, mintable only through an already-authenticated call to
+`POST /runs/{id}/attach/ticket`.
+
+What it does NOT stop: any Wardyn user can mint a ticket for their OWN run and
+drive a victim's browser to redeem it — by this `POST` form exactly like by the
+unchanged `GET` link — landing the victim's browser on a session for the
+ATTACKER's app (login CSRF / session fixation); the enter endpoint only checks
+that the ticket's principal owns the run it names, never who the browser
+actually belongs to. Host mode ([below](#4-deployment)) bounds this to the
+attacker's own origin — a phishing risk, not a same-origin one. The
+pre-existing shared-origin (path-mode) chain this residual compounds into is
+tracked in #1241, not introduced or widened here.
 
 **One session per app, per run.** The app is in the path and the cookie is
 scoped to it, so a run that declares several `ui_apps` can have them all open at

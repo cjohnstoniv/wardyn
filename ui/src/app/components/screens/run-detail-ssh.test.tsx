@@ -378,6 +378,59 @@ describe("ConnectSSHCard — UI apps lane", () => {
     submitSpy.mockRestore();
   });
 
+  // Review F4: an older daemon than this console (dev-setup skew only — the
+  // console is normally baked into the daemon serving it) publishes
+  // enter_url_template but not enter_post_url. Submitting a form with an
+  // empty action would silently POST run/app/ticket to the CONSOLE's own
+  // current URL, burning the ticket for nothing — the console must fall back
+  // to the GET template that daemon actually published instead.
+  it("falls back to the GET template (window.open) when enter_post_url is absent but enter_url_template is present", async () => {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ui_sandbox: {
+        enabled: true,
+        enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}",
+      },
+    });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockResolvedValue("tkt_abc123");
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith(
+        `http://ui.local/__wardyn/enter?run=${baseRun.id}&app=vscode&ticket=tkt_abc123`,
+        "_blank",
+        "noopener",
+      ),
+    );
+    // Never a form POST to the console's own (empty-action) URL.
+    expect(submitSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText(UI_APPS_LANE.errorTitle("vscode"))).toBeNull();
+    submitSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+
+  it("shows an error rather than POSTing to its own URL when neither enter_post_url nor enter_url_template is published", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true } });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockResolvedValue("tkt_abc123");
+    const openSpy = vi.spyOn(window, "open");
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(submitSpy).not.toHaveBeenCalled();
+    submitSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+
   it("renders lane.error.launcher above the server's verbatim body when the ticket mint fails with that message, and leaves the other app untouched", async () => {
     healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
