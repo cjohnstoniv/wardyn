@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -19,7 +20,7 @@ import (
 // envelope and the dispatched env — rather than against the posture alone. A
 // posture test passes when both doors agree on a wrong answer; these do not.
 
-// autonomyDispatchedSpec returns the run.policy.effective envelope of the one
+// autonomyDispatchedSpec returns the run.policy.resolve envelope of the one
 // run this fixture created: dispatch's post-widening snapshot of what the run
 // was allowed to reach.
 func autonomyDispatchedSpec(t *testing.T, st *govEscapeStore, audit *recRecorder) types.RunPolicySpec {
@@ -31,7 +32,7 @@ func autonomyDispatchedSpec(t *testing.T, st *govEscapeStore, audit *recRecorder
 	}
 	st.mu.Unlock()
 	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
-	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
+	ev := waitForRecAudit(t, audit, runID, "run.policy.resolve", "success")
 	var spec types.RunPolicySpec
 	_ = json.Unmarshal(ev.Data, &spec)
 	return spec
@@ -182,4 +183,143 @@ func TestAutonomySiteConfigIsReadOnceForGateAndUnion(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestAutonomyADOEntraLaneIsAuthoredOnlyAsGraded is the same one-read property
+// for the lane that carries a CREDENTIAL rather than only reach, on the same
+// CreateRun span as the SCM test above (#474).
+//
+// The gate grades the per-person Azure DevOps lane from the site config it read
+// at create; dispatch re-reads (siteConfigForDispatch) and authors the
+// credential from that SECOND read. So an admin who flips the provider row
+// between the two — `shared` to `per_user`, or adding the entra lane — could
+// hand a run graded `secrets=none` the person's Entra bearer, on a rubric that
+// caps a powerful secret at a lower rung. The window is not a scheduling race:
+// it is the image resolve and the devcontainer/BYOI build inside
+// finishCreateRunLaunch, minutes to half an hour.
+//
+// The assertion is on what dispatch HANDED THE RUNNER, never on the posture:
+// both doors agreed on the understated grade, so only the injection rules on
+// the sandbox spec can tell the escape from a correct run.
+//
+// The three rows are the three directions the configuration can move, and they
+// are deliberately not one rule:
+//
+//   - TOWARD the credential — refused. A run whose level was frozen without
+//     this credential may not be handed it.
+//   - AWAY from it — allowed, and the run still launches. It is capped as
+//     though it held a credential it now does not, which is stricter than its
+//     posture and harms nobody; refusing would turn a benign admin edit into a
+//     failed run.
+//   - SIDEWAYS, to another provider row — refused. An Entra access token
+//     carries no organisation claim, so the row and organisation pin are the
+//     only things scoping the credential, and they may not be re-decided after
+//     the level was graded.
+func TestAutonomyADOEntraLaneIsAuthoredOnlyAsGraded(t *testing.T) {
+	shared := adoEntraTestRow()
+	shared.CredentialSource = types.CredentialSourceShared
+	otherRow := adoEntraTestRow()
+	otherRow.ID = "ado-row-2"
+
+	for _, tc := range []struct {
+		name         string
+		atTheGate    types.SiteConfig
+		afterTheGate types.SiteConfig
+		wantRefused  bool
+	}{
+		{
+			name:         "a row flipped to per_user after the gate never reaches the run",
+			atTheGate:    adoSite(shared),
+			afterTheGate: adoSite(adoEntraTestRow()),
+			wantRefused:  true,
+		},
+		{
+			name:         "a row flipped to shared after the gate only caps the run",
+			atTheGate:    adoSite(adoEntraTestRow()),
+			afterTheGate: adoSite(shared),
+			wantRefused:  false,
+		},
+		{
+			name:         "a different provider row after the gate never reaches the run",
+			atTheGate:    adoSite(adoEntraTestRow()),
+			afterTheGate: adoSite(otherRow),
+			wantRefused:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("ado-entra-span")
+			p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+				EgressOpen: types.AutonomyL2, SecretsNone: types.AutonomyL2,
+				SecretsBaseline: types.AutonomyL2, SecretsPowerful: types.AutonomyL1,
+			}}
+			srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
+			st.workspaces = []types.Workspace{{ID: uuid.New(), Name: "ado",
+				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}}}}
+			st.siteConfig = tc.atTheGate
+			after := tc.afterTheGate
+			st.onCreateRun = func() { st.siteConfig = after }
+
+			body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2",` +
+				`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"` + adoTestRepo + `"}]}}`
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, adoTestOwner, []string{"eng"}, false), body)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+			}
+			var created struct {
+				ID uuid.UUID `json:"id"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+				t.Fatalf("decode create: %v", err)
+			}
+			graded, _ := autonomyCreateAudit(t, st, audit)["autonomy"].(map[string]any)
+			posture, _ := graded["posture"].(map[string]any)
+			secrets, _ := posture["secrets"].(string)
+			state, hosts := adoDispatchedInjectionHosts(t, srv, created.ID)
+
+			if slices.Contains(hosts, "dev.azure.com") {
+				t.Errorf("dispatch authored an api_key injection to dev.azure.com for a run graded secrets=%s "+
+					"from a provider row the gate never saw (state %s, hosts %v)", secrets, state, hosts)
+			}
+			if tc.wantRefused && state != types.RunFailed {
+				t.Errorf("run state = %s, want FAILED: dispatch must refuse the drift rather than launch a run "+
+					"whose level was graded against different provider configuration", state)
+			}
+			if !tc.wantRefused && state == types.RunFailed {
+				t.Errorf("run state = FAILED: an edit AWAY from the credential only caps the run and must not " +
+					"turn a benign admin change into a failed launch")
+			}
+		})
+	}
+}
+
+// adoDispatchedInjectionHosts waits for the detached launch to leave
+// PENDING/STARTING and returns the settled state plus the hosts dispatch put on
+// the runner's proxy injection rules — empty when CreateSandbox was never
+// reached. This is the only place the escape is visible: the run row and the
+// audit both record the understated grade.
+func adoDispatchedInjectionHosts(t *testing.T, srv *Server, runID uuid.UUID) (types.RunState, []string) {
+	t.Helper()
+	var state types.RunState
+	waitFor(t, "run to settle", func() bool {
+		got, err := srv.cfg.Store.GetRun(context.Background(), runID)
+		if err != nil {
+			return false
+		}
+		state = got.State
+		return state != types.RunPending && state != types.RunStarting
+	})
+	fr, ok := srv.cfg.Runner.(*fakeRunner)
+	if !ok {
+		t.Fatalf("fixture runner is %T, not *fakeRunner", srv.cfg.Runner)
+	}
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	if fr.createCalls == 0 {
+		return state, nil
+	}
+	var hosts []string
+	for _, g := range fr.lastSpec.ProxyConfig.Injection {
+		hosts = append(hosts, g.Rule.Host)
+	}
+	return state, hosts
 }

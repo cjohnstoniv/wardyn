@@ -44,7 +44,7 @@ func r3bServedCSP(t *testing.T, h *harness, host string) string {
 	return csp
 }
 
-// TestR3BCSPConnectSrcNamesThisOriginOnly is F248's pin. The console's ONLY
+// TestCSPConnectSrcNamesThisOriginOnly is F248's pin. The console's ONLY
 // outbound channel is the PTY-attach WebSocket, and connect-src is the one
 // directive that says where an injected script on this admin-bearing origin may
 // ship data. It shipped the bare `ws:` and `wss:` SCHEMES, which match ANY host
@@ -58,7 +58,8 @@ func r3bServedCSP(t *testing.T, h *harness, host string) string {
 //     that sent the malformed Host;
 //   - a Host carrying CSP punctuation splices no new source and no new
 //     directive into the policy.
-func TestR3BCSPConnectSrcNamesThisOriginOnly(t *testing.T) {
+func TestCSPConnectSrcNamesThisOriginOnly(t *testing.T) {
+	// ticket: R3B
 	h := newHarness(t)
 
 	t.Run("a real Host names this origin's ws/wss and nothing else", func(t *testing.T) {

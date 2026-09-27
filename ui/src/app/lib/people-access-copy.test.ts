@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 
 import { describe, it, expect } from "vitest";
 
-import { ACCESS_ERROR, GUARD, PEOPLE, PREVIEW, SIGNIN } from "./people-access-copy";
+import { ACCESS_ERROR, GUARD, PEOPLE, PREVIEW } from "./people-access-copy";
 
 // Sentinel byte-exact pins against docs/design/people-access-prompt.md §7 — a
 // hand-retyped copy could silently drift (an em-dash swapped for a hyphen, a
@@ -16,7 +16,7 @@ import { ACCESS_ERROR, GUARD, PEOPLE, PREVIEW, SIGNIN } from "./people-access-co
 describe("people-access-copy — sentinel byte-exact pins", () => {
   it("pins PEOPLE entries verbatim", () => {
     expect(PEOPLE.TABLE_LEAD).toBe(
-      "A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member.",
+      "A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or user.",
     );
     expect(PEOPLE.SHADOWED_BODY).toBe(
       "Your chart now maps this value too, and the chart always wins. This row is stored but has no effect until you remove the chart entry or delete this row.",
@@ -74,7 +74,7 @@ describe("people-access-copy — GUARD posture-flip worked examples (§7.3)", ()
 describe("people-access-copy — PREVIEW result trio + the DEFAULT/LEGACY split", () => {
   it("RESULT_MATCHED/RESULT_DEFAULT/RESULT_DENIED are pinned", () => {
     expect(PREVIEW.RESULT_MATCHED("admin", "Wardyn.Admin")).toBe("Would sign in as admin — matched by Wardyn.Admin.");
-    expect(PREVIEW.RESULT_DEFAULT("member")).toBe("Would sign in as member — nothing matched, so your default role applies.");
+    expect(PREVIEW.RESULT_DEFAULT("user")).toBe("Would sign in as user — nothing matched, so your default role applies.");
     expect(PREVIEW.RESULT_DENIED).toBe("Would be denied at sign-in — nothing matched, and no default role is set.");
   });
 
@@ -87,25 +87,14 @@ describe("people-access-copy — PREVIEW result trio + the DEFAULT/LEGACY split"
   });
 });
 
-describe("people-access-copy — SIGNIN arms (§7.7)", () => {
-  it("NO_ROLE and EMAIL_VERIFIED_ABSENT both name 'your Wardyn admin', not a bare 'an operator'", () => {
-    expect(SIGNIN.NO_ROLE).toMatch(/ask your wardyn admin/i);
-    expect(SIGNIN.EMAIL_VERIFIED_ABSENT).toMatch(/ask your wardyn admin/i);
-  });
-
-  it("ROLE_CHECK_UNAVAILABLE is pinned", () => {
-    expect(SIGNIN.ROLE_CHECK_UNAVAILABLE).toBe("Couldn't check your access — try again, or contact your admin.");
-  });
-});
-
 // Casing rule (§7.2): {role} interpolated INSIDE a sentence is lowercase —
-// "admin"/"security admin"/"member"; the ROLE_ADMIN/ROLE_SECURITY_ADMIN/
-// ROLE_MEMBER chip labels are the only title-case forms, and a sentence takes
+// "admin"/"security admin"/"user"; the ROLE_ADMIN/ROLE_SECURITY_ADMIN/
+// ROLE_USER chip labels are the only title-case forms, and a sentence takes
 // the chip's lowercase via access-panel.tsx's roleLabelInSentence.
 describe("people-access-copy — casing rule", () => {
-  it("ROLE_ADMIN/ROLE_MEMBER are title case (chip labels only)", () => {
+  it("ROLE_ADMIN/ROLE_USER are title case (chip labels only)", () => {
     expect(PEOPLE.ROLE_ADMIN).toBe("Admin");
-    expect(PEOPLE.ROLE_MEMBER).toBe("Member");
+    expect(PEOPLE.ROLE_USER).toBe("User");
   });
 
   it("every parameterized sentence template lowercases its {role}/{before}/{after} interpolation", () => {
@@ -117,7 +106,7 @@ describe("people-access-copy — casing rule", () => {
   // The doc half of the same rule (R4/F033). renderPreviewResult now lowers a
   // THIRD tier into RESULT_MATCHED/_DEFAULT/_LEGACY via roleLabelInSentence
   // (access-panel.tsx), so a security_admin verdict reads "Would sign in as
-  // security admin — matched by …" where it used to read "member". §7.2's rule
+  // security admin — matched by …" where it used to read "user". §7.2's rule
   // enumerated only admin/member, which made the doc false about a shipped
   // string; these pin the enumeration and the one derivation that owns it, in
   // both docs, so neither can drift back.

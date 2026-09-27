@@ -107,15 +107,21 @@ func adoRequestDetail(r *http.Request) adoAsk {
 }
 
 // adoRepoOf is the repository a REST path addresses under
-// `_apis/git/repositories/{repo}`, lower-cased, or "".
+// `_apis/git/repositories/{repo}`, as adoscope.NameKey reads it (decoded and
+// case-folded — the same key the git broker's ask carries for the same
+// repository), or "".
 //
-// It is the SPELLING the sandbox chose — a repository name or its GUID — not a
+// It is the NAME the sandbox chose — a repository name or its GUID — not a
 // resolved identity, and the approval's canonical scope (and so a sticky deny)
-// is keyed on it. A denied repo re-asked under its other spelling is a new ask.
-// That is bounded, not closed: every ask spends one of the run's
-// maxCapabilityHolds (16), and a person answers each.
+// is keyed on it. A denied repo re-asked under its GUID is a new ask; one
+// re-asked under another percent-escaping of its name is not. That is bounded,
+// not closed: every ask spends one of the run's maxCapabilityHolds (16), and a
+// person answers each.
 func adoRepoOf(path string) string {
-	segs := strings.Split(strings.ToLower(strings.Trim(path, "/")), "/")
+	segs := strings.Split(strings.Trim(path, "/"), "/")
+	for i := range segs {
+		segs[i] = adoscope.NameKey(segs[i])
+	}
 	for i := 0; i+3 < len(segs); i++ {
 		if segs[i] == "_apis" && segs[i+1] == "git" && segs[i+2] == "repositories" {
 			return segs[i+3]

@@ -68,10 +68,11 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  // #483: the handler learns whether the refused request was a WRITE, and —
-  // only for a request marked as a screen's Save — whose. A save that hit the
+  // The handler learns whether the refused request was a WRITE, and — only
+  // for a request marked as a screen's Save — whose. A save that hit the
   // expiry is never re-sent, so that screen, and no other, has to say so.
-  it("#483: the handler is told whether the refused request was a write, and whose Save", async () => {
+  it("the handler is told whether the refused request was a write, and whose Save", async () => {
+    // ticket: #483
     const handler = vi.fn();
     onUnauthorized(handler);
     fetchMock.mockResolvedValue(new Response("", { status: 401 }));

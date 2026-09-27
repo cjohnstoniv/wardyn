@@ -18,21 +18,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F155 — the proxy-side mask registers per RENDERING, not per credential.
+// The proxy-side mask registers per rendering, not per credential.
 //
 // procRegistry is what stands between a proxy-held credential and every
 // sandbox-facing error body (Proxy.httpError -> maskDecisionBytes) and every
-// decision-log line, and secretmask.Masker.Mask is exact bytes. So a credential
-// is protected in exactly the renderings that were registered — and the three
-// registration sites used to disagree about what that means:
+// decision-log line, and secretmask.Masker.Mask is exact bytes. So a
+// credential is protected in exactly the renderings that were registered, and
+// every registration site must register every rendering the credential takes:
 //
-//   - inject.go registered ONLY the FORMATTED header value ("Bearer sk-…"),
-//     leaving the bare token — the form a vendor echoes in an error body — open;
-//   - git_broker.go registered ONLY the raw installation token, while the token
-//     goes on the wire as base64("x-access-token:" + tok);
-//   - pat_broker.go registered NOTHING at all;
-//   - upstream.go (same package) already registered all three renderings of the
-//     corp-proxy credential, which is the shape the others now share.
+//   - inject.go: the formatted header value ("Bearer sk-…") and the bare
+//     token — the form a vendor echoes in an error body;
+//   - git_broker.go: the raw installation token and its wire form,
+//     base64("x-access-token:" + tok);
+//   - pat_broker.go: its credential too;
+//   - upstream.go: all three renderings of the corp-proxy credential, the
+//     shape the others share.
 //
 // Each case below masks a buffer holding ONE rendering of a credential the
 // proxy has just taken possession of. maskDecisionBytes is the exact function
@@ -71,7 +71,7 @@ func TestInjectionMaskCoversTheBareTokenRendering(t *testing.T) {
 		t.Fatalf("buildInjector: %v", err)
 	}
 
-	// The rendering that was always registered stays masked (no regression)...
+	// The primary rendering stays masked as well...
 	assertMasked(t, "Bearer "+raw, "the formatted injection value")
 	// ...and the bare credential, which is what a vendor echoes back, now is too.
 	assertMasked(t, raw, "the bare injection token")

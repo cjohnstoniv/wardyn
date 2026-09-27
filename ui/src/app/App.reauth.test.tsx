@@ -16,10 +16,11 @@ import App from "./App";
 import { SESSION_ENDED_REASON, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "./lib/reauth-copy";
 import { PROVIDERS_DRAFT } from "./lib/workspace-providers-copy";
+import { UNSAVED } from "./lib/unsaved-copy";
 
 const mockState = vi.hoisted(() => ({ claim: true }));
 
-// One stub for /runs and /providers: a draft, a Save, a poll, and where it is.
+// One stub for /runs and /admin/providers: a draft, a Save, a poll, and where it is.
 vi.mock("./components/screens/runs", async () => {
   const React = await import("react");
   const { useLocation } = await import("react-router-dom");
@@ -201,25 +202,25 @@ describe("App — a session that ends mid-page (#483)", () => {
   });
 
   it("someone else signs in: the page reloads fresh as them — no dialog, no copy offer", async () => {
-    await lapseMidPage("/providers");
+    await lapseMidPage("/admin/providers");
     daemon.me = { ...ME, principal: "someone-else" };
     await signInWithToken();
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("/providers"));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/admin/providers"));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByLabelText("Note")).toBeNull();
     expect(screen.queryByText(PROVIDERS_DRAFT.CONFLICT_COPY)).toBeNull();
   });
 
   it("someone else who cannot open this page reloads onto Runs", async () => {
-    await lapseMidPage("/providers");
-    daemon.me = { ...ME, principal: "someone-else", role: "member", operator: false, security_operator: false };
+    await lapseMidPage("/admin/providers");
+    daemon.me = { ...ME, principal: "someone-else", role: "user", operator: false, security_operator: false };
     await signInWithToken();
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
   });
 
   it("same person, narrower role: says so, offers the copy, and continues to Runs", async () => {
-    await lapseMidPage("/providers");
-    daemon.me = { ...ME, role: "member", operator: false, security_operator: false };
+    await lapseMidPage("/admin/providers");
+    daemon.me = { ...ME, role: "user", operator: false, security_operator: false };
     await signInWithToken();
     const dialog = screen.getByRole("dialog");
     expect(await within(dialog).findByText(REAUTH_DIALOG.ROLE_CHANGED_BODY)).toBeInTheDocument();
@@ -318,6 +319,8 @@ describe("App — a session that ends mid-page (#483)", () => {
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await user.click(screen.getByRole("link", { name: /^Approvals/ }));
+    // Leaving a dirty screen asks first (#460); the draft is let go on purpose.
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: UNSAVED.DISCARD }));
     await waitFor(() => expect(screen.queryByLabelText("Note")).toBeNull());
     await user.click(screen.getByRole("button", { name: REAUTH_BAR.CTA }));
     await screen.findByRole("dialog");
@@ -341,13 +344,15 @@ describe("App — a session that ends mid-page (#483)", () => {
 });
 
 describe("App — the SSO door in the dialog (#483)", () => {
+  // On an SSO install the admin token is the Admin view's only
+  // (console-view.tsx viewAccess), so the page lives under /admin.
   beforeEach(() => {
     daemon.sso = true;
   });
 
   it("a blocked popup offers the sign-in page in a new tab", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
-    await lapseMidPage();
+    await lapseMidPage("/admin/runs");
     const dialog = screen.getByRole("dialog");
     await user.click(await within(dialog).findByRole("button", { name: "Sign in with SSO" }));
     expect(await within(dialog).findByText(REAUTH_DIALOG.POPUP_BLOCKED)).toBeInTheDocument();
@@ -359,7 +364,7 @@ describe("App — the SSO door in the dialog (#483)", () => {
   it("a popup closed before signing in says so", async () => {
     const popup = { closed: false, opener: {} as unknown, location: { href: "" }, close: vi.fn() };
     const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
-    await lapseMidPage();
+    await lapseMidPage("/admin/runs");
     const dialog = screen.getByRole("dialog");
     await user.click(await within(dialog).findByRole("button", { name: "Sign in with SSO" }));
     expect(open).toHaveBeenCalledWith("about:blank", expect.any(String), expect.any(String));
@@ -377,7 +382,7 @@ describe("App — the SSO door in the dialog (#483)", () => {
     const popup = { closed: false, opener: {} as unknown, location: { href: "" }, close: vi.fn() };
     vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
     const setItem = vi.spyOn(Storage.prototype, "setItem");
-    await lapseMidPage();
+    await lapseMidPage("/admin/runs");
     await user.click(await within(screen.getByRole("dialog")).findByRole("button", { name: "Sign in with SSO" }));
     daemon.dead = false;
     await act(async () => {

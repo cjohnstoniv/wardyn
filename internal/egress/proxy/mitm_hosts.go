@@ -21,7 +21,7 @@ import (
 // config written before the port suffix existed — and matches ANY port; a
 // malformed or out-of-range port suffix is treated the same as absent rather
 // than guessed. No live caller authors a bare entry any more: both
-// planArtifactRedirect and authorBedrockBearerInjection (F037) join
+// planArtifactRedirect and authorBedrockBearerInjection join
 // the host to the port they actually configured, so the any-port arm is not a
 // default that a new lane can fall into by accident.
 // A clean "host:port" (what planArtifactRedirect now authors) scopes

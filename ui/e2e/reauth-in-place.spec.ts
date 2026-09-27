@@ -9,7 +9,7 @@ import { REAUTH_BAR, REAUTH_DIALOG } from "../src/app/lib/reauth-copy";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
 // #483 — a session that ends mid-page keeps the page. A real screen with a
-// typed-but-unsaved draft (/providers, a git row's base URL), a Save whose
+// typed-but-unsaved draft (/admin/providers, a git row's base URL), a Save whose
 // PUT hits the expiry (route interception answers it 401), and the dialog
 // that opens over it.
 
@@ -17,14 +17,14 @@ const BASE_URL = "https://github.com/acme-reauth";
 
 const isProvidersPut = (r: Request) => r.method() === "PUT" && new URL(r.url()).pathname === "/api/v1/workspace-providers";
 
-/** On /providers with a git row typed but not saved; the Save then 401s. */
+/** On /admin/providers with a git row typed but not saved; the Save then 401s. */
 async function saveIntoAnExpiredSession(page: Page): Promise<{ puts: () => number }> {
   let puts = 0;
   page.on("request", (r) => {
     if (isProvidersPut(r)) puts += 1;
   });
   await gotoConsole(page);
-  await navToRoute(page, "/providers");
+  await navToRoute(page, "/admin/providers");
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
   await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).click();
   await page.getByTestId("provider-row-github").locator("textarea").fill(BASE_URL);

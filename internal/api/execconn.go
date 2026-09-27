@@ -15,16 +15,12 @@ import (
 
 // execConn adapts ONE runner.ExecSession to net.Conn: Read pulls the exec's
 // stdout, Write pushes the exec's stdin, Close tears down only that exec
-// stream. Paired with `socat - TCP:127.0.0.1:<port>` inside the sandbox (the
-// SAME dial handleSSHDirectTCPIP already uses for `ssh -L`), it turns the
-// exec lane into an http.Transport DialContext — which is the whole of the UI
-// gateway's transport: no pod-IP/container-IP dial, no new network path out
-// of the sandbox, no substrate change (invariant 3).
-//
-// Stderr is drained to io.Discard on construction. That is NOT tidiness: the
-// ExecSession streaming contract makes Stdout and Stderr unbuffered io.Pipes
-// fed by ONE demux goroutine, so a single undrained stderr byte blocks Stdout
-// AND Wait (drainExecStderr's doc, sshgateway_channels.go). ponytail: the
+// stream. Paired with `socat - TCP:127.0.0.1:<port>` in the sandbox (the dial
+// handleSSHDirectTCPIP uses for `ssh -L`), it is the UI gateway's whole
+// transport: no pod/container-IP dial, no new network path out (invariant 3).
+// Stderr is drained to io.Discard on construction, NOT for tidiness: Stdout and
+// Stderr are unbuffered io.Pipes fed by ONE demux goroutine, so one undrained
+// stderr byte blocks Stdout AND Wait (drainExecStderr's doc). ponytail: the
 // drained bytes are dropped rather than surfaced — socat's connect error
 // reaches the caller as a dial/EOF failure instead of its own text; the
 // launcher probe (uiEnsureApp) is what produces the honest "app is not

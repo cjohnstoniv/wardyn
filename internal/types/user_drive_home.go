@@ -23,8 +23,8 @@ import (
 // volume.
 //
 // It is NOT a DNS-1123 name and never was — `_` is not legal in one, and a
-// trailing `-` or `.` is not either. That claim used to sit on this comment
-// and was the bug driveHomeSegmentK8sRe below exists to close: a k8s drive
+// trailing `-` or `.` is not either — that gap is the bug driveHomeSegmentK8sRe
+// below exists to close: a k8s drive
 // whose home came through here would validate and then be rejected by the
 // apiserver at bind time, on somebody's run.
 //
@@ -40,7 +40,7 @@ var driveHomeSegmentRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 // only.
 //
 // ANCHORED PER LABEL, which is what a subdomain rule IS and what the single
-// anchored run this used to be could not say. `^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$`
+// a single anchored expression cannot say. `^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$`
 // pinned only the first and last characters and let `.` and `-` sit in any
 // order between them, so `a.-b`, `us-.bob`, `ab.-cd` and `x.-y.z` all matched
 // HERE and were then refused by the apiserver — inside somebody's run, which is

@@ -110,7 +110,7 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 	})
 
 	t.Run("stat_and_tail", func(t *testing.T) {
-		// R4-F077: StatAndTail must answer size/tail without a caller ever
+		// StatAndTail must answer size/tail without a caller ever
 		// calling OpenCast — both backends compute the size and slice the tail
 		// on their own side (fs Seek, pg substring/octet_length), never by
 		// reading the payload into Go and slicing there, so this only proves

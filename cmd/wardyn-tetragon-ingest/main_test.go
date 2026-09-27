@@ -20,14 +20,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 )
 
-// TestTailExport_ReadsRotatedFileFromStart covers ITEM 27: on log rotation the
-// tailer reopened the NEW file and seeked to END (io.SeekEnd), silently
-// dropping every ground-truth event written to the new file before the rotation
-// was noticed — a security-signal loss. A rotation reopen must start at offset 0
-// so the new file's beginning (unread data) is read.
+// TestTailExport_ReadsRotatedFileFromStart pins rotation handling: a rotation
+// reopen starts at offset 0 so the new file's beginning (unread data) is read.
+// Reopening the new file and seeking to the end (io.SeekEnd) would silently drop
+// every ground-truth event written to it before the rotation was noticed — a
+// security-signal loss.
 //
-// Red-first: against the pre-fix SeekEnd-on-reopen behavior the post-rotation
-// event never reaches the sink, so the final assertion fails.
+// With a SeekEnd-on-reopen tailer the post-rotation event never reaches the
+// sink, so the final assertion fails.
 func TestTailExport_ReadsRotatedFileFromStart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tetragon.log")
@@ -122,13 +122,13 @@ func TestTailExport_ReadsRotatedFileFromStart(t *testing.T) {
 		"post-rotation event B was dropped: tailer seeked to END of the rotated file instead of START")
 }
 
-// TestTailExport_LogsOnUnopenableExportFile covers F158: openFile's os.Open
-// error was discarded with `return false` and no log at any level, so a
-// typo'd/unreadable -export path left the sensor silently blind forever while
-// heartbeats and the stats loop kept printing as if it were healthy.
+// TestTailExport_LogsOnUnopenableExportFile pins that openFile logs its
+// os.Open error: a typo'd/unreadable -export path must not leave the sensor
+// silently blind forever while heartbeats and the stats loop keep printing as
+// if it were healthy.
 //
-// Red-first: against the pre-fix openFile (silent `return false`) nothing in
-// this window ever names the bad path, so the assertion below fails.
+// If openFile returns false silently, nothing in this window names the bad
+// path, so the assertion below fails.
 func TestTailExport_LogsOnUnopenableExportFile(t *testing.T) {
 	dir := t.TempDir()
 	// Parent directory does not exist, so every os.Open(path) fails for the
@@ -175,13 +175,12 @@ func appendLine(t *testing.T, path, line string) {
 	}
 }
 
-// TestTailExport_ReassemblesLineSplitAcrossEOF is the red-first regression for
-// a Tetragon JSON line whose bytes straddle an EOF read boundary (the
-// writer flushes it in two syscalls) must be REASSEMBLED, not split into two
-// undecodable fragments that both drop. Pre-fix, ReadBytes returns the first
-// half with io.EOF, that half is processed (JSON parse fails -> dropped), and the
-// later-arriving remainder is processed as its own fragment (also dropped), so
-// the event is silently lost from the tamper-proof stream.
+// TestTailExport_ReassemblesLineSplitAcrossEOF pins that a Tetragon JSON line
+// whose bytes straddle an EOF read boundary (the writer flushes it in two
+// syscalls) is reassembled, not split into two undecodable fragments that both
+// drop. Processing the first half on io.EOF fails the JSON parse (dropped), and
+// the later-arriving remainder then fails as its own fragment (also dropped), so
+// the event would be silently lost from the tamper-proof stream.
 func TestTailExport_ReassemblesLineSplitAcrossEOF(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tetragon.log")
@@ -258,11 +257,11 @@ func TestTailExport_ReassemblesLineSplitAcrossEOF(t *testing.T) {
 	}
 }
 
-// TestTailExport_CapsPendingLineAt1MiB is the red-first regression for
-// B12b-F9: pending accumulated an unterminated export line with no bound at
-// all, so a stretch of writes with no '\n' (a corrupted write, or Tetragon
-// itself emitting one abnormally long record) grew tailExport's own memory
-// without limit — the tail loop cannot refuse to read the file it is handed.
+// TestTailExport_CapsPendingLineAt1MiB pins the bound on pending: an
+// unterminated export line must not grow tailExport's own memory without
+// limit when a stretch of writes carries no '\n' (a corrupted write, or
+// Tetragon itself emitting one abnormally long record) — the tail loop
+// cannot refuse to read the file it is handed.
 // maxPendingExportLine caps it at 1 MiB: past the cap the accumulated bytes
 // are dropped (counted on the sink, the same "lost event, never silent"
 // contract as every other drop this sidecar already counts) and pending
@@ -367,8 +366,8 @@ func TestTailExport_CapsPendingLineAt1MiB(t *testing.T) {
 	}
 }
 
-// TestTailExport_ResyncsPastStillStreamingOversizedLine is the red-first
-// regression for R-06: TestTailExport_CapsPendingLineAt1MiB writes its whole
+// TestTailExport_ResyncsPastStillStreamingOversizedLine covers what
+// TestTailExport_CapsPendingLineAt1MiB cannot: that test writes its whole
 // 2 MiB feed in ONE syscall, so tailExport sees it all in a single io.EOF
 // read and the drop's reset lands on a clean boundary — it cannot see the
 // hazard the surrounding code comment names. A line that is still

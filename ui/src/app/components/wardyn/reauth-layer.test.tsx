@@ -28,7 +28,7 @@ const meResponse = {
   method: "token",
   operator: false,
   security_operator: false,
-  role: "member",
+  role: "user",
   email: "",
 };
 vi.mock("../../lib/api/core", async (importOriginal) => ({

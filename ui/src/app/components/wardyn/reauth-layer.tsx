@@ -35,7 +35,8 @@ import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "../../lib/reauth-copy";
 import { unsavedSnapshot } from "../../lib/unsaved-registry";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { PROVIDERS_DRAFT } from "../../lib/workspace-providers-copy";
-import { SSO_SIGN_IN, TOKEN_HINT, TOKEN_LABEL, TOKEN_REJECTED } from "../screens/sign-in";
+import { SIGNIN } from "../../lib/sign-in-copy";
+import { SSO_SIGN_IN, TOKEN_LABEL } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useOperatorResolved, usePrincipal } from "./operator-context";
 
@@ -45,16 +46,17 @@ const POLL_MS = 1500;
 // says when it closes — the poll it starts is bounded instead.
 const FALLBACK_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
-// Can THIS role open `path`? Mirrors App.tsx's <Route> tiers: a member's
-// reachable surface is wider than their nav (/secrets, /settings and
-// /ssh-keys have no sidebar entry but are theirs), and /drives + /providers
-// are admin-only for everyone else. Not a route guard — the server is the
+// Can THIS role open `path`? Mirrors App.tsx's <Route> tiers: a user's
+// reachable surface is wider than their nav (/secrets, /account and /ssh-keys
+// have no sidebar entry but are theirs), nothing under /admin is theirs, and
+// /admin/providers is for an actual admin only — a security admin manages
+// Drives, so /admin/drives stays theirs. Not a route guard — the server is the
 // gate — only the answer to "does this page still belong to who signed in".
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/settings", "/ssh-keys"];
-const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account", "/ssh-keys"];
+const OPERATOR_ONLY_PREFIXES = ["/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
+  if (role === "user") return under(MEMBER_REACHABLE_PREFIXES);
   if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
   return true;
 }
@@ -235,7 +237,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     waiting: [REAUTH_DIALOG.WAITING, "text-muted-foreground"],
     closed: [REAUTH_DIALOG.CLOSED_WITHOUT, "text-warning"],
     unreachable: [REAUTH_DIALOG.UNREACHABLE, "text-warning"],
-    rejected: [TOKEN_REJECTED, "text-danger"],
+    rejected: [SIGNIN.TOKEN_REJECTED, "text-danger"],
   };
   const line = note[status];
 
@@ -295,7 +297,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
                       autoComplete="off"
                     />
                   </div>
-                  <p className="text-xs text-muted-foreground">{TOKEN_HINT}</p>
+                  <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
                   <Button type="submit" className="w-full" disabled={!token || busy}>
                     {busy ? <Loader2 className="size-4 animate-spin" /> : REAUTH_BAR.CTA}
                   </Button>

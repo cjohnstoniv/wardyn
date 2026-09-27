@@ -220,7 +220,7 @@ IMAGES_ORIGIN=built
 #
 # The identity + issuer are the same two values docs/VERIFY.md s1/s2 tell an
 # operator to paste, and they live INSIDE the function so extracting it
-# (scripts/test-claims-match-code.sh C4) yields something that actually runs.
+# (scripts/test-up-probes.sh C4) yields something that actually runs.
 # Keyless: the check is "built by THIS repo's release workflow, from a tag",
 # not "signed by a key someone holds".
 cosign_verify() {
@@ -811,16 +811,18 @@ cmd_up() {
 
   # Sandbox → control-plane reachability CONFIRMATION (the inverse of the
   # host-mode warning setup.sh prints). In this compose path wardynd runs as a
-  # container on wardyn-internal, so a run's proxy sidecar reaches it at
-  # http://wardynd:8080 over Docker DNS with NO host/NAT hop — which is what
-  # lets workspace VERIFY report its result (the exact thing that can't work on
-  # Docker Desktop + WSL2 when wardynd runs host-mode). Prove it with a
-  # throwaway container on the same network; never fatal.
-  if [ "$(wardynd_probe "${ENV_FILE}" /healthz | tail -n1)" = "200" ]; then
-    log "Sandbox → control-plane reachability: OK — workspace recordings and confined replays will complete on this instance."
+  # container on wardyn-internal, so a run's proxy sidecar reaches it over
+  # Docker DNS with NO host/NAT hop — at https://wardynd:8443, the TLS listener
+  # pinned to wardynd's internal CA. The probe asks the console port on the
+  # same network (the pin cannot be checked without that CA) and reads the
+  # /healthz bit saying the proxies' hop is TLS; never fatal.
+  _reach="$(wardynd_probe "${ENV_FILE}" /healthz)"
+  if [ "$(printf '%s' "${_reach}" | tail -n1)" = "200" ] && printf '%s' "${_reach}" | grep -q '"proxy_hop_tls": *true'; then
+    log "Sandbox → control-plane reachability: OK — proxies reach wardynd over TLS (https://wardynd:8443); recordings and confined replays will complete."
   else
-    warn "sandbox → control-plane probe failed (http://wardynd:8080 on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal'."
+    warn "sandbox → control-plane probe failed, or /healthz does not report proxy_hop_tls (wardynd on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal' and WARDYN_CONTROL_PLANE_URL."
   fi
+  unset _reach
 
   # LOCAL-MODE no-auth GATE smoke (closes the masking class from the N1/forwarder
   # regression). /healthz is OUTSIDE the auth group, and the container healthcheck
@@ -874,7 +876,7 @@ cmd_up() {
   # open so first light is as fast as possible; you read Getting-started while these
   # finish. Skip them for a pure UI look with WARDYN_UP_SKIP_RUN_IMAGES=1.
   if [ "${WARDYN_UP_SKIP_RUN_IMAGES:-0}" = "1" ]; then
-    log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images (build later: make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image)"
+    log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images, including the Claude sign-in image (agent-claude-code): adding a Claude subscription is refused and claude-code runs fail until you build it — make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image"
   else
     log "Finishing the run components so your first run is ready (sandbox proxy + agent images)…"
     # What the pull-first block above ALREADY put at these :local tags must not be
@@ -899,7 +901,10 @@ cmd_up() {
     # loop in scripts/setup.sh. The control plane is already up and healthy above,
     # so a failed agent image is a warning, not a teardown. Building via compose so
     # the corp-build args (NPM_REGISTRY/HTTP(S)_PROXY) wired into these stanzas apply.
+    # agent-claude-code is the exception: #524/MP-14 makes it a checked
+    # prerequisite (E4), so its failure stops here instead of just warning.
     _agent_img_warn=0
+    _claude_img_failed=0
     for _svc in ${_svcs}; do
       log "Building ${_svc}…"
       if compose --profile build-only build "${_svc}"; then
@@ -907,14 +912,16 @@ cmd_up() {
       else
         warn "build failed for ${_svc} — runs naming this agent fail until you rebuild it (docker compose -f ${COMPOSE_FILE} --profile build-only build ${_svc}). Other agents are unaffected."
         _agent_img_warn=1
+        [ "${_svc}" = "agent-claude-code" ] && _claude_img_failed=1
       fi
     done
+    [ "${_claude_img_failed}" = 1 ] && die "The stack is UP; agent-claude-code (the Claude sign-in image) failed to build — adding a Claude subscription is refused and claude-code runs fail until you rebuild it: docker compose -f ${COMPOSE_FILE} --profile build-only build agent-claude-code"
     if [ "${_agent_img_warn}" = 1 ]; then
       warn "one or more agent images did not build (see above). The stack is UP; fix the image and rerun its build before launching that agent."
     else
       log "Run components ready — you can launch your first run."
     fi
-    unset _agent_img_warn _svc _svcs
+    unset _agent_img_warn _claude_img_failed _svc _svcs
   fi
 
   log "  Tear down: make compose-down   (or: scripts/up.sh down)"

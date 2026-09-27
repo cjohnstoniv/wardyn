@@ -9,6 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { health } from "./health";
 import { WFETCH_TIMEOUT_MS } from "./core";
 import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // Regression for the sign-out HIGH finding: signing out only cleared the local
 // admin token, never calling the server logout endpoint, so the OIDC session
@@ -105,7 +106,7 @@ describe("health — site-config integrations round-trip", () => {
     const echoed: Record<string, unknown> = {
       scm_hosts: ["github.com"],
       integrations: [{ id: "anthropic_api_key" }],
-      onboarding_completed_at: "2026-08-01T00:00:00Z",
+      onboarding_completed_at: aheadByHours(-1),
       // 0.7.2: the provider block is not REFUSED on PUT /site-config (that door
       // is how MDM delivers it), but a GET-spread writer must never carry it —
       // a stale spread would revert an admin's providers to whatever this tab
@@ -114,6 +115,8 @@ describe("health — site-config integrations round-trip", () => {
       // The agent roster rides on the same door and needs the same strip: a
       // stale spread would silently re-enable an agent the admin just turned off.
       agent_providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      // The model-provider block, for the agent roster's reason.
+      model_providers: { providers: [{ id: "corp-gateway", kind: "custom_endpoint", base_url: "https://gw.corp.example" }] },
       effective_scm_hosts: ["github.com"],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));
@@ -242,7 +245,7 @@ describe("health.whoami() — the user-drive pair", () => {
     method: "sso",
     operator: false,
     security_operator: false,
-    role: "member",
+    role: "user",
     email: "alice@corp.example",
     ...extra,
   });
@@ -496,7 +499,8 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   return keys;
 }
 
-describe("source parity — GET /me's Go body vs the TS Me mirror (F010)", () => {
+describe("source parity — GET /me's Go body vs the TS Me mirror", () => {
+  // ticket: F010
   const root = repoRoot();
   const meGo = readFileSync(join(root, "internal/api/me.go"), "utf8");
   // Every non-test internal/api/user_drives*.go as one text: meUserDrive moved to

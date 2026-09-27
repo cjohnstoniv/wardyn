@@ -14,14 +14,17 @@
 //     `host_path` option is disabled with its reason rather than offered and
 //     refused. The 400 stays on the API path, where `wardyn drive apply` will
 //     meet it.
-//  2. The home-template rule runs both ways. A share names its own homes, so
-//     the derived (`hash`) directory option is disabled for share backends;
-//     a managed backend is the mirror — every non-hash template is disabled,
-//     since the home segment is concatenated into the object name `docker
-//     volume ls` / `kubectl get pvc` print, and a subject-bearing template
-//     would publish the principal there (scope widened 2026-09-03, see
-//     `homeDisabled` below). HOME_HINT says why either way — the same
-//     refusal the server raises, avoided rather than met.
+//  2. The home-template rule is keyed on who NAMES the object, not on managed
+//     vs share (#808): host_path names its own homes, so the derived (`hash`)
+//     option is disabled there; docker_volume/k8s_pvc are the mirror — every
+//     non-hash template is disabled, since the home segment is concatenated
+//     into the object name `docker volume ls` / `kubectl get pvc` print, and a
+//     subject-bearing template would publish the principal there. k8s_pvc_static
+//     is a THIRD case: an admin provisions the claim but Wardyn still names it,
+//     so `hash` and `sub` are both fine (`hash` is the server's default here)
+//     and only `email_local` is refused. See `homeTemplateDisabled` (api/drives.ts)
+//     for the one predicate all three enforcement points share. HOME_HINT says
+//     why either way — the same refusal the server raises, avoided rather than met.
 //  3. The server composes its own refusals. The roots are an env-borne ceiling
 //     the console cannot read, so a host-root refusal is post-attempt: the
 //     console contributes SAVE_REFUSED_TITLE and the body is the server's text,
@@ -39,7 +42,7 @@ import { HttpError } from "../../../lib/api/core";
 import {
   backendsFor,
   drives as api,
-  isManagedBackend,
+  homeTemplateDisabled,
   type DriveBackend,
   type DriveReclaim,
   type HomeTemplate,
@@ -138,23 +141,19 @@ export function DriveEditor({
   // console contributes only the heading (REHOME_TITLE).
   const [rehome, setRehome] = React.useState<string | null>(null);
 
-  const managed = isManagedBackend(backend);
   // The rule runs both ways, and until 2026-09-03 only one way was gated here.
-  // A share's directories are named by the corporation's own directory, so the
-  // derived id cannot name one. A managed drive is the mirror: its home segment
-  // is concatenated into the object name that `docker volume ls` and `kubectl
-  // get pvc` print, so a subject-bearing template would publish the principal
-  // there — refused on the API path for `email_local` all along, and for `sub`
-  // since 2026-09-03. Offering a choice the server always refuses is a menu that
-  // 400s, so both directions are disabled here.
-  const homeDisabled = (t: HomeTemplate) => (managed ? t !== "hash" : t === "hash");
+  // It is THREE cases, not a managed/share binary (#808): k8s_pvc_static is a
+  // share by Kind() but is still Wardyn-NAMED, so it sits between the other
+  // two — see homeTemplateDisabled's own comment for the full rule.
+  const homeDisabled = (t: HomeTemplate) => homeTemplateDisabled(backend, t);
   // Selecting a backend while an incompatible template is chosen would author
   // exactly the row the server refuses, so the choice moves with the backend
-  // rather than waiting to be refused.
+  // rather than waiting to be refused. A template that is still valid under the
+  // new backend (e.g. `hash` staying selected into k8s_pvc_static) is left
+  // alone; `hash` is every Wardyn-named backend's own default otherwise.
   const pickBackend = (b: DriveBackend) => {
     setBackend(b);
-    if (!isManagedBackend(b) && home === "hash") setHome("sub");
-    if (isManagedBackend(b) && home !== "hash") setHome("hash");
+    if (homeTemplateDisabled(b, home)) setHome(b === "host_path" ? "sub" : "hash");
   };
 
   const save = async (confirmRehome = false) => {

@@ -63,9 +63,9 @@ func (s *ownerStore) MergeWorkspaceRequirements(_ context.Context, id uuid.UUID,
 // every case below needs.
 func reassignHarness(t *testing.T) (srv *Server, st *ownerStore, h *harness, admin, member *http.Cookie, owned uuid.UUID) {
 	t.Helper()
-	srv, st, h = ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, h = ownerHarness(t, runner.UserMountPolicy{})
 	admin = ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
-	member = ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member = ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	owned = st.put(types.Workspace{OwnedBy: ownerMemberSub})
 	return srv, st, h, admin, member, owned
 }
@@ -140,10 +140,10 @@ func TestWorkspaceReassign_AdminReturnsRowToOperator(t *testing.T) {
 	}
 
 	// The reassigned row's local_dir sources leave the member mount gate with
-	// it — memberMountPosture resolves no roots for an operator-owned
+	// it — userMountPosture resolves no roots for an operator-owned
 	// workspace, so its binds are ordinary operator mounts from here on. Pinned
 	// HERE, at the transition, because that is where a reader looks for it.
-	if p := srv.memberMountPosture([]types.Workspace{stored}); p.Roots != nil || p.Sources != nil {
+	if p := srv.userMountPosture([]types.Workspace{stored}); p.Roots != nil || p.Sources != nil {
 		t.Errorf("posture after reassign = %+v, want the zero value — an operator-owned row takes the operator mount path", p)
 	}
 
@@ -248,8 +248,8 @@ func TestWorkspaceReassign_UnknownWorkspaceIsNotFound(t *testing.T) {
 //
 // Swept across the workspace-scoped write surface rather than one route: the
 // generic scopedWorkspaceWrite chokepoint, two handlers that audit directly,
-// and the reassign added by O6. A new workspace write that forgets the marker
-// is the regression this exists to catch.
+// and the workspace reassign. A new workspace write that forgets the marker
+// fails here.
 func TestWorkspaceOwner_NoImpersonation(t *testing.T) {
 	const adminSub = "sub-owner-admin"
 	srv, st, h, admin, _, _ := reassignHarness(t)

@@ -117,7 +117,7 @@ func TestHardenedHostConfig_InvalidEnvIsLoud(t *testing.T) {
 		{envBuildMemoryMB, "-512"},  // negative
 		{envBuildCPUs, "two"},       //
 		{envBuildCPUs, "-1"},        //
-		{envMaxContextMB, "1024MB"}, // used to silently disable the layer cap
+		{envMaxContextMB, "1024MB"}, // would silently disable the layer cap
 		{envMaxContextMB, "1_024"},  //
 	} {
 		t.Run(tc.key+"="+tc.val, func(t *testing.T) {

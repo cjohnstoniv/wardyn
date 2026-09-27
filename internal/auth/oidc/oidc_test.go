@@ -21,6 +21,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 
 	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // testHMACKey is 32 bytes — minimum accepted by New.
@@ -108,7 +109,7 @@ func (e *idpEnv) buildIDTokenWithRoles(t *testing.T, sub, email string, roles, g
 }
 
 // buildIDTokenRawClaim is buildIDToken plus one arbitrary extra claim of any
-// shape — H1's tolerant-decode regression coverage: a real IdP sometimes
+// shape, for tolerant-decode coverage: a real IdP sometimes
 // sends "roles"/"groups" as a scalar string (or object) instead of the JSON
 // array deriveRole expects. Signs with roleCallbackNonce so the result works
 // directly with doCallback.
@@ -218,7 +219,7 @@ func (e *idpEnv) newRoleAuth(t *testing.T, roleMap map[string]string, defaultRol
 	return auth
 }
 
-// ─── TestLoginHandlerSetsStateCookies ────────────────────────────────────────
+// TestLoginHandlerSetsStateCookies
 
 func TestLoginHandlerSetsStateCookies(t *testing.T) {
 	env := newIdPEnv(t)
@@ -278,7 +279,7 @@ func TestLoginHandlerSetsStateCookies(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackHandlerRejectsInvalidState ──────────────────────────────────
+// TestCallbackHandlerRejectsInvalidState
 
 func TestCallbackHandlerRejectsInvalidState(t *testing.T) {
 	env := newIdPEnv(t)
@@ -298,7 +299,7 @@ func TestCallbackHandlerRejectsInvalidState(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackHandlerRejectsMissingStateCookie ─────────────────────────────
+// TestCallbackHandlerRejectsMissingStateCookie
 
 func TestCallbackHandlerRejectsMissingStateCookie(t *testing.T) {
 	env := newIdPEnv(t)
@@ -314,7 +315,7 @@ func TestCallbackHandlerRejectsMissingStateCookie(t *testing.T) {
 	}
 }
 
-// ─── TestFullCodeFlow ─────────────────────────────────────────────────────────
+// TestFullCodeFlow
 //
 // Full round-trip: LoginHandler → (simulate IdP redirect) → CallbackHandler.
 // The fake token endpoint returns a pre-signed ID token containing the correct
@@ -432,7 +433,7 @@ func doCallbackFlow(t *testing.T, env *idpEnv, auth *writoidc.Authenticator) *ht
 	return cbW
 }
 
-// ─── TestCallbackHandlerRetriesTransientTokenEndpointError (D12) ─────────────
+// TestCallbackHandlerRetriesTransientTokenEndpointError (D12)
 //
 // The token endpoint 503s twice, then succeeds — retryExchange must ride out
 // the blip and finish the login rather than hard-failing on the first 503.
@@ -470,7 +471,7 @@ func TestCallbackHandlerRetriesTransientTokenEndpointError(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient (D12) ────
+// TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient (D12)
 //
 // The token endpoint 503s on every attempt — retryExchange gives up after
 // tokenExchangeRetries and the callback must redirect with the TRANSIENT
@@ -509,7 +510,7 @@ func TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient(t *testing.T
 	}
 }
 
-// ─── TestCallbackHandlerPermanentTokenErrorNotRetried (D12) ──────────────────
+// TestCallbackHandlerPermanentTokenErrorNotRetried (D12)
 //
 // invalid_grant (or any other 4xx) is the IdP actively rejecting the request
 // — the authorization code is single-use, so retrying it can only ever
@@ -547,7 +548,7 @@ func TestCallbackHandlerPermanentTokenErrorNotRetried(t *testing.T) {
 	}
 }
 
-// ─── D16: Middleware session-revocation check ─────────────────────────────────
+// D16: Middleware session-revocation check
 
 // fakeSessionRevocations is an in-memory writoidc.SessionRevocations double
 // for Middleware's revocation-check tests: it always answers `revoked`/`err`
@@ -590,7 +591,7 @@ func TestMiddlewareRevokedSessionDenied(t *testing.T) {
 	writoidc.SetRevocationsForTest(auth, fake)
 
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub: "sub-revoked", Email: "revoked@example.com", Role: writoidc.RoleAdmin,
+		Sub: "sub-revoked", Email: "revoked@example.com", Role: writoidc.RoleAdmin, UserType: "standard",
 		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
 	})
 	if err != nil {
@@ -615,7 +616,7 @@ func TestMiddlewareNotRevokedSessionAllowed(t *testing.T) {
 	writoidc.SetRevocationsForTest(auth, &fakeSessionRevocations{revoked: false})
 
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub: "sub-fine", Email: "fine@example.com", Role: writoidc.RoleAdmin,
+		Sub: "sub-fine", Email: "fine@example.com", Role: writoidc.RoleAdmin, UserType: "standard",
 		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
 	})
 	if err != nil {
@@ -640,7 +641,7 @@ func TestMiddlewareRevocationStoreErrorFailsClosed(t *testing.T) {
 	writoidc.SetRevocationsForTest(auth, &fakeSessionRevocations{err: errors.New("pg: connection refused")})
 
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub: "sub-db-down", Email: "dbdown@example.com", Role: writoidc.RoleAdmin,
+		Sub: "sub-db-down", Email: "dbdown@example.com", Role: writoidc.RoleAdmin, UserType: "standard",
 		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
 	})
 	if err != nil {
@@ -665,7 +666,7 @@ func TestMiddlewareNilRevocationsUnsetChangesNothing(t *testing.T) {
 	auth := env.newAuth(t, nil) // Revocations left nil
 
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub: "sub-no-store", Email: "nostore@example.com", Role: writoidc.RoleAdmin,
+		Sub: "sub-no-store", Email: "nostore@example.com", Role: writoidc.RoleAdmin, UserType: "standard",
 		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
 	})
 	if err != nil {
@@ -681,7 +682,7 @@ func TestMiddlewareNilRevocationsUnsetChangesNothing(t *testing.T) {
 	}
 }
 
-// ─── TestNonceMismatchRejected ────────────────────────────────────────────────
+// TestNonceMismatchRejected
 //
 // The ID token contains nonce "correct" but the cookie carries "wrong".
 // CallbackHandler must reject with 401.
@@ -710,7 +711,7 @@ func TestNonceMismatchRejected(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackRole* ────────────────────────────────────────────────────────
+// TestCallbackRole*
 //
 // Role derivation (Config.RoleMap / DefaultRole / LegacyAdminEmails, see
 // deriveRole in oidc.go): the union of the ID token's roles/groups claims and
@@ -729,40 +730,46 @@ func TestCallbackRoleRolesClaimAdmin(t *testing.T) {
 	if sess.Role != writoidc.RoleAdmin {
 		t.Errorf("role = %q, want %q", sess.Role, writoidc.RoleAdmin)
 	}
+	if sess.UserType != types.UserTypeStandard {
+		t.Errorf("user type = %q, want %q", sess.UserType, types.UserTypeStandard)
+	}
 }
 
-func TestCallbackRoleGroupsClaimMember(t *testing.T) {
+func TestCallbackRoleGroupsClaimUser(t *testing.T) {
 	env := newIdPEnv(t)
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", nil)
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil)
 
 	w, sess := doRoleCallback(t, env, auth, "bob@corp.example", nil, []string{"eng-team"})
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
-	if sess.Role != writoidc.RoleMember {
-		t.Errorf("role = %q, want %q", sess.Role, writoidc.RoleMember)
+	if sess.Role != writoidc.RoleUser {
+		t.Errorf("role = %q, want %q", sess.Role, writoidc.RoleUser)
+	}
+	if sess.UserType != types.UserTypeStandard {
+		t.Errorf("user type = %q, want %q", sess.UserType, types.UserTypeStandard)
 	}
 }
 
 func TestCallbackRoleEmailMapping(t *testing.T) {
 	env := newIdPEnv(t)
-	auth := env.newRoleAuth(t, map[string]string{"carol@corp.example": writoidc.RoleMember}, "", nil)
+	auth := env.newRoleAuth(t, map[string]string{"carol@corp.example": writoidc.RoleUser}, "", nil)
 
 	w, sess := doRoleCallback(t, env, auth, "carol@corp.example", nil, nil)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
-	if sess.Role != writoidc.RoleMember {
-		t.Errorf("role = %q, want %q", sess.Role, writoidc.RoleMember)
+	if sess.Role != writoidc.RoleUser {
+		t.Errorf("role = %q, want %q", sess.Role, writoidc.RoleUser)
 	}
 }
 
 func TestCallbackRoleNoMatchNoDefaultDenied(t *testing.T) {
 	env := newIdPEnv(t)
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", nil)
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil)
 
 	w, sess := doRoleCallback(t, env, auth, "dave@corp.example", nil, nil)
-	// W31-S1-5: redirects to "/?auth_error=no_role" (302) instead of a bare
+	// Redirects to "/?auth_error=no_role" (302) instead of a bare
 	// http.Error text page.
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
@@ -779,16 +786,16 @@ func TestCallbackRoleNoMatchNoDefaultDenied(t *testing.T) {
 	assertSessionCookieCleared(t, w)
 }
 
-func TestCallbackRoleNoMatchDefaultRoleMember(t *testing.T) {
+func TestCallbackRoleNoMatchDefaultRoleUser(t *testing.T) {
 	env := newIdPEnv(t)
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, writoidc.RoleMember, nil)
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, writoidc.RoleUser, nil)
 
 	w, sess := doRoleCallback(t, env, auth, "erin@corp.example", nil, nil)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
-	if sess.Role != writoidc.RoleMember {
-		t.Errorf("role = %q, want %q (DefaultRole)", sess.Role, writoidc.RoleMember)
+	if sess.Role != writoidc.RoleUser {
+		t.Errorf("role = %q, want %q (DefaultRole)", sess.Role, writoidc.RoleUser)
 	}
 }
 
@@ -806,12 +813,12 @@ func TestCallbackRoleMapUnsetDefaultsAdmin(t *testing.T) {
 }
 
 func TestCallbackRoleMapUnsetLegacyListStillSplitsAdminMember(t *testing.T) {
-	// Regression (silent viewer→admin escalation on upgrade): with the role map
-	// UNSET but WARDYN_OIDC_OPERATOR_EMAILS SET — the mandatory-minimum SSO config
-	// an upgrading 0.4.5 deployment runs (validateOperatorPosture refuses an empty
-	// list; a role map is opt-in on top) — the operator allowlist alone must still
-	// split admin from member. Before the fix, deriveRole's empty-map short-circuit
-	// returned RoleAdmin for EVERYONE, promoting every existing viewer to admin.
+	// Silent viewer→admin escalation on upgrade: with the role map unset but
+	// WARDYN_OIDC_OPERATOR_EMAILS set — the mandatory-minimum SSO config
+	// (validateOperatorPosture refuses an empty list; a role map is opt-in on top) —
+	// the operator allowlist alone must still split admin from member. An empty-map
+	// short-circuit in deriveRole returning RoleAdmin for everyone would promote
+	// every existing viewer to admin.
 	env := newIdPEnv(t)
 	auth := env.newRoleAuth(t, nil, "", []string{"olivia@corp.example"}) // role map unset, operator list set
 
@@ -828,8 +835,8 @@ func TestCallbackRoleMapUnsetLegacyListStillSplitsAdminMember(t *testing.T) {
 	if wMem.Code != http.StatusFound {
 		t.Fatalf("member status = %d, want %d (body: %s)", wMem.Code, http.StatusFound, wMem.Body.String())
 	}
-	if memSess.Role != writoidc.RoleMember {
-		t.Errorf("non-listed role = %q, want %q (must not be promoted to admin on upgrade)", memSess.Role, writoidc.RoleMember)
+	if memSess.Role != writoidc.RoleUser {
+		t.Errorf("non-listed role = %q, want %q (must not be promoted to admin on upgrade)", memSess.Role, writoidc.RoleUser)
 	}
 }
 
@@ -838,7 +845,7 @@ func TestCallbackRoleLegacyOperatorEmailAdmin(t *testing.T) {
 	// The map is SET and this user also hits a MEMBER entry via groups — the
 	// legacy operator-email match must still win to admin (highest
 	// precedence), proving it is not merely a fallback for an empty map.
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", []string{"grace@corp.example"})
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", []string{"grace@corp.example"})
 
 	// Mixed case on both sides of the match, proving case-insensitivity too.
 	w, sess := doRoleCallback(t, env, auth, "Grace@Corp.Example", nil, []string{"eng-team"})
@@ -854,7 +861,7 @@ func TestCallbackRoleAdminBeatsMemberTie(t *testing.T) {
 	env := newIdPEnv(t)
 	auth := env.newRoleAuth(t, map[string]string{
 		"wardyn.admin": writoidc.RoleAdmin,
-		"eng-team":     writoidc.RoleMember,
+		"eng-team":     writoidc.RoleUser,
 	}, "", nil)
 
 	// Matches BOTH an admin entry (roles) and a member entry (groups) — any
@@ -876,7 +883,7 @@ func TestCallbackRoleAdminBeatsMemberTie(t *testing.T) {
 // entry — the escalating direction.
 func TestCallbackRoleNonASCIIEmailNoFoldEscalation(t *testing.T) {
 	env := newIdPEnv(t)
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", []string{"ross@corp.example"})
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", []string{"ross@corp.example"})
 
 	// U+017F (LATIN SMALL LETTER LONG S): "roſs@corp.example" must NOT match
 	// the ASCII legacy-admin entry "ross@corp.example". The groups claim still
@@ -886,12 +893,12 @@ func TestCallbackRoleNonASCIIEmailNoFoldEscalation(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
-	if sess.Role != writoidc.RoleMember {
-		t.Errorf("role = %q, want %q (non-ASCII email must not fold onto the ASCII legacy-admin entry)", sess.Role, writoidc.RoleMember)
+	if sess.Role != writoidc.RoleUser {
+		t.Errorf("role = %q, want %q (non-ASCII email must not fold onto the ASCII legacy-admin entry)", sess.Role, writoidc.RoleUser)
 	}
 }
 
-// ─── TestCallbackScalarClaim* ─────────────────────────────────────────────────
+// TestCallbackScalarClaim*
 //
 // H1: a real IdP sometimes sends "roles"/"groups" as a scalar string (or
 // object) instead of a JSON array — e.g. a lone group as bare "eng-team"
@@ -920,11 +927,11 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 	// will send — if the tolerant decode were broken (e.g. silently coerced
 	// into a one-element slice instead of failing closed), this would wrongly
 	// match and grant member.
-	auth := env.newRoleAuth(t, map[string]string{"not-an-array": writoidc.RoleMember}, "", nil)
+	auth := env.newRoleAuth(t, map[string]string{"not-an-array": writoidc.RoleUser}, "", nil)
 
 	env.buildIDTokenRawClaim(t, "sub-scalar2", "scalar2@corp.example", "groups", "not-an-array")
 	w, sess := doCallback(t, auth)
-	// W31-S1-5: redirects (302) rather than a fatal 401/500 or a bare
+	// Redirects (302) rather than a fatal 401/500 or a bare
 	// http.Error text page.
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (malformed claim decodes to nothing, so nothing matches; deny via redirect, not a fatal 401/500): body: %s", w.Code, http.StatusFound, w.Body.String())
@@ -934,7 +941,7 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 	}
 }
 
-// ─── TestParseRoleMap ─────────────────────────────────────────────────────────
+// TestParseRoleMap
 //
 // M2/M3/L8: non-empty input that yields no usable entry, a non-ASCII key
 // (can never match — see ASCIIOnly), and a duplicate key must all be parse
@@ -949,14 +956,16 @@ func TestParseRoleMap(t *testing.T) {
 	}{
 		{"empty is unset, not an error", "", nil, false},
 		{"blank is unset, not an error", "   ", nil, false},
-		{"one valid entry", "eng-team=member", map[string]string{"eng-team": "member"}, false},
-		{"multiple valid entries, key lowered", "Wardyn.Admin=admin,eng-team=member", map[string]string{"wardyn.admin": "admin", "eng-team": "member"}, false},
-		{"blank entries between commas are skipped", "eng-team=member,,", map[string]string{"eng-team": "member"}, false},
+		{"one valid entry", "eng-team=user", map[string]string{"eng-team": "user"}, false},
+		{"multiple valid entries, key lowered", "Wardyn.Admin=admin,eng-team=user", map[string]string{"wardyn.admin": "admin", "eng-team": "user"}, false},
+		{"blank entries between commas are skipped", "eng-team=user,,", map[string]string{"eng-team": "user"}, false},
 		{"missing =", "eng-team", nil, true},
 		{"empty key before =", "=admin", nil, true},
-		{"bad role value", "eng-team=owner", nil, true},
-		{"duplicate key", "eng-team=member,eng-team=admin", nil, true},
-		{"duplicate key differs only by case", "Eng-Team=member,eng-team=admin", nil, true},
+		{"bad role value", "eng-team=Owner", nil, true},
+		{"a user type id is a role value", "pm-group=portfolio-manager", map[string]string{"pm-group": "portfolio-manager"}, false},
+		{"a reserved word is not a type id", "eng-team=denied", nil, true},
+		{"duplicate key", "eng-team=user,eng-team=admin", nil, true},
+		{"duplicate key differs only by case", "Eng-Team=user,eng-team=admin", nil, true},
 		// M2: non-empty input, but every entry is blank — must error, not
 		// silently return nil (which deriveRole reads as "everyone is admin").
 		{"all-blank input is an error, not silently unset", ",,,", nil, true},
@@ -1033,7 +1042,7 @@ func TestSessionRoundTripWithRole(t *testing.T) {
 	env := newIdPEnv(t)
 	auth := env.newAuth(t, nil)
 
-	sess := buildSession(t, auth, "sub-dana", "dana@example.com", writoidc.RoleMember, time.Now().Add(time.Hour))
+	sess := buildSession(t, auth, "sub-dana", "dana@example.com", writoidc.RoleUser, time.Now().Add(time.Hour))
 
 	var got writoidc.Session
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1049,12 +1058,12 @@ func TestSessionRoundTripWithRole(t *testing.T) {
 	w := httptest.NewRecorder()
 	auth.Middleware(next).ServeHTTP(w, r)
 
-	if got.Sub != "sub-dana" || got.Email != "dana@example.com" || got.Role != writoidc.RoleMember {
-		t.Errorf("round-tripped session = %+v, want sub=sub-dana email=dana@example.com role=%s", got, writoidc.RoleMember)
+	if got.Sub != "sub-dana" || got.Email != "dana@example.com" || got.Role != writoidc.RoleUser {
+		t.Errorf("round-tripped session = %+v, want sub=sub-dana email=dana@example.com role=%s", got, writoidc.RoleUser)
 	}
 }
 
-// ─── TestSessionRoundTrip ─────────────────────────────────────────────────────
+// TestSessionRoundTrip
 
 func TestSessionRoundTrip(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1079,7 +1088,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	}
 }
 
-// ─── TestMiddlewareFallsThrough ───────────────────────────────────────────────
+// TestMiddlewareFallsThrough
 
 func TestMiddlewareFallsThrough(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1093,7 +1102,7 @@ func TestMiddlewareFallsThrough(t *testing.T) {
 		}
 		// No cookie was presented at all — the ordinary non-browser-client
 		// case — so this must NOT be flagged as a rejected session (that
-		// would make auth.failed fire on every plain bearer-token request).
+		// would make auth.fail fire on every plain bearer-token request).
 		if reason := writoidc.SessionRejectedFromContext(r.Context()); reason != "" {
 			t.Errorf("SessionRejectedFromContext = %q, want \"\" (no cookie presented)", reason)
 		}
@@ -1109,7 +1118,7 @@ func TestMiddlewareFallsThrough(t *testing.T) {
 	}
 }
 
-// ─── TestExpiredSessionRejected ───────────────────────────────────────────────
+// TestExpiredSessionRejected
 
 func TestExpiredSessionRejected(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1150,7 +1159,7 @@ func TestExpiredSessionRejected(t *testing.T) {
 	}
 }
 
-// ─── TestTamperedCookieRejected ───────────────────────────────────────────────
+// TestTamperedCookieRejected
 
 func TestTamperedCookieRejected(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1191,7 +1200,7 @@ func TestTamperedCookieRejected(t *testing.T) {
 	}
 }
 
-// ─── TestDomainCheck* ─────────────────────────────────────────────────────────
+// TestDomainCheck*
 
 func TestDomainCheckAllowedEmail(t *testing.T) {
 	checkDomainFilter(t, "alice@example.com", []string{"example.com"}, true)
@@ -1214,7 +1223,7 @@ func TestDomainCheckMalformedEmail(t *testing.T) {
 	checkDomainFilter(t, "notanemail", []string{"example.com"}, false)
 }
 
-// ─── C1: email_verified absent vs explicitly false ───────────────────────────
+// C1: email_verified absent vs explicitly false
 //
 // Entra ID tokens typically OMIT email_verified entirely rather than sending
 // it false (Config.AllowedEmailDomains' doc). A plain bool claims field
@@ -1288,7 +1297,7 @@ func TestCallbackEmailVerifiedAbsentIsIgnoredWithoutDomains(t *testing.T) {
 	}
 }
 
-// ─── TestLogoutClearsCookie ───────────────────────────────────────────────────
+// TestLogoutClearsCookie
 
 func TestLogoutClearsCookie(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1314,7 +1323,7 @@ func TestLogoutClearsCookie(t *testing.T) {
 	// Cookie absent is also acceptable (browser would drop it).
 }
 
-// ─── TestSecureCookieAttribute ────────────────────────────────────────────────
+// TestSecureCookieAttribute
 //
 // The session cookie's Secure attribute must follow Config.SecureCookies:
 // false over plain HTTP (else the browser drops the cookie and login breaks),
@@ -1365,7 +1374,7 @@ func TestSecureCookieAttribute(t *testing.T) {
 	}
 }
 
-// ─── TestNewRejectsMissingConfig ──────────────────────────────────────────────
+// TestNewRejectsMissingConfig
 
 // TestNewRejectsMissingConfig is C2-reshaped: ClientSecret is no longer in
 // this table at all — see TestNewAcceptsPublicClientWithNoSecret below for
@@ -1411,8 +1420,8 @@ func TestNewAcceptsPublicClientWithNoSecret(t *testing.T) {
 	}
 }
 
-// TestCallbackPublicClientCompletesWithoutASecret is C2's end-to-end
-// regression: a full login (LoginHandler's PKCE state through
+// TestCallbackPublicClientCompletesWithoutASecret is the end-to-end pin: a
+// full login (LoginHandler's PKCE state through
 // CallbackHandler's token exchange and session issuance) against a public
 // client — no ClientSecret configured at all — must complete exactly like a
 // confidential client's does. The fake token endpoint (idpEnv.tokenSrv)
@@ -1438,7 +1447,7 @@ func TestCallbackPublicClientCompletesWithoutASecret(t *testing.T) {
 	}
 }
 
-// ─── TestNewRejectsShortHMACKey ───────────────────────────────────────────────
+// TestNewRejectsShortHMACKey
 
 func TestNewRejectsShortHMACKey(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1455,7 +1464,7 @@ func TestNewRejectsShortHMACKey(t *testing.T) {
 	}
 }
 
-// ─── TestWrongHMACKeyRejected ─────────────────────────────────────────────────
+// TestWrongHMACKeyRejected
 //
 // A session cookie signed with key A must be rejected when decoded with key B.
 
@@ -1497,16 +1506,17 @@ func TestWrongHMACKeyRejected(t *testing.T) {
 	}
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 // buildSession creates a signed session cookie via the exported test helper.
 func buildSession(t *testing.T, auth *writoidc.Authenticator, sub, email, role string, expiry time.Time) *http.Cookie {
 	t.Helper()
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub:    sub,
-		Email:  email,
-		Role:   role,
-		Expiry: expiry,
+		Sub:      sub,
+		Email:    email,
+		Role:     role,
+		UserType: "standard",
+		Expiry:   expiry,
 	})
 	if err != nil {
 		t.Fatalf("EncodeSessionForTest: %v", err)
@@ -1541,7 +1551,7 @@ func checkDomainFilter(t *testing.T, email string, allowedDomains []string, want
 				email, resp.StatusCode, http.StatusFound, w.Body.String())
 		}
 	} else {
-		// W31-S1-5: a domain-check denial redirects to "/?auth_error=..."
+		// A domain-check denial redirects to "/?auth_error=..."
 		// (302) rather than a bare http.Error text page — a real page the
 		// browser can act on instead of a dead end with no way back.
 		if resp.StatusCode != http.StatusFound {
@@ -1571,13 +1581,20 @@ const roleCallbackNonce = "nonce-role"
 // when no cookie was issued, e.g. a denied login).
 func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseRecorder, writoidc.Session) {
 	t.Helper()
+	return doCallbackVia(t, auth, auth.CallbackHandler)
+}
+
+// doCallbackVia is doCallback through a given callback handler (e.g. one
+// built by CallbackHandlerWithDenials).
+func doCallbackVia(t *testing.T, auth *writoidc.Authenticator, callback http.HandlerFunc) (*httptest.ResponseRecorder, writoidc.Session) {
+	t.Helper()
 	const stateVal, verifierVal = "state-role", "verifier-role"
 	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: roleCallbackNonce})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: verifierVal})
 	w := httptest.NewRecorder()
-	auth.CallbackHandler(w, r)
+	callback(w, r)
 
 	var sessCookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
@@ -1592,10 +1609,11 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 	var got writoidc.Session
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		got = writoidc.Session{
-			Sub:    writoidc.PrincipalFromContext(r.Context()),
-			Email:  writoidc.EmailFromContext(r.Context()),
-			Role:   writoidc.RoleFromContext(r.Context()),
-			Groups: writoidc.GroupsFromContext(r.Context()),
+			Sub:      writoidc.PrincipalFromContext(r.Context()),
+			Email:    writoidc.EmailFromContext(r.Context()),
+			Role:     writoidc.RoleFromContext(r.Context()),
+			UserType: writoidc.UserTypeFromContext(r.Context()),
+			Groups:   writoidc.GroupsFromContext(r.Context()),
 		}
 	})
 	checkReq := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -1695,7 +1713,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
 // callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
-func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, []string, bool)) *writoidc.Authenticator {
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, string, []string, bool)) *writoidc.Authenticator {
 	t.Helper()
 	rt := &rewriteTokenRT{
 		base:          http.DefaultTransport,
@@ -1717,7 +1735,7 @@ func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, 
 	return auth
 }
 
-// ─── TestCallbackInvokesOnLoginWithSubAndRole ─────────────────────────────────
+// TestCallbackInvokesOnLoginWithSubAndRole
 //
 // Migration 0046's refresh hook: a successful login must call Config.OnLogin
 // exactly once, with the ID token's sub and the role CallbackHandler just
@@ -1731,13 +1749,13 @@ func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, 
 func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	env := newIdPEnv(t)
 	var gotCtx context.Context
-	var gotSub, gotRole string
+	var gotSub, gotRole, gotUserType string
 	var gotGroups []string
 	var gotTruncated bool
 	calls := 0
-	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role string, groups []string, truncated bool) {
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
 		calls++
-		gotCtx, gotSub, gotRole, gotGroups, gotTruncated = ctx, sub, role, groups, truncated
+		gotCtx, gotSub, gotRole, gotUserType, gotGroups, gotTruncated = ctx, sub, role, userType, groups, truncated
 	})
 
 	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
@@ -1774,6 +1792,11 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	if gotRole != writoidc.RoleAdmin {
 		t.Errorf("OnLogin role = %q, want %q", gotRole, writoidc.RoleAdmin)
 	}
+	// #611: the user type the session carries rides along too, so the token
+	// re-stamp learns it. No role map puts everyone on the built-in type.
+	if gotUserType != types.UserTypeStandard {
+		t.Errorf("OnLogin user type = %q, want %q", gotUserType, types.UserTypeStandard)
+	}
 	// #152: OnLogin's groups/truncated are the SAME values the session carries
 	// (sessionGroups run once, not re-derived) — no roles/groups claim in this
 	// fixture's ID token, so the snapshot is empty and complete.
@@ -1803,7 +1826,7 @@ func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
 		ClientSecret: "secret",
 		RedirectURL:  "http://localhost/auth/callback",
 		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
-		OnLogin:      func(context.Context, string, string, []string, bool) { calls++ },
+		OnLogin:      func(context.Context, string, string, string, []string, bool) { calls++ },
 	}, testHMACKey)
 	if err != nil {
 		t.Fatalf("writoidc.New: %v", err)
@@ -1839,7 +1862,7 @@ func TestMiddlewareRevocationBranchesSurfaceReason(t *testing.T) {
 			auth := env.newAuth(t, nil)
 			writoidc.SetRevocationsForTest(auth, tc.fake)
 			cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-				Sub: "sub-x", Email: "x@example.com", Role: writoidc.RoleAdmin,
+				Sub: "sub-x", Email: "x@example.com", Role: writoidc.RoleAdmin, UserType: "standard",
 				Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
 			})
 			if err != nil {
@@ -1914,7 +1937,8 @@ func TestSessionRoundTripName(t *testing.T) {
 	t.Run("name survives the round trip", func(t *testing.T) {
 		name, ok := roundTrip(t, writoidc.Session{
 			Sub: "sub-dana", Email: "dana@example.com", Name: "Dana Example",
-			Role: writoidc.RoleMember, Expiry: time.Now().Add(time.Hour),
+			Role: writoidc.RoleUser, Expiry: time.Now().Add(time.Hour),
+			UserType: "standard",
 		})
 		if !ok || name != "Dana Example" {
 			t.Fatalf("authenticated=%v name=%q, want authenticated with name %q", ok, name, "Dana Example")
@@ -1924,7 +1948,8 @@ func TestSessionRoundTripName(t *testing.T) {
 	t.Run("a session minted without a name (a 0.7.0 cookie) is still a session", func(t *testing.T) {
 		name, ok := roundTrip(t, writoidc.Session{
 			Sub: "sub-dana", Email: "dana@example.com",
-			Role: writoidc.RoleMember, Expiry: time.Now().Add(time.Hour),
+			Role: writoidc.RoleUser, Expiry: time.Now().Add(time.Hour),
+			UserType: "standard",
 		})
 		if !ok || name != "" {
 			t.Fatalf("authenticated=%v name=%q, want authenticated with an empty name", ok, name)

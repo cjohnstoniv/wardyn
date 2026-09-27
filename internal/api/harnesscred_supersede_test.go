@@ -68,6 +68,22 @@ func (s *supersedeStore) CountActiveRunsBy(_ context.Context, createdBy string) 
 	return n, nil
 }
 
+// SetSandboxRef overrides govEscapeStore's no-op so a gated-runner test can
+// observe killTeardownTail actually reach KillSandbox: the embedded store's
+// own SetSandboxRef discards the ref, which would leave every run's
+// SandboxRef "" and skip the teardown's KillSandbox call outright.
+func (s *supersedeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok {
+		return nil
+	}
+	r.SandboxRef = ref
+	s.runs[id] = r
+	return nil
+}
+
 // QueryAuditEvents: the RUN READ path asks for a run's events to project its UI
 // apps (effectiveUIApps, runs_policy.go), and an unimplemented promoted method
 // on a double is a nil-pointer panic rather than the logged error that read path
@@ -143,6 +159,21 @@ func (i *ctxAwareIdentity) failRevokes(err error) {
 	i.revokeErr = err
 }
 
+// waitForRevoke polls for runID's identity revocation, so a test can assert on
+// a supersede's teardown tail, which now runs on a detached goroutine after
+// the launch POST answers (#122).
+func waitForRevoke(t *testing.T, idp *ctxAwareIdentity, runID uuid.UUID) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if idp.didRevoke(runID) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("run %s identity was never revoked after 5s", runID)
+}
+
 // ctxAwareAudit drops a row written on a dead context, which is what the real
 // sink does — recordAudit passes the context straight to a store write. Without
 // it a cancelled cascade still "audits" in these tests and R1-F1 is unprovable.
@@ -194,7 +225,7 @@ func newSupersedeFixture(t *testing.T, cs *capStore, rnr runner.Runner) supersed
 
 func memberLoginSession(t *testing.T) *http.Cookie {
 	t.Helper()
-	return ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	return ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 }
 
 // launchLoginRun POSTs one sign-in and returns its run id.
@@ -260,13 +291,13 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // GREEN ON THE UNFIXED TREE — a regression pin, not a defect fix. The
 // no-credential preview's 409 sits in handleHarnessLogin, before
 // launchHarnessLoginRun and therefore before the supersede; the existing preview
-// case asserts only "no run row, no harness.login.started" on a fixture with no
+// case asserts only "no run row, no harness.login.start" on a fixture with no
 // supersede seam and no live login run, so moving the 409 below the launch (or
 // hoisting the supersede into the handler — a plausible refactor, since the
 // comment at the supersede call already argues about placement) would kill the
-// admin's REAL sign-in from inside a preview with every test still green. That
-// is the worst possible shape of this feature: a view that destroys the thing it
-// is pretending not to have.
+// admin's real sign-in from inside a preview with every other test still green.
+// That is the worst possible shape of this feature: a view that destroys the
+// thing it is pretending not to have.
 func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 	f := newSupersedeFixture(t, nil, nil)
 
@@ -282,8 +313,8 @@ func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("harness-login in the preview = %d, want 409: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), memberPreviewSignInRefusal) {
-		t.Errorf("body = %q, want %q", w.Body.String(), memberPreviewSignInRefusal)
+	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
+		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
 	}
 	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
 		t.Errorf("the admin's own sign-in sandbox is %s, want RUNNING — a refused launch must not "+
@@ -330,7 +361,7 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 // lands after the winner's. The second pass is what closes it, and it has to do
 // so WITHOUT an in-process mutex, which is not a lock on the second replica.
 //
-// WHAT IS PINNED, EXACTLY: the interleaving where a pass SEES BOTH ROWS — both
+// What is pinned, exactly: the interleaving where a pass sees both rows — both
 // are in the store before either second pass runs. That is the ordinary
 // double-click, and the passes are run in each order because the property is
 // that the answer does not depend on which finishes first. It is NOT a universal
@@ -501,7 +532,10 @@ func TestHarnessLogin_SupersedeAuditsSuccessWithTheReason(t *testing.T) {
 	waitRunState(t, st, first, types.RunRunning)
 	second := launchLoginRun(t, srv, sess)
 
-	row := killRow(t, audit, first)
+	// The run.kill row is written by the detached teardown tail (#122), which
+	// runs after this POST has already answered — wait for it rather than
+	// asserting immediately.
+	row := waitForKillRow(t, audit, first)
 	if row.Outcome != "success" {
 		t.Errorf("run.kill outcome = %q, want success — a clean supersede is not a failed kill", row.Outcome)
 	}
@@ -584,13 +618,13 @@ func TestUploadSSOToken_KilledRunIsRefused(t *testing.T) {
 		}
 		var refused *types.AuditEvent
 		for _, ev := range h.audit.events {
-			if ev.Action == "harness.credential.refused" {
+			if ev.Action == "harness.credential.refuse" {
 				refused = &ev
 				break
 			}
 		}
 		if refused == nil {
-			t.Fatal("no harness.credential.refused row — a refused capture that leaves no trail is the 0.7.3 finding again")
+			t.Fatal("no harness.credential.refuse row — a refused capture that leaves no trail is the 0.7.3 finding again")
 		}
 		var data map[string]any
 		if err := json.Unmarshal(refused.Data, &data); err != nil {
@@ -682,13 +716,13 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 	}
 	var refused *types.AuditEvent
 	for _, ev := range h.audit.events {
-		if ev.Action == "harness.credential.refused" {
+		if ev.Action == "harness.credential.refuse" {
 			refused = &ev
 			break
 		}
 	}
 	if refused == nil {
-		t.Fatal("no harness.credential.refused row for a refused capture")
+		t.Fatal("no harness.credential.refuse row for a refused capture")
 	}
 	data := killData(t, *refused)
 	if data["reason"] != refuseReasonRunKilled {
@@ -702,7 +736,7 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 	}
 }
 
-// TestKillRunCascade_FinishesAfterTheCallersContextDies is R1-F1: the cascade
+// TestKillRunCascade_FinishesAfterTheCallersContextDies: the cascade
 // detaches ITSELF, so no caller can leak a cancellation into a half-applied
 // kill.
 //
@@ -714,8 +748,8 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 //
 // BOTH callers, because the property belongs to the cascade and not to either
 // of them: the supersede runs on the launch POST's context (a person closing
-// that tab mid-launch is this lane's whole subject), and the kill route is the
-// regression pin for the detach it has always had.
+// that tab mid-launch is this lane's whole subject), and the kill route
+// carries the same detach.
 func TestKillRunCascade_FinishesAfterTheCallersContextDies(t *testing.T) {
 	t.Run("the login supersede", func(t *testing.T) {
 		f := newSupersedeFixture(t, nil, nil)
@@ -732,16 +766,14 @@ func TestKillRunCascade_FinishesAfterTheCallersContextDies(t *testing.T) {
 		cancel()
 		f.srv.supersedeCallerLoginRuns(dead, actor, awsSSOAgent, uuid.New())
 
+		// The CAS (claimKillTransition) is synchronous, so the state change is
+		// already visible; the revoke and the run.kill row are the detached
+		// teardown tail's (#122) and have to be waited for.
 		if got := f.store.stateOf(t, first); got != types.RunKilled {
 			t.Fatalf("run state = %s, want KILLED", got)
 		}
-		if !f.idp.didRevoke(uuid.MustParse(first)) {
-			t.Error("the run's identity was never revoked — the cascade inherited the caller's dead context, " +
-				"so the sandbox keeps a token that still mints")
-		}
-		if !supersedeKillRow(t, f.audit, first) {
-			t.Error("no run.kill row — a terminal state change with nothing in the trail, and nothing revisits it")
-		}
+		waitForRevoke(t, f.idp, uuid.MustParse(first))
+		waitForKillRow(t, f.audit, first)
 	})
 
 	t.Run("the kill route", func(t *testing.T) {
@@ -807,6 +839,25 @@ func killRow(t *testing.T, audit *memAudit, runID string) types.AuditEvent {
 	return types.AuditEvent{}
 }
 
+// waitForKillRow polls for the run.kill row belonging to runID, so a test can
+// assert on a supersede's teardown tail — which now runs on a detached
+// goroutine after the launch POST answers (#122), unlike handleKillRun's own
+// synchronous cascade, which killRow still suits.
+func waitForKillRow(t *testing.T, audit *memAudit, runID string) types.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, ev := range audit.find("run.kill") {
+			if ev.Target == runID {
+				return ev
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("no run.kill row for run %s after 5s", runID)
+	return types.AuditEvent{}
+}
+
 // TestKillRunCascade_PartialCascadeIsHonest is R1-F2: the branch where a
 // teardown step FAILS had no test in either caller, and this lane both moved it
 // and gave it a second consumer.
@@ -864,7 +915,8 @@ func TestKillRunCascade_PartialCascadeIsHonest(t *testing.T) {
 		if got := f.store.stateOf(t, second); got.IsTerminal() {
 			t.Fatalf("the new sign-in is %s", got)
 		}
-		row := killRow(t, f.audit, first)
+		// The run.kill row is the detached teardown tail's (#122); wait for it.
+		row := waitForKillRow(t, f.audit, first)
 		if row.Outcome != "failure" {
 			t.Errorf("run.kill outcome = %q, want failure — a supersede that could not revoke is not a clean kill", row.Outcome)
 		}
@@ -926,5 +978,192 @@ func TestHarnessLogin_UnenforceableClassRefusalPrecedesTheSupersede(t *testing.T
 	}
 	if rows := f.audit.find("run.kill"); len(rows) != 0 {
 		t.Errorf("a refused sign-in wrote %d run.kill row(s); the supersede ran below the refusal", len(rows))
+	}
+}
+
+// gatedKillRunner blocks KillSandbox until the test closes the gate, so a test
+// can observe exactly what a sign-in POST has and has not done by the time it
+// answers — before the detached teardown tail has torn anything down — and
+// what only happens once the gate opens. entered is closed the first time
+// KillSandbox is actually reached, the only way a test can know the detached
+// goroutine is blocked INSIDE the call rather than simply not scheduled yet
+// (mirrors coldPullRunner.entered in harnesscred_launch_test.go).
+type gatedKillRunner struct {
+	*fakeRunner
+	gate        chan struct{}
+	gateOnce    sync.Once
+	entered     chan struct{}
+	enteredOnce sync.Once
+}
+
+func (g *gatedKillRunner) KillSandbox(ctx context.Context, ref string) error {
+	g.enteredOnce.Do(func() { close(g.entered) })
+	<-g.gate
+	return g.fakeRunner.KillSandbox(ctx, ref)
+}
+
+// openGate opens the gate, idempotently — safe to call both from the test body
+// (to observe what happens once KillSandbox unblocks) and from a t.Cleanup (so
+// a case that fails BEFORE opening it does not leak the detached goroutine
+// parked on <-g.gate for the rest of the test binary's run).
+func (g *gatedKillRunner) openGate() {
+	g.gateOnce.Do(func() { close(g.gate) })
+}
+
+// TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown is #122 itself: with
+// KillSandbox gated shut, the sign-in POST answers — and the superseded run
+// already reads KILLED — before the gate ever opens, and the run.kill row plus
+// the identity revocation (the rest of killTeardownTail) happen only after it
+// does. Undo the claim/tail split and this hangs until its own 2s deadline
+// instead of passing in milliseconds.
+func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
+	rnr := &gatedKillRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{}), entered: make(chan struct{})}
+	t.Cleanup(rnr.openGate)
+	f := newSupersedeFixture(t, nil, rnr)
+	srv, st, audit, idp := f.srv, f.store, f.audit, f.idp
+	sess := memberLoginSession(t)
+
+	first := launchLoginRun(t, srv, sess)
+	waitRunState(t, st, first, types.RunRunning)
+
+	// The second POST, run on its own goroutine and answered through a channel
+	// rather than asserted there — t.FailNow (which t.Fatal calls) may only run
+	// on the test's own goroutine — so a synchronous teardown fails
+	// this test with a clear timeout instead of hanging until `go test`'s own
+	// deadline.
+	type postResult struct {
+		code int
+		body string
+	}
+	resultCh := make(chan postResult, 1)
+	go func() {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/setup/harness-login", strings.NewReader(`{"provider":"aws"}`))
+		r.AddCookie(sess)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, r)
+		resultCh <- postResult{code: w.Code, body: w.Body.String()}
+	}()
+
+	var second string
+	select {
+	case res := <-resultCh:
+		if res.code != http.StatusOK {
+			t.Fatalf("POST /setup/harness-login = %d, want 200: %s", res.code, res.body)
+		}
+		var body struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal([]byte(res.body), &body); err != nil {
+			t.Fatalf("decode launch response: %v (%s)", err, res.body)
+		}
+		second = body.RunID
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sign-in POST did not answer within 2s while the superseded run's teardown was gated " +
+			"shut — it must not wait on KillSandbox")
+	}
+	if second == "" {
+		t.Fatal("launch answered no run id")
+	}
+
+	// Answered already, so the claim — the synchronous half — is done: the
+	// superseded run reads KILLED before the gate ever opens.
+	if got := st.stateOf(t, first); got != types.RunKilled {
+		t.Fatalf("superseded run state = %s, want KILLED before the teardown gate opens", got)
+	}
+
+	select {
+	case <-rnr.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the detached teardown never reached KillSandbox")
+	}
+
+	// The gate is still shut: nothing past the claim has run yet.
+	if rows := audit.find("run.kill"); len(rows) != 0 {
+		t.Fatalf("run.kill row(s) written before the teardown gate opened: %d", len(rows))
+	}
+	if idp.didRevoke(uuid.MustParse(first)) {
+		t.Fatal("the run's identity was revoked before the teardown gate opened")
+	}
+
+	rnr.openGate()
+
+	// Only now — after the gate opens — does the rest of the tail land.
+	waitForKillRow(t, audit, first)
+	waitForRevoke(t, idp, uuid.MustParse(first))
+}
+
+// TestServer_WaitBackground_WaitsForKillTeardownTail is the shutdown half of
+// #122's review: httpSrv.Shutdown (cmd/wardynd/boot_serve.go) only waits for
+// in-flight HANDLERS, and the supersede's teardown is a goroutine that
+// deliberately outlives its handler. Without goBackground/WaitBackground, a
+// SIGTERM landing between the claim and the teardown would leave the
+// superseded run KILLED with its sandbox still up, its credentials unrevoked
+// and no run.kill row — the shutdown answers before the tail does. This pins
+// that WaitBackground actually blocks until the tail (run through goBackground
+// by supersedeOneLoginRun) finishes, and that the run.kill row is ALREADY
+// written by the moment it returns — not merely "eventually", which is what a
+// caller doing an orderly stop needs to be true.
+func TestServer_WaitBackground_WaitsForKillTeardownTail(t *testing.T) {
+	rnr := &gatedKillRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{}), entered: make(chan struct{})}
+	t.Cleanup(rnr.openGate)
+	f := newSupersedeFixture(t, nil, rnr)
+	srv, st, audit := f.srv, f.store, f.audit
+	sess := memberLoginSession(t)
+
+	first := launchLoginRun(t, srv, sess)
+	waitRunState(t, st, first, types.RunRunning)
+	launchLoginRun(t, srv, sess) // supersedes `first`; the tail blocks on rnr.gate
+
+	select {
+	case <-rnr.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the detached teardown never reached KillSandbox")
+	}
+
+	// WaitBackground, run on its own goroutine so the test can tell "still
+	// blocked" from "returned" without WaitBackground itself hanging the test.
+	waitDone := make(chan struct{})
+	go func() {
+		srv.WaitBackground()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		t.Fatal("WaitBackground returned while the teardown was still gated shut — shutdown must wait for it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	rnr.openGate()
+
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitBackground never returned after the gate opened")
+	}
+
+	// The run.kill row must already be there — WaitBackground returning is the
+	// caller's signal that it is safe to close the audit sinks next.
+	if rows := audit.find("run.kill"); len(rows) == 0 {
+		t.Error("WaitBackground returned with no run.kill row written — the shutdown path would have raced the teardown")
+	}
+}
+
+// TestServer_WaitBackground_RespectsItsBudget is the other half: a detached
+// goroutine that never finishes (a genuinely wedged runner call) must not turn
+// an orderly shutdown into a hang. bgWaitBudget overrides the real ~35s budget
+// so this proves the bound in milliseconds.
+func TestServer_WaitBackground_RespectsItsBudget(t *testing.T) {
+	srv := New(baseTestConfig(newHarness(t), &integStore{govEscapeStore: newGovEscapeStore(&capStore{})}))
+	srv.bgWaitBudget = 50 * time.Millisecond
+
+	never := make(chan struct{})
+	t.Cleanup(func() { close(never) }) // let the leaked goroutine finish once the test is done
+	srv.goBackground(func() { <-never })
+
+	start := time.Now()
+	srv.WaitBackground()
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("WaitBackground took %s with a 50ms budget and a goroutine that never finishes — it did not respect its bound", elapsed)
 	}
 }

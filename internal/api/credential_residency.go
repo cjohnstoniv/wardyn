@@ -73,6 +73,11 @@ type modelCredentialFacts struct {
 	// daemon never reads that file back, so the rail names the mount instead of
 	// silently promising nothing is mounted at all.
 	StagedPlaceholder bool `json:"staged_placeholder,omitempty"`
+	// bedrockHost is the Bedrock data-plane host when the lane that RESOLVED is
+	// a Bedrock one, else "". Unexported, so neither surface publishes it: it
+	// is the autonomy gate's input (bedrockCredGradedAs), set by
+	// enforceCreateLLMMechanism from the same resolution as the fields above.
+	bedrockHost string
 }
 
 // gradeModelCredential grades where this run's model credential lands.

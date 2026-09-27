@@ -44,7 +44,12 @@ D() { docker "$@"; }
 D version >/dev/null 2>&1 || { echo "[error] cannot reach the Podman socket at ${SOCK}. Enable it: systemctl --user enable --now podman.socket" >&2; exit 2; }
 
 # 1. rootless reported?
-if D info --format '{{json .SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+# CAPTURE, THEN MATCH — never `D info | grep -q` under `pipefail`: `grep -q`
+# exits on its first match while D (docker/podman) is still writing, it takes
+# SIGPIPE, and pipefail reports the pipeline failed even though the match was
+# found.
+_security_opts="$(D info --format '{{json .SecurityOptions}}' 2>/dev/null || echo '[]')"
+if grep -q rootless <<<"${_security_opts}"; then
   pass "docker info reports rootless"
 else
   warn "docker info SecurityOptions does not list 'rootless' (Podman may format it differently — inspect: docker info --format '{{.SecurityOptions}}')"

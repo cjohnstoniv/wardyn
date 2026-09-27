@@ -12,6 +12,9 @@ import {
   LANE_META,
   patLaneMeta,
   deriveProviders,
+  adoRepoName,
+  isADOAddress,
+  unescapeADOName,
 } from "./scm-provider";
 
 // Mirrors secrets.tsx:48's server-mirrored name policy. Duplicated rather
@@ -297,5 +300,54 @@ describe("deriveProviders", () => {
     // not exist anywhere in the output — the credential landed on the
     // registered host, it didn't spawn a third, wrong one.
     expect(rows.find((r) => r.host === "git.server.corp.com")).toBeUndefined();
+  });
+});
+
+// #485: the port of internal/adoscope/names.go's UnescapeName. The literal
+// cases are the Go twin's (TestEscapeName_RoundTripsEveryPermittedName,
+// TestUnescapeName_RefusesStructure) so the console decodes a name exactly as
+// the server does.
+describe("unescapeADOName", () => {
+  it.each([
+    ["Payments%20Platform", "Payments Platform"],
+    ["Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
+    ["Card%20Auth%20%28v2%29.Service", "Card Auth (v2).Service"],
+    ["Card Auth (v2).Service", "Card Auth (v2).Service"],
+    ["R&D%20Ops!", "R&D Ops!"],
+    ["Bob's%20@Tools~1", "Bob's @Tools~1"],
+    ["Caf%C3%A9%20%C3%89quipe", "Café Équipe"],
+    ["100%25%20Done", "100% Done"],
+    ["a+b", "a+b"], // "+" is a literal in a path, never a space
+  ])("%s decodes to %s", (raw, name) => {
+    expect(unescapeADOName(raw)).toBe(name);
+  });
+
+  it.each(["a%2Fb", "a%2fb", "a%5Cb", "a%252Fb", "a%25252Fb", "%2E%2E", "%2e", "..", "p%20", "%20p", "p.", "a%0Ab", "a%00", "a%7F", "%zz", "a%4", "a%"])(
+    "%s is refused",
+    (raw) => {
+      expect(unescapeADOName(raw)).toBeNull();
+    },
+  );
+});
+
+describe("adoRepoName", () => {
+  it.each([
+    ["https://dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
+    ["https://dev.azure.com/contoso/Payments Platform/_git/Card Auth (v2).Service", "Card Auth (v2).Service"],
+    ["https://contoso@dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20%28v2%29.Service", "Card Auth (v2).Service"],
+    ["https://contoso.visualstudio.com/Caf%C3%A9/_git/%C3%9Cn%C3%AFcode%20Repo", "Ünïcode Repo"],
+    ["git@ssh.dev.azure.com:v3/contoso/Payments%20Platform/Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
+  ])("%s is named %s", (locator, name) => {
+    expect(isADOAddress(locator)).toBe(true);
+    expect(adoRepoName(locator)).toBe(name);
+  });
+
+  it("names no other forge's repository", () => {
+    expect(isADOAddress("https://github.com/acme/payments%20svc")).toBe(false);
+    expect(adoRepoName("https://github.com/acme/payments%20svc")).toBeNull();
+    expect(adoRepoName("acme/payments-service")).toBeNull();
+    // "_git" alone does not make a host Azure DevOps (a provider row does).
+    expect(adoRepoName("https://github.com/acme/_git/re%20po")).toBeNull();
+    expect(adoRepoName("https://tfs.corp.example/tfs/c/Payments%20Platform/_git/Card%20Auth")).toBeNull();
   });
 });

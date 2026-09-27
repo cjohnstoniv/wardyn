@@ -109,6 +109,11 @@ var harnessCatalog = []harnessDef{
 			"anthropic_subscription": "",
 			"bedrock":                "",
 			"openai_api_key":         reasonXOpenAIClaude,
+			// The model-provider kinds (types.ModelProviderKind) beyond the
+			// integration types above, which they share keys with.
+			"bedrock_sso":     "",
+			"bedrock_bearer":  "",
+			"custom_endpoint": "",
 		},
 	},
 	{
@@ -121,6 +126,9 @@ var harnessCatalog = []harnessDef{
 			"anthropic_subscription": reasonXSubCodex,
 			"bedrock":                reasonXBedrockCodex,
 			"openai_api_key":         "",
+			"bedrock_sso":            reasonXBedrockCodex,
+			"bedrock_bearer":         reasonXBedrockCodex,
+			"custom_endpoint":        "",
 		},
 	},
 	{

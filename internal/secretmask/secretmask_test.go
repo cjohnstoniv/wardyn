@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
-// ─── Registry tests ──────────────────────────────────────────────────────────
+// Registry tests
 
 func TestRegistry_Add_Snapshot(t *testing.T) {
 	r := secretmask.NewRegistry()
@@ -38,7 +39,7 @@ func TestRegistry_AddGlobal_AppearsInAllSnapshots(t *testing.T) {
 	runA, runB := uuid.New(), uuid.New()
 	global := []byte("global-secret-val")
 
-	r.AddGlobal(global)
+	r.AddGlobal("", "test-credential", time.Now(), global)
 	r.Add(runA, []byte("per-run-secret-a"))
 
 	snapA := r.Snapshot(runA)
@@ -62,9 +63,9 @@ func TestRegistry_AddGlobal_Idempotent(t *testing.T) {
 	global := []byte("global-secret-val")
 
 	// Per-run call sites re-add the same blob on every dispatch/preflight.
-	r.AddGlobal(global)
-	r.AddGlobal(bytes.Clone(global))
-	r.AddGlobal(global)
+	r.AddGlobal("", "test-credential", time.Now(), global)
+	r.AddGlobal("", "test-credential", time.Now(), bytes.Clone(global))
+	r.AddGlobal("", "test-credential", time.Now(), global)
 
 	if snap := r.Snapshot(uuid.New()); len(snap) != 1 {
 		t.Fatalf("Snapshot len = %d, want 1 (duplicate globals collapsed)", len(snap))
@@ -75,9 +76,9 @@ func TestRegistry_MinLen_Floor(t *testing.T) {
 	r := secretmask.NewRegistry()
 	runID := uuid.New()
 
-	r.Add(runID, []byte("short"))    // 5 bytes < MinLen(8) — should be ignored
-	r.AddGlobal([]byte("tiny"))      // 4 bytes < MinLen(8) — should be ignored
-	r.Add(runID, []byte("exactlen")) // exactly 8 bytes — should be kept
+	r.Add(runID, []byte("short"))                                  // 5 bytes < MinLen(8) — should be ignored
+	r.AddGlobal("", "test-credential", time.Now(), []byte("tiny")) // 4 bytes < MinLen(8) — should be ignored
+	r.Add(runID, []byte("exactlen"))                               // exactly 8 bytes — should be kept
 
 	snap := r.Snapshot(runID)
 	if len(snap) != 1 {
@@ -107,7 +108,7 @@ func TestRegistry_NilSafe(t *testing.T) {
 
 	// None of these should panic.
 	r.Add(runID, []byte("someverylongsecret"))
-	r.AddGlobal([]byte("globalverylongsecret"))
+	r.AddGlobal("", "test-credential", time.Now(), []byte("globalverylongsecret"))
 	snap := r.Snapshot(runID)
 	if snap != nil {
 		t.Fatalf("nil Registry Snapshot should return nil, got %v", snap)
@@ -115,7 +116,7 @@ func TestRegistry_NilSafe(t *testing.T) {
 	r.Evict(runID)
 }
 
-// ─── Masker tests ────────────────────────────────────────────────────────────
+// Masker tests
 
 func TestMasker_SingleSecret_Replaced(t *testing.T) {
 	secret := []byte("my-api-key-12345")
@@ -233,7 +234,7 @@ func TestMasker_NoSecrets_PassThrough(t *testing.T) {
 	}
 }
 
-// ─── MaskingWriter tests ─────────────────────────────────────────────────────
+// MaskingWriter tests
 
 // TestMaskingWriter_BufferBoundarySplit feeds a secret one byte at a time
 // through MaskingWriter and verifies it is still masked.
@@ -379,14 +380,14 @@ func TestMaskingWriter_NoSecrets_PassThrough(t *testing.T) {
 	}
 }
 
-// ─── Fail-CLOSED-on-panic tests (invariant-1) ────────────────────────────────
+// Fail-closed-on-panic tests (invariant-1)
 
 // TestSafeMask_PanicFailsClosed proves that when Masker.Mask panics, the
 // recovered path does NOT forward the raw input bytes (which could contain
 // secrets) — it substitutes the placeholder and returns the panic as an error.
 //
-// Red-first: against the old fail-OPEN code this asserts the leaked raw bytes
-// are absent, which fails because the old code returned the original input.
+// A fail-open recovery would return the original input, so the leaked raw bytes
+// would be present and this assertion would fail.
 func TestMaskingWriter_PanicFailsClosed_NoRawLeak(t *testing.T) {
 	// Inject a masker that panics on every call (simulates a crash inside Mask).
 	orig := secretmask.MaskCallForTest
