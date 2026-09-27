@@ -1621,7 +1621,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   or starting with `local:` or `device:` (trimmed and case-folded), before role derivation, with
   the generic sign-in error and an `auth.fail` row (`wardyn/oidcCallback`, reason
   `reserved_principal`). A session cookie or `wdn_` API token carrying such a principal, issued
-  before this change, is refused with `401` and the same reason on every request.
+  before this change, is refused with `401` and the same reason on every request; with OIDC
+  configured, a stored SSH key under one is refused at the gateway (`ssh.authenticate` failure),
+  while local-mode and admin-token-only SSH keep working. The revive/restart/extend owner
+  re-check now exempts a run by its recorded `operator_owned` flag instead of `created_by ==
+  "admin-token"`, so a person's run named like the admin token is re-checked; an admin-token run
+  created before 0.8 (flag unset) is re-checked too when a signed-in admin revives it, so under an
+  enforced kind it needs an allow row for everyone, its user type or `admin-token`; the admin
+  token reviving its own run is unaffected. A guard test now fails on any new
+  comparison against the admin token's principal string outside a reviewed allow-list. If a local
+  install moves to SSO with a custom `WARDYN_LOCAL_OPERATOR`, keep the variable set: that seat is
+  reserved only while it is configured.
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
   (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
   kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env

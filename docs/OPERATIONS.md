@@ -898,6 +898,16 @@ A few things that don't fit the grid:
   real login would, against pasted claims or the caller's own session, so an
   admin can see "who would this row make an admin" without waiting for that
   person to sign in — nothing it does is saved.
+- **Some subjects never sign in.** The callback refuses an identity-provider
+  `sub` that names an identity that is not a person — `admin-token`, the
+  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:` name, trimmed
+  and case-folded — with the generic sign-in error and an `auth.fail` row
+  (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
+  one is refused on use. Switching a local-mode install to SSO: the default
+  seat (`local:<os-user>`) stays reserved by its prefix, but a custom
+  `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains
+  set — unset it, and a person whose `sub` is that name would own the runs
+  local mode created under it. Keep it set.
 - **The same claim values do double duty.** The `roles`/`groups` values a role
   mapping matches are the exact same login-time snapshot a `/permissions`
   capability grant's `subject_type=group` matches against (see "Subjects, and
