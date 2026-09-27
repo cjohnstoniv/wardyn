@@ -1405,7 +1405,7 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
 // with no second "Sign in to AWS" beside it. The real refusal, from a real
 // per-user AWS session that lapsed, is live case J (lane e2e-sso-path).
 const CREDENTIAL_REFUSAL =
-  "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+  "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
 const CREDENTIAL_VIEWER = "alice@corp.example";
 
 /** The viewer's own subject, so `created_by === principal` can be true of a

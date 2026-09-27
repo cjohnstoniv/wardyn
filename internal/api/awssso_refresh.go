@@ -138,7 +138,7 @@ const (
 	// %s is the REMEDY clause (llmMechanismRemedy): under a per_user row the
 	// person who must sign in again is the member, and Settings → Model provider
 	// is the page whose AWS button is admin-only.
-	awsSSORefreshSpentSentence = "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
+	awsSSORefreshSpentSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
 		"and that session can no longer be renewed — %s " +
 		"Wardyn does not substitute a different model provider."
 
@@ -149,7 +149,7 @@ const (
 	// copy says "try again", never "sign in again". A renewal that fails while
 	// the access token is still valid never reaches this sentence at all: that
 	// run is served from the token in hand.
-	awsSSORefreshUnavailableSentence = "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
+	awsSSORefreshUnavailableSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
 		"and renewing that session did not complete — AWS did not answer the token request. " +
 		"Your sign-in is still good; launch again in a moment. Wardyn does not substitute a different model provider."
 

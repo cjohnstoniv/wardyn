@@ -218,7 +218,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
 		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "wrong host for run", "host": r.Host})
-		writeError(w, http.StatusForbidden, "this run's UI apps are served on a different host")
+		writeError(w, http.StatusForbidden, "This run's UI apps are served on a different host")
 		return
 	}
 

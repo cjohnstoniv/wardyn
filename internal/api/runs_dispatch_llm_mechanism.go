@@ -45,7 +45,7 @@ const (
 	//
 	// The third %s is the REMEDY clause (llmMechanismRemedy): the destination is
 	// the one part of this sentence that depends on who is reading it.
-	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — %s " +
+	llmMechanismDeadSentence = "This run's model access is configured as %s, and that credential %s — %s " +
 		"Wardyn does not substitute a different model provider."
 
 	// llmMechanismPinContradictedSentence is the refusal for a stored AWS SSO
@@ -60,7 +60,7 @@ const (
 	// again, and a sign-in is genuinely all it takes — a new login run stamps
 	// the CURRENT pin and its capture replaces the stored blob. %s = the stored
 	// account, role; then the allowed account, role.
-	llmMechanismPinContradictedSentence = "this run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
+	llmMechanismPinContradictedSentence = "This run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
 		"nothing was started. To replace it, %s Wardyn does not rewrite a stored sign-in."
 
 	// llmMechanismStateNotConfigured is the state above when NOTHING credentials

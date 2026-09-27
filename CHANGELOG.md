@@ -240,6 +240,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   redaction now keeps presence of the demo catalog's own public seed-secret names, and the
   console's readiness/demo-gating checks fall back to the server's own `llm_ready` verdict — already
   computed from the unredacted facts and already carried on the wire for exactly this reason.
+- **Every user-visible refusal sentence now starts with a capital letter (#585).** About twenty
+  server-side sentences a person can end up reading — an AWS SSO pin refusal, an Azure DevOps
+  resolve or dispatch refusal, the dead-model-access and pin-contradicted sentences, the UI
+  gateway's wrong-host refusal — started mid-sentence lower case (`"this run's model access is
+  configured as…"`), because each was written as its own sentence at the source but assembled from
+  fragments that read fine concatenated and wrong stood alone. Capitalized at each sentence's
+  source const (mid-sentence embeds, like the remedy clause spliced into the middle of another
+  sentence, are untouched); the matching console/e2e fixtures and the workspace-providers mock
+  doc were updated to the same byte-exact text. A new guard test
+  (`TestRefusalSentenceConstsStartCapitalized`) fails on any lower-case regression.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

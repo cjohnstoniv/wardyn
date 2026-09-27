@@ -466,7 +466,7 @@ func TestRun_PrintsFailMarkerOnRefusal(t *testing.T) {
 		out := runHelperAgainst(t, portal, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"this session is for account 111111111111; the configured Bedrock model lives in account 333333333333"}`))
+			_, _ = w.Write([]byte(`{"error":"This session is for account 111111111111; the configured Bedrock model lives in account 333333333333"}`))
 		})
 		line := assertFailLine(t, out)
 		if !strings.Contains(line, "the configured Bedrock model lives in account 333333333333") {
