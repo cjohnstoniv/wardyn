@@ -34,6 +34,7 @@ import { ReauthContext, useReauthController } from "./lib/reauth";
 import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
 import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import { ViewGate, screenPath, useViewAccess, viewLanding } from "./components/wardyn/console-view";
+import { appURL } from "./lib/base-path";
 import type {
   AgentRun,
   ApprovalRequest,
@@ -438,7 +439,7 @@ export default function App() {
   // console was signed out and reset.
   React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
   React.useEffect(() => {
-    if (reloadTo !== null) window.location.assign(safeReturnPath(reloadTo));
+    if (reloadTo !== null) window.location.assign(appURL(safeReturnPath(reloadTo)));
   }, [reloadTo]);
 
   React.useEffect(() => {
