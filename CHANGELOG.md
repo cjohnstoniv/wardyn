@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The base agent image no longer warns on every Node start when no corporate CA was staged
+  (#1114).** `NODE_EXTRA_CA_CERTS` pointed straight at `/corp-ca/corp-ca.pem`, which only exists
+  on a build with a corp CA staged, so a default build's Node processes printed
+  `Warning: Ignoring extra certs ... load failed` on first TLS use. `NODE_EXTRA_CA_CERTS` now
+  points at `/corp-ca/node-extra-ca.pem`, created empty on a default build (Node finds zero certs,
+  stays silent) and copied from the staged CA otherwise (unchanged trust behaviour).
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
