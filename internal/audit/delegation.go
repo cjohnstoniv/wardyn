@@ -32,10 +32,14 @@ func DelegationFrom(ctx context.Context) (types.DelegationVia, bool) {
 	return v, ok
 }
 
-// StampDelegation returns data with via added under "via". Data that is not a
-// JSON object is kept whole under "data", so no delegated row can lack the
-// stamp.
-func StampDelegation(data json.RawMessage, via types.DelegationVia) json.RawMessage {
+// StampDelegation returns data with the portal added under "via" when ctx is
+// a delegated request, and data unchanged otherwise. Data that is not a JSON
+// object is kept whole under "data", so no delegated row can lack the stamp.
+func StampDelegation(ctx context.Context, data json.RawMessage) json.RawMessage {
+	via, ok := DelegationFrom(ctx)
+	if !ok {
+		return data
+	}
 	m := map[string]any{}
 	if len(data) > 0 && string(data) != "null" {
 		var obj map[string]json.RawMessage
@@ -60,8 +64,6 @@ type DelegationRecorder struct{ Inner Recorder }
 
 // Record stamps ev when ctx is delegated and hands it on.
 func (r DelegationRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	if via, ok := DelegationFrom(ctx); ok {
-		ev.Data = StampDelegation(ev.Data, via)
-	}
+	ev.Data = StampDelegation(ctx, ev.Data)
 	return r.Inner.Record(ctx, ev)
 }
