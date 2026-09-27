@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -131,6 +135,65 @@ func TestEndedRun_ExtendThenReviveWithinFilesGrace(t *testing.T) {
 	}
 	if data := leaseAuditData(t, ev[0]); data["from"] != "ended" || data["agent_started"] != true {
 		t.Errorf("run.revive data = %v; want from ended, agent_started", data)
+	}
+}
+
+// TestEndedRun_OldTokenRefusedAndReviveMintsAFreshOne is #1176's revive half.
+// The token the kept proxy holds is refused at the mint and injection doors the
+// moment the run ends; a revive then gives the new proxy a FRESH token that the
+// same doors admit, and retires the old one, which stays refused.
+func TestEndedRun_OldTokenRefusedAndReviveMintsAFreshOne(t *testing.T) {
+	f, _ := newEndedFixture(t)
+	// The injection door is routed only with a secrets store.
+	cfg := f.srv.cfg
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	f.srv = New(cfg)
+	ctx := context.Background()
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := proxy.LoadConfigBytes(f.rr.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept.RunToken = old.Token
+	if f.rr.cfg, err = json.Marshal(kept); err != nil {
+		t.Fatal(err)
+	}
+	mint := func(tok string) (int, string) {
+		w := do(t, f.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, `{"grant_id":"`+uuid.NewString()+`"}`)
+		return w.Code, w.Body.String()
+	}
+	inject := func(tok string) (int, string) {
+		w := do(t, f.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), tok, "")
+		return w.Code, w.Body.String()
+	}
+	for name, door := range map[string]func(string) (int, string){"mint": mint, "injection": inject} {
+		if code, body := door(old.Token); code != http.StatusForbidden || !strings.Contains(body, "lost") {
+			t.Fatalf("%s with the ended run's token = %d %s, want 403 run is lost", name, code, body)
+		}
+	}
+
+	f.now = f.now.Add(time.Hour)
+	if code, body := f.extendAs(t, true, f.now.Add(48*time.Hour)); code != http.StatusOK {
+		t.Fatalf("extend = %d %s, want 200", code, body)
+	}
+	f.run = f.st.run
+	if code, body := f.reviveAs(t, true); code != http.StatusOK {
+		t.Fatalf("revive = %d %s, want 200", code, body)
+	}
+	fresh := f.newConfig(t).RunToken
+	if fresh == "" || fresh == old.Token {
+		t.Fatalf("revived proxy token = %q, want a fresh one", fresh)
+	}
+	for name, door := range map[string]func(string) (int, string){"mint": mint, "injection": inject} {
+		if code, body := door(fresh); code == http.StatusUnauthorized || code == http.StatusForbidden {
+			t.Errorf("%s with the revived token = %d %s, want it past the liveness gate", name, code, body)
+		}
+		if code, body := door(old.Token); code != http.StatusUnauthorized {
+			t.Errorf("%s with the retired token = %d %s, want 401 (revoked by its jti)", name, code, body)
+		}
 	}
 }
 

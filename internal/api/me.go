@@ -248,10 +248,12 @@ func memberLocalDirRootLabel(roots []string) *string {
 
 // meUserType is /me's user_type: the type stamped on this SSO session at
 // sign-in, or on this API token at mint or its holder's last sign-in, with its
-// display name. nil for a caller with no type — the admin token and local
-// mode. A type the store no longer holds, or a failed read, still names the id
-// with an empty name: this is a label, and the controls that bind a type
-// decide for themselves what a missing one means.
+// display name and description. nil for a caller with no type — the admin
+// token and local mode. A type the store no longer holds, or a failed read,
+// still names the id with an empty name/description: this is a label, and the
+// controls that bind a type decide for themselves what a missing one means.
+// Description rides here (UT-7a) so the user's own Getting Started page can
+// introduce the type it names without a second round trip.
 func (s *Server) meUserType(r *http.Request) *meUserTypeView {
 	id := oidcUserTypeFromContext(r.Context())
 	if id == "" {
@@ -263,6 +265,7 @@ func (s *Server) meUserType(r *http.Request) *meUserTypeView {
 	}
 	if t, err := s.cfg.Store.GetUserType(r.Context(), id); err == nil {
 		v.Name = t.Name
+		v.Description = t.Description
 	} else if !errors.Is(err, store.ErrNotFound) {
 		slog.WarnContext(r.Context(), "api: could not read the caller's user type for /me", "user_type", id, "error", err)
 	}
@@ -270,6 +273,7 @@ func (s *Server) meUserType(r *http.Request) *meUserTypeView {
 }
 
 type meUserTypeView struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }

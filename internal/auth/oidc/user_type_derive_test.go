@@ -236,7 +236,7 @@ func TestCallbackRefusesOverTheUserType(t *testing.T) {
 			auth := env.newRoleMappingAuth(t, roleMap, writoidc.RoleAdmin, nil, nil, func(cfg *writoidc.Config) { cfg.UserTypes = c.src })
 			var reported []string
 			env.buildIDTokenWithRoles(t, "sub-role", "x@corp.example", nil, c.groups, roleCallbackNonce, time.Now().Add(time.Hour))
-			w, sess := doCallbackVia(t, auth, auth.CallbackHandlerWithDenials(func(_ *http.Request, reason string) {
+			w, sess := doCallbackVia(t, auth, auth.CallbackHandlerWithDenials(nil, func(_ *http.Request, reason string) {
 				reported = append(reported, reason)
 			}))
 			if loc := w.Result().Header.Get("Location"); !containsAuthError(loc, c.want) {
@@ -267,7 +267,7 @@ func TestCallbackAdminNeverRefusedOverTheUserType(t *testing.T) {
 		func(c *writoidc.Config) { c.UserTypes = &fakeUserTypeSource{list: orgTypes} })
 	var reported []string
 	env.buildIDTokenWithRoles(t, "sub-ops", "ops@corp.example", nil, []string{"pm-group", "quant-group"}, roleCallbackNonce, time.Now().Add(time.Hour))
-	_, sess := doCallbackVia(t, auth, auth.CallbackHandlerWithDenials(func(_ *http.Request, reason string) {
+	_, sess := doCallbackVia(t, auth, auth.CallbackHandlerWithDenials(nil, func(_ *http.Request, reason string) {
 		reported = append(reported, reason)
 	}))
 	if sess.Role != writoidc.RoleAdmin || sess.UserType != types.UserTypeStandard {

@@ -8,7 +8,7 @@ import { MEMBER_TOKEN, MEMBER_PRINCIPAL, consoleAPI } from "./fixtures";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
-import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/sign-in-copy";
 import { SESSION_ENDED_REASON } from "../src/app/lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "../src/app/lib/reauth-copy";
 

@@ -47,9 +47,10 @@ export interface Me {
   operator: boolean;
   security_operator: boolean;
   role: "admin" | "security_admin" | "user";
-  // The user type (0.8) this sign-in was given, with its display name. null
-  // for the admin token, local mode and API tokens, which carry none.
-  user_type?: { id: string; name: string } | null;
+  // The user type (0.8) this sign-in was given, with its display name and
+  // description. null for the admin token, local mode and API tokens, which
+  // carry none. description is omitted when the type has none (omitempty).
+  user_type?: { id: string; name: string; description?: string } | null;
   email: string;
   // The IdP's display-name claim — "" outside SSO or when the IdP sent none,
   // absent on a pre-0.7.1 daemon. Display only: the header reads name, then

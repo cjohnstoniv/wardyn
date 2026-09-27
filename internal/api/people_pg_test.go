@@ -221,7 +221,9 @@ func TestPeople_AnotherLoginNeverAttaches(t *testing.T) {
 			}
 		})
 	}
-	for _, reserved := range []string{adminTokenPrincipal, "device:laptop"} {
+	// "local:alice" and "Admin-Token" are reserved by the shared
+	// isReservedPrincipal (#1162): the local seat's prefix and a case fold.
+	for _, reserved := range []string{adminTokenPrincipal, "device:laptop", "local:alice", "Admin-Token"} {
 		if w := e.createPerson(t, e.sec, reserved, ""); w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("create reserved %q: %d, want 422", reserved, w.Code)
 		}

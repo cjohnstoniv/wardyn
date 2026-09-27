@@ -6,7 +6,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ADMIN_ACCESS_BANNER, SIGNIN_HELP } from "./access-posture-copy";
-import { SIGNIN_HELP_LINK_LABEL } from "./people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "./sign-in-copy";
 import { parseFrozenTables } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the sign-in/

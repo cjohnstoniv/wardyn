@@ -33,6 +33,7 @@
 import * as React from "react";
 import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
+import { useUserTypeName } from "../../../lib/use-user-types";
 import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
 import { previewClaims } from "../../../lib/api/governance";
 import {
@@ -66,7 +67,15 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
-import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText, type PickableSubjectType } from "../permissions";
+import {
+  SUBJECTS,
+  SUBJECT_LABEL,
+  Segmented,
+  UserTypeSubjectSelect,
+  subjectText,
+  SubjectName,
+  type PickableSubjectType,
+} from "../permissions";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
 
 // PREVIEW_RESULT's {tier}, frozen in §7.3's table rather than in prose.
@@ -119,6 +128,7 @@ export function AllocationsBlock({
   const [toRemove, setToRemove] = React.useState<UserDriveGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
+  const typeName = useUserTypeName();
 
   const remove = async (g: UserDriveGrant) => {
     setBusy(true);
@@ -133,7 +143,7 @@ export function AllocationsBlock({
     }
   };
 
-  const confirm = toRemove ? DRIVES.REMOVE_CONFIRM(subjectText(toRemove), driveName(toRemove.drive_id)) : "";
+  const confirm = toRemove ? DRIVES.REMOVE_CONFIRM(subjectText(toRemove, typeName), driveName(toRemove.drive_id)) : "";
   const [confirmHead, confirmBody] = question(confirm);
 
   return (
@@ -175,7 +185,7 @@ export function AllocationsBlock({
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-2">
                         <Chip tone="neutral">{SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
-                        {g.subject_type !== "all" && <Mono>{g.subject}</Mono>}
+                        <SubjectName g={g} typeName={typeName} />
                       </span>
                     </TableCell>
                     {/* A drive name is a human-chosen label, never mono. */}
@@ -194,7 +204,7 @@ export function AllocationsBlock({
                         size="sm"
                         disabled={disabled}
                         onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${subjectText(g)}`}
+                        aria-label={`${PERM.REMOVE} ${subjectText(g, typeName)}`}
                       >
                         {PERM.REMOVE}
                       </Button>
@@ -380,20 +390,31 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
           <div className="space-y-2">
             <Segmented
               value={subjectType}
-              onChange={(v) => setSubjectType(v)}
+              onChange={(v) => {
+                // A typed subject is no type id, and the reverse — see
+                // permissions.tsx's AddGrantForm.
+                if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                setSubjectType(v);
+              }}
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
             {/* Free text with suggestions ON TOP, never instead of; with no
-                directory configured this is the plain input it has always been. */}
-            {subjectType !== "all" && (
-              <DirectoryCombobox
-                label={PERM.FIELD_WHO}
-                value={subject}
-                onChange={setSubject}
-                kind={subjectType}
-                disabled={disabled}
-              />
+                directory configured this is the plain input it has always
+                been. A user type is a bounded, admin-authored set instead —
+                permissions.tsx's UserTypeSubjectSelect. */}
+            {subjectType === "user_type" ? (
+              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+            ) : (
+              subjectType !== "all" && (
+                <DirectoryCombobox
+                  label={PERM.FIELD_WHO}
+                  value={subject}
+                  onChange={setSubject}
+                  kind={subjectType}
+                  disabled={disabled}
+                />
+              )
             )}
           </div>
         </Field>
