@@ -572,14 +572,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 	}
 
-	hop, herr := loadHopTLS(bootCtx, bootKeys, *f.controlURL)
-	if herr != nil {
+	var herr error
+	if of.hop, herr = loadHopTLS(bootCtx, bootKeys, *f.controlURL); herr != nil {
 		return of, herr
 	}
-	of.hop = hop
 	// Before anything serves, so an ingest waiting on wardynd's healthcheck finds it.
-	_ = publishHopCA(hop, strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")))
-
+	_ = publishHopCA(of.hop, strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")))
 	return of, nil
 }
 
