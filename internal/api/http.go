@@ -414,6 +414,13 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	// to the admin bearer path.
 	return s.cfg.OIDC.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if sub := oidc.PrincipalFromContext(r.Context()); sub != "" {
+			// A session minted before the sign-in callback refused reserved
+			// subjects must not act as the identity it names (#1162).
+			if s.isReservedPrincipal(sub) {
+				s.auditAuthFailed(r, authFailedReservedPrincipal)
+				writeError(w, http.StatusUnauthorized, sessionInvalidMsg)
+				return
+			}
 			// CSRF: this is the COOKIE-authenticated lane — the browser attaches
 			// the session to any request a page can cause, so a cross-origin
 			// mutation must be refused BEFORE the handler runs (csrf.go states
@@ -702,7 +709,8 @@ const (
 	csrfActor = "wardyn/csrf"
 	// oidcCallbackActor is the SSO sign-in callback, refusing a login the
 	// IdP approved because of what the role map makes of it (a user type
-	// that is ambiguous or does not exist).
+	// that is ambiguous or does not exist) or because its subject is a
+	// reserved principal (isReservedPrincipal).
 	oidcCallbackActor = "wardyn/oidcCallback"
 )
 

@@ -1598,6 +1598,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
+  Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
+  operator's and a device's, so an identity provider that let a user pick their `sub` could
+  produce a human treated as that identity — owning every run the admin token created. The SSO
+  callback now refuses a subject equal to `admin-token`, the configured `WARDYN_LOCAL_OPERATOR`,
+  or starting with `local:` or `device:` (trimmed and case-folded), before role derivation, with
+  the generic sign-in error and an `auth.fail` row (`wardyn/oidcCallback`, reason
+  `reserved_principal`). A session cookie or `wdn_` API token carrying such a principal, issued
+  before this change, is refused with `401` and the same reason on every request.
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
   (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
   kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env
