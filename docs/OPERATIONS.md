@@ -4209,9 +4209,10 @@ whatever it can know this early:
   pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16` — the
   ranges an unconfigured daemon draws from) — the remedy is to set
   `default-address-pools` in that daemon's `daemon.json` away from the
-  endpoint's range, or to use an endpoint outside those pools. An operator who
-  has already moved `default-address-pools` elsewhere is not in this set at
-  all.
+  endpoint's range, or to use an endpoint outside those pools. The WARN checks
+  the built-in ranges only, so it keeps printing after the remedy is applied;
+  once `default-address-pools` no longer covers the endpoint, it can be
+  ignored.
 - **Kubernetes**: the per-run proxy pod's CIDR is not reliably known from
   `wardynd`'s own boot-time view (it depends on the cluster's CNI and is not
   surfaced to a workload without extra node/API access this daemon is not

@@ -155,6 +155,10 @@ func TestRefuseBedrockOnProxySubnet_Docker_UnknownNetworkWarns(t *testing.T) {
 	if !strings.Contains(buf.String(), "UNVERIFIED") {
 		t.Errorf("expected an UNVERIFIED WARN when the control-plane network can't be inspected; log = %s", buf.String())
 	}
+	// 172.20.1.1 is inside docker's built-in pools, so the pool WARN must fire too.
+	if !strings.Contains(buf.String(), "default-address-pools") {
+		t.Errorf("expected the default-address-pools WARN for an address in docker's built-in pools; log = %s", buf.String())
+	}
 }
 
 // TestControlPlaneNetworkSubnets_RealDaemon (#1198, Q6): an optional
