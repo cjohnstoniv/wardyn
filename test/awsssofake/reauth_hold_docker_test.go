@@ -100,8 +100,8 @@ func sandboxAWSConfigEnv(home map[string]string) string {
 // buffer collecting its output. The caller waits.
 //
 // The returned stop removes the container, not just the `docker run` client:
-// killing the client leaves the agent holding its parked GetRoleCredentials
-// open, and the fake's Close then waits out the whole park.
+// killing the client leaves the agent running past the test, holding a parked
+// GetRoleCredentials open that the fake's Close then waits on.
 func runClaudeAgainstFake(t *testing.T, s *Server, home map[string]string, timeout time.Duration) (*exec.Cmd, *bytes.Buffer, context.CancelFunc) {
 	t.Helper()
 	name := "awsssofake-agent-" + randHex(6)
