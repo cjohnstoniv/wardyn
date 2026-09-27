@@ -56,6 +56,10 @@ immediately, and the run strands RUNNING with a dead main process and no
 attach target. `deploy/images/oracle/agent-run` is the minimal reference
 implementation of this branch (idle only — it skips the workspace prep the
 real harness images perform, since oracle brokers neither git nor a model).
+agent-base's own `agent-run` (`common/agent-run-stub`) implements this branch
+with the full workspace prep and no agent, so images layered on agent-base
+without their own `agent-run` (agent-vscode, agent-novnc) inherit a working
+`--idle`.
 
 **Revive after a reboot (Docker).** When a run lost to a reboot is revived,
 the control plane starts its kept container again, which re-runs `agent-run
