@@ -463,6 +463,11 @@ function agentMetaFor(agent: string): AgentMeta {
   return { label: agent, initials: agent.slice(0, 2).toUpperCase(), badge: "bg-muted text-muted-foreground" };
 }
 
+// An agent id's display name, or null for one this console doesn't know.
+export function agentLabel(agent: string): string | null {
+  return agentMeta[agent.toLowerCase().replace(/-/g, "_")]?.label ?? null;
+}
+
 export function AgentBadge({ agent, withLabel = true }: { agent: Agent; withLabel?: boolean }) {
   const m = agentMetaFor(agent);
   return (

@@ -129,8 +129,9 @@ export interface ShellMeta {
   // nothing is claimed about a drive that is also null.
   userDriveUnavailable: string;
   // 0.8 (UT-7a) — the caller's own user type, the same /me body every other
-  // field here comes from. See operator-context.tsx's UserTypeContext.
-  userType: UserTypeMeta | null;
+  // field here comes from (operator-context.tsx's MeIdentity.userType).
+  // Absent reads as null.
+  userType?: UserTypeMeta | null;
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
   /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which

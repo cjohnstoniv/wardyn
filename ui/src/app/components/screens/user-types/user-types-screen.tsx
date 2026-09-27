@@ -174,7 +174,7 @@ export function UserTypesScreen() {
                         {relativeTime(t.updated_at)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex justify-end gap-1">
+                        <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="outline"
                             size="sm"
@@ -190,10 +190,17 @@ export function UserTypesScreen() {
                             disabled={!securityOperator || editorOpen || t.built_in}
                             onClick={() => openDelete(t)}
                             aria-label={`${UT.DELETE} ${t.name}`}
-                            title={t.built_in ? UT.DELETE_BUILTIN : undefined}
+                            aria-describedby={t.built_in ? `builtin-reason-${t.id}` : undefined}
                           >
                             {UT.DELETE}
                           </Button>
+                          {/* #459: a disabled control says why in visible
+                              text beside it, not in a title tooltip. */}
+                          {t.built_in && (
+                            <span id={`builtin-reason-${t.id}`} className="max-w-[32ch] text-meta text-muted-foreground">
+                              {UT.DELETE_BUILTIN}
+                            </span>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -243,7 +250,7 @@ export function UserTypesScreen() {
               disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
-                if (toDelete) del(toDelete);
+                if (toDelete) void del(toDelete);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

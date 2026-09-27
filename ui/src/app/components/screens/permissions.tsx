@@ -57,7 +57,7 @@ import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatu
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { UNSAVED } from "../../lib/unsaved-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
-import { useUserTypes } from "../../lib/use-user-types";
+import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
 // internal/api/runs_policy.go) — a machine lane, never a member.
@@ -136,9 +136,19 @@ function kindLabel(capability: string): string {
 
 // Who a row names, for the remove/unassign confirmations. Structural on
 // purpose: a capability grant, a governance assignment and a drive allocation
-// are three different rows that all carry this one pair.
-export function subjectText(g: { subject_type: CapabilitySubjectType; subject: string }): string {
-  return g.subject_type === "all" ? PERM.SUBJECT_ALL : g.subject;
+// are three different rows that all carry this one pair. A user type reads by
+// its name (useUserTypeName), the name its picker offers, never its id.
+type SubjectRow = { subject_type: CapabilitySubjectType; subject: string };
+export function subjectText(g: SubjectRow, typeName: (id: string) => string = (id) => id): string {
+  if (g.subject_type === "all") return PERM.SUBJECT_ALL;
+  return g.subject_type === "user_type" ? typeName(g.subject) : g.subject;
+}
+
+// The same, in a row beside its SUBJECT_LABEL chip: a person or a group as
+// written (mono), a type by its human-chosen name (never mono).
+export function SubjectName({ g, typeName }: { g: SubjectRow; typeName: (id: string) => string }) {
+  if (g.subject_type === "all") return null;
+  return g.subject_type === "user_type" ? <span>{typeName(g.subject)}</span> : <Mono>{g.subject}</Mono>;
 }
 
 // A quiet standing fact in the header — not an alert. The doctrine and the
@@ -238,6 +248,7 @@ export function PermissionsScreen() {
   // their own grants; they are audited, and they reach nothing that exemption
   // would give them.
   const securityOperator = useSecurityOperator();
+  const typeName = useUserTypeName();
   // `null` is the UNKNOWN state, and it exists on purpose: PermissionsSnapshot's
   // `enforcement` map encodes an absent key as "not enforced" (types/permissions.ts),
   // so a seed object of `{ grants: [], enforcement: {} }` is byte-identical to a
@@ -385,7 +396,7 @@ export function PermissionsScreen() {
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-2">
                         <Chip tone="neutral">{SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
-                        {g.subject_type !== "all" && <Mono>{g.subject}</Mono>}
+                        <SubjectName g={g} typeName={typeName} />
                       </span>
                     </TableCell>
                     <TableCell>{kindLabel(g.capability)}</TableCell>
@@ -455,7 +466,7 @@ export function PermissionsScreen() {
           <AlertDialogHeader>
             <AlertDialogTitle>{PERM.REMOVE}</AlertDialogTitle>
             <AlertDialogDescription>
-              {PERM.REMOVE_CONFIRM(toRemove ? subjectText(toRemove) : "")}
+              {PERM.REMOVE_CONFIRM(toRemove ? subjectText(toRemove, typeName) : "")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

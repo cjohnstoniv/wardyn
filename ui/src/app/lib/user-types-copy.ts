@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// User types screen copy (0.8, UT-7a) — authored against
-// user-types-design.md rev 4 §2.6/§2.7 and the approved decision packets
-// (mock-08/user-types-packet-a.html, packet-b.html). Unlike governance-copy.ts
-// or permissions-copy.ts, no separate frozen canon doc exists for this screen
-// yet (UT-0 approved the packets, not a strings table) — this module is the
-// one home for the screen's wording so it can be reviewed and revised in one
-// place rather than reopening every component that renders it.
+// User types screen copy (0.8, UT-7a). EXPLAIN is the "What this type gets"
+// grid's canon, copied from the owner-approved user types packet A and frozen
+// in docs/design/user-types-canon.md (user-types-copy.test.ts parses it back).
+// USER_TYPES is the rest of the screen, which packet A does not draw: it is
+// not frozen and waits on an owner mock round (the canon doc lists it).
 //
 // The Ceiling and run limits section reuses GOVERNANCE's own limit labels
 // (governance/limit-chips.tsx) rather than re-wording them — a profile's
@@ -66,20 +64,32 @@ export const USER_TYPES = {
   CEILING_PROFILE: (name: string) => `Bound to the "${name}" profile.`,
   OPEN_GOVERNANCE: "Open in Governance",
 
-  // ---- What this type gets (design §2.6, #739's Explain grid) ----
-  EXPLAIN_TITLE: "What this type gets",
-  EXPLAIN_LEAD: "Every resource family, and whether this type reaches it — a deny always walls the widest allow.",
+  // ---- What this type gets: its load failure (the rest is EXPLAIN below) ----
   EXPLAIN_LOAD_FAILED: "Couldn't compute this grid.",
-  EXPLAIN_STATE: {
+};
+
+// "What this type gets" (design §2.6), from packet A. The audience after ONLY
+// is a type's name or AVAILABILITY's group/person chip text; the family
+// headings are KIND's labels (permissions-copy.ts).
+export const EXPLAIN = {
+  TITLE: "What this type gets",
+  STATE: {
     everyone: "Everyone",
     this_type: "This type",
     blocked: "Blocked",
     admins_only: "Admins only",
     not_available: "Not available",
   } as const,
-  // The wall warning (design §2.6): a blocked cell is a deny, and a deny binds
-  // everyone of the type but a super admin (isOperator is the one exemption,
-  // PERM.HINT_ALL's wording) — the one state worth a second line under the
-  // grid rather than only a chip.
-  WALL_WARNING: "Blocked means a deny — it walls the widest allow this type would otherwise get. Super admins are exempt; a security admin is not.",
+  // Set after the value as " · only Developer".
+  ONLY: (who: string) => `only ${who}`,
+  // The wall note under a family with a block: WALL_HEAD bold, then WALL_BODY.
+  WALL_HEAD: "A block here is a wall.",
+  WALL_BODY: "It blocks everyone of this type, and an allow for a person or a group does not override it.",
+  REMOVE: "Remove",
+  // Values the packet names in words. Every other value shows as written.
+  ALL_WORKSPACES: "All org workspaces",
+  ALL_IMAGES: "Images",
+  SSH_KEYS: "SSH keys",
+  API_TOKENS: "API tokens",
+  SSH_AND_TOKENS: "SSH keys · API tokens",
 };

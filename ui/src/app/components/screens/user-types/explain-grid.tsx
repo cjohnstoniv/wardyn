@@ -3,73 +3,107 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// "What this type gets" (design §2.6) — the grid over GET
-// /permissions/explain's rows (#739, AK-5). One row per capability kind's
-// default (the "*" wildcard, the family's answer for a value no specific row
-// names) plus every specific value the type (or `all`) holds an explicit
-// grant for.
-//
-// This asks Explain with subject_type=user_type. As #837 stands, Explain reads
-// only the `all` rows for a type subject — a grant row naming the type itself
-// (which UT-3 now allows) is not read, so a type-tier deny or allow would not
-// show. This grid must not ship until Explain resolves user_type subjects
-// (#911).
+// "What this type gets" (design §2.6, packet A) over GET /permissions/explain
+// (#739). Per kind: its default ("*") row, then one row per value a grant
+// names or "Available to" restricts. The state is the server's answer; this
+// file only names the value and adds what packet A draws beside it: the
+// audience of a restricted value this type is not listed for, the wall note
+// under a block, and Remove on a row written for this type.
 import * as React from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { HttpError } from "../../../lib/api/core";
 import { permissions as api, type ExplainRow, type ExplainState } from "../../../lib/api/permissions";
-import { CAPABILITY_KINDS, KIND } from "../../../lib/permissions-copy";
-import { USER_TYPES as UT } from "../../../lib/user-types-copy";
+import { AVAILABILITY } from "../../../lib/availability-copy";
+import { getErrorMessage } from "../../../lib/format";
+import { CAPABILITY_KINDS, KIND, PERM, type CapabilityKind } from "../../../lib/permissions-copy";
+import type { CapabilityGrant } from "../../../lib/types";
+import { useUserTypeName } from "../../../lib/use-user-types";
+import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
+import { Button } from "../../ui/button";
+import { cn } from "../../ui/utils";
+import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
+import { Note } from "../governance/display";
+import { useValueNames } from "./explain-names";
 
-const STATE_TONE: Record<ExplainState, "neutral" | "warning" | "danger"> = {
+// Packet A: green for this type's own, red for a block, grey otherwise.
+const STATE_TONE: Record<ExplainState, "neutral" | "success" | "danger"> = {
   everyone: "neutral",
-  this_type: "neutral",
+  this_type: "success",
   blocked: "danger",
-  admins_only: "warning",
-  not_available: "warning",
+  admins_only: "neutral",
+  not_available: "neutral",
 };
 
-function kindLabel(kind: string): string {
-  return KIND[kind as keyof typeof KIND]?.label ?? kind;
-}
+const same = (a: string, b: string) => a.trim() === b.trim();
 
-// One kind's rows, folded to what the grid actually shows: the default ("*")
-// row always renders, plus every specific value's row beneath it — so a kind
-// with no per-value grant still gets one line, never a blank family.
-function rowsByKind(rows: ExplainRow[]): Map<string, ExplainRow[]> {
-  const byKind = new Map<string, ExplainRow[]>();
-  for (const r of rows) {
-    const list = byKind.get(r.kind) ?? [];
-    list.push(r);
-    byKind.set(r.kind, list);
-  }
-  return byKind;
-}
-
-export function ExplainGrid({ subject }: { subject: string }) {
+export function ExplainGrid({ subject, name, disabled }: { subject: string; name: string; disabled: boolean }) {
   const [rows, setRows] = React.useState<ExplainRow[] | null>(null);
-  const [failed, setFailed] = React.useState(false);
+  const [grants, setGrants] = React.useState<CapabilityGrant[]>([]);
+  const [failed, setFailed] = React.useState<string | null>(null);
+  const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [removeError, setRemoveError] = React.useState<string | null>(null);
+  const typeName = useUserTypeName();
+  const valueName = useValueNames();
 
-  React.useEffect(() => {
+  const load = React.useCallback(() => {
     let active = true;
-    setRows(null);
-    setFailed(false);
     api
       .explainCapabilities("user_type", subject, [...CAPABILITY_KINDS])
-      .then((res) => active && setRows(res.rows))
-      .catch(() => active && setFailed(true));
+      .then((res) => {
+        if (!active) return;
+        setRows(res.rows);
+        setFailed(null);
+      })
+      // A 400 (a type deleted since the list loaded) carries the server's own
+      // sentence, shown as sent under the failure line.
+      .catch((e) => active && setFailed(e instanceof HttpError ? e.message : ""));
+    // The grant rows only add Remove and "only …"; without them the grid
+    // still answers.
+    api
+      .getPermissions()
+      .then((snap) => active && setGrants(snap.grants))
+      .catch(() => active && setGrants([]));
     return () => {
       active = false;
     };
   }, [subject]);
+  React.useEffect(load, [load]);
 
-  if (failed) {
+  const remove = async (g: CapabilityGrant) => {
+    setBusy(true);
+    setRemoveError(null);
+    try {
+      await api.deleteGrant(g.id);
+      load();
+    } catch (e) {
+      setRemoveError(e instanceof HttpError ? e.message : getErrorMessage(e));
+    } finally {
+      setToRemove(null);
+      setBusy(false);
+    }
+  };
+
+  if (failed !== null) {
     return (
-      <p className="flex items-center gap-2 text-body text-muted-foreground">
-        <AlertTriangle className="size-3.5 shrink-0" />
-        {UT.EXPLAIN_LOAD_FAILED}
-      </p>
+      <div className="text-body text-muted-foreground">
+        <p className="flex items-center gap-2">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          {UT.EXPLAIN_LOAD_FAILED}
+        </p>
+        {failed && <Note tone="red">{failed}</Note>}
+      </div>
     );
   }
   if (!rows) {
@@ -80,34 +114,109 @@ export function ExplainGrid({ subject }: { subject: string }) {
     );
   }
 
-  const byKind = rowsByKind(rows);
-  const anyBlocked = rows.some((r) => r.state === "blocked");
+  // The grant row this type wrote for exactly this cell — what Remove deletes.
+  const ownGrant = (r: ExplainRow) =>
+    grants.find(
+      (g) => g.subject_type === "user_type" && g.subject === subject && g.capability === r.kind && same(g.value, r.value),
+    );
+  // Who a restricted value is listed for: the audiences of its allow rows.
+  const onlyFor = (r: ExplainRow) =>
+    grants
+      .filter((g) => g.effect === "allow" && g.subject_type !== "all" && g.capability === r.kind && same(g.value, r.value))
+      .map((g) =>
+        g.subject_type === "user_type"
+          ? AVAILABILITY.CHIP_TYPE(typeName(g.subject))
+          : g.subject_type === "group"
+            ? AVAILABILITY.CHIP_GROUP(g.subject)
+            : AVAILABILITY.CHIP_USER(g.subject),
+      );
+  // Packet A draws the wall note once, under the first family with a block.
+  const wallKind = CAPABILITY_KINDS.find((k) => rows.some((r) => r.kind === k && r.state === "blocked"));
 
   return (
-    <>
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>{UT.EXPLAIN_TITLE}</TableHead>
-            <TableHead>Value</TableHead>
-            <TableHead>State</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {CAPABILITY_KINDS.map((kind) =>
-            (byKind.get(kind) ?? []).map((row) => (
-              <TableRow key={`${row.kind}:${row.value}`}>
-                <TableCell className="font-medium">{kindLabel(row.kind)}</TableCell>
-                <TableCell className="font-mono text-xs">{row.value}</TableCell>
-                <TableCell>
-                  <Chip tone={STATE_TONE[row.state]}>{UT.EXPLAIN_STATE[row.state]}</Chip>
-                </TableCell>
-              </TableRow>
-            )),
-          )}
-        </TableBody>
-      </Table>
-      {anyBlocked && <p className="mt-3 text-xs text-muted-foreground">{UT.WALL_WARNING}</p>}
-    </>
+    <div data-testid="explain-grid">
+      {CAPABILITY_KINDS.map((kind) => {
+        const list = rows.filter((r) => r.kind === kind);
+        if (list.length === 0) return null;
+        return (
+          <div key={kind} className="border-t border-border py-2.5 first:border-t-0 first:pt-0">
+            <h5 className="text-body font-medium text-foreground">{KIND[kind as CapabilityKind].label}</h5>
+            {list.map((r) => {
+              const own = ownGrant(r);
+              const named = valueName(r.kind, r.value);
+              const only = r.restricted && r.state === "not_available" ? onlyFor(r) : [];
+              return (
+                <div
+                  key={r.value}
+                  data-testid={`explain-row-${r.kind}-${r.value}`}
+                  className={cn(
+                    "flex flex-wrap items-center gap-x-2.5 gap-y-1.5 py-1 text-body",
+                    r.state !== "this_type" && r.state !== "blocked" && "text-muted-foreground",
+                  )}
+                >
+                  <Chip tone={STATE_TONE[r.state]}>{EXPLAIN.STATE[r.state]}</Chip>
+                  <span>
+                    {named ?? <Mono>{r.value}</Mono>}
+                    {only.length > 0 && (
+                      <>
+                        {" · "}
+                        <span className="text-xs text-muted-foreground">{EXPLAIN.ONLY(only.join(", "))}</span>
+                      </>
+                    )}
+                  </span>
+                  {own && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={disabled || busy}
+                      onClick={() => setToRemove(own)}
+                      aria-label={`${EXPLAIN.REMOVE} ${named ?? r.value}`}
+                    >
+                      {EXPLAIN.REMOVE}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+            {kind === wallKind && (
+              <Note tone="amber">
+                <span>
+                  <b>{EXPLAIN.WALL_HEAD}</b> {EXPLAIN.WALL_BODY}
+                </span>
+              </Note>
+            )}
+          </div>
+        );
+      })}
+      {removeError && (
+        <Note tone="red" role="alert">
+          {removeError}
+        </Note>
+      )}
+
+      {/* The Permissions screen's own confirmation, for the same grant row. */}
+      <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && setToRemove(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{PERM.REMOVE}</AlertDialogTitle>
+            <AlertDialogDescription>{PERM.REMOVE_CONFIRM(name)}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              disabled={busy}
+              onClick={(e) => {
+                e.preventDefault();
+                if (toRemove) void remove(toRemove);
+              }}
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+              {PERM.REMOVE}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }

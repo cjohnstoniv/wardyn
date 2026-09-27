@@ -28,6 +28,9 @@ export interface ExplainRow {
   kind: string;
   value: string;
   state: ExplainState;
+  // The value is "Available to: Only these" — omitted when it isn't. A
+  // restricted value gets a row even when no grant names it.
+  restricted?: boolean;
 }
 
 export interface ExplainResponse {
@@ -161,9 +164,11 @@ export const permissions = {
 
   // GET /api/v1/permissions/explain?subject_type=&subject=&kinds= -> the
   // Explain grid (#739) for one named subject — the User types screen asks
-  // for subject_type=user_type. securityOps, same tier as the rest of
-  // /permissions. `kinds` defaults to every kind in CAPABILITY_KINDS' order
-  // when omitted.
+  // for subject_type=user_type, whose subject is the type's id. securityOps,
+  // same tier as the rest of /permissions. `kinds` defaults server-side to
+  // every kind. A user or group subject's grid reads only rows naming that
+  // subject or `all`, never the person's groups or type. An unknown or
+  // malformed type id is a 400.
   async explainCapabilities(
     subjectType: CapabilitySubjectType,
     subject: string,

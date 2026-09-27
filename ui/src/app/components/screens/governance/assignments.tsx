@@ -54,7 +54,7 @@ import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Textarea } from "../../ui/textarea";
-import { Mono } from "../../wardyn/code-block";
+import { useUserTypeName } from "../../../lib/use-user-types";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
@@ -65,6 +65,7 @@ import {
   Segmented,
   UserTypeSubjectSelect,
   subjectText,
+  SubjectName,
   type PickableSubjectType,
 } from "../permissions";
 import { Note, question } from "./display";
@@ -93,6 +94,7 @@ export function AssignmentsBlock({
   const [toRemove, setToRemove] = React.useState<GovernanceAssignment | null>(null);
   const [busy, setBusy] = React.useState(false);
   const profileName = (id: string) => snapshot.profiles.find((p) => p.id === id)?.name ?? id;
+  const typeName = useUserTypeName();
 
   const remove = async (a: GovernanceAssignment) => {
     setBusy(true);
@@ -107,7 +109,7 @@ export function AssignmentsBlock({
     }
   };
 
-  const confirm = toRemove ? GOV.UNASSIGN_CONFIRM(subjectText(toRemove), profileName(toRemove.profile_id)) : "";
+  const confirm = toRemove ? GOV.UNASSIGN_CONFIRM(subjectText(toRemove, typeName), profileName(toRemove.profile_id)) : "";
   const [confirmHead, confirmBody] = question(confirm);
 
   return (
@@ -141,7 +143,7 @@ export function AssignmentsBlock({
                             so the /permissions amber-allow / red-deny law does
                             not reach it. */}
                         <Chip tone="neutral">{SUBJECT_LABEL[a.subject_type] ?? a.subject_type}</Chip>
-                        {a.subject_type !== "all" && <Mono>{a.subject}</Mono>}
+                        <SubjectName g={a} typeName={typeName} />
                       </span>
                     </TableCell>
                     <TableCell>{profileName(a.profile_id)}</TableCell>
@@ -157,7 +159,7 @@ export function AssignmentsBlock({
                         size="sm"
                         disabled={disabled}
                         onClick={() => setToRemove(a)}
-                        aria-label={`${PERM.REMOVE} ${subjectText(a)}`}
+                        aria-label={`${PERM.REMOVE} ${subjectText(a, typeName)}`}
                       >
                         {PERM.REMOVE}
                       </Button>

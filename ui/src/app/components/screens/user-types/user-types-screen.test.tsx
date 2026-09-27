@@ -34,13 +34,22 @@ vi.mock("../../../lib/api/governance", async () => {
 const explainCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
-  return { ...actual, permissions: { explainCapabilities: (...a: unknown[]) => explainCapabilitiesMock(...a) } };
+  return {
+    ...actual,
+    permissions: {
+      explainCapabilities: (...a: unknown[]) => explainCapabilitiesMock(...a),
+      getPermissions: async () => ({ grants: [], enforcement: {} }),
+    },
+  };
 });
+// The grid's value names are explain-grid.test.tsx's; here every value is raw.
+vi.mock("./explain-names", () => ({ useValueNames: () => () => null }));
 
 import { HttpError } from "../../../lib/api/core";
+import { aheadByHours } from "../../../lib/test-clock";
 import type { UserType } from "../../../lib/types";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
-import { USER_TYPES as UT } from "../../../lib/user-types-copy";
+import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { UserTypesScreen } from "./user-types-screen";
@@ -52,8 +61,8 @@ function type(over: Partial<UserType> = {}): UserType {
     description: "Reads risk models, no repo access.",
     priority: 10,
     built_in: false,
-    created_at: "2026-09-20T00:00:00Z",
-    updated_at: "2026-09-20T00:00:00Z",
+    created_at: aheadByHours(-24),
+    updated_at: aheadByHours(-24),
     ...over,
   };
 }
@@ -102,13 +111,21 @@ describe("UserTypesScreen — states", () => {
     expect(screen.getAllByRole("button", { name: UT.NEW_CTA }).length).toBeGreaterThan(0);
   });
 
-  it("the built-in type carries its badge and delete is refused with a title, not a click", async () => {
+  it("the built-in type carries its badge and its disabled delete says why in visible text", async () => {
     renderScreen([STANDARD, type()]);
     expect(await screen.findByText(STANDARD.name)).toBeInTheDocument();
     expect(screen.getByText(UT.BUILT_IN_BADGE)).toBeInTheDocument();
     const del = screen.getByRole("button", { name: `${UT.DELETE} ${STANDARD.name}` });
     expect(del).toBeDisabled();
-    expect(del).toHaveAttribute("title", UT.DELETE_BUILTIN);
+    // #459: visible beside the control, and its accessible description — not
+    // a title tooltip a keyboard or touch user never reaches.
+    const reason = screen.getByText(UT.DELETE_BUILTIN);
+    expect(reason).toBeVisible();
+    expect(del).toHaveAccessibleDescription(UT.DELETE_BUILTIN);
+    expect(del).not.toHaveAttribute("title");
+    // Only the built-in row carries it.
+    expect(screen.getAllByText(UT.DELETE_BUILTIN)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: `${UT.DELETE} Portfolio manager` })).toBeEnabled();
   });
 });
 
@@ -220,8 +237,9 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
     await screen.findByText(t.name);
     await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
     expect(explainCapabilitiesMock).toHaveBeenCalledWith("user_type", t.id, expect.any(Array));
-    expect(await screen.findByText(UT.EXPLAIN_STATE.blocked)).toBeInTheDocument();
-    expect(screen.getByText(UT.WALL_WARNING)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: EXPLAIN.TITLE })).toBeInTheDocument();
+    expect(await screen.findByText(EXPLAIN.STATE.blocked)).toBeInTheDocument();
+    expect(screen.getByText(EXPLAIN.WALL_HEAD)).toBeInTheDocument();
   });
 });
 

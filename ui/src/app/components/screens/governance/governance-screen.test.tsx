@@ -452,6 +452,18 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 
   // UT-7a: a user type is a bounded, admin-authored set — no directory search,
   // a closed picker of the org's types instead.
+  it("an assignment for a user type reads by the type's name, not its id", async () => {
+    renderScreen(
+      snapshot({
+        assignments: [
+          { id: "a2", subject_type: "user_type", subject: "portfolio-manager", profile_id: PLATFORM.id, priority: 0, created_at: aheadByHours(-1) },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.queryByText("portfolio-manager")).toBeNull();
+  });
+
   it("User type swaps the Who field for UserTypeSubjectSelect", async () => {
     upsertAssignmentMock.mockResolvedValue(undefined);
     renderScreen();

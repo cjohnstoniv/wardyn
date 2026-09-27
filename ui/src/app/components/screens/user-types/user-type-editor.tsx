@@ -18,7 +18,7 @@ import { userTypes as api } from "../../../lib/api/user-types";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
-import { USER_TYPES as UT } from "../../../lib/user-types-copy";
+import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -166,10 +166,9 @@ export function UserTypeEditor({
 
       {type && (
         <section className="mt-6 border-t border-border pt-5">
-          <h4 className="text-body font-medium text-foreground">{UT.EXPLAIN_TITLE}</h4>
-          <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{UT.EXPLAIN_LEAD}</p>
+          <h4 className="text-body font-medium text-foreground">{EXPLAIN.TITLE}</h4>
           <div className="mt-3">
-            <ExplainGrid subject={type.id} />
+            <ExplainGrid subject={type.id} name={type.name} disabled={disabled} />
           </div>
         </section>
       )}

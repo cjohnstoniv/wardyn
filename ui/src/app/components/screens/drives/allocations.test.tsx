@@ -254,6 +254,18 @@ describe("DrivesScreen — allocations", () => {
   // UT-7a: a user type is a bounded, admin-authored set — no directory search,
   // a closed picker of the org's types instead, and its priority stays
   // disabled (meaningful only inside the group tier).
+  it("an allocation for a user type reads by the type's name, not its id", async () => {
+    renderScreen(
+      snapshot({
+        grants: [
+          { id: "g2", subject_type: "user_type", subject: "portfolio-manager", drive_id: SCRATCH.id, priority: 0, enabled: true, created_at: aheadByHours(-1) },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.queryByText("portfolio-manager")).toBeNull();
+  });
+
   it("User type swaps the Who field for UserTypeSubjectSelect and disables priority", async () => {
     upsertGrantMock.mockResolvedValueOnce({ grant: {}, replaced: false });
     renderScreen();

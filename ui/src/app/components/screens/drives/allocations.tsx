@@ -33,6 +33,7 @@
 import * as React from "react";
 import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
+import { useUserTypeName } from "../../../lib/use-user-types";
 import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
 import { previewClaims } from "../../../lib/api/governance";
 import {
@@ -72,6 +73,7 @@ import {
   Segmented,
   UserTypeSubjectSelect,
   subjectText,
+  SubjectName,
   type PickableSubjectType,
 } from "../permissions";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
@@ -126,6 +128,7 @@ export function AllocationsBlock({
   const [toRemove, setToRemove] = React.useState<UserDriveGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
+  const typeName = useUserTypeName();
 
   const remove = async (g: UserDriveGrant) => {
     setBusy(true);
@@ -140,7 +143,7 @@ export function AllocationsBlock({
     }
   };
 
-  const confirm = toRemove ? DRIVES.REMOVE_CONFIRM(subjectText(toRemove), driveName(toRemove.drive_id)) : "";
+  const confirm = toRemove ? DRIVES.REMOVE_CONFIRM(subjectText(toRemove, typeName), driveName(toRemove.drive_id)) : "";
   const [confirmHead, confirmBody] = question(confirm);
 
   return (
@@ -182,7 +185,7 @@ export function AllocationsBlock({
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-2">
                         <Chip tone="neutral">{SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
-                        {g.subject_type !== "all" && <Mono>{g.subject}</Mono>}
+                        <SubjectName g={g} typeName={typeName} />
                       </span>
                     </TableCell>
                     {/* A drive name is a human-chosen label, never mono. */}
@@ -201,7 +204,7 @@ export function AllocationsBlock({
                         size="sm"
                         disabled={disabled}
                         onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${subjectText(g)}`}
+                        aria-label={`${PERM.REMOVE} ${subjectText(g, typeName)}`}
                       >
                         {PERM.REMOVE}
                       </Button>

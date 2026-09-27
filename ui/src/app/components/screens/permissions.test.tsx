@@ -294,9 +294,10 @@ describe("PermissionsScreen — the grant table", () => {
     expect(within(table).getByText(PERM.EFFECT_DENY).className).toContain("danger");
   });
 
-  // 0.8: a row naming a user type reads "User type" beside the type's id, not
-  // the raw wire token.
-  it("a user type row renders the User type chip and the type's id", async () => {
+  // 0.8: a row naming a user type reads "User type" beside the type's name —
+  // the name the picker offers — not its id or the raw wire token.
+  it("a user type row renders the User type chip and the type's name", async () => {
+    listUserTypesMock.mockResolvedValue([{ id: "portfolio-manager", name: "Portfolio manager" }]);
     getPermissionsMock.mockResolvedValue({
       grants: [grant({ subject_type: "user_type", subject: "portfolio-manager", effect: "deny" })],
       enforcement: {},
@@ -305,8 +306,24 @@ describe("PermissionsScreen — the grant table", () => {
 
     const table = await screen.findByRole("table");
     expect(within(table).getByText(PERM.SUBJECT_USER_TYPE)).toBeInTheDocument();
-    expect(within(table).getByText("portfolio-manager")).toBeInTheDocument();
+    expect(await within(table).findByText("Portfolio manager")).toBeInTheDocument();
+    expect(within(table).queryByText("portfolio-manager")).toBeNull();
     expect(within(table).queryByText("user_type")).toBeNull();
+
+    // The remove confirmation names it the same way.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(table).getByRole("button", { name: new RegExp(PERM.REMOVE) }));
+    expect(await screen.findByText(PERM.REMOVE_CONFIRM("Portfolio manager"))).toBeInTheDocument();
+  });
+
+  it("a user type the list no longer holds still reads by its id", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant({ subject_type: "user_type", subject: "contractor", effect: "deny" })],
+      enforcement: {},
+    });
+    renderScreen();
+    const table = await screen.findByRole("table");
+    expect(await within(table).findByText("contractor")).toBeInTheDocument();
   });
 
   // F4-F5/F6-F5 (Appendix A V8): a grant markInertGrants flagged Inert on the
