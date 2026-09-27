@@ -178,7 +178,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     expect(res.status()).toBe(422);
     const { error } = await res.json();
     expect(error).toMatch(
-      /^this run's model access is configured as Amazon Bedrock \(bearer key\), and that credential is not configured/,
+      /^This run's model access is configured as Amazon Bedrock \(bearer key\), and that credential is not configured/,
     );
   });
 });
