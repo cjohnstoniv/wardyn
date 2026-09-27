@@ -40,7 +40,7 @@ function storeLabel(store: string): string {
 }
 
 // A person's contiguous run of rows, in the order the inventory listed them —
-// erase works per PERSON, not per credential (review finding F2, packet F
+// erase works per PERSON, not per credential (packet F
 // §4 a colfoot: "The table is grouped by person because erase works per
 // person"). The Person and Erase cells render once per group, with a rowSpan.
 interface PersonGroup {
@@ -116,7 +116,7 @@ export function CredentialsScreen() {
   const stores = new Set(rows.map((r) => r.store));
   const mixedStores = stores.size > 1;
   const groups = React.useMemo(() => groupByPerson(filtered), [filtered]);
-  // The footer's own store name (review F5): the EXTERNAL store present, if
+  // The footer's own store name: the EXTERNAL store present, if
   // any — the "Stored in" column (mixedStores) is the per-row distinction;
   // the footer's job is only to say where that store's OWN audit trail lives.
   const footerStore: "local" | "vault" | "key_vault" = stores.has("azurekv")
@@ -317,7 +317,7 @@ function EraseDialog({
       // §5 (f): a >=500 never finished, so it gets its OWN sentence — the
       // erase may have partly landed, unlike a 4xx refusal, whose server
       // sentence (route-neutral 422, or the operator-namespace 400) is shown
-      // as sent (review finding F1).
+      // as sent.
       setError(e instanceof HttpError && e.status >= 500 ? ERASE.FAILED(label) : getErrorMessage(e));
     } finally {
       setBusy(false);
@@ -342,7 +342,7 @@ function EraseDialog({
               {result.count === 0 ? ERASE.DONE_NONE(erasedLabel) : ERASE.DONE(result.count, erasedLabel)}
             </p>
             {/* §5 (d)'s order: the count, then Key Vault's recoverable-days
-                line (when it applies), then the audit line last (review F6). */}
+                line (when it applies), then the audit line last. */}
             {result.count > 0 && result.store && !result.purged && !!result.recoverable_days && (
               <p className="text-body text-muted-foreground">{ERASE.KEY_VAULT_RECOVERABLE(result.recoverable_days)}</p>
             )}

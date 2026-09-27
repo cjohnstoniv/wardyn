@@ -105,7 +105,7 @@ describe("the inventory", () => {
     expect(await screen.findByText("alice@corp.example")).toBeInTheDocument();
   });
 
-  it("groups a person's rows: one Erase per person, not per credential (review finding F2)", async () => {
+  it("groups a person's rows: one Erase per person, not per credential", async () => {
     const second = { ...aliceRow, provider: "bedrock-prod", provider_name: "Bedrock (prod)" };
     listInventoryMock.mockResolvedValue(inventory([aliceRow, second], { "corp-gw": 1, "bedrock-prod": 1 }));
     renderScreen();
@@ -119,14 +119,14 @@ describe("the inventory", () => {
     expect(screen.getAllByRole("button", { name: INVENTORY.ERASE_ROW })).toHaveLength(1);
   });
 
-  it("a zero-credential provider chip falls back to the raw id when no row named it (review finding F10)", async () => {
+  it("a zero-credential provider chip falls back to the raw id when no row named it", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1, "unnamed-prov": 0 }));
     renderScreen();
     await screen.findByText("alice@corp.example");
     expect(screen.getByRole("button", { name: "unnamed-prov · 0" })).toBeInTheDocument();
   });
 
-  it("the footer names the store and links to Audit, even when rows mix more than one store (review finding F5)", async () => {
+  it("the footer names the store and links to Audit, even when rows mix more than one store", async () => {
     const vaultRow = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", store: "azurekv" as const };
     listInventoryMock.mockResolvedValue(inventory([aliceRow, vaultRow], { "corp-gw": 2 }));
     renderScreen();
@@ -184,7 +184,7 @@ describe("erasing a listed person (design F-5)", () => {
     expect(screen.getByText(ERASE.RETENTION_KEY_VAULT)).toBeInTheDocument();
   });
 
-  it("§5 (d)'s order: the recoverable-days line comes before the audit line (review finding F6)", async () => {
+  it("§5 (d)'s order: the recoverable-days line comes before the audit line", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     eraseMock.mockResolvedValue({ count: 2, store: "azurekv", purged: false, recoverable_days: 90 });
     renderScreen();
@@ -200,7 +200,7 @@ describe("erasing a listed person (design F-5)", () => {
     expect(auditIdx).toBeGreaterThan(recoverableIdx);
   });
 
-  it("a >=500 erase failure shows ERASE.FAILED, never the server's bare 500 text (review finding F1)", async () => {
+  it("a >=500 erase failure shows ERASE.FAILED, never the server's bare 500 text", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     eraseMock.mockRejectedValue(new HttpError(500, "erase credentials"));
     renderScreen();

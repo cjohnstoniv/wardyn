@@ -44,7 +44,7 @@ type govEscapeStore struct {
 	token      *types.APIToken
 	tokenRaw   string
 	workspaces []types.Workspace
-	// apiTokens is the ListAPITokens directory (review finding F9): distinct
+	// apiTokens is the ListAPITokens directory: distinct
 	// from the single `token`/`tokenRaw` pair above, which is GetAPITokenByRaw's
 	// own fixture for a different door. A test opts in by setting this slice;
 	// the zero value keeps every other caller's "no token fixture" behaviour.
@@ -80,7 +80,7 @@ func (s *govEscapeStore) ListRuns(context.Context) ([]types.AgentRun, error) { r
 // ListRoleMappings stub above it, that keeps a test reaching knownPrincipals
 // (CS-8's credential inventory, via emailsByPrincipal) from panicking on an
 // unimplemented promoted method. A test that seeds apiTokens gets a REAL
-// directory read, not a stub (review finding F9: TestPG_CredentialInventory
+// directory read, not a stub (TestPG_CredentialInventory
 // seeds it to prove email population end to end).
 func (s *govEscapeStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
 	return s.apiTokens, nil

@@ -148,7 +148,7 @@ func newInventoryFixture(t *testing.T) inventoryFixture {
 	site := types.SiteConfig{ModelProviders: providerBlock(key, sub, sso, unused),
 		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey})}
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
-	// review finding F9: a real directory entry for alice (an api_tokens
+	// a real directory entry for alice (an api_tokens
 	// pairing) and one for bob (workspaces.owned_by, no email — the shape
 	// resolveSecretOwner's own directory takes), so TestPG_CredentialInventory
 	// proves email population end to end (the real knownPrincipals/
@@ -238,7 +238,7 @@ func TestPG_CredentialInventory(t *testing.T) {
 	if r := got[key{invCarol, "bedrock", credStateExpired}]; r.ExpiresAt == nil {
 		t.Errorf("carol's expired sign-in carries no expires_at: %+v", r)
 	}
-	// design F-2, review finding F9: email comes from the REAL directory
+	// email comes from the REAL directory
 	// (knownPrincipals), end to end — not a client-visible field the handler
 	// could fake. Alice is seeded into it above; bob and carol are not, so
 	// they must get no email invented from their bare subject.

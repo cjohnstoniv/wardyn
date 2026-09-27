@@ -46,7 +46,7 @@ const providerName = (p: SetupModelProvider) => p.name || p.id;
 
 function doorTitle(t: DoorTarget, confirmingRemove: boolean): string {
   if (t.kind === "key") {
-    // The remove confirm gets its OWN title (packet F §3 review finding F4) —
+    // The remove confirm gets its OWN title (packet F §3) —
     // not the Add/Replace title behind it, which the confirm has replaced.
     if (confirmingRemove) return REMOVE_CONFIRM.TITLE(t.token, providerName(t.provider));
     // A Replace open (a credential is already stored) gets its own title
@@ -123,7 +123,7 @@ function KeyDoor({
   /** /setup/status's credential_storage (design F-3) — which store-mode line
    *  the notice's second line shows (F-4). */
   credentialStorage: SetupStatus["credential_storage"];
-  /** Lifted to DoorDialog (review finding F4): the confirm needs its OWN
+  /** Lifted to DoorDialog: the confirm needs its OWN
    *  DialogTitle, which only the parent can set. */
   confirmingRemove: boolean;
   setConfirmingRemove: (v: boolean) => void;
@@ -149,7 +149,7 @@ function KeyDoor({
       setBusy(false);
     }
   };
-  // Default focus: Cancel (packet F §3, review finding F4) — the confirm's
+  // Default focus: Cancel (packet F §3) — the confirm's
   // OWN title now carries REMOVE_CONFIRM.TITLE (doorTitle, DoorDialog).
   // Unconditional (Rules of Hooks): KeyDoor returns two different subtrees
   // below, so a hook cannot live inside either branch.
@@ -324,10 +324,10 @@ export function DoorDialog({
   if (target) shown.current = target;
   const t = target ?? shown.current;
 
-  // Lifted out of KeyDoor (review finding F4): the confirm needs its OWN
+  // Lifted out of KeyDoor: the confirm needs its OWN
   // DialogTitle, which only THIS component can set (KeyDoor sits below it).
   //
-  // Keyed on TARGET, not `t` (review R2-1): `t` falls back to `shown.current`
+  // Keyed on TARGET, not `t`: `t` falls back to `shown.current`
   // once the dialog closes, so it never actually becomes null and never
   // changes on a same-provider reopen — the effect below then never re-ran,
   // and a closed confirm (Escape, or a completed Remove) stuck the NEXT open

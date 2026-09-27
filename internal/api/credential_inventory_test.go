@@ -81,7 +81,7 @@ func TestCredentialInventoryFill_NoPairedEmailOmitsField(t *testing.T) {
 // workspaces.owned_by names a principal with none. A principal named by
 // TWO token rows (a rotated or re-minted token) keeps whichever email it's
 // FIRST paired with; one named only by a workspace gets none — the directory
-// must never invent one from the bare principal. RED (F9) if either claim
+// must never invent one from the bare principal. RED if either claim
 // stops being exercised: the fixture below seeds BOTH a duplicate-principal
 // token pair and a workspace-only principal, so a change that drops either
 // source, or that starts inventing email=principal, fails one of the two
