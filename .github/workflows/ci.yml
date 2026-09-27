@@ -929,8 +929,9 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Two image builds (one of them a bookworm + node + `npm install -g` layer)
-    # in front of a suite whose own `go test -timeout` is 20m.
-    timeout-minutes: 45
+    # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
+    # key-service leg.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.backend != 'false'
@@ -958,6 +959,13 @@ jobs:
       - name: Docker smoke check
         if: needs.changes.outputs.backend != 'false'
         run: docker run --rm hello-world
+      # T-33: the Vault Transit KEK and the Vault KV store against the official
+      # hashicorp/vault and openbao/openbao dev images (a paused server must be
+      # transient, a deleted key definitive, every read one audited decrypt).
+      # Needs no image build, so it runs first.
+      - name: Key-service conformance (Vault + OpenBao dev servers)
+        if: needs.changes.outputs.backend != 'false'
+        run: make test-kek-conformance
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx

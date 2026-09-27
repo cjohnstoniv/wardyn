@@ -749,6 +749,29 @@ jobs:
             local/evidence/compose-sso-roles/**
           if-no-files-found: error
 
+  # ── Key services: Vault + OpenBao dev servers, and Vault on kind (T-33) ─────
+  # The docker leg is the PR `conformance` job's step, run again here against
+  # the same pins; the kind leg installs Vault from its Helm chart and logs in
+  # with Kubernetes auth and a projected service-account token.
+  kek-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Vault + OpenBao dev servers
+        run: make test-kek-conformance
+      - name: Vault on kind with Kubernetes auth
+        run: make test-kek-conformance-kind
+
   # Coverage-guided fuzzing of the session-cookie decoder: a cookie whose HMAC
   # does not verify must never decode into a session. Every PR runs the seed
   # corpus as an ordinary test; this lane searches past it.
@@ -828,7 +851,7 @@ jobs:
         run: ./scripts/nightly-migration-merge-check.sh
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -850,7 +873,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, fuzz, gvisor-cc2-live, kind-sso-ado-walk or compose-sso-roles." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk or compose-sso-roles." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \

@@ -225,6 +225,9 @@ if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
       unit)
         echo ">> Put curl on PATH — these probes exist to prove a real curl round-trip and cannot do that" >&2
         echo ">> skipped. A minimal dev container without curl can set WARDYN_TEST_REPORT_SKIP_FLOOR=1." >&2 ;;
+      kek-*)
+        echo ">> Run the suite through scripts/kek-conformance.sh or scripts/kek-conformance-kind.sh," >&2
+        echo ">> which set every variable these probes need." >&2 ;;
       *)
         echo ">> These probes need no real daemon or cluster — they are the fake-backed core cases every" >&2
         echo ">> lane can run, so a skip means the environment broke, not that it is missing." >&2
