@@ -162,6 +162,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
   The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
   survives.
+- **The sign-in door's "Downloading the image" step now lights on Kubernetes (#807).** The kubelet
+  reports an image pull as `ContainerCreating`, so a cold pull on a cluster showed the first step
+  for its whole length. The runner now reads the starting pod's Events (at most once a second,
+  only while the container is being created) and reports a pull in the Docker runner's words. The
+  chart's namespaced Role gains one verb, `events: list`. **If you write the Role yourself
+  (`k8s.rbac.create=false`), add `events: list` on upgrade** — without it the read fails closed and
+  pulls keep reading as "Setting up the container". Nothing an Event says is shown: it only chooses
+  between two sentences Wardyn wrote.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
@@ -308,9 +316,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an about:blank tab straight away, and on a first launch the person sat on it while the sign-in
   image downloaded. The dialog now stays put and shows three steps: starting the sign-in sandbox,
   downloading the sign-in image ("Can take a few minutes the first time." — no runner reports pull
-  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which only
-  the Docker runner does — on Kubernetes the kubelet reports `ContainerCreating` through a pull, so the
-  first step stays lit), and waiting for the provider. Once the provider's page is
+  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which the
+  Docker runner reports directly — on Kubernetes the step lights through the namespaced `events: list`
+  read added in #807, and falls back to reading `ContainerCreating` without it), and waiting for the
+  provider. Once the provider's page is
   ready, an "Open AWS sign-in" (or "Open Claude sign-in") button opens it, with the device code
   beside it and a copy-link fallback; the tab still has its `opener` severed. A failed image pull
   shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps
