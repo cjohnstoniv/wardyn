@@ -43,9 +43,11 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
 {{- /* basePath (WARDYN_BASE_PATH): wardynd serves /healthz and /readyz under it,
-so the probes follow — from basePath, or from an env.WARDYN_BASE_PATH set
-directly. */ -}}
-{{- $basePath := .Values.basePath | default (get .Values.env "WARDYN_BASE_PATH") | default "" -}}
+so the probes must follow whatever the CONTAINER actually gets — an explicit
+env.WARDYN_BASE_PATH wins (line ~233 below only adds it from basePath when
+env doesn't already set it), basePath otherwise. Same precedence both places,
+so the probes and the daemon can never disagree. */ -}}
+{{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
 {{- /*
 secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
 age key) are projected into ONE read-only volume and wardynd gets

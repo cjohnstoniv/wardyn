@@ -3463,16 +3463,21 @@ To put Wardyn behind a reverse proxy at a sub-path next to another application
 - **The proxy forwards the path unchanged.** `wardynd` mounts the console, the
   API, `/auth/login`, `/auth/callback`, `/healthz`, `/readyz` and `/metrics`
   under the prefix and answers 404 for everything outside it, so a rule that
-  strips the prefix breaks every request. nginx: `location /wardyn/ { proxy_pass
-  http://wardynd:8080; }` — no trailing slash or URI on `proxy_pass`. WebSocket
-  upgrades (the terminal) need the usual `Upgrade`/`Connection` headers.
+  strips the prefix breaks every request. nginx: `location /wardyn { proxy_pass
+  http://wardynd:8080; }` (not `location /wardyn/` — `wardynd` itself 404s
+  `/wardynx/…`, so the bare-prefix location matching the daemon's own segment
+  check is what makes `https://host.example.com/wardyn` reach the console) —
+  no trailing slash or URI on `proxy_pass`. WebSocket upgrades (the terminal)
+  need the usual `Upgrade`/`Connection` headers.
 - **One bundle, any prefix.** The console is built with relative asset URLs;
   `wardynd` writes the base into the `index.html` it serves (an attribute, not an
   inline script — the CSP is unchanged) and the console builds every API, sign-in,
   terminal and recording URL from it. A refresh on a deep link works.
 - **Cookies** — the session, the sign-in cookies and the Azure DevOps sign-in's —
   are scoped to `Path=/wardyn`, so the neighbouring application never receives
-  them.
+  them. A session issued before the console moved under a base path (a
+  same-host migration) carries `Path=/` and stays valid until it expires;
+  signing out clears both.
 - **SSO.** Register and set `WARDYN_OIDC_REDIRECT_URL` under the base
   (`https://host.example.com/wardyn/auth/callback`); boot refuses one outside it,
   naming both variables. The Azure DevOps callback is derived from it and carries

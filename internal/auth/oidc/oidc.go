@@ -641,7 +641,7 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 
 // LogoutHandler clears the Wardyn session cookie and redirects to the console root.
 func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	a.clearCookie(w, sessionCookieName)
+	a.clearSessionCookie(w)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
 
@@ -686,7 +686,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 						return
 					}
 					if revoked {
-						a.clearCookie(w, sessionCookieName)
+						a.clearSessionCookie(w)
 						// Post-revocation use is THE event "revoke a human now"
 						// exists to make visible: surface it by name.
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "revoked_session")))
@@ -700,7 +700,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			}
 			// Expired session: clear the stale cookie so the browser doesn't
 			// keep sending it, then fall through.
-			a.clearCookie(w, sessionCookieName)
+			a.clearSessionCookie(w)
 			next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "expired_session")))
 			return
 		}
@@ -790,16 +790,29 @@ func (a *Authenticator) loginCookie(name, value string) *http.Cookie {
 	}
 }
 
-// clearCookie instructs the browser to delete a named cookie.
-func (a *Authenticator) clearCookie(w http.ResponseWriter, name string) {
+// clearCookieAt instructs the browser to delete a named cookie at path.
+func (a *Authenticator) clearCookieAt(w http.ResponseWriter, name, path string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    "",
-		Path:     a.cookiePath(),
-		MaxAge:   -1,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		Name: name, Value: "", Path: path, MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// clearCookie instructs the browser to delete a named cookie at the base path.
+func (a *Authenticator) clearCookie(w http.ResponseWriter, name string) {
+	a.clearCookieAt(w, name, a.cookiePath())
+}
+
+// clearSessionCookie clears wardyn_session at the base path and, when under
+// WARDYN_BASE_PATH, ALSO at Path=/ — a session from before a same-host
+// migration onto the base carries that path, and cookie identity is
+// name+domain+path (RFC 6265), so the base-path clear alone would leave it
+// authenticating. No-op extra header at BasePath == "" (cookiePath is "/").
+func (a *Authenticator) clearSessionCookie(w http.ResponseWriter) {
+	a.clearCookie(w, sessionCookieName)
+	if a.cfg.BasePath != "" {
+		a.clearCookieAt(w, sessionCookieName, "/")
+	}
 }
 
 // Auth-error codes carried on the "/?auth_error=<code>" redirect:
