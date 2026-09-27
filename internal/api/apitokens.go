@@ -131,9 +131,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// A row minted for a reserved principal (before the sign-in callback
 		// refused one) would replay it as that identity (#1162). Audited and
 		// answered here: the fallback would only record invalid_admin_token.
-		if s.isReservedPrincipal(t.Principal) {
-			s.auditAuthFailed(r, authFailedReservedPrincipal)
-			writeError(w, http.StatusUnauthorized, apiTokenReservedRefusal)
+		if s.refuseReservedPrincipal(w, r, t.Principal, apiTokenReservedRefusal) {
 			return
 		}
 		// The same cutoff the session lane obeys, applied to the token's

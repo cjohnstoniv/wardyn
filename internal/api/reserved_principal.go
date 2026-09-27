@@ -3,7 +3,10 @@
 
 package api
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 // isReservedPrincipal reports whether p names an identity that is not a
 // person: the admin token, the local-mode operator (the configured seat, or any
@@ -23,4 +26,17 @@ func (s *Server) isReservedPrincipal(p string) bool {
 	op := strings.ToLower(strings.TrimSpace(s.cfg.LocalOperator))
 	return p == adminTokenPrincipal || (op != "" && p == op) ||
 		strings.HasPrefix(p, "local:") || strings.HasPrefix(p, "device:")
+}
+
+// refuseReservedPrincipal answers 401 with msg, and records auth.fail
+// reserved_principal, when a request's authenticated principal p is reserved
+// — a session cookie or wdn_ token issued before the sign-in callback refused
+// one. Reports whether it answered.
+func (s *Server) refuseReservedPrincipal(w http.ResponseWriter, r *http.Request, p, msg string) bool {
+	if !s.isReservedPrincipal(p) {
+		return false
+	}
+	s.auditAuthFailed(r, authFailedReservedPrincipal)
+	writeError(w, http.StatusUnauthorized, msg)
+	return true
 }
