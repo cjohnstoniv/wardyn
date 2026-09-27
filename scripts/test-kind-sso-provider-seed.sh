@@ -30,9 +30,12 @@
 #   2. NEVER TOUCHES THE LEGACY ENV: none of WARDYN_BEDROCK_REGION/MODEL/
 #      BASE_URL reach the daemon's own environment — read back off
 #      /proc/<pid>/environ, not asserted by absence-of-a-flag.
-#   3. CAPTURES UID-BACKED: a person's own credential PUT against the provider
-#      id shows up as that provider's connected_people, the live signal a
-#      capture actually landed under the UID scheme rather than a no-op.
+#   3. CAPTURES UID-BACKED, NOT ID-BACKED: a person's own credential PUT
+#      against the provider id shows up as that provider's connected_people —
+#      and, the distinguishing case, deleting the provider and re-adding it
+#      under the SAME id (a fresh server-minted UID, the id unchanged) leaves
+#      that old capture unreachable. id-keying and UID-keying agree until the
+#      UID changes under a fixed id; only this case tells them apart.
 #   4. PROPAGATES FAILURE: a roster default naming no real provider, and
 #      clearing a provider a roster still defaults to, are BOTH refused
 #      (400) — proven against the live doors, not asserted from reading the
@@ -158,6 +161,7 @@ mp_body=$(cat <<JSON
   "harnesses":[{"harness":"claude-code","model":"us.anthropic.claude-sonnet-4-5-20250929-v1:0"}]}]}
 JSON
 )
+uid=""
 code=$(put_json /model-providers "${mp_body}")
 if [[ "${code}" != "200" ]]; then
   bad "PUT /model-providers = ${code}: $(cat "${RESP_FILE}")"
@@ -229,7 +233,49 @@ else
   bad "connected_people[walk-673-bedrock] = ${connected@Q}, want 1 (the UID-keyed capture did not register)"
 fi
 
-# ── 7. failure propagation: two refusals a rebuilt walk must be able to trust ─
+# ── 7. THE DISTINGUISHING CHECK: delete + re-add under the SAME admin id ────
+# id-keying and UID-keying agree on everything proven so far (both key by the
+# one string this script has only ever used once). The only way to tell them
+# apart is to change the UID while holding the id fixed: delete the provider
+# (purging its stored credential, rule 8) and re-add it under the identical
+# id. A UID-keyed store starts the new record with nobody's credential; an
+# id-keyed store would still find the old capture, because "walk-673-bedrock"
+# never changed.
+step "clearing the roster default so walk-673-bedrock can be deleted"
+code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":""}]}')
+[[ "${code}" == "200" ]] || bad "PUT /agent-providers (clear default) = ${code}: $(cat "${RESP_FILE}")"
+
+step "PUT /model-providers {} — deleting walk-673-bedrock (rule 8 purges its credential)"
+code=$(put_json /model-providers '{}')
+[[ "${code}" == "200" ]] || bad "PUT /model-providers (delete) = ${code}: $(cat "${RESP_FILE}")"
+
+step "PUT /model-providers — re-adding walk-673-bedrock under the SAME admin id"
+new_uid=""
+code=$(put_json /model-providers "${mp_body}")
+if [[ "${code}" != "200" ]]; then
+  bad "PUT /model-providers (re-add) = ${code}: $(cat "${RESP_FILE}")"
+else
+  new_uid=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["providers"][0].get("uid",""))' "${RESP_FILE}")
+fi
+if [[ -n "${new_uid}" && "${new_uid}" != "${uid}" ]]; then
+  ok "re-add minted a NEW uid (${new_uid}, was ${uid}) for the unchanged id walk-673-bedrock"
+else
+  bad "re-add did not mint a fresh uid: got ${new_uid@Q}, previous was ${uid@Q}"
+fi
+
+step "restoring the roster default to walk-673-bedrock"
+code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":"walk-673-bedrock"}]}')
+[[ "${code}" == "200" ]] || bad "PUT /agent-providers (restore default) = ${code}: $(cat "${RESP_FILE}")"
+
+step "asserting the OLD capture did not survive under the re-added id"
+connected=$(auth "${BASE_URL}/api/v1/model-providers" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("connected_people",{}).get("walk-673-bedrock",-1))' 2>/dev/null)
+if [[ "${connected}" == "0" ]]; then
+  ok "connected_people[walk-673-bedrock] = 0 after delete+re-add — credentials are keyed by UID, not id"
+else
+  bad "connected_people[walk-673-bedrock] = ${connected@Q}, want 0 — a credential captured under the OLD uid is still reachable under the re-added id (credentials are keyed by id, not UID)"
+fi
+
+# ── 8. failure propagation: two refusals a rebuilt walk must be able to trust ─
 step "asserting a roster default naming NO real provider is refused"
 code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":"no-such-provider"}]}')
 if [[ "${code}" == "400" ]]; then

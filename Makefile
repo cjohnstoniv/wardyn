@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -471,6 +471,16 @@ test-e2e-ssh-k8s: ## Live SSH gateway e2e on Kubernetes (needs a kind-quickstart
 test-e2e-ui-sandbox: ## Live UI-sandbox relay e2e: handoff/audit/403s/header strips/exec baseline
 	@echo "Running live UI-sandbox gateway e2e (dedicated compose stack; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ui-sandbox.sh
+
+# The model-providers seeding path a rebuilt kind-sso-walk.sh would need: PUT
+# /model-providers + PUT /agent-providers wiring a roster default, UID-backed
+# (not id-backed) per-person credential capture, no legacy WARDYN_BEDROCK_*
+# env reaching the daemon, and failure propagation on a bad roster/provider
+# write. Headless (WARDYN_RUNNER=none — no kind, no docker sandbox); needs
+# Docker only for a throwaway Postgres. Self-skips without WARDYN_TEST_DOCKER=1.
+test-provider-seed: ## Model-providers seeding path: UID-keyed credential capture (needs Docker)
+	@echo "Running model-providers seeding path test (headless; requires Docker for Postgres)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/test-kind-sso-provider-seed.sh
 
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
