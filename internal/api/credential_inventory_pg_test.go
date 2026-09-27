@@ -82,6 +82,49 @@ func TestPG_ProviderKeySinkStampsLastUsed(t *testing.T) {
 	}
 }
 
+// TestPG_ProviderSubscriptionSinkStampsLastUsed: resolving a run's Claude
+// subscription sign-in stamps the owner's row, same as the key sink. RED with
+// the stamp dropped from the subscription sink.
+func TestPG_ProviderSubscriptionSinkStampsLastUsed(t *testing.T) {
+	p := subProvider("claude")
+	h, st, _ := subHarness(t, p)
+	if _, ok := dispatchSub(h, st, &types.RunPolicySpec{}, map[string]string{}, nil); !ok || len(st.grants) != 1 {
+		t.Fatalf("dispatch: ok=%v grants=%d (failed: %q)", ok, len(st.grants), st.failed)
+	}
+	sec, pool := auditedPGSecrets(t)
+	name := providerSecretName(p.UID, providerOAuthPart)
+	if err := sec.For(subOwner).Put(context.Background(), name, subBlob(subOwnerToken)); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.cfg.Secrets = sec
+	if code, body := resolveSub(t, h, st, "api.anthropic.com"); code != http.StatusOK {
+		t.Fatalf("resolve = %d %s", code, body)
+	}
+	if rowLastUsed(t, pool, subOwner, name) == nil {
+		t.Fatal("the subscription sink resolved the owner's sign-in without stamping last_used_at")
+	}
+}
+
+// TestPG_AWSSSOSinkStampsLastUsed: resolving a run's AWS sign-in stamps the
+// owner's row, same as the key sink. RED with the stamp dropped from the AWS
+// sink.
+func TestPG_AWSSSOSinkStampsLastUsed(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	sec, pool := auditedPGSecrets(t)
+	name := harnessCredSecretName(awsSSOProvider)
+	raw, _ := json.Marshal(liveSSOBlob())
+	if err := sec.For("alice@example.com").Put(context.Background(), name, raw); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.cfg.Secrets = sec
+	if w := f.resolve(t); w.Code != http.StatusOK {
+		t.Fatalf("resolve = %d %s", w.Code, w.Body.String())
+	}
+	if rowLastUsed(t, pool, "alice@example.com", name) == nil {
+		t.Fatal("the AWS sign-in sink resolved the owner's session without stamping last_used_at")
+	}
+}
+
 // inventoryFixture: four providers and the credentials three people and the
 // operator hold for them; the values are what no response may carry.
 type inventoryFixture struct {
