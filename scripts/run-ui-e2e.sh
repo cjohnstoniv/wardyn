@@ -92,9 +92,9 @@ export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 # path changes: the whole of it is skipped below on one variable, and unset
 # (every other caller) the script is byte-identical to before this block.
 #
-# The `live` Playwright project is matched by the spec PATH, not a --project
-# flag: chromium testIgnores live/**, and no other project matches it, so
-# `playwright test e2e/live/<x>.spec.ts` selects exactly one project.
+# The `walk` Playwright project is matched by the spec PATH, not a --project
+# flag: chromium testIgnores walk/**, and no other project matches it, so
+# `playwright test e2e/walk/<x>.spec.ts` selects exactly one project.
 LIVE_BASE_URL="${WARDYN_E2E_WALK_BASE_URL:-}"
 if [[ -n "${LIVE_BASE_URL}" ]]; then
   export WARDYN_E2E_BASE_URL="${LIVE_BASE_URL}"
@@ -150,7 +150,7 @@ pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
   # Playwright is run from ui/, so its argument is the spec path with the "ui/"
-  # prefix dropped — "e2e/foo.spec.ts", or "e2e/live/foo.spec.ts" in LIVE mode.
+  # prefix dropped — "e2e/foo.spec.ts", or "e2e/walk/foo.spec.ts" in LIVE mode.
   spec_rel="${spec#ui/}"
   # Retry once, and SHOW the failure. This used to be a single attempt with all
   # output sent to /dev/null, so a transient port race looked identical to a
