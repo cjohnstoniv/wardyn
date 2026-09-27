@@ -38,9 +38,11 @@ package api
 // builtin:private-ip even with an InternalHosts lift for it):
 //
 //   - the CONTROL-PLANE instance is reached at a bridge-network alias
-//     (wardyn-cl-677-cp on wardyn-cl-677-net), which the proxy's own direct
-//     outbound resolve call reaches directly — reliable, and never subject to
-//     vetHost since it is the proxy's OWN call, not sandboxed traffic;
+//     (wardyn-cl-677-cp-<run>, on wardyn-cl-677-net-<run> — suffixed per test
+//     run so two concurrent runs never share a network or race its teardown),
+//     which the proxy's own direct outbound resolve call reaches directly —
+//     reliable, and never subject to vetHost since it is the proxy's OWN
+//     call, not sandboxed traffic;
 //   - the VENDOR instance is a SEPARATE container (a different address, off
 //     that subnet), its port published to the host and reached back from the
 //     proxy via host.docker.internal + an InternalHosts lift for it, which
@@ -55,14 +57,18 @@ package api
 //     for neither.
 //
 // Wire, per owner: dispatchSub (the real resolveLLMInjections) authors the
-// real per-owner grant, sourced from a REAL Postgres row -> runner.
-// BuildProxyConfig seals it exactly as dispatchRun would -> the REAL
-// wardyn-proxy container resolves it against the control-plane subfake, which
-// answers with the literal token this test's own Go process just read back
-// from Postgres -> a raw HTTP client (published proxy port on the host)
-// stands in for the sandbox, trusting only the run's own MITM CA
+// real per-owner grant, sourced from a REAL Postgres row -> the test's own Go
+// process calls the REAL resolveProviderSubscriptionInjection handler
+// in-process on that SAME grant (resolveSubAs) and reads back its actual
+// "value" -> runner.BuildProxyConfig seals a plan exactly as dispatchRun
+// would -> the REAL wardyn-proxy container resolves the grant against the
+// control-plane subfake, which answers with THAT value (never a Go
+// constant) -> a raw HTTP client (published proxy port on the host) stands
+// in for the sandbox, trusting only the run's own MITM CA
 // (plan.mitmCACertPEM, the same one dispatch generates in production) -> the
-// vendor subfake logs the Authorization header the proxy actually forwarded.
+// vendor subfake logs the Authorization header the proxy actually forwarded,
+// which the test asserts equals the SAME value the real handler served,
+// never another owner's or the operator's.
 //
 // Three real members share ONE provider row and ONE Postgres-backed store:
 // alice and bob each captured their own token; carol captured nothing (the
@@ -88,6 +94,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
@@ -118,21 +125,45 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// subDockerProxyImage is the real sidecar binary this test drives — the thing
-// under test IS its decisions, so (as boot_egress_docker_test.go's own comment
-// puts it for the same reason) a stand-in image would measure nothing.
-const subDockerProxyImage = "wardyn/wardyn-proxy:local"
-
-// subDockerNetwork/subDockerCPHost: the bridge network and alias the
-// control-plane subfake instance is reachable at from the proxy container.
+// subDockerNetworkPrefix/subDockerCPHostPrefix: the bridge network and alias
+// the control-plane subfake instance is reachable at from the proxy
+// container, each made unique per test run (a random suffix) so two
+// concurrent runs never share a network or race its teardown (F7).
 // subDockerVendorHost is Docker Desktop's built-in host-reachable alias, used
 // for the SEPARATE vendor subfake instance — see the file doc comment for why
-// these must be two different addresses.
+// these must be two different addresses. On a native-Linux Docker engine
+// (no built-in host.docker.internal DNS entry) runSubDockerProxy maps it
+// explicitly via ExtraHosts/host-gateway.
 const (
-	subDockerNetwork    = "wardyn-cl-677-net"
-	subDockerCPHost     = "wardyn-cl-677-cp"
-	subDockerVendorHost = "host.docker.internal"
+	subDockerNetworkPrefix = "wardyn-cl-677-net-"
+	subDockerCPHostPrefix  = "wardyn-cl-677-cp-"
+	subDockerVendorHost    = "host.docker.internal"
 )
+
+// buildProxyImage builds the REAL wardyn-proxy image from THIS worktree's own
+// source, under a uniquely tagged name derived from the checked-out commit —
+// never the pre-existing, shared wardyn/wardyn-proxy:local tag other sessions
+// may be relying on. Removes the tag by this exact name in cleanup.
+func buildProxyImage(t *testing.T) string {
+	t.Helper()
+	sha, err := exec.Command("git", "rev-parse", "--short=9", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v", err)
+	}
+	tag := fmt.Sprintf("wardyn/wardyn-proxy:cl-677-%s-%s", strings.TrimSpace(string(sha)), uuid.NewString()[:8])
+	cmd := exec.Command("docker", "build", "-f", "../../deploy/compose/Dockerfile.proxy", "-t", tag, "../..")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", tag, err, out)
+	}
+	t.Cleanup(func() {
+		rmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(rmCtx, "docker", "rmi", tag).CombinedOutput(); err != nil {
+			t.Logf("remove image %s: %v\n%s", tag, err, out)
+		}
+	})
+	return tag
+}
 
 // requireDockerAndPGSecrets is the ONE guard for this file: real Docker and a
 // real Postgres both configured, or skip cleanly (never a false pass). Returns
@@ -209,19 +240,19 @@ func buildSubfakeBinary(t *testing.T) string {
 	return bin
 }
 
-// ensureSubDockerNetwork creates the dedicated bridge network the
-// control-plane subfake instance and the proxy container share, if absent.
-func ensureSubDockerNetwork(t *testing.T, cli *dockerclient.Client) {
+// ensureSubDockerNetwork creates the dedicated bridge network (per-run name,
+// netName) the control-plane subfake instance and the proxy container share.
+func ensureSubDockerNetwork(t *testing.T, cli *dockerclient.Client, netName string) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := cli.NetworkCreate(ctx, subDockerNetwork, dockerclient.NetworkCreateOptions{Driver: "bridge"})
+	_, err := cli.NetworkCreate(ctx, netName, dockerclient.NetworkCreateOptions{Driver: "bridge"})
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-		t.Fatalf("create network %q: %v", subDockerNetwork, err)
+		t.Fatalf("create network %q: %v", netName, err)
 	}
 	t.Cleanup(func() {
 		rmCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_, _ = cli.NetworkRemove(rmCtx, subDockerNetwork, dockerclient.NetworkRemoveOptions{})
+		_, _ = cli.NetworkRemove(rmCtx, netName, dockerclient.NetworkRemoveOptions{})
 	})
 }
 
@@ -252,16 +283,16 @@ func subfakeCert(t *testing.T, host string) (certPEM, keyPEM []byte, caPEM strin
 	return certPEM, keyPEM, string(ca.CertPEM)
 }
 
-// startSubfakeCP runs the control-plane subfake instance on subDockerNetwork
-// under subDockerCPHost, serving TLS for that name. It answers grantID's
-// resolve with {header, value} (or a 403 when refuse). Reached by the real
-// proxy container's OWN direct outbound call — never sandboxed traffic, so
-// this never needs (and, on the proxy's own subnet, could never get) an
+// startSubfakeCP runs the control-plane subfake instance on netName under
+// cpHost, serving TLS for that name. It answers grantID's resolve with
+// {header, value} (or a 403 when refuse). Reached by the real proxy
+// container's OWN direct outbound call — never sandboxed traffic, so this
+// never needs (and, on the proxy's own subnet, could never get) an
 // InternalHosts lift. Returns the container id and the CA PEM for
 // ProxyConfig.ControlPlaneCAPEM.
-func startSubfakeCP(t *testing.T, cli *dockerclient.Client, bin string, grantID uuid.UUID, header, value string, refuse bool) (id, caPEM string) {
+func startSubfakeCP(t *testing.T, cli *dockerclient.Client, bin, netName, cpHost string, grantID uuid.UUID, header, value string, refuse bool) (id, caPEM string) {
 	t.Helper()
-	certPEM, keyPEM, caPEM := subfakeCert(t, subDockerCPHost)
+	certPEM, keyPEM, caPEM := subfakeCert(t, cpHost)
 	name := "wardyn-cl-677-subfake-cp-" + uuid.NewString()[:8]
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -282,9 +313,9 @@ func startSubfakeCP(t *testing.T, cli *dockerclient.Client, bin string, grantID 
 			Cmd:   []string{"/subfake"},
 			Env:   env,
 		},
-		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(subDockerNetwork)},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(netName)},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
-			subDockerNetwork: {Aliases: []string{subDockerCPHost}},
+			netName: {Aliases: []string{cpHost}},
 		}},
 	})
 	if err != nil {
@@ -359,12 +390,16 @@ func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string, port
 	return created.ID, caPEM
 }
 
-// runSubDockerProxy starts the REAL wardyn-proxy image as a bare container on
-// subDockerNetwork (so it reaches the control-plane subfake by alias),
-// publishing its listen port to 127.0.0.1:port on the host so this test's own
-// "sandbox" client can dial it directly. Named wardyn-cl-677-* per the lane's
-// fixture-naming rule.
-func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, runID uuid.UUID, cfgJSON []byte, port int) string {
+// runSubDockerProxy starts the REAL wardyn-proxy image (this worktree's own
+// uniquely tagged build, image) as a bare container on netName (so it reaches
+// the control-plane subfake by its alias), publishing its listen port to
+// 127.0.0.1:port on the host so this test's own "sandbox" client can dial it
+// directly. Named wardyn-cl-677-* per the lane's fixture-naming rule.
+// ExtraHosts maps subDockerVendorHost to the host gateway explicitly: Docker
+// Desktop provides that DNS entry built in, but a native-Linux Docker engine
+// does not, and the vendor leg (a different, non-aliased address — see the
+// file doc comment) needs it either way.
+func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, netName, image string, runID uuid.UUID, cfgJSON []byte, port int) string {
 	t.Helper()
 	name := "wardyn-cl-677-proxy-" + runID.String()[:8]
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -376,18 +411,19 @@ func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, runID uuid.UUID, 
 	created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{
-			Image:        subDockerProxyImage,
+			Image:        image,
 			Env:          []string{"WARDYN_PROXY_CONFIG_JSON=" + string(cfgJSON)},
 			ExposedPorts: network.PortSet{pp: struct{}{}},
 		},
 		HostConfig: &container.HostConfig{
-			NetworkMode: container.NetworkMode(subDockerNetwork), // reaches subDockerCPHost by alias
+			NetworkMode: container.NetworkMode(netName), // reaches cpHost by alias
 			PortBindings: network.PortMap{pp: []network.PortBinding{
 				{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: strconv.Itoa(port)},
 			}},
+			ExtraHosts: []string{subDockerVendorHost + ":host-gateway"},
 		},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
-			subDockerNetwork: {},
+			netName: {},
 		}},
 	})
 	if err != nil {
@@ -495,6 +531,29 @@ func sendThroughDockerProxy(t *testing.T, port int, caPEM string, vendorPort int
 	return nil, err
 }
 
+// resolveSubAs calls the REAL resolveProviderSubscriptionInjection handler,
+// in-process, for owner's own grant on st — generalizing provider_subscription_test.go's
+// resolveSub (which always mints the run token as alice) to mint as owner
+// instead, so this also works for bob's subtest. This is what makes the
+// Docker legs non-circular: the value fed onward to the control-plane subfake
+// below is READ from this call, sourced from the real Postgres-backed store
+// wired into h, rather than a Go constant the test already knows. A sink
+// mutation that serves the wrong owner's (or the operator's) row surfaces
+// right here, before any container starts.
+func resolveSubAs(t *testing.T, h *harness, st *subStore, host, owner string) (int, string) {
+	t.Helper()
+	g := st.grants[0]
+	var scope struct {
+		SecretName string `json:"secret_name"`
+	}
+	_ = json.Unmarshal(g.Spec.Scope, &scope)
+	h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: "jti-sub-docker", Injection: &egress.InjectionRule{
+		Host: host, Header: "Authorization", SecretName: scope.SecretName, Format: "Bearer %s",
+	}}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+g.ID.String(), mintRunTokenAs(t, h, st.run.ID, owner), "")
+	return rr.Code, rr.Body.String()
+}
+
 func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T) {
 	sec := requireDockerAndPGSecrets(t)
 	cli, err := dockerclient.New(dockerclient.FromEnv)
@@ -502,8 +561,12 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 		t.Fatalf("docker client: %v", err)
 	}
 	t.Cleanup(func() { _ = cli.Close() })
-	ensureSubDockerNetwork(t, cli)
+	runSuffix := uuid.NewString()[:8] // per-run network/alias suffix (F7): never shared across concurrent runs
+	netName := subDockerNetworkPrefix + runSuffix
+	cpHost := subDockerCPHostPrefix + runSuffix
+	ensureSubDockerNetwork(t, cli, netName)
 	subfakeBin := buildSubfakeBinary(t)
+	proxyImage := buildProxyImage(t)
 
 	const dockerBob = "bob@example.com"
 	const dockerCarol = "carol@example.com"
@@ -554,23 +617,44 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 			if plan.mitmCACertPEM == "" || plan.mitmCAKeyPEM == "" || !plan.mitmLLM {
 				t.Fatalf("dispatch did not provision a per-run MITM CA: mitmLLM=%v", plan.mitmLLM)
 			}
+			// Call the REAL resolveProviderSubscriptionInjection handler,
+			// in-process, on this SAME grant — the one thing that makes the
+			// docker leg below non-circular. resolved.Value is sourced from
+			// real Postgres (via h's pg-backed secret store), never a Go
+			// constant; a sink mutation that serves the wrong owner's row (or
+			// the operator's) diverges from tc.wantToken right here, before
+			// any container starts.
+			code, body := resolveSubAs(t, h, st, plan.injections[0].Rule.Host, tc.owner)
+			if code != http.StatusOK {
+				t.Fatalf("real resolve handler (Postgres-backed) = %d %s, want 200", code, body)
+			}
+			var resolved types.ResolvedInjection
+			if err := json.Unmarshal([]byte(body), &resolved); err != nil {
+				t.Fatalf("unmarshal resolve response: %v\n%s", err, body)
+			}
+			wantValue := "Bearer " + tc.wantToken
+			if resolved.Value != wantValue {
+				t.Fatalf("the real handler served %q, want %q — it must come from %s's own real Postgres row, never another owner's or the operator's", resolved.Value, wantValue, tc.owner)
+			}
+
 			runToken := mintRunTokenAs(t, h, st.run.ID, tc.owner)
 			h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: uuid.NewString(), Injection: &egress.InjectionRule{
 				Host: plan.injections[0].Rule.Host, Header: "Authorization",
 				SecretName: plan.injections[0].Rule.SecretName, Format: "Bearer %s",
 			}}
-			// The control-plane subfake answers THIS run's grant with the literal
-			// token this test's own Go process just read back from real Postgres
-			// for tc.owner. The vendor subfake is a SEPARATE instance/address (see
-			// the file doc comment for why) whose only job is recording what the
-			// proxy forwards to it.
-			cpID, cpCAPEM := startSubfakeCP(t, cli, subfakeBin, st.grants[0].ID, "Authorization", "Bearer "+tc.wantToken, false)
+			// The control-plane subfake answers THIS run's grant with
+			// resolved.Value — literally what the REAL resolve handler just
+			// served from real Postgres above, not a Go constant. The vendor
+			// subfake is a SEPARATE instance/address (see the file doc
+			// comment for why) whose only job is recording what the proxy
+			// forwards to it.
+			cpID, cpCAPEM := startSubfakeCP(t, cli, subfakeBin, netName, cpHost, st.grants[0].ID, "Authorization", resolved.Value, false)
 			vendorID, vendorCAPEM := startSubfakeVendor(t, cli, subfakeBin, vendorPort)
 
 			port := freeLoopbackPort(t)
 			raw, err := runner.BuildProxyConfig(st.run.ID, runner.ProxyConfig{
 				RunToken:          runToken,
-				ControlPlaneURL:   fmt.Sprintf("https://%s:8443", subDockerCPHost),
+				ControlPlaneURL:   fmt.Sprintf("https://%s:8443", cpHost),
 				ControlPlaneCAPEM: cpCAPEM,
 				Policy:            types.RunPolicySpec{AllowedDomains: []string{subDockerVendorHost}},
 				InternalHosts:     []types.InternalHost{{HostSuffix: subDockerVendorHost}},
@@ -584,7 +668,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 			if err != nil {
 				t.Fatalf("BuildProxyConfig: %v", err)
 			}
-			proxyID := runSubDockerProxy(t, cli, st.run.ID, raw, port)
+			proxyID := runSubDockerProxy(t, cli, netName, proxyImage, st.run.ID, raw, port)
 
 			resp, err := sendThroughDockerProxy(t, port, plan.mitmCACertPEM, vendorPort)
 			if err != nil {
@@ -596,7 +680,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 				t.Fatalf("status = %d, want 200 (the real proxy container forwarded to the vendor subfake)", resp.StatusCode)
 			}
 
-			want := fmt.Sprintf("subfake: vendor request POST /v1/messages auth=%q", "Bearer "+tc.wantToken)
+			want := fmt.Sprintf("subfake: vendor request POST /v1/messages auth=%q", wantValue)
 			logs := waitForLog(t, cli, vendorID, want, 5*time.Second)
 			if !strings.Contains(logs, want) {
 				t.Fatalf("the vendor subfake did not see %q; logs:\n%s", want, logs)
@@ -641,13 +725,13 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 			Host: plan.injections[0].Rule.Host, Header: "Authorization",
 			SecretName: plan.injections[0].Rule.SecretName, Format: "Bearer %s",
 		}}
-		cpID, cpCAPEM := startSubfakeCP(t, cli, subfakeBin, st.grants[0].ID, "Authorization", "Bearer "+subOwnerToken, true /* refuse */)
+		cpID, cpCAPEM := startSubfakeCP(t, cli, subfakeBin, netName, cpHost, st.grants[0].ID, "Authorization", "Bearer "+subOwnerToken, true /* refuse */)
 		vendorID, vendorCAPEM := startSubfakeVendor(t, cli, subfakeBin, vendorPort)
 
 		port := freeLoopbackPort(t)
 		raw, err := runner.BuildProxyConfig(st.run.ID, runner.ProxyConfig{
 			RunToken:          runToken,
-			ControlPlaneURL:   fmt.Sprintf("https://%s:8443", subDockerCPHost),
+			ControlPlaneURL:   fmt.Sprintf("https://%s:8443", cpHost),
 			ControlPlaneCAPEM: cpCAPEM,
 			Policy:            types.RunPolicySpec{AllowedDomains: []string{subDockerVendorHost}},
 			InternalHosts:     []types.InternalHost{{HostSuffix: subDockerVendorHost}},
@@ -661,7 +745,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 		if err != nil {
 			t.Fatalf("BuildProxyConfig: %v", err)
 		}
-		proxyID := runSubDockerProxy(t, cli, st.run.ID, raw, port)
+		proxyID := runSubDockerProxy(t, cli, netName, proxyImage, st.run.ID, raw, port)
 
 		// A refused resolve fails the proxy's startup (it exits), so the
 		// container may already be gone by the time we can dial it — either
@@ -673,9 +757,18 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 				t.Fatalf("status = 200 through a refused resolve, want the tunnel refused")
 			}
 		}
+		// F6: "the vendor never saw a request" alone would pass vacuously for
+		// ANY proxy failure (bad config, a crash, an unreachable control
+		// plane) — none of that pins the refusal this subtest is named for.
+		// Require the real proxy container's OWN startup log to name the
+		// control plane's 403 specifically, not just any absence.
+		proxyLogs := waitForLog(t, cli, proxyID, "injection status 403", 5*time.Second)
+		if !strings.Contains(proxyLogs, "injection status 403") {
+			t.Fatalf("the real proxy container never logged the control-plane's 403 refusal (only a vacuous absence of a vendor request would otherwise pass this subtest):\n%s", proxyLogs)
+		}
 		if logs := containerLogs(cli, vendorID); strings.Contains(logs, "vendor request") {
 			t.Fatalf("the vendor subfake saw a request despite the refused resolve:\n--- proxy logs ---\n%s\n--- cp subfake logs ---\n%s\n--- vendor subfake logs ---\n%s",
-				containerLogs(cli, proxyID), containerLogs(cli, cpID), logs)
+				proxyLogs, containerLogs(cli, cpID), logs)
 		}
 	})
 }
