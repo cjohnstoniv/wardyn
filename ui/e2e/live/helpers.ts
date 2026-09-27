@@ -196,7 +196,7 @@ export async function seen(): Promise<{
 /**
  * Launch an autonomous claude-code run from the signed-in person's own seat and
  * wait for it to be running. RETURNS THE RUN ID — /runs/:id is addressable, so
- * the id is simply the last path segment once "Open run" has navigated, and a
+ * the id is simply the last path segment once the launch has navigated, and a
  * caller that needs to scope an API read (approvals, the run row) to THIS run
  * has no other honest source for it.
  *
@@ -216,10 +216,8 @@ export async function seen(): Promise<{
  * autonomous; H drives the wizard itself, because the shape it must exercise is
  * the default no-seed one.)
  *
- * LAUNCH NAVIGATES NOWHERE, deliberately: the 201's advisory `warnings[]` render
- * inline in the rail and "Open run" carries the member to the run "at their own
- * pace" (new-run-screen.tsx; new-run-screen.test.tsx pins "navigates NOWHERE
- * until Open run is clicked"). The warnings this run legitimately carries are
+ * LAUNCH NAVIGATES straight to the run page (#125), carrying the 201's
+ * advisory `warnings[]` with it (use-launch.ts). The warnings this run legitimately carries are
  * governance working, not failure — `api.anthropic.com` is dropped from egress
  * because this deployment is Bedrock, and the member's resources are capped to
  * the operator maximum.
@@ -230,7 +228,7 @@ export async function launchAgentRun(page: Page, title: string): Promise<string>
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
   await page.locator("#nr-task").fill("Reply with the single word: ready.");
   await page.getByRole("button", { name: /^Launch/ }).click();
-  await page.getByRole("button", { name: "Open run" }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
   await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
   return runIDFromURL(page);
 }
