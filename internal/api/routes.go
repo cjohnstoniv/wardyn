@@ -258,6 +258,11 @@ func (s *Server) routes() chi.Router {
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
 			r.Get("/me", s.handleMe)
+			// #1197: the shell's two nav badges in one small object, replacing
+			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
+			// the caller's own view exactly as GET /runs?view= and GET /approvals
+			// are (handleMeAttention's own doc).
+			r.Get("/me/attention", s.handleMeAttention)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
 			// a member reading only their OWN grants (ListCapabilityGrantsFor,

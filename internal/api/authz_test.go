@@ -464,6 +464,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
+	// #1197: the shell's nav-badge counts, scoped to the caller's own
+	// view exactly as GET /runs?view=/GET /approvals are (handleMeAttention's
+	// own doc) — classMember, not classOwner: there is no foreign-id path to
+	// distinguish.
+	"GET /api/v1/me/attention": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -2164,6 +2169,59 @@ func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, e
 	}
 	return n, nil
 }
+
+// ListPendingApprovalsForRuns is #1197's attention-projection read
+// (store.ApprovalsForRunsPager) — every PENDING row whose run_id is in
+// runIDs, the same in-memory shape ListApprovalsPageByRunCreator already
+// uses for its own optional-capability twin.
+func (a *authzApprovals) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	want := map[uuid.UUID]bool{}
+	for _, id := range runIDs {
+		want[id] = true
+	}
+	out := []types.ApprovalRequest{}
+	for _, ap := range a.byID {
+		if ap.State == types.ApprovalPending && want[ap.RunID] {
+			out = append(out, ap)
+		}
+	}
+	return out, nil
+}
+
+// CountPendingApprovals / CountPendingApprovalsByRunCreator back GET
+// /me/attention's pending_approvals count in each view — counted here rather
+// than listed, the same in-memory shape as the pagers above.
+func (a *authzApprovals) CountPendingApprovals(_ context.Context) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, ap := range a.byID {
+		if ap.State == types.ApprovalPending {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (a *authzApprovals) CountPendingApprovalsByRunCreator(ctx context.Context, createdBy string) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, ap := range a.byID {
+		if ap.State != types.ApprovalPending {
+			continue
+		}
+		run, err := a.store.GetRun(ctx, ap.RunID)
+		if err == nil && run.CreatedBy == createdBy {
+			n++
+		}
+	}
+	return n, nil
+}
+
+var _ store.ApprovalsForRunsPager = (*authzApprovals)(nil)
 
 // ListApprovalsPageByRunCreator: item 2's optional scoped-list interface.
 func (a *authzApprovals) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, _ store.Page) ([]types.ApprovalRequest, error) {

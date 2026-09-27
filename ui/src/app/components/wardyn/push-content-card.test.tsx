@@ -10,6 +10,7 @@ import type { PushContentScope } from "../../lib/types/approvals";
 import { isPushContentRequest, PushContentCard, unquoteGitPath, type PushCardRun } from "./push-content-card";
 import { PUSH } from "./copy/push";
 import { APPROVAL, SECURITY_ONLY_REASON } from "./copy";
+import { heldFieldsFor } from "../../lib/test-hold-fixture";
 
 const RUNNING: PushCardRun = { state: "RUNNING" };
 const ENDED: PushCardRun = { state: "COMPLETED" };
@@ -29,8 +30,11 @@ function scope(over: Partial<PushContentScope> = {}): PushContentScope {
   };
 }
 
+// #1197: held/held_until are now server fields — heldFieldsFor mirrors
+// internal/approval.Hold so this fixture keeps constructing rows by
+// kind/requested_at/state exactly as it always has.
 function push(over: Partial<ApprovalRequest> = {}): ApprovalRequest & { requested_scope: PushContentScope } {
-  return {
+  const base = {
     id: "apr_push_1",
     run_id: "run_1",
     kind: "push_content",
@@ -39,6 +43,7 @@ function push(over: Partial<ApprovalRequest> = {}): ApprovalRequest & { requeste
     requested_at: new Date().toISOString(),
     ...over,
   } as ApprovalRequest & { requested_scope: PushContentScope };
+  return { ...base, ...heldFieldsFor(base) };
 }
 
 describe("PushContentCard — held (#181)", () => {

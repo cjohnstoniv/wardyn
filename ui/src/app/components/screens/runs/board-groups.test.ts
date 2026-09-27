@@ -16,6 +16,7 @@ import {
   rowHeadline,
   titleGroups,
 } from "./board-groups";
+import { heldFieldsFor } from "../../../lib/test-hold-fixture";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run-1",
@@ -32,15 +33,21 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   ...over,
 });
 
-const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
-  id: "a1",
-  run_id: "run-1",
-  kind: "egress_domain",
-  requested_scope: { host: "unlisted.example" },
-  state: "PENDING",
-  requested_at: new Date().toISOString(),
-  ...over,
-});
+// #1197: held/held_until are now server fields (internal/approval.Hold's
+// projection) — heldFieldsFor mirrors that same rule so every case below can
+// keep constructing rows by kind/requested_at/state exactly as it always has.
+const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => {
+  const base = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "egress_domain" as const,
+    requested_scope: { host: "unlisted.example" },
+    state: "PENDING" as const,
+    requested_at: new Date().toISOString(),
+    ...over,
+  };
+  return { ...base, ...heldFieldsFor(base) };
+};
 
 // The join that makes "needs you" mean something the run state cannot say: a
 // wait_for_review approval parks the sandbox while the run stays RUNNING.

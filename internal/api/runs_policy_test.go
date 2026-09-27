@@ -327,7 +327,7 @@ func TestParseRunsListParams_Validation(t *testing.T) {
 	for _, q := range []string{
 		"view=nonsense",
 		"owner=nonsense",
-		"status=needs", // L1b's, not yet servable — rejected, not silently ignored
+		"status=needs", // needs requires view=; with no view= it 400s (see TestRunsStatusNeeds for the servable path)
 		"status=bogus",
 		"ended_within=nonsense",
 		"include_killed=maybe",
