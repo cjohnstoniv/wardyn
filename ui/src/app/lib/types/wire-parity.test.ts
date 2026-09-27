@@ -204,4 +204,15 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProvidersRead"))).toEqual(new Set(goJSONTags(readGo, "modelProvidersRead")));
     expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProviders"))).toEqual(new Set(goJSONTags(blockGo, "ModelProviders")));
   });
+
+  // #923's two reads: the Images tab's catalog row and the Available to view.
+  it.each([
+    ["BaseImageEntry", "internal/types/workspace_contract.go", "BaseImageEntry", "ui/src/app/lib/types/workspaces.ts"],
+    ["availabilityView", "internal/api/permissions_availability.go", "AvailabilityView", "ui/src/app/lib/types/permissions.ts"],
+  ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(4);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, tsFile), "utf8"), tsName);
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
 });

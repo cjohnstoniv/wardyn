@@ -315,7 +315,7 @@ export function RunActions({
   // dead-feeling click.
   const cloneRun = async () => {
     try {
-      const events = await auditApi.listAudit(run.id, "run.create");
+      const events = await auditApi.listAudit(run.id, { action: "run.create" });
       // review C-01/C-06/U-01: the SAME refusal the run header uses — an
       // empty read (an older run, a pruned trail, or a non-owner's empty
       // 200 — auditScope writes an empty list rather than an error) must

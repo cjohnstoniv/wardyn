@@ -12,6 +12,31 @@ import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, Run
 import { toolRuleDecision } from "../types";
 import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
+// The SOLE named table of pre-0.8 audit action names Wardyn's OWN readers of
+// PERSISTED rows still accept (owner ruling, 2026-09-25, #1062 — the TS twin
+// of internal/api/audit_legacy.go's legacyAuditActions; same law, one table
+// per language, because there is no read-time query that can canonicalize a
+// name at the database level).
+//
+// READ-SIDE ONLY. Audit rows are hashed and append-only — a row written
+// under the old name is never rewritten — so a reader of history has to keep
+// recognising both spellings forever. NEVER pass one of these old names to
+// an emitter; canonicalAuditAction only widens what a reader accepts, it
+// never changes what gets written. See docs/AUDIT-ACTIONS.md's "Renamed in
+// 0.8" appendix for the full rename list; this table holds only the pairs a
+// console reader actually has to compare against.
+export const LEGACY_AUDIT_ACTIONS: Record<string, string> = {
+  "session.recording": "session.recording.write",
+  "egress.pending": "egress.hold",
+};
+
+// canonicalAuditAction returns the 0.8 name a reader should compare against.
+// An action already on the 0.8 grammar, or one this table does not know,
+// passes through unchanged.
+export function canonicalAuditAction(a: string): string {
+  return LEGACY_AUDIT_ACTIONS[a] ?? a;
+}
+
 // Project egress.allow / egress.deny / egress.hold audit events into
 // the EgressDecision shape the run-detail screen renders. Exported so callers
 // that already hold a run's audit events can derive egress WITHOUT a second
@@ -28,8 +53,9 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
     // "Deny · wardynd" — a host the sandbox never dialled — while the Audit
     // tab described the same event as "Decided by rule". One event, two
     // stories. The tile drops exactly the rows that surface relabels.
-    .filter((e) => e.action in map && !toolRuleDecision(e))
+    .filter((e) => canonicalAuditAction(e.action) in map && !toolRuleDecision(e))
     .map((e) => {
+      const action = canonicalAuditAction(e.action);
       const d = (e.data ?? {}) as Record<string, unknown>;
       // Prefer an explicit domain in data; otherwise strip a :port off target.
       const domain =
@@ -38,7 +64,7 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         id: e.id,
         time: e.time,
         domain,
-        decision: map[e.action],
+        decision: map[action],
         bytes: num(d.bytes),
         // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
         // answers undefined for the other two actions and for an older trail.
@@ -252,17 +278,24 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
   return { kind: "unknown", action: "" };
 }
 
+export type AuditListFilter = { action?: string; actionPrefix?: string };
+
 export const audit = {
-  // GET /api/v1/audit?run_id=&action=   (both optional; server-side filter —
-  // see parseAuditFilter, internal/api/audit.go). `action` narrows the
-  // 1000-row cap to just that action instead of spending the whole budget
-  // on every action a chatty run logged: a run-scoped list is
-  // returned OLDEST-first, so a single wide fetch can cap out before it ever
-  // reaches a later action's events.
-  async listAudit(runId?: string, action?: string): Promise<AuditEvent[]> {
+  // GET /api/v1/audit?run_id=&action=|action_prefix=   (all optional;
+  // server-side filter — see parseAuditFilter, internal/api/audit.go). Either
+  // narrows the 1000-row cap to just the matching rows instead of spending
+  // the whole budget on every action a chatty run logged: a run-scoped list
+  // is returned OLDEST-first, so a single wide fetch can cap out before it
+  // ever reaches a later action's events. `actionPrefix` is a plain STRING
+  // prefix match (strings.HasPrefix / starts_with, internal/store/auditfilter.go)
+  // — not "any dotted child" — so "session.recording" also matches
+  // "session.recording.write" only because that string literally starts with
+  // it, the same coincidence that makes it match "session.recording.other" too.
+  async listAudit(runId?: string, filter?: AuditListFilter): Promise<AuditEvent[]> {
     const params = new URLSearchParams();
     if (runId) params.set("run_id", runId);
-    if (action) params.set("action", action);
+    if (filter?.action) params.set("action", filter.action);
+    if (filter?.actionPrefix) params.set("action_prefix", filter.actionPrefix);
     const qs = params.toString() ? `?${params.toString()}` : "";
     const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
     return unwrapList<AuditEvent>(await asJson<unknown>(res));

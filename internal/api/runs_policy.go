@@ -234,11 +234,13 @@ const effectivePolicyAuditScan = 200
 
 // effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
 // authorization envelope dispatch recorded as run.policy.resolve
-// (runs_dispatch.go), which is the ONLY post-hoc source of a run's real spec:
-// agent_runs.policy_id has no spec column, run_policies.spec is overwritten in
-// place, and an inline/default policy has no stored row at all. Resolving
-// through policy_id instead would hand a run created with an INLINE policy the
-// DEFAULT policy's apps — a widening this must never do.
+// (runs_dispatch.go; canonicalAction also accepts a run dispatched before
+// 0.8, run.policy.effective — audit_legacy.go), which is the ONLY post-hoc
+// source of a run's real spec: agent_runs.policy_id has no spec column,
+// run_policies.spec is overwritten in place, and an inline/default policy has
+// no stored row at all. Resolving through policy_id instead would hand a run
+// created with an INLINE policy the DEFAULT policy's apps — a widening this
+// must never do.
 //
 // A run with no such event (never dispatched, or the audit store unavailable)
 // yields no apps, so every caller fails closed on it.
@@ -252,7 +254,7 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	}
 	var apps []types.UIApp
 	for _, ev := range events {
-		if ev.Action != "run.policy.resolve" || len(ev.Data) == 0 {
+		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
 		var spec types.RunPolicySpec

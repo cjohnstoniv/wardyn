@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,17 +45,23 @@ func (r *pgReviveRunner) ReplaceProxy(_ context.Context, _ string, cfg []byte) e
 
 // TestPG_ReviveAndExtendRecheckOwnerAuthority walks the owner re-check over
 // the real capability, grant, run and secret tables: a deny row on the
-// owner's email refuses the revive for the owner and for an admin; an erased
-// model credential refuses it; with both restored it revives; and extending
-// the revived run's end is refused once its agent is withdrawn from an
-// enforced kind.
+// owner's email, or on the run's model provider, refuses the revive for the
+// owner and for an admin; an erased model credential refuses it; with all
+// restored it revives; and extending the revived run's end is refused once its
+// agent is withdrawn from an enforced kind, or while its selected stored
+// policy is available to another user type only.
 func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	h, sec := newRunOwnerPGHarness(t)
 	ctx := context.Background()
 	st := h.srv.cfg.Store
 	const owner = "sub-pg-owner"
 
+	pol, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "pg-selected"})
+	if err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
 	run, err := st.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: owner, Agent: "claude-code",
+		ModelProviderID: "pg-provider", PolicyID: &pol.ID,
 		ConfinementClass: types.CC1, State: types.RunRunning, RunnerTarget: "docker", Task: "t"})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
@@ -117,6 +124,20 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 		t.Fatalf("DeleteCapabilityGrant: %v", err)
 	}
 
+	deny, err = st.UpsertCapabilityGrant(ctx, grant(types.CapabilitySubjectAll, "", capModelProvider, "pg-provider", types.CapabilityDeny))
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant: %v", err)
+	}
+	for _, asOwner := range []bool{true, false} {
+		if code := revive(asOwner); code != http.StatusForbidden || !lost() || rn.replaced != 0 {
+			t.Fatalf("revive (owner %v) under a deny on the run's model provider = %d (lost %v, replaced %d); want 403, still lost",
+				asOwner, code, lost(), rn.replaced)
+		}
+	}
+	if err := st.DeleteCapabilityGrant(ctx, deny.ID); err != nil {
+		t.Fatalf("DeleteCapabilityGrant: %v", err)
+	}
+
 	if code := revive(true); code != http.StatusConflict || !lost() {
 		t.Fatalf("revive with the model credential erased = %d (lost %v); want 409, still lost", code, lost())
 	}
@@ -141,5 +162,28 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	}
 	if r, _ := st.GetRun(ctx, run.ID); r.EndsAt == nil || !r.EndsAt.Equal(end) {
 		t.Errorf("stored end = %v, want %v untouched", r.EndsAt, end)
+	}
+
+	if _, err := st.PutCapabilityEnforcement(ctx, map[string]bool{capAgent: false}); err != nil {
+		t.Fatalf("PutCapabilityEnforcement: %v", err)
+	}
+	if _, err := st.CreateUserType(ctx, types.UserType{ID: "pg-contractor", Name: "PG contractor"}); err != nil {
+		t.Fatalf("CreateUserType: %v", err)
+	}
+	if _, err := st.UpsertCapabilityGrant(ctx, grant(types.CapabilitySubjectUserType, "pg-contractor", capPolicy, pol.ID.String(), types.CapabilityAllow)); err != nil {
+		t.Fatalf("UpsertCapabilityGrant: %v", err)
+	}
+	if err := st.SetCapabilityRestriction(ctx, capPolicy, pol.ID.String(), true, "admin"); err != nil {
+		t.Fatalf("SetCapabilityRestriction: %v", err)
+	}
+	w = doSSO(t, h.srv, http.MethodPatch, path, session, endsAtBody(now.Add(7*24*time.Hour)))
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "the policy capability for "+pol.ID.String()) {
+		t.Fatalf("extend with the selected policy available to another type only = %d %s, want 403 naming the policy", w.Code, w.Body.String())
+	}
+	if err := st.SetCapabilityRestriction(ctx, capPolicy, pol.ID.String(), false, "admin"); err != nil {
+		t.Fatalf("SetCapabilityRestriction: %v", err)
+	}
+	if w := doSSO(t, h.srv, http.MethodPatch, path, session, endsAtBody(now.Add(7*24*time.Hour))); w.Code != http.StatusOK {
+		t.Fatalf("extend with the restriction removed = %d %s, want 200", w.Code, w.Body.String())
 	}
 }

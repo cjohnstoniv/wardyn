@@ -483,6 +483,107 @@ func TestPG_UpdateRunStateIfIdle_HoldAware(t *testing.T) {
 	}
 }
 
+// keepRun persists a RUNNING run and then, in a second write (CreateRun never
+// accepts lost_at/lost_reason/ends_at), stamps it with the given kept mark —
+// exactly the row shape a lease-swept or lost run has when stopKeptRun reads it.
+func keepRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) types.AgentRun {
+	t.Helper()
+	r := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=$2, lost_reason=$3, ends_at=$4 WHERE id=$1`,
+		r.ID, lostAt, string(lostReason), endsAt); err != nil {
+		t.Fatalf("stamp kept mark: %v", err)
+	}
+	got, err := store.NewPG(pool).GetRun(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	return got
+}
+
+// TestPG_StopKeptRunIf_ConditionalTransition is F04 CHECK (d): StopKeptRunIf
+// must apply the destructive RUNNING->terminal transition only when the row
+// STILL carries the exact kept mark (lost_at, lost_reason, ends_at) the caller
+// read, on top of the state='RUNNING' guard UpdateRunStateIf already has. A
+// stale lease-sweep row — read before an extension, a revive or a fresher end
+// landed — must no-op instead of tearing the run down (the F04 TOCTOU).
+func TestPG_StopKeptRunIf_ConditionalTransition(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	now := time.Now().UTC()
+	lostAt := now.Add(-time.Hour)
+	endsAt := now.Add(-time.Minute)
+
+	t.Run("applies_on_the_same_mark", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil || !ok {
+			t.Fatalf("StopKeptRunIf = %v, %v; want applied", ok, err)
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunStopped {
+			t.Errorf("state = %q, want STOPPED", got.State)
+		}
+	})
+
+	t.Run("noops_on_a_changed_ends_at", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+		staleEnds := endsAt.Add(-time.Hour) // the caller's stale read
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &staleEnds)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied despite a changed ends_at; a stale sweep must never win")
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunRunning {
+			t.Errorf("state = %q, want RUNNING (untouched)", got.State)
+		}
+	})
+
+	t.Run("noops_on_a_cleared_lost_at", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, nil, "", &endsAt) // a revive already cleared lost_at
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied despite a cleared lost_at (revived); a stale sweep must never win")
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunRunning {
+			t.Errorf("state = %q, want RUNNING (untouched)", got.State)
+		}
+	})
+
+	t.Run("noops_on_a_different_lost_reason", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostReboot, &endsAt)
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied despite a different lost_reason; a stale sweep must never win")
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunRunning {
+			t.Errorf("state = %q, want RUNNING (untouched)", got.State)
+		}
+	})
+
+	t.Run("noops_when_already_terminal", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state=$1 WHERE id=$2`, string(types.RunKilled), r.ID); err != nil {
+			t.Fatalf("force killed: %v", err)
+		}
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied over a concurrent kill's outcome; state=RUNNING must still be required")
+		}
+	})
+}
+
 // TestPG_ListRuns_ReaperCandidateQuery exercises the query shape the idle reaper
 // relies on (internal/lifecycle): it lists runs, then selects RUNNING runs whose
 // updated_at is older than the idle threshold. We backdate one run's updated_at

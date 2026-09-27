@@ -46,7 +46,8 @@ const runTokenLapseAfter = time.Hour + 5*time.Minute
 // token lapsed is marked lost (outage) with its proxy stopped, or torn down.
 func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 	loser, ok := s.cfg.Store.(store.RunLoser)
-	if !ok || s.cfg.Runner == nil {
+	leaser, lok := s.cfg.Store.(store.RunLeaser)
+	if !ok || !lok || s.cfg.Runner == nil {
 		return nil
 	}
 	runs, err := loser.ListLapsedTokenRuns(ctx, runTokenLapseAfter)
@@ -57,7 +58,7 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()
-			if s.loseRun(ctx, loser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter) {
+			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter) {
 				return
 			}
 			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
@@ -80,14 +81,15 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 		return true
 	}
 	loser, ok := s.cfg.Store.(store.RunLoser)
-	if !ok || st.ExitCode == nil {
+	leaser, lok := s.cfg.Store.(store.RunLeaser)
+	if !ok || !lok || st.ExitCode == nil {
 		return false
 	}
 	terminal := types.RunFailed
 	if *st.ExitCode == 0 {
 		terminal = types.RunCompleted
 	}
-	return s.loseRun(ctx, loser, run, types.LostReboot, terminal, 0)
+	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0)
 }
 
 // loseRun marks run lost for reason and stops its proxy. false means the run
@@ -97,7 +99,7 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 // it, a renew landed, or it went terminal) or could not be written (the next
 // pass retries). tokenLife > 0 also requires the run's token to be lapsed by
 // that much still (MarkRunLost), so the sweep's mark loses to a renew.
-func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration) bool {
+func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration) bool {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
 		return false
@@ -119,7 +121,7 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, run types.Ag
 	if err := s.stopLostSandbox(ctx, run, now); err != nil {
 		data["kept"] = false
 		data["lost_error"] = err.Error()
-		s.stopKeptRun(ctx, run, terminal, "run.lost", data)
+		s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
 		return true
 	}
 	data["kept"] = true

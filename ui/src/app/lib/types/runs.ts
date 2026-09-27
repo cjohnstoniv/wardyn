@@ -337,7 +337,12 @@ export function runHasWorkspace(run: Pick<AgentRun, "workspace_ids" | "workspace
 // The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
 // and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
 export interface CreateRunInput {
-  agent: Agent;
+  // Omitted for a governed command (task_mode=exec) whose target already
+  // carries a real base image — an explicit `image`, or a selected workspace
+  // with one: task_mode=exec runs no agent harness, so naming one there was a
+  // formality (see agentRequirementError, server-side). Every other run still
+  // requires it.
+  agent?: Agent;
   repo: string;
   task: string;
   // The run's name (grouping key) and an optional note on why it exists.

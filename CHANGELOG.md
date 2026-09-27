@@ -16,6 +16,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
   The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
   survives.
+- **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
+  never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
+  to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
+  failing nightly lane opened no issue. `GH_REPO: ${{ github.repository }}` is now set alongside
+  the job's `GH_TOKEN`.
+- **Revive, admin restart and extending a run's end re-check its model provider and selected
+  stored policy (#1055, refs #679).** These keep a run alive on its owner's launch authority, and
+  re-checked the agent, workspaces and git provider rows but not the model provider or stored
+  policy recorded on the run, so a provider or policy withdrawn from the owner (a deny row, the
+  allow removed under enforcement, or "Available to" another user type) still let the run be
+  revived or extended. Both are now re-checked for the owner exactly as the create gate checks
+  them (`run.revive` / `run.end.set` denied with `capability_model_provider` or
+  `capability_policy`); a run recorded before either existed adds no check.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
@@ -928,6 +941,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   off for every other one. Turning "Only…" on with no allow row naming the value is refused (`400`).
   The launch fields, the six git-provider doors and the per-person model sign-in refuse a restricted
   value; an inline policy's workspace repo is dropped with a warning, as an ungranted one already is.
+- **"Available to" on the console: the git provider row, the agent roster row and an org workspace
+  (#619).** Each editor gets one Everyone/Only control, backed by
+  `GET`/`PUT /permissions/availability/{kind}/{value}` and posting its "Only…" list through
+  `POST`/`DELETE /permissions/grants` — a type, group or person typed by id, added or removed the
+  moment it changes, independent of the editor's own Save. Turning "Only…" on with nobody listed is
+  refused, and the server's own sentence renders verbatim; while "Only…" is on, the last person on the
+  list can't be removed until Everyone is chosen. The control is shown to security admins and super
+  admins only. Not yet wired: the stored policy, model provider, integration and base image editors
+  (#923); the person-facing side (#922).
+- **"Available to" on stored policies, model providers and base images (#923).** A policy's detail
+  sheet and the model provider editor carry the control, each with its own "Only these" line and note.
+  Base images get a new Images tab on Workspace providers: one row per image in the
+  `GET /base-images` catalog, whose first choice reads "Admins only" (an image nobody is listed for is
+  launched only by admins). New policy, a new model provider and Add image ask who gets it on the
+  form: Save creates the resource, then writes the list, then turns "Only these" on; a list the server
+  refuses leaves the editor open on the saved resource with the server's sentence. The control now
+  follows the approved mock: a radio choice, chips that name a user type (a group is marked
+  "(group)"), and a refused add shown under the adder instead of a toast. Integrations get no editor
+  of their own: their lists live on the model provider and git provider rows.
 - **The user view looks through a chosen user type (#615).** `POST /me/view` with
   `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
   governance profile, drives and run limits bind exactly as for a person of that type, and the tier
@@ -2252,9 +2284,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Renamed in 0.8" appendix (e.g. `auth.failed` → `auth.fail`, `egress.pending` → `egress.hold`,
   `kernel.sensor.heartbeat` → `kernel.sensor.ping`, `run.workspace.egress` → `run.egress.add` with
   `kind: workspace`). `authz.denied` is unchanged. The egress proxy's wire values moved with the
-  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`), so
-  run the proxy image from the same release as `wardynd`. The `egress.decisions.dropped:<n>`
-  `rule_source` value is now `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
+  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`, or
+  a skipped one as `skip`); wardynd N accepts proxy N−1's spellings and records them under the N
+  names. The `egress.decisions.dropped:<n>` `rule_source` value is now
+  `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
   snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
   `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
   the same update.

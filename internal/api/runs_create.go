@@ -146,6 +146,15 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		req.Image = ws.BaseImage.Image
 		seededImageOwner = ws.OwnedBy
 	}
+	// agentRequirementError deferred exactly this question to here: an exec
+	// run naming a workspace but no agent needed SOME image to run the command
+	// in, and now that base_image has had its one chance to supply req.Image,
+	// still having neither is the caller's request, resolved. Never "attach a
+	// workspace" — one already is attached; what it lacks is a base image.
+	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" {
+		return nil, "", http.StatusBadRequest, fmt.Errorf(
+			"workspace %s has no base image to run a command in: pass --image or --agent", ws.ID)
+	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
 	// can break: the unique in-container target across workspace_mounts +
 	// workspace_repos (policy.go). Without this, a workspace whose target
