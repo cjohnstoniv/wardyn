@@ -47,7 +47,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -99,6 +98,14 @@ type Config struct {
 	// (WARDYN_OIDC_ROLE_MAP against the "roles" claim, below) plus the app
 	// registration's "assignment required" setting there instead.
 	AllowedEmailDomains []string
+	// ExtraScopes is WARDYN_OIDC_EXTRA_SCOPES (CSV, default empty): scopes
+	// appended to the fixed "openid profile email" request below — usually
+	// "groups", so a WARDYN_OIDC_ROLE_MAP `groups`-keyed row sees the claim on
+	// an IdP that gates it behind a scope. Validated at boot against discovery
+	// scopes_supported (see validateExtraScopes): an unadvertised scope refuses
+	// boot by name instead of locking every human out at login with
+	// invalid_scope. Empty leaves the request unchanged.
+	ExtraScopes []string
 	// RoleMap maps a case-insensitive claim/email value — an Entra App Role
 	// from the ID token's "roles" claim, a "groups" claim entry, or the user's
 	// email — to a Wardyn role, RoleAdmin or RoleUser. Parsed from
@@ -445,13 +452,17 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 	if err != nil {
 		return nil, fmt.Errorf("oidc: provider discovery for %q: %w", discoverURL, err)
 	}
+	// Refuse boot on an unadvertised extra scope BEFORE it reaches oa.Scopes.
+	if err := validateExtraScopes(provider, cfg.ExtraScopes); err != nil {
+		return nil, err
+	}
 
 	oa := oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.RedirectURL,
 		Endpoint:     provider.Endpoint(),
-		Scopes:       []string{gooidc.ScopeOpenID, "profile", "email"},
+		Scopes:       append([]string{gooidc.ScopeOpenID, "profile", "email"}, cfg.ExtraScopes...),
 	}
 	if cfg.ClientSecret == "" {
 		// C2: a public client's token request must never include a
@@ -552,28 +563,6 @@ func warnUnrequestedGroupsScope(gated bool, requested []string, cfg Config) {
 		"so those rows would silently decide nothing",
 		"issuer", cfg.IssuerURL, "scope", groupsScope, "requested_scopes", requested,
 		"claim_keyed_role_map_values", claimKeyed, "env", "WARDYN_OIDC_ROLE_MAP")
-}
-
-// providerGatesGroupsScope reports whether this provider's discovery document
-// advertises a `groups` scope that the authorization request does not ask for —
-// the single condition both halves of the warning are keyed on, computed in one
-// place so they can never disagree about a provider's posture.
-//
-// A discovery document this build cannot read, or one that publishes no
-// scopes_supported at all, is NOT evidence that the provider gates `groups`:
-// both answer false rather than guess and cry wolf on every login screen that
-// follows.
-func providerGatesGroupsScope(provider *gooidc.Provider, requested []string) bool {
-	if slices.Contains(requested, groupsScope) {
-		return false // asked for; there is nothing to warn about
-	}
-	var meta struct {
-		ScopesSupported []string `json:"scopes_supported"`
-	}
-	if err := provider.Claims(&meta); err != nil {
-		return false
-	}
-	return slices.Contains(meta.ScopesSupported, groupsScope)
 }
 
 // LoginHandler initiates the OIDC authorization code flow. It generates a

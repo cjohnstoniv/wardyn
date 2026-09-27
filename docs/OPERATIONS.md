@@ -925,6 +925,15 @@ operators with zero re-configuration. `WARDYN_OIDC_DEFAULT_ROLE`
 `cmd/wardynd/boot_deps.go`): the role map is the only way to reach that tier, so
 it is never the tier granted by fallthrough to everyone nobody named.
 
+**A `groups`-keyed row needs the `groups` scope requested, on an IdP that gates
+that claim behind one.** The authorization request is fixed at `openid profile
+email`; it does not ask for `groups` by default, so an IdP that only sends
+that claim once a client explicitly requests the scope simply omits it —
+indistinguishable from "this human is in no groups", so a `WARDYN_OIDC_ROLE_MAP`
+row keyed on a group name decides nothing there. `WARDYN_OIDC_EXTRA_SCOPES`
+(see [ENV.md](ENV.md)) opts a deployment into requesting `groups` (or any other
+scope), validated at boot against the provider's own discovery document.
+
 Both are validated at **boot**, not at first use: a malformed entry (invalid role
 value, non-ASCII key — matching is ASCII-only, so it could never match —
 duplicate key, or non-blank input with no valid entry at all) or an invalid
