@@ -141,22 +141,28 @@ func TestInternalAuth_TailUploadsLandInsideTheGrace(t *testing.T) {
 	}
 }
 
-// keptRunStore serves one RUNNING run kept by its end or a loss, marked `age`
-// ago.
+// keptRunStore serves one run kept by its end or a loss, marked `age` ago:
+// RUNNING unless state says otherwise, updated `updatedAge` ago.
 type keptRunStore struct {
 	store.Store
-	runID  uuid.UUID
-	reason types.LostReason
-	age    time.Duration
+	runID      uuid.UUID
+	reason     types.LostReason
+	age        time.Duration
+	state      types.RunState
+	updatedAge time.Duration
 }
 
 func (s keptRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
 	if id != s.runID {
 		return types.AgentRun{}, store.ErrNotFound
 	}
+	state := s.state
+	if state == "" {
+		state = types.RunRunning
+	}
 	lostAt := time.Now().UTC().Add(-s.age)
-	return types.AgentRun{ID: id, State: types.RunRunning, LostAt: &lostAt, LostReason: s.reason,
-		UpdatedAt: time.Now().UTC()}, nil
+	return types.AgentRun{ID: id, State: state, LostAt: &lostAt, LostReason: s.reason,
+		UpdatedAt: time.Now().UTC().Add(-s.updatedAge)}, nil
 }
 
 // TestInternalAuth_KeptRunIsRefusedAtEveryDoor is #1176: a run its lease ended
@@ -195,6 +201,55 @@ func TestInternalAuth_KeptRunIsRefusedAtEveryDoor(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestInternalAuth_KeptThenTerminalRunIsRefusedAsTerminal: a kept run keeps
+// its lost mark when it is later killed or torn down (only a revive clears
+// it), so the gate must answer the terminal state first, auditing
+// run_terminal with run_state as documented, never run_kept. Its tail-upload
+// grace is the terminal one, from updated_at, not from the old mark.
+func TestInternalAuth_KeptThenTerminalRunIsRefusedAsTerminal(t *testing.T) {
+	h := newHarness(t)
+	runID, grantID := uuid.New(), uuid.New()
+	cfg := baseTestConfig(h, keptRunStore{runID: runID, reason: types.LostEnded, age: time.Hour,
+		state: types.RunKilled, updatedAge: time.Second})
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.RecordingStore = &fakeRecordingStore{}
+	cfg.Approvals = h.approvals
+	cfg.Broker = h.broker
+	srv := New(cfg)
+	tok := h.mintRunToken(t, runID)
+
+	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	for _, d := range internalDoors(runID, grantID) {
+		t.Run(d.name, func(t *testing.T) {
+			w := do(t, srv, d.method, d.path, tok, d.body)
+			if graced[d.name] {
+				if w.Code == http.StatusForbidden && (strings.Contains(w.Body.String(), "run is terminal") || strings.Contains(w.Body.String(), "run is lost")) {
+					t.Fatalf("a tail upload inside the terminal grace was refused by the gate: %s", w.Body.String())
+				}
+				return
+			}
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "terminal") {
+				t.Fatalf("code = %d body=%s, want 403 saying the run is terminal", w.Code, w.Body.String())
+			}
+		})
+	}
+	var terminal, kept int
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != "authz.denied" {
+			continue
+		}
+		switch {
+		case strings.Contains(string(ev.Data), `"reason":"run_terminal"`) && strings.Contains(string(ev.Data), `"run_state":"KILLED"`):
+			terminal++
+		case strings.Contains(string(ev.Data), `"run_kept"`):
+			kept++
+		}
+	}
+	if terminal == 0 || kept != 0 {
+		t.Errorf("authz.denied rows: run_terminal/KILLED %d, run_kept %d; want run_terminal only", terminal, kept)
 	}
 }
 

@@ -127,30 +127,32 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		return false
 	}
 	now := s.cfg.Now().UTC()
-	if runIsKept(run) {
-		// A kept run (ended by its lease, or lost to a reboot or an outage) is
-		// still RUNNING, but its proxy is stopped on purpose and only a revive
-		// gives it a new one, under a token of its own (#1176). The old token is
-		// not revoked, so it would verify until its TTL lapses: the stopped
-		// proxy's config still holds it. Refuse it here as renew already does,
-		// so no mint, injection or decision is answered for it. The tail
-		// uploads keep their grace, counted from the mark: the agent stops
-		// before its proxy, and its last cast races both.
-		if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LostAt, now) {
+	// Terminal first: a kept run keeps its lost mark when it is later killed or
+	// torn down, and a terminal run is refused as terminal whatever it was.
+	if isTerminalRunState(run.State) {
+		if internalUploadWithinGrace(r.URL.Path, run, now) {
 			return true
 		}
-		s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
-		writeError(w, http.StatusForbidden, "run is lost")
+		s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "run_state", string(run.State))
+		writeError(w, http.StatusForbidden, "run is terminal")
 		return false
 	}
-	if !isTerminalRunState(run.State) {
+	if !runIsKept(run) {
 		return true
 	}
-	if internalUploadWithinGrace(r.URL.Path, run, now) {
+	// A kept run (ended by its lease, or lost to a reboot or an outage) is
+	// still RUNNING, but its proxy is stopped on purpose and only a revive
+	// gives it a new one, under a token of its own (#1176). The old token is
+	// not revoked, so it would verify until its TTL lapses: the stopped
+	// proxy's config still holds it. Refuse it here as renew already does, so
+	// no mint, injection or decision is answered for it. The tail uploads keep
+	// their grace, counted from the mark: the agent stops before its proxy,
+	// and its last cast races both.
+	if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LostAt, now) {
 		return true
 	}
-	s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "run_state", string(run.State))
-	writeError(w, http.StatusForbidden, "run is terminal")
+	s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
+	writeError(w, http.StatusForbidden, "run is lost")
 	return false
 }
 
