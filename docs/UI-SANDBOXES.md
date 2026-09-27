@@ -223,6 +223,7 @@ precisely what the second listener exists to prevent.
 | `WARDYN_UI_SANDBOX_LISTEN` | the gateway's own address, e.g. `:8081` — never `WARDYN_LISTEN`'s |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | the externally-reachable base URL, e.g. `https://wardyn-ui.example.com` (advisory copy; unset falls back to the raw bind address and warns) |
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | how long a relay session stays usable, default `8h` — the relay's sibling of `WARDYN_SSH_ROLE_TTL`. Shortening it binds the cookies already in browsers |
+| `WARDYN_UI_SANDBOX_STRIP_COOKIES` | optional inbound cookie policy: `allow:<names>` forwards only those cookies to the app, `deny:<names>` strips them (comma-separated, `prefix*` for a prefix). Unset forwards every cookie except `wardyn_*`. Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below |
 
 **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
@@ -356,7 +357,16 @@ attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
 hostname would otherwise hand console cookies to sandbox code: every forwarded
 request has **all `wardyn_*` cookies**, `Authorization`, `Proxy-Authorization`
 and any `?ticket` stripped, and every response has `Set-Cookie: wardyn_*`
-dropped (cookie tossing). `X-Forwarded-*` is removed and deliberately not
+dropped (cookie tossing). Every other cookie is forwarded by default. If the
+relay host sits under a parent domain other applications share, the browser
+also sends their `Domain=` cookies here, and the `Cookie` header does not say
+which host set a cookie: set `WARDYN_UI_SANDBOX_STRIP_COOKIES` to
+`allow:<the app's cookie names>` so only those reach the app, or to
+`deny:<names>` to strip known ones. The other direction needs no setting: a
+`Set-Cookie` from the app that carries a `Domain` attribute is always dropped,
+so a sandbox cannot plant a cookie on sibling hosts, and so is one with no name
+(a browser would send its value back verbatim, e.g. as a forged
+`wardyn_ui_sess`). `X-Forwarded-*` is removed and deliberately not
 re-added — the sandbox has no business learning the operator's IP — and every
 gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
 ticket cannot leak to whatever the app links to.
