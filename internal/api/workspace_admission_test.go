@@ -133,7 +133,7 @@ type admitDoor struct {
 	name string
 	// memberReachable is false for a door only an operator can open — POST
 	// /sources is operatorOnly, and devcontainer_repo is refused from a member by
-	// denyMemberRequest before admission is reached.
+	// denyUserRequest before admission is reached.
 	memberReachable bool
 	fire            func(t *testing.T, sc types.SiteConfig, repo string, operator bool) (*Server, *httptest.ResponseRecorder)
 }
@@ -174,7 +174,7 @@ func admitWorkspaceDoor(name string, fire func(t *testing.T, srv *Server, st *ow
 		memberReachable: true,
 		fire: func(t *testing.T, sc types.SiteConfig, repo string, operator bool) (*Server, *httptest.ResponseRecorder) {
 			t.Helper()
-			srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+			srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 			st.siteConfig = sc
 			session := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 			if operator {
@@ -514,13 +514,13 @@ func TestStoreCreateRunCallerCensus(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("read %s: %v", name, rerr)
 		}
-		if strings.Contains(string(src), "Store.CreateRun(") {
+		if strings.Contains(string(src), "s.createRun(") {
 			got = append(got, name)
 		}
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
-		t.Errorf("Store.CreateRun callers = %v, want %v\n"+
+		t.Errorf("createRun callers = %v, want %v\n"+
 			"a NEW lane that creates a run must admit the repository it is about to clone "+
 			"(admitRepoSources at a request door, or admitLauncherRepo at its own clone-URL "+
 			"derivation) — then add it here with a note saying which", got, want)
@@ -545,7 +545,7 @@ func laneVetoAudit(t *testing.T, srv *Server) []map[string]any {
 	}
 	var out []map[string]any
 	for _, ev := range rec.events {
-		if ev.Action != "run.provider.lane_dropped" {
+		if ev.Action != "run.provider.veto" {
 			continue
 		}
 		var d map[string]any
@@ -877,7 +877,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 		}
 		var out []string
 		for _, ev := range rec.events {
-			if ev.Action == "workspace.provider.legacy_host" {
+			if ev.Action == "workspace.provider.admit" {
 				out = append(out, ev.Target)
 			}
 		}
@@ -885,7 +885,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	}
 
 	t.Run("POST /workspaces", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admitAdminSession(t),
 			`{"name":"app","sources":[{"type":"repo","source":`+quote(admitUnclaimed)+`}]}`)
@@ -901,7 +901,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	})
 
 	t.Run("PUT /workspaces/{id} — an edit is how a source MOVES onto a legacy host", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		sess := admitAdminSession(t)
 		created := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", sess,
@@ -925,7 +925,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	})
 
 	t.Run("POST /sources", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/sources", admitAdminSession(t),
 			`{"kind":"repo","locator":`+quote(admitUnclaimed)+`}`)
@@ -950,7 +950,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	// ORDINARY admission says nothing: a repo on a provider row is not news, and
 	// a trail that records every clone is a trail nobody reads (B5).
 	t.Run("a repo on a row is not audited", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admitAdminSession(t),
 			`{"name":"app","sources":[{"type":"repo","source":`+quote(admitOnRow)+`}]}`)
@@ -1011,7 +1011,7 @@ func flagsOf(sources []types.WorkspaceSource) []*bool {
 // provider" from the SERVER's verdict, on the list and the single row alike —
 // one document, one projection.
 func TestAdmittedProjectionOnBothReads(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	st.siteConfig = admitSite()
 	admin := admitAdminSession(t)
 	id := st.put(types.Workspace{Sources: []types.WorkspaceSource{
@@ -1050,7 +1050,7 @@ func TestAdmittedProjectionOnBothReads(t *testing.T) {
 // asserted by EQUALITY against the pre-feature document rather than by eyeballing
 // a missing field.
 func TestAdmittedProjectionAbsentInLegacyOpenMode(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	admin := admitAdminSession(t)
 	id := st.put(types.Workspace{Sources: []types.WorkspaceSource{
 		{Type: types.WorkspaceSourceTypeRepo, Source: admitOnRow},
@@ -1067,7 +1067,7 @@ func TestAdmittedProjectionAbsentInLegacyOpenMode(t *testing.T) {
 // TestAdmittedIsNeverTakenFromAWriteBody: the projection is the server's, so a
 // client round-tripping a GET cannot persist a provider verdict.
 func TestAdmittedIsNeverTakenFromAWriteBody(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	st.siteConfig = admitSite()
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admitAdminSession(t),
 		`{"name":"app","sources":[{"type":"repo","source":"`+admitOffRow+`","admitted":true}]}`)
@@ -1088,7 +1088,7 @@ func TestAdmittedIsNeverTakenFromAWriteBody(t *testing.T) {
 // host-level SSH ceiling STAYS (an SSH clone URL carries no path to compare), so
 // what is pinned here is that it is said out loud rather than closed: a run whose
 // SSH repository slipped a path-scoped row's org bound earns the 201 warning and
-// the run.provider.ssh_host_level audit row — the one admission outcome that is
+// the run.provider.admit audit row — the one admission outcome that is
 // WIDER than the policy an admin wrote.
 func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
 	runID := uuid.New()
@@ -1111,7 +1111,7 @@ func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
 		}
 		var found bool
 		for _, ev := range audit.events {
-			if ev.Action == "run.provider.ssh_host_level" {
+			if ev.Action == "run.provider.admit" {
 				found = true
 				if ev.Target != string(types.GitProviderGitHub) {
 					t.Errorf("audit target = %q, want the provider KIND", ev.Target)
@@ -1119,7 +1119,7 @@ func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("events = %#v, want a run.provider.ssh_host_level row", audit.events)
+			t.Errorf("events = %#v, want a run.provider.admit row", audit.events)
 		}
 	})
 

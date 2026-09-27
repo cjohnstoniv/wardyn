@@ -64,11 +64,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// No profile, or a profile with no rubric: the zero value and no bound. An
 	// UNASSIGNED member — and every operator — is byte-for-byte what they were
 	// before this gate existed, the same absent-row rule every other
-	// GovernanceLimits field follows. Nothing below runs.
+	// GovernanceLimits field follows. Nothing below runs. The one sentence
+	// that still applies is the managed-settings one: a hold run gets its file
+	// at no level too (#358).
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
+		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced),
+			scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
 	// posture is graded on it, and the frozen answer travels to dispatch on the
@@ -94,16 +97,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, nil, scmSite, grade, bedrock, true
+		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced), scmSite, grade, bedrock, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name)
 	// Here rather than in the ladder: whether the managed settings land depends
-	// on the ENFORCED class's substrate, which only this function holds. No
-	// agent process on an exec run to say it about.
-	if ok && req.TaskMode != "exec" {
-		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level, enforced); msg != "" {
-			warnings = append(warnings, msg)
-		}
+	// on the ENFORCED class's substrate, which only this function holds. After
+	// it, because the ladder may derive the hold that brings the file.
+	if ok {
+		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, enforced)...)
 	}
 	return res, warnings, scmSite, grade, bedrock, ok
 }
@@ -366,6 +367,19 @@ func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, leg
 	}
 	unionADOEntraLane(&out, spec, ado)
 	unionBedrockCredential(&out, bedrock)
+	// KNOWN RESIDUAL (#518 item 3): the resident ~/.claude subscription mount
+	// and the Wardyn-managed setup-token lane are NOT folded in here, so a run
+	// that will dispatch on either one grades `secrets=none` on this axis
+	// rather than `secrets=baseline` — unlike every OTHER model credential
+	// above, which is folded the moment it resolves. Left as a documented gap
+	// rather than a third union (a baseline api_key to api.anthropic.com next
+	// to unionBedrockCredential) because both lanes are the OPERATOR's single
+	// shared credential today: the multi-provider design due next makes
+	// credentials per-person, which is the point at which this posture
+	// actually needs to see WHOSE credential a run is getting, not just that
+	// one exists — folding a placeholder grant now would have to be redone
+	// under that shape anyway. autonomyPostureSpec's own doc explains the
+	// pattern this gap should eventually follow.
 	return out
 }
 

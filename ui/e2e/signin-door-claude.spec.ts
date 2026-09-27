@@ -11,7 +11,8 @@ import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pa
 // The Claude sign-in door (#628). The packet draws it as the AWS door's
 // states 1-8 unchanged in shape, with no device code: Claude's flow is a link
 // and an approval, and the code it hands back is pasted into this dialog.
-// Opened from Settings' model provider card, its one mount today.
+// Opened from Settings' model provider card, which opens the shell's one door
+// (#544) rather than mounting its own.
 //
 // Hermetic for the reason signin-door-aws.spec.ts gives: `-runner none` never
 // starts a login run, so the run, its kill, the attach and the token write are

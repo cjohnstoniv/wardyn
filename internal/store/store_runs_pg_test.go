@@ -119,8 +119,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	r.PolicyID = &polID
 	r.ConfinementClass = types.CC3
 	r.SandboxRef = "container-" + r.ID.String()
-	r.AutoStopAfterSec = 900        // the effective idle cap persists on the run row
-	r.AgentExecID = "agent-exec-01" // the exec id persists for restart-safe liveness
+	r.AutoStopAfterSec = 900           // the effective idle cap persists on the run row
+	r.AgentExecID = "agent-exec-01"    // the exec id persists for restart-safe liveness
+	r.ModelProviderID = "corp-gateway" // the run's model-provider choice (#527) persists on the row
 	created := persistRun(t, ctx, pool, r)
 
 	// CreateRun returns the hydrated row.
@@ -163,6 +164,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	}
 	if got.AgentExecID != "agent-exec-01" {
 		t.Errorf("agent_exec_id = %q, want %q (exec id persists for restart-safe liveness)", got.AgentExecID, "agent-exec-01")
+	}
+	if got.ModelProviderID != "corp-gateway" {
+		t.Errorf("model_provider_id = %q, want %q (run's model-provider choice, #527)", got.ModelProviderID, "corp-gateway")
 	}
 	// SetRunAgentExecID scoped-writes the column post-create (the real path: the
 	// exec id is only known after Exec runs).
@@ -336,6 +340,248 @@ func TestPG_UpdateRunStateIfIdle_TOCTOU(t *testing.T) {
 	if got, _ := store.NewPG(pool).GetRun(ctx, killed.ID); got.State != types.RunKilled {
 		t.Errorf("killed run state = %q, want KILLED (untouched)", got.State)
 	}
+}
+
+// newApproval builds a PENDING approval for run, requested at requestedAt. The
+// caller owns persistence via CreateApproval; cleanup rides the run's own
+// ON DELETE CASCADE (persistRun's cleanup), so no separate teardown is needed.
+func newApproval(runID uuid.UUID, requestedAt time.Time) types.ApprovalRequest {
+	return types.ApprovalRequest{
+		ID:             uuid.New(),
+		RunID:          runID,
+		Kind:           types.ApprovalToolCall,
+		RequestedScope: json.RawMessage(`{}`),
+		State:          types.ApprovalPending,
+		RequestedAt:    requestedAt,
+	}
+}
+
+// TestPG_UpdateRunStateIfIdle_HoldAware covers RL-5, the hold-aware idle
+// reaper (long-holds-design.md §2.1: "idle stop never fires while a request
+// is open within its wait"). The CAS guard lives inside UpdateRunStateIfIdle
+// itself (store.openHoldSQL), not as an earlier skip in the reaper's scan
+// loop, so this drives the store method directly exactly as
+// TestPG_UpdateRunStateIfIdle_TOCTOU does for the touch guard.
+func TestPG_UpdateRunStateIfIdle_HoldAware(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	notAfter := time.Now().UTC().Add(time.Hour) // generous: only the hold should block
+
+	// Case 1 — a PENDING approval well inside the run's wait: the stop must
+	// NO-OP, even though the idleness guard alone would let it through.
+	openHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.WaitBudgetSec = 3600
+		return r
+	}())
+	ap, err := st.CreateApproval(ctx, newApproval(openHold.ID, time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+	applied, err := st.UpdateRunStateIfIdle(ctx, openHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (open hold): %v", err)
+	}
+	if applied {
+		t.Error("idle CAS must NO-OP while a PENDING approval is open within its wait")
+	}
+	if got, _ := st.GetRun(ctx, openHold.ID); got.State != types.RunRunning {
+		t.Errorf("open-hold run state = %q, want RUNNING (left untouched)", got.State)
+	}
+
+	// Deciding the approval closes the hold: the SAME idle CAS must now APPLY.
+	if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "tester@example.com",
+	}); err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, openHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (decided hold): %v", err)
+	}
+	if !applied {
+		t.Error("idle CAS must APPLY once the open approval has been decided")
+	}
+	if got, _ := st.GetRun(ctx, openHold.ID); got.State != types.RunStopped {
+		t.Errorf("decided-hold run state = %q, want STOPPED", got.State)
+	}
+
+	// Case 2 — a PENDING approval whose wait has ALREADY elapsed (the sweeper
+	// has not yet caught up and expired it): it is no longer "within its wait",
+	// so it must NOT block the stop.
+	staleHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.WaitBudgetSec = 1
+		return r
+	}())
+	if _, err := st.CreateApproval(ctx, newApproval(staleHold.ID, time.Now().UTC().Add(-time.Hour))); err != nil {
+		t.Fatalf("create stale approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, staleHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (stale hold): %v", err)
+	}
+	if !applied {
+		t.Error("idle CAS must APPLY when the only PENDING approval's wait has already elapsed")
+	}
+
+	// Case 3 — a PENDING approval with NO run-scoped bound (wait_budget_sec 0,
+	// ends_at NULL — a run created before migration 0072, or one with neither
+	// set): openHoldSQL's LEAST(...) is NULL, which reads as "still open" (the
+	// deployment's own approval-expiry ceiling reaps it, not the idle reaper).
+	noBoundHold := persistRun(t, ctx, pool, newRun(types.RunRunning)) // WaitBudgetSec 0, EndsAt nil
+	if _, err := st.CreateApproval(ctx, newApproval(noBoundHold.ID, time.Now().UTC())); err != nil {
+		t.Fatalf("create no-bound approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, noBoundHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (no-bound hold): %v", err)
+	}
+	if applied {
+		t.Error("idle CAS must NO-OP for a PENDING approval with no run-scoped expiry (NULL reads as open)")
+	}
+
+	// Case 4 — ends_at is the binding bound: a long wait, but the run's end has
+	// already passed, so min(requested_at+wait, ends_at) is in the past and the
+	// request is no longer open. The stop must APPLY.
+	past := time.Now().UTC().Add(-time.Minute)
+	endedHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.WaitBudgetSec = 3600
+		r.EndsAt = &past
+		return r
+	}())
+	if _, err := st.CreateApproval(ctx, newApproval(endedHold.ID, time.Now().UTC())); err != nil {
+		t.Fatalf("create ended-run approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, endedHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (ended-run hold): %v", err)
+	}
+	if !applied {
+		t.Error("idle CAS must APPLY when the run's ends_at has passed, even inside wait_budget_sec")
+	}
+
+	// Case 5 — ends_at alone bounds the request (no wait): the end is still in
+	// the future, so the request is open and the stop must NO-OP.
+	future := time.Now().UTC().Add(time.Hour)
+	endOnlyHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.EndsAt = &future
+		return r
+	}())
+	if _, err := st.CreateApproval(ctx, newApproval(endOnlyHold.ID, time.Now().UTC())); err != nil {
+		t.Fatalf("create end-only approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, endOnlyHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (end-only hold): %v", err)
+	}
+	if applied {
+		t.Error("idle CAS must NO-OP while a PENDING approval is open before the run's ends_at")
+	}
+}
+
+// keepRun persists a RUNNING run and then, in a second write (CreateRun never
+// accepts lost_at/lost_reason/ends_at), stamps it with the given kept mark —
+// exactly the row shape a lease-swept or lost run has when stopKeptRun reads it.
+func keepRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) types.AgentRun {
+	t.Helper()
+	r := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=$2, lost_reason=$3, ends_at=$4 WHERE id=$1`,
+		r.ID, lostAt, string(lostReason), endsAt); err != nil {
+		t.Fatalf("stamp kept mark: %v", err)
+	}
+	got, err := store.NewPG(pool).GetRun(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	return got
+}
+
+// TestPG_StopKeptRunIf_ConditionalTransition is F04 CHECK (d): StopKeptRunIf
+// must apply the destructive RUNNING->terminal transition only when the row
+// STILL carries the exact kept mark (lost_at, lost_reason, ends_at) the caller
+// read, on top of the state='RUNNING' guard UpdateRunStateIf already has. A
+// stale lease-sweep row — read before an extension, a revive or a fresher end
+// landed — must no-op instead of tearing the run down (the F04 TOCTOU).
+func TestPG_StopKeptRunIf_ConditionalTransition(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	now := time.Now().UTC()
+	lostAt := now.Add(-time.Hour)
+	endsAt := now.Add(-time.Minute)
+
+	t.Run("applies_on_the_same_mark", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil || !ok {
+			t.Fatalf("StopKeptRunIf = %v, %v; want applied", ok, err)
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunStopped {
+			t.Errorf("state = %q, want STOPPED", got.State)
+		}
+	})
+
+	t.Run("noops_on_a_changed_ends_at", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+		staleEnds := endsAt.Add(-time.Hour) // the caller's stale read
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &staleEnds)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied despite a changed ends_at; a stale sweep must never win")
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunRunning {
+			t.Errorf("state = %q, want RUNNING (untouched)", got.State)
+		}
+	})
+
+	t.Run("noops_on_a_cleared_lost_at", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, nil, "", &endsAt) // a revive already cleared lost_at
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied despite a cleared lost_at (revived); a stale sweep must never win")
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunRunning {
+			t.Errorf("state = %q, want RUNNING (untouched)", got.State)
+		}
+	})
+
+	t.Run("noops_on_a_different_lost_reason", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostReboot, &endsAt)
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied despite a different lost_reason; a stale sweep must never win")
+		}
+		if got, _ := st.GetRun(ctx, r.ID); got.State != types.RunRunning {
+			t.Errorf("state = %q, want RUNNING (untouched)", got.State)
+		}
+	})
+
+	t.Run("noops_when_already_terminal", func(t *testing.T) {
+		r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state=$1 WHERE id=$2`, string(types.RunKilled), r.ID); err != nil {
+			t.Fatalf("force killed: %v", err)
+		}
+		ok, err := st.StopKeptRunIf(ctx, r.ID, types.RunStopped, &lostAt, types.LostOutage, &endsAt)
+		if err != nil {
+			t.Fatalf("StopKeptRunIf: %v", err)
+		}
+		if ok {
+			t.Error("StopKeptRunIf applied over a concurrent kill's outcome; state=RUNNING must still be required")
+		}
+	})
 }
 
 // TestPG_ListRuns_ReaperCandidateQuery exercises the query shape the idle reaper

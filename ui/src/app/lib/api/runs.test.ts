@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runs } from "./runs";
+import { aheadByHours } from "../test-clock";
 
 // grantsFromRecords projects the GET /runs/{id}/grants ELIGIBILITY records into
 // the CredentialGrant rows the run-detail screen renders. It had zero coverage
@@ -25,11 +26,12 @@ describe("runs.getGrants — grant-record projection", () => {
     });
 
   it("compacts a grant with a scope object and reports it active", async () => {
+    const mintedAt = aheadByHours(-1);
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
         {
           id: "g-1",
-          created_at: "2026-07-17T00:00:00Z",
+          created_at: mintedAt,
           spec: { kind: "github_token", scope: { repo: "acme/widgets" } },
         },
       ]),
@@ -39,7 +41,7 @@ describe("runs.getGrants — grant-record projection", () => {
       id: "g-1",
       audience: "github_token",
       state: "active",
-      minted_at: "2026-07-17T00:00:00Z",
+      minted_at: mintedAt,
     });
     expect(g.scope).toBe('github_token {"repo":"acme/widgets"}');
   });

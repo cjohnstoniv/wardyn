@@ -57,6 +57,16 @@ attach target. `deploy/images/oracle/agent-run` is the minimal reference
 implementation of this branch (idle only — it skips the workspace prep the
 real harness images perform, since oracle brokers neither git nor a model).
 
+**Revive after a reboot (Docker).** When a run lost to a reboot is revived,
+the control plane starts its kept container again, which re-runs `agent-run
+--idle` over the files the run left. An image that calls `booted_before`
+(`common/agent-run-lib.sh`) at the top of `--idle` takes a `--revive` branch
+instead: the same prep, and the run's seed is never started again. Claude
+Code continues its last conversation (`claude --continue`) when the run
+landed the human in the agent; codex-cli starts a fresh session on the first
+attach. An image without it re-runs `--idle` as on the first boot, so a
+seeded run starts its seed over.
+
 When the control plane sets `WARDYN_TASK_MODE=exec` (BYOA/CI lane — see
 `docs/CI.md`), `agent-run` runs the task as a plain shell command
 (`/bin/sh -lc "<task>"`) instead of the agent harness: same MITM-CA/clone/

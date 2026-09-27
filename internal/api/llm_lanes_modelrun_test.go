@@ -85,7 +85,7 @@ func TestPreflight_ExecRunDoesNotClaimBedrock(t *testing.T) {
 
 	access := srv.resolveRunLLMAccess(context.Background(),
 		createRunRequest{Agent: "claude-code", TaskMode: "exec", Task: "ls"},
-		types.RunPolicySpec{}, map[string]bool{}, nil, "")
+		types.RunPolicySpec{}, map[string]bool{}, nil, "", runProviderChoice{})
 	if access != nil && access.Provisioned && strings.Contains(access.Note, "Bedrock") {
 		t.Errorf("model-access note = %q; an exec run gets no Bedrock credential at dispatch", access.Note)
 	}

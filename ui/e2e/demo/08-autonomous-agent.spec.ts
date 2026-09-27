@@ -986,11 +986,11 @@ test("V08 beat 10 — borrowed, never held", async () => {
   // verified event pair): the workspace granted it, Wardyn read it. No owner
   // line names this pair explicitly this pass, so it stays a silent check.
   const reqEvents = await (
-    await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}&action=run.workspace.requirement.secret`, { headers })
+    await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}&action=run.requirement.grant`, { headers })
   ).text();
   expect(
     reqEvents.includes(PROOF_SECRET),
-    `no run.workspace.requirement.secret event for ${PROOF_SECRET} on ${proofRunId}`,
+    `no run.requirement.grant event for ${PROOF_SECRET} on ${proofRunId}`,
   ).toBe(true);
 
   // The deterministic negative, searched for ON CAMERA rather than only

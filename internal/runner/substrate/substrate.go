@@ -111,6 +111,13 @@ type ClassSupport struct {
 	// plane tells an admin a disk number MEANS, so one substrate that enforces
 	// nothing makes the deployment unable to promise enforcement. Never overclaim.
 	EphemeralDiskEnforcement types.StorageEnforcement
+	// Freeze reports, PER CLASS, whether this substrate can pause/resume the
+	// agent in place without losing state — the substrate-level analogue of
+	// runner.Capabilities.Freeze; the orchestrator copies it straight through
+	// (first substrate to claim a class wins, exactly as Resolved does),
+	// because only one substrate ever backs a given class. Never overclaim: a
+	// class absent, or present and false, declares no freeze support for it.
+	Freeze map[types.ConfinementClass]bool
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate,

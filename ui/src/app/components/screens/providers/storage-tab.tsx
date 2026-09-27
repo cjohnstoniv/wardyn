@@ -28,7 +28,7 @@ export function StorageTab({
   storage: StorageProviders;
   onChange: (next: StorageProviders) => void;
   /** From /setup/status's runner block — the AUTHORING daemon's driver,
-   *  operators only (redactSetupStatusForMember strips it for a member). */
+   *  operators only (redactSetupStatusForUser strips it for a member). */
   enforcement: StorageEnforcement | undefined;
   operator: boolean;
 }) {

@@ -63,7 +63,7 @@ func driveGetCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(doc)
+			return emitJSON(cmd.OutOrStdout(), doc)
 		},
 	}
 }
@@ -101,7 +101,7 @@ func driveApplyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(out)
+			return emitJSON(cmd.OutOrStdout(), out)
 		},
 	}
 }

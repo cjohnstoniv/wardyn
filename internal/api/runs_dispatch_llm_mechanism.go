@@ -379,6 +379,9 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 // code's own predicate (bedrockLaneSelectable, runs_bedrock.go): a deployment
 // with no Bedrock region/model, a non-model run, a login box, a subscription
 // run and every non-claude-code agent dispatch exactly as before, blip or no.
+// A model run of an agent Wardyn credentials never gets here on an unreadable
+// roster: providerGovernsDispatch cannot rule out a model-provider block, so
+// the provider arm refuses it first.
 func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run types.AgentRun,
 	p dispatchParams, policy *types.RunPolicySpec, siteCfgOK bool,
 ) bool {
@@ -515,7 +518,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 // the resident lane. Left untouched (residency stays "") wherever nothing was
 // resolved, so the caller omits the field rather than publishing a guess.
 //
-// Returns ok=false when it has already written the 422.
+// Returns ok=false when it has already written the 422, or the 500 below.
 func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseWriter, req createRunRequest,
 	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts, refresh bool,
 ) bool {
@@ -524,9 +527,18 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		// Admitting on a read failure is the same call dispatch's own
-		// site-config consumers make: refusing would blame the caller for an
-		// outage, and dispatch reads the roster again on the way to the sandbox.
+		// Fail CLOSED, as the SCM lane's own site-config read does
+		// (scmLaneSiteConfig) — admitting here graded this run ungraded, and it
+		// then only fails at DISPATCH, with bedrockCredGradeHolds' detail
+		// ("the configuration changed between then and now"), which is untrue
+		// for a store blip: nothing changed, the roster just could not be read
+		// (#518). A 500 here blames the actual cause instead.
+		writeError(w, http.StatusInternalServerError, loggedMsg(ctx, "get site config", err))
+		return false
+	}
+	// Under a model-provider block the run's provider decides its lane, and
+	// enforceRunModelProvider already judged it (and its credential).
+	if sc.ModelProviders != nil {
 		return true
 	}
 	row, declared := agentProviderFor(sc, req.Agent)
@@ -581,7 +593,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 // second vocabulary; it never names WHICH lane — the console reads the current
 // roster row for that, exactly as the failure block does.
 func writeLLMRefusal(w http.ResponseWriter, msg string) {
-	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Reason: llmRefusalAuditReason})
+	writeErrorReason(w, http.StatusUnprocessableEntity, llmRefusalAuditReason, msg)
 }
 
 // llmUnavailableDetail is what the proxy's brokered-LLM 404 says when this run

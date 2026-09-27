@@ -6,7 +6,7 @@
 #
 #   - TestLive_SubscriptionInject      — the safe default. Launching a subscription
 #     run authors the re-mintable injection grant + auto-enables TLS-MITM of
-#     api.anthropic.com (proven by the run.llm.subscription_inject audit event);
+#     api.anthropic.com (proven by the run.subscription.inject audit event);
 #     `wardyn attach` then reaches a live shell whose curl to api.anthropic.com
 #     traverses the injected+MITM'd path.
 #   - TestLive_SubscriptionEscapeHatch — WARDYN_SUBSCRIPTION_INJECT=off. NO

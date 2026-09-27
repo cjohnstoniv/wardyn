@@ -42,7 +42,9 @@ vi.mock("./new-run/new-run-dialog", () => ({
 }));
 
 import { RunsScreen } from "./runs";
-import { RoleProvider, type Role } from "../wardyn/operator-context";
+import { OperatorProvider, RoleProvider, type Role } from "../wardyn/operator-context";
+import { RUN } from "../wardyn/copy";
+import { OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
 import { AttentionPublisherProvider } from "../../lib/attention-context";
 import { baseStatus } from "../../lib/test-fixtures";
 import { DEMOS } from "./demos/demo-catalog";
@@ -63,10 +65,12 @@ const run: AgentRun = {
   runner_target: "docker",
 };
 
-function renderScreen(role?: Role) {
+function renderScreen(role?: Role, path = "/runs") {
   const tree = <RunsScreen />;
   return render(
-    <MemoryRouter>{role ? <RoleProvider role={role}>{tree}</RoleProvider> : tree}</MemoryRouter>,
+    <MemoryRouter initialEntries={[path]}>
+      {role ? <RoleProvider role={role}>{tree}</RoleProvider> : tree}
+    </MemoryRouter>,
   );
 }
 
@@ -108,7 +112,7 @@ describe("RunsScreen — first-run empty state", () => {
       "/setup?step=sealed-box",
     );
     // The guided funnel is one unobtrusive link, not a competing button.
-    expect(screen.getByRole("link", { name: /guided tour/i })).toHaveAttribute("href", "/setup");
+    expect(screen.getByRole("link", { name: /guided tour/i })).toHaveAttribute("href", "/admin/setup");
     // The grid is React.lazy'd (runs-first-run-demos.tsx) so the demo catalog's
     // prose stays out of the eager /runs entry chunk — so it arrives a tick
     // after the hero, not with it. Await the first card, then the loop is sync.
@@ -280,19 +284,30 @@ describe("RunsScreen — Start-a-run route state redirects to the New run page",
   });
 });
 
-// B3 (prompt-v2 point 2): the list is already server-scoped to the member's
-// own runs (handleListRuns's creator-pager branch) — this only pins the copy
-// says so plainly, and that admin copy is unchanged.
-describe("RunsScreen — member vs admin count line", () => {
-  it("a member sees \"Your runs · N\"", async () => {
+// M-7 (admin-member-modes-design.md §6): the description is keyed on the
+// VIEW, not the role — the list is already server-scoped to the user's own
+// runs (handleListRuns's creator-pager branch) either way, so this only pins
+// the copy that says so plainly.
+describe("RunsScreen — user vs admin view count line", () => {
+  it("a user (always the user view) sees \"Your runs · N\"", async () => {
     renderScreen("user");
     expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
   });
 
-  it("an admin (and the fail-open default) keeps the unscoped description", async () => {
-    renderScreen("admin");
+  it("an admin on /admin/runs keeps the unscoped description", async () => {
+    renderScreen("admin", "/admin/runs");
     expect(await screen.findByText(/Every run, live/)).toBeInTheDocument();
     expect(screen.queryByText(/Your runs ·/)).not.toBeInTheDocument();
+  });
+
+  // The defect this pins: an admin reading /runs (the user view) must see the
+  // SAME "Your runs" a member sees — the old role-keyed copy showed the
+  // admin's unscoped description here too, which is wrong once the view can
+  // differ from the role.
+  it("an admin on /runs (the user view) ALSO sees \"Your runs · N\"", async () => {
+    renderScreen("admin", "/runs");
+    expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
+    expect(screen.queryByText(/Every run, live/)).not.toBeInTheDocument();
   });
 });
 
@@ -604,6 +619,44 @@ describe("RunsScreen — a run opens from a link (#215)", () => {
   });
 });
 
+// Review finding on #638: every link off the Admin monitor must stay in the
+// Admin view (/admin/runs/:id) — ViewGate's TWIN rule sends the plain
+// /runs/:id path to the User view for a "url"-access install, and refuses it
+// outright for an admin-only SSO token, so a board that ever linked there
+// made the monitor reachable only by typing its URL.
+describe("RunsScreen — admin board/table links stay in the Admin view (review finding, M-7)", () => {
+  function LocationProbe() {
+    const location = useLocation();
+    return <span data-testid="path">{location.pathname}</span>;
+  }
+
+  it("the board card's title targets /admin/runs/:id when the board is /admin/runs", async () => {
+    renderScreen(undefined, "/admin/runs");
+    const link = await screen.findByRole("link", { name: "Fix flaky auth tests" });
+    expect(link).toHaveAttribute("href", "/admin/runs/run-1");
+  });
+
+  it("the table row's title targets /admin/runs/:id too", async () => {
+    const user = userEvent.setup();
+    renderScreen(undefined, "/admin/runs");
+    await user.click(await screen.findByRole("button", { name: /^table$/i }));
+    const link = await screen.findByRole("link", { name: "Fix flaky auth tests" });
+    expect(link).toHaveAttribute("href", "/admin/runs/run-1");
+  });
+
+  it("clicking a card on /admin/runs navigates to /admin/runs/:id, not /runs/:id", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/admin/runs"]}>
+        <RunsScreen />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByTestId("run-card"));
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/admin/runs/run-1"));
+  });
+});
+
 // mock M2: the pinned "Needs you" lane
 // Held approvals and failures must not flatten into one amber treatment.
 // They are not one thing: an approval is a REQUEST (someone is waiting on
@@ -850,5 +903,85 @@ describe("RunsScreen — a lapsed session's 401 never floats unhandled (loadSetu
     // setupStatus stays null on a reject, same as "not answered yet" — never
     // the no-barrier banner off a read that never actually answered.
     expect(screen.queryByText(/no sandbox barrier/i)).toBeNull();
+  });
+});
+
+// M-7 (modes-b §1: "Monitor, kill, decide. No New run and no relaunch. The
+// admin's own run carries only a switch link.") — pinned on the route, since the
+// screen keys all of it on the view it is mounted under.
+describe("RunsScreen — /admin/runs is a monitor (M-7)", () => {
+  const finished: AgentRun = { ...run, state: "COMPLETED" };
+  const theirs: AgentRun = { ...run, id: "run-2", task: "Bump the lockfile", created_by: "bob@corp" };
+
+  function renderAdmin(path: string) {
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <RoleProvider role="admin">
+          <OperatorProvider operator principal="me">
+            <RunsScreen />
+          </OperatorProvider>
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  async function openKebab() {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("button", { name: /run actions/i }));
+    await screen.findByRole("menuitem", { name: /open detail/i });
+  }
+
+  it("a finished run's kebab offers no relaunch on /admin/runs", async () => {
+    listRunsMock.mockResolvedValue([finished]);
+    renderAdmin("/admin/runs");
+    await openKebab();
+    expect(screen.queryByRole("menuitem", { name: RUN.CLONE_CTA })).not.toBeInTheDocument();
+  });
+
+  it("negative control: the same admin on /runs keeps the relaunch", async () => {
+    listRunsMock.mockResolvedValue([finished]);
+    renderAdmin("/runs");
+    await openKebab();
+    expect(screen.getByRole("menuitem", { name: RUN.CLONE_CTA })).toBeInTheDocument();
+  });
+
+  it("an admin with no runs gets no New run, nor any other door that starts one", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderAdmin("/admin/runs");
+    expect(await screen.findByText("No runs yet")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /new run/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /new run|try it without a repo|guided tour/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/available on this host/)).not.toBeInTheDocument();
+  });
+
+  it("the board marks the admin's own card (you) with the switch link; someone else's gets neither", async () => {
+    listRunsMock.mockResolvedValue([run, theirs]);
+    renderAdmin("/admin/runs");
+    const cards = await screen.findAllByTestId("run-card");
+    const mine = cards.find((c) => within(c).queryByText(run.task))!;
+    const other = cards.find((c) => within(c).queryByText(theirs.task))!;
+    expect(within(mine).getByText("me (you)")).toBeInTheDocument();
+    expect(within(mine).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+    expect(within(other).getByText("bob@corp")).toBeInTheDocument();
+    expect(within(other).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+  });
+
+  it("the table marks the admin's own row the same way", async () => {
+    listRunsMock.mockResolvedValue([run, theirs]);
+    renderAdmin("/admin/runs");
+    await userEvent.click(await screen.findByRole("button", { name: "Table" }));
+    const mine = screen.getByRole("row", { name: new RegExp(run.task) });
+    const other = screen.getByRole("row", { name: new RegExp(theirs.task) });
+    expect(within(mine).getByText("me (you)")).toBeInTheDocument();
+    expect(within(mine).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+    expect(within(other).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+  });
+
+  it("the user view never marks a card or offers the switch link", async () => {
+    listRunsMock.mockResolvedValue([run]);
+    renderAdmin("/runs");
+    await screen.findByText(run.task);
+    expect(screen.queryByText("me (you)")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
   });
 });

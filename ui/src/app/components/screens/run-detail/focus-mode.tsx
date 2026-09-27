@@ -222,7 +222,7 @@ function Dock({
 function Strip({ ctx }: { ctx: WidgetContext }) {
   const allow = ctx.egress.filter((e) => e.decision === "allow").length;
   // B3: allow and deny are SETTLED facts, so counting their audit rows is
-  // right. "Held" is not — an egress.pending row is a historical event on an
+  // right. "Held" is not — an egress.hold row is a historical event on an
   // append-only trail, so this strip kept counting holds decided minutes ago.
   // The live number rides the context, from the one isHeld derivation.
   const held = ctx.heldCount;

@@ -14,6 +14,7 @@ import {
   sidebarLink,
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
@@ -373,7 +374,9 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     expect(enabledCount).toBeGreaterThan(0);
 
     await gotoConsole(page);
-    await navToRoute(page, "/setup");
+    // The funnel step lives at /admin/setup since M-6/D1 — plain /setup is
+    // the User Getting Started now, even for this harness's admin session.
+    await navToRoute(page, "/admin/setup");
     const stepBtn = page.getByRole("button", { name: new RegExp(`^${PROVIDERS.STEP_LABEL}`) });
     await expect(stepBtn).toBeVisible();
     await expect(stepBtn).toContainText(PROVIDERS.STEP_BADGE_READY(enabledCount));
@@ -702,7 +705,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 //
 // mockMemberBedrockRowRedacted below is this file's own composed splice
 // instead: ONE **/api/v1/setup/status* handler that mirrors
-// redactSetupStatusForMember's structural drops (the same shape
+// redactSetupStatusForUser's structural drops (the same shape
 // mockMemberSetupStatus, fixtures.ts, mirrors for every OTHER member spec in
 // this repo) AND injects the harnesses row, so nothing here can bypass the
 // redaction the way stacking two routes on the same pattern did.
@@ -731,7 +734,7 @@ async function mockMemberBedrockRowRedacted(
   let bearerPresent = initialBearerPresent;
   await page.route("**/api/v1/setup/status*", async (route) => {
     const body = (await (await route.fetch()).json()) as Record<string, unknown>;
-    // Mirrors redactSetupStatusForMember (internal/api/setup.go) — the same
+    // Mirrors redactSetupStatusForUser (internal/api/setup.go) — the same
     // drop list mockMemberSetupStatus (fixtures.ts) applies for every other
     // member spec, plus the #337 BearerPresent carve-out that function now
     // applies under the caller's own per_user bearer row.
@@ -805,5 +808,76 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
     await expect(page.getByText(/Saved bedrock-api-key/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Replace" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
+  });
+});
+
+// UT-7b — the "Available to" control embedded in the git provider row: real
+// writes against /permissions/availability and /permissions/grants, proving
+// the round trip an admin actually performs (not just this file's own
+// component-level coverage in availability-control.test.tsx). The github row
+// already exists by this point in the file (the serial walk above never
+// removes it), so this reuses it rather than adding a third row.
+test.describe("providers — the git provider row's Available to control (UT-7b)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("Everyone by default; turning Only on with nobody listed refuses, verbatim", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+
+    // The server's own availabilityOnlyEmptyMsg (permissions_availability.go),
+    // rendered verbatim — never a console reword.
+    await expect(
+      row.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
+    ).toBeVisible();
+    // The failed PUT never flipped the segment — it still reads Everyone.
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+  });
+
+  test("adding a user type lands the chip, turns Only on, and both survive a reload", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+
+    // "standard" — the one user type every deployment seeds and can never
+    // delete (UT-1) — is the only type id guaranteed to exist on a fresh e2e
+    // backend: userTypeSubjectExists (permissions.go) refuses a grant naming
+    // an id nobody created.
+    await row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
+    await row.getByRole("button", { name: AVAILABILITY.ADD_CTA }).click();
+    await expect(row.getByText(/standard/i)).toBeVisible();
+
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+
+    await page.reload();
+    const reloaded = page.getByTestId("provider-row-github");
+    await expect(reloaded).toBeVisible();
+    await expect(reloaded.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+    await expect(reloaded.getByText(/standard/i)).toBeVisible();
+    // The mock's two provider lines, and the last audience locked while Only is on.
+    await expect(reloaded.getByText(AVAILABILITY.PROVIDER_ONLY_HINT)).toBeVisible();
+    await expect(reloaded.getByText(AVAILABILITY.PROVIDER_NOTE)).toBeVisible();
+    await expect(reloaded.getByRole("button", { name: /Remove.*standard/i })).toBeDisabled();
+    await expect(reloaded.getByText(AVAILABILITY.LAST_AUDIENCE_LOCKED)).toBeVisible();
+
+    // The wire itself — restricted, and the allow row naming this exact kind/value.
+    const view = await (
+      await page.request.get("/api/v1/permissions/availability/workspace_provider/github", { headers: auth })
+    ).json();
+    expect(view.restricted).toBe(true);
+    expect(view.allowed_by).toEqual([
+      expect.objectContaining({ subject_type: "user_type", subject: "standard", capability: "workspace_provider", value: "github" }),
+    ]);
+
+    // Clean up: back to Everyone, then remove the audience — this row's
+    // availability must not leak into a later run of this same suite.
+    await reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
+    await expect(reloaded.getByText(/standard/i)).toHaveCount(0);
   });
 });

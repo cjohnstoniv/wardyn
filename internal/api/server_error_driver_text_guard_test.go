@@ -65,6 +65,15 @@ import (
 // sshExecStreamErrorMessage callers in sshgateway_channels.go, a channel
 // stderr write that is not an HTTP 5xx body at all and this guard does not
 // watch) in one step.
+//
+// #656's reason-carrying writers. writeErrorReason(w, status, reason, msg) is
+// writeError with a machine reason, so the direct shape matches it too, with
+// its message one argument later (directErrorWriters). A body written with
+// writeJSON(w, <5xx>, v) straight — errorBody{...} or any other value — is
+// matched when anything in v calls err.Error(): that is the shape a
+// reason-carrying refusal took before writeErrorReason existed, and it hid
+// from a guard that only read writeError.
+//
 // Keyed by "file:enclosing-symbol:call", not by line: a line number shifts
 // every time an unrelated edit lands above the site (three other PRs did
 // exactly that to these same files in the same review round), which made a
@@ -95,6 +104,14 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as the entries above, not just a
 	// passing build.
+}
+
+// directErrorWriters maps each body writer this guard reads directly to its
+// message argument's position; the status is argument 1 for all of them.
+var directErrorWriters = map[string]int{
+	"writeError":       2, // writeError(w, status, msg)
+	"writeErrorReason": 3, // writeErrorReason(w, status, reason, msg)
+	"writeJSON":        2, // writeJSON(w, status, v)
 }
 
 // serverErrorForwarder names one hop this guard follows: a function or
@@ -233,11 +250,13 @@ func scanFileForLeaks(fset *token.FileSet, name string, file *ast.File, src []by
 		ast.Inspect(fd.Body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.CallExpr:
-				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
-				if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
-					if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>),
+				// its reason-carrying twin, and a raw writeJSON 5xx body.
+				if fn, ok := node.Fun.(*ast.Ident); ok && directErrorWriters[fn.Name] > 0 {
+					msgArg := directErrorWriters[fn.Name]
+					if len(node.Args) > msgArg && is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[msgArg]) {
 						pos := fset.Position(node.Pos())
-						key := fmt.Sprintf("%s:%s:writeError", name, symbol)
+						key := fmt.Sprintf("%s:%s:%s", name, symbol, fn.Name)
 						found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
 					}
 					return true

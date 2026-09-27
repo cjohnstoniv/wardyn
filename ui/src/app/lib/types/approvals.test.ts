@@ -4,7 +4,15 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { canDecideApproval, decisionArgs, isHeld, type ApprovalKind, type ApprovalRequest } from "./approvals";
+import {
+  ADO_HOLD_WINDOW_MS,
+  canDecideApproval,
+  decisionArgs,
+  isHeld,
+  type ApprovalKind,
+  type ApprovalRequest,
+} from "./approvals";
+import { aheadByHours } from "../test-clock";
 
 const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
   id: "a1",
@@ -49,9 +57,8 @@ describe("decisionArgs", () => {
   it("every non-default scope produces exactly one options object", () => {
     expect(decisionArgs("once")).toEqual([{ scope: "once", until: undefined }]);
     expect(decisionArgs("always")).toEqual([{ scope: "always", until: undefined }]);
-    expect(decisionArgs("until", "2030-01-01T00:00:00.000Z")).toEqual([
-      { scope: "until", until: "2030-01-01T00:00:00.000Z" },
-    ]);
+    const until = aheadByHours(24);
+    expect(decisionArgs("until", until)).toEqual([{ scope: "until", until }]);
   });
 });
 
@@ -122,5 +129,43 @@ describe("isHeld — a hold stays live until the server's own state says otherwi
     const past30s = new Date(Date.now() - 60_000).toISOString();
     const held = approval({ kind: "egress_domain", requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: past30s });
     expect(isHeld(held)).toBe(false); // still the pre-existing 30s behaviour
+  });
+});
+
+// #725/F1 — an Azure DevOps capability escalation IS a tool_call row
+// (isAdoCapabilityRequest: grant_id set, requested_scope.lane
+// "azure_devops"), but the proxy releases its hold after ADO_HOLD_WINDOW_MS
+// (4 minutes), unlike a plain tool_call, held for as long as it is PENDING
+// (#509). Before this arm, isHeld kept reporting "held" while the ADO card itself
+// (ado-capability-card.tsx's own stillHeld, the same 4-minute window) had
+// already flipped to "no longer waiting" — the board and the card disagreed.
+const adoApproval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest =>
+  approval({
+    kind: "tool_call",
+    grant_id: "grant-1",
+    requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
+    ...over,
+  });
+
+describe("isHeld — an Azure DevOps capability escalation's own 4-minute window (#725/F1)", () => {
+  it("a fresh ADO tool_call is held", () => {
+    expect(isHeld(adoApproval())).toBe(true);
+  });
+
+  it("an ADO tool_call row at 5 minutes is no longer held", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(isHeld(adoApproval({ requested_at: fiveMinutesAgo }))).toBe(false);
+  });
+
+  it("right at ADO_HOLD_WINDOW_MS, isHeld matches the exported constant, not a hand-copied number", () => {
+    const justUnder = new Date(Date.now() - (ADO_HOLD_WINDOW_MS - 1000)).toISOString();
+    const justOver = new Date(Date.now() - (ADO_HOLD_WINDOW_MS + 1000)).toISOString();
+    expect(isHeld(adoApproval({ requested_at: justUnder }))).toBe(true);
+    expect(isHeld(adoApproval({ requested_at: justOver }))).toBe(false);
+  });
+
+  it("a plain tool_call with no grant_id/azure_devops scope is still held at 5 minutes (#509)", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(isHeld(approval({ kind: "tool_call", requested_at: fiveMinutesAgo }))).toBe(true);
   });
 });

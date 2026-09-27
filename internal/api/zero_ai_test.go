@@ -75,9 +75,9 @@ func TestZeroAI_InteractiveRunWorks(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	// RUNNING and the run.interactive row are written by the launch, after the 201.
+	// RUNNING and the run.interactive.start row are written by the launch, after the 201.
 	waitForRunState(t, srv, run.ID, types.RunRunning)
-	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive", "success")
+	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive.start", "success")
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}

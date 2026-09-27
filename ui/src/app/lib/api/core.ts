@@ -103,11 +103,19 @@ export class HttpError extends Error {
    *  from HERE, not from a preflight fact: a 422 can be the very first thing
    *  a caller hears about the row. */
   org: string;
-  constructor(status: number, message: string, reason = "", org = "") {
+  /** The model provider a refusal is about (#532), "" when the body names
+   *  none. A launch refusal's door is keyed by THIS, never by what the screen
+   *  has selected (#146's ruling, #543). */
+  provider: string;
+  /** The refused provider's kind (#532, #535), "" when the body names none. */
+  kind: string;
+  constructor(status: number, message: string, reason = "", org = "", provider = "", kind = "") {
     super(message);
     this.status = status;
     this.reason = reason;
     this.org = org;
+    this.provider = provider;
+    this.kind = kind;
     this.name = "HttpError";
   }
 }
@@ -254,8 +262,8 @@ export async function wfetch(
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org);
+    const { message, reason, org, provider, kind } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind);
   }
   return (await res.json()) as T;
 }
@@ -282,25 +290,37 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-export async function errEnvelope(res: Response): Promise<{ message: string; reason: string; org: string }> {
+type ErrEnvelope = { message: string; reason: string; org: string; provider: string; kind: string };
+
+export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "" });
+  const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
-    if (!body) return { message: res.statusText, reason: "", org: "" };
+    if (!body) return bare(res.statusText);
     try {
-      const j = JSON.parse(body) as { error?: unknown; reason?: unknown; org?: unknown };
+      const j = JSON.parse(body) as {
+        error?: unknown;
+        reason?: unknown;
+        org?: unknown;
+        provider?: unknown;
+        kind?: unknown;
+      };
       if (typeof j.error === "string" && j.error) {
         return {
           message: j.error,
-          reason: typeof j.reason === "string" ? j.reason : "",
-          org: typeof j.org === "string" ? j.org : "",
+          reason: field(j.reason),
+          org: field(j.org),
+          provider: field(j.provider),
+          kind: field(j.kind),
         };
       }
     } catch {
       // not JSON — fall through to the raw-body guard below
     }
-    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "", org: "" };
+    return bare(isRawBodyDisplayable(body) ? body : res.statusText);
   } catch {
-    return { message: res.statusText, reason: "", org: "" };
+    return bare(res.statusText);
   }
 }
 
