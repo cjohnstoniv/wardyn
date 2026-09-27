@@ -897,7 +897,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
   `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
   `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
-  now (`/ssh-keys` stays until M-5, and `/demos` until M-6). Every in-app link, the sidebar's
+  now (`/ssh-keys` was deleted the same way by M-5 below, and `/demos` stays until M-6). Every in-app link, the sidebar's
   Policies/Governance/Permissions/Audit/Recordings entries, the account-menu and sidebar Settings
   links (which now land on `/admin/settings` for an admin tier and `/account` for a user), the
   first-run model-provider "Connect →" doors (`/admin/settings`), the "New policy", "Drives",
@@ -906,6 +906,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Recordings library" now render only for the tier whose Admin view screen they open, so a user
   never gets a link to a page that refuses them. The operator docs' console-screen citations are
   re-pointed too. A stale bookmark or link falls through to the console's ordinary catch-all.
+- **The unsplit Settings screen is split per view (M-5, #636).** `/admin/settings` (Admin view)
+  and `/account` (User view) now mount their own screens instead of the same one: Admin Settings
+  keeps Host, the admin Model providers list, the shared Model provider credential card, Providers
+  and User drives, and gains an **Admin SSH keys** card — super admins only — for the override keys
+  that reach other people's runs. Your account keeps a person's own model connection, Azure DevOps
+  and Your SSH keys. A security admin who reaches `/admin/settings` from a stale link now gets a
+  refusal naming the tier, with nothing fetched, instead of the old unsplit screen's redacted
+  leftovers. `/ssh-keys` is deleted, clean break, no alias — every in-app link now points at
+  `/account`, which already carries the same pane. Two SSH-key strings changed: the capped-key chip
+  reads "User access" (was "Member access", frozen by #584) and its tooltip now points at the new
+  Admin SSH keys card; the pane's own description no longer says "no admin view of anyone else's",
+  which collided with the console's own Admin view — it now reads "admins can't list anyone else's".
 - **A held tool call now waits the operator's real approval ceiling (RL-1, #566).**
   `wardyn-toolgate`'s `-deadline` and Claude Code's `MCP_TOOL_TIMEOUT` were hardcoded, so
   raising `WARDYN_APPROVAL_EXPIRY_AFTER` on the daemon did not change how long a parked tool

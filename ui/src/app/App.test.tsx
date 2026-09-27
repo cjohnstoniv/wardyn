@@ -28,6 +28,16 @@ vi.mock("./components/screens/runs", () => ({
   RunsScreen: () => <div>runs screen stub</div>,
 }));
 
+// M-5 (#636) — the settings-split route table. Stubbed the same way
+// RunsScreen is above: these cases only care WHICH screen a path mounts, not
+// either screen's own internals (each has its own suite).
+vi.mock("./components/screens/settings/admin-settings-screen", () => ({
+  AdminSettingsScreen: () => <div>admin settings screen stub</div>,
+}));
+vi.mock("./components/screens/settings/your-account-screen", () => ({
+  YourAccountScreen: () => <div>your account screen stub</div>,
+}));
+
 function renderLanding(role: Role, roleResolved: boolean, status: SetupStatus | null) {
   return render(
     <MemoryRouter initialEntries={["/"]}>
@@ -365,5 +375,26 @@ describe("App — the setup-status poll behind the model-access door", () => {
 
     secondRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
     await screen.findByText("runs screen stub");
+  });
+});
+
+// M-5 (#636) — the settings split's route table: /admin/settings and
+// /account each mount their OWN screen now, not the same unsplit one.
+// DONE WHEN: a test fails if either path is wired to the other's screen.
+describe("App — the settings-split route table", () => {
+  it("mounts AdminSettingsScreen at /admin/settings", async () => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp("/admin/settings");
+    expect(await screen.findByText("admin settings screen stub")).toBeInTheDocument();
+    expect(screen.queryByText("your account screen stub")).toBeNull();
+  });
+
+  it("mounts YourAccountScreen at /account", async () => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp("/account");
+    expect(await screen.findByText("your account screen stub")).toBeInTheDocument();
+    expect(screen.queryByText("admin settings screen stub")).toBeNull();
   });
 });

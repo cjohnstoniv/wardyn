@@ -10,11 +10,14 @@
 //
 // S-5 changes what "not an operator" MEANS here: the old unsplit page was
 // reachable by a security admin too, and rendered a redacted, partial page for
-// one. This page now REFUSES that tier outright (nothing fetched), so the
-// member/security-admin partial-render suites the old file carried (proxy
-// posture hidden, redacted checks hidden, the operatorResolved cold-load
-// guard) no longer describe a reachable state and are replaced by the refusal
-// suite below.
+// one. This page now REFUSES that tier outright (nothing fetched, see the S-5
+// suite below), so the MEMBER/security-admin halves of the old file's
+// partial-render suites (proxy posture hidden from a member, redacted checks
+// hidden from a member, the operatorResolved cold-load guard for a member) no
+// longer describe a reachable state and are dropped. The OPERATOR halves of
+// those same suites are still reachable — a real super admin is the only
+// caller who ever renders this page now — so they are ported below unchanged,
+// alongside the Host card's own #1228/#1200 coverage.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -227,5 +230,155 @@ describe("AdminSettingsScreen — the Host card's barrier picker offers only wha
       expect.stringContaining("Wall"),
     ]);
     expect(hostCard.queryByText("Vault")).toBeNull();
+  });
+
+  it("a CC1-only host lists Fence alone", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getAllByRole("status")).toHaveLength(1);
+    expect(hostCard.getByText("Fence")).toBeInTheDocument();
+    expect(hostCard.queryByText("Wall")).toBeNull();
+    expect(hostCard.queryByText("Vault")).toBeNull();
+  });
+});
+
+// The Host card is a SECOND mount of EnvironmentStep's own no-runner/k8s
+// facts, and must keep them byte-identical rather than a compact-picker-only
+// fallback with no fix line.
+// DONE WHEN: a test fails if the canon "No sandbox runner" card, its fix
+// line, or the k8s rows disappear from this card again.
+describe("AdminSettingsScreen — the Host card keeps the canon no-runner card and the k8s rows", () => {
+  it("a driver:'none' host gets the canon card and the operator fix line, and no TierPicker fallback", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(hostCard.getByText(/-runner docker/)).toBeInTheDocument();
+    // Never the compact-picker's own generic fallback beside the real card.
+    expect(hostCard.queryByText(/no barrier is installed/i)).toBeNull();
+  });
+
+  it("a real Docker daemon that is simply down gets the daemon fix line, not the operator one", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(
+      hostCard.getByText(/start the Docker daemon.*so Wardyn can build a barrier/),
+    ).toBeInTheDocument();
+    expect(hostCard.queryByText(/-runner docker/)).toBeNull();
+  });
+
+  it("a k8s driver gets the Runner/Egress-containment rows, even with zero classes", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "k8s", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getByText("Kubernetes")).toBeInTheDocument();
+    expect(hostCard.getByText("Egress containment")).toBeInTheDocument();
+    // Zero classes on a k8s driver is still "no runner" by the shared rule.
+    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+  });
+});
+
+// GET /api/v1/site-config is operatorOnly: it carries the upstream proxy
+// secret ref, every integration's credential ref and the internal proxy/SCM
+// hostnames. A super admin — the only caller who ever reaches this page now
+// — still sees the real posture, including the configured URL.
+describe("AdminSettingsScreen — the proxy posture", () => {
+  it("shows the operator the proxy posture, including the configured URL", async () => {
+    getSiteConfigMock.mockResolvedValue({
+      upstream_proxy_url: "http://proxy.internal.corp.example:3128",
+    });
+    renderScreen(true);
+    expect(
+      await screen.findByText(/corporate proxy & egress/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/proxy\.internal\.corp\.example:3128/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Internet$/)).toBeInTheDocument();
+  });
+});
+
+// A failed site-config read is not the same fact as it answering "nothing is
+// configured" — AdminSettingsScreen.load swallows every site-config failure
+// into `null` and still resolves state="ready", so a 500 or a dead network
+// must not paint "Internet: Direct" or "Not configured — sandboxes go
+// direct": two POSITIVE claims about a deployment nothing had read. Absence
+// is honest; a statement is not. The funnel link itself stays — it is how the
+// operator goes and finds out.
+describe("AdminSettingsScreen — a FAILED site-config read is not a proxy posture", () => {
+  it("claims neither 'Direct' nor 'Not configured' when the read failed", async () => {
+    getSiteConfigMock.mockRejectedValue(new Error("HTTP 500 store unavailable"));
+    renderScreen(true);
+
+    // The screen still renders — a site-config failure is not a page failure.
+    expect(
+      await screen.findByRole("heading", { name: "Host", level: 3 }),
+    ).toBeInTheDocument();
+    // The way in is still offered…
+    expect(screen.getByText(/corporate proxy & egress/i)).toBeInTheDocument();
+    // …but nothing on the card states a posture nothing read.
+    expect(screen.queryByText(/sandboxes go direct/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Direct$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/through the corporate proxy/i)).not.toBeInTheDocument();
+  });
+
+  // The negative control, so the fix cannot be satisfied by deleting the
+  // feature: a server that ANSWERS "nothing is configured" is a real answer
+  // and still says so.
+  it("an answered empty config still says 'Not configured' — that one is a fact", async () => {
+    getSiteConfigMock.mockResolvedValue({});
+    renderScreen(true);
+    expect(
+      await screen.findByText(/not configured — sandboxes go direct/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Internet$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Direct$/)).toBeInTheDocument();
+  });
+
+  // …and a retry that succeeds must recover: the failure state is per-load,
+  // not sticky. "Re-check this host" is the control that drives it.
+  it("recovers on a re-check that succeeds", async () => {
+    getSiteConfigMock
+      .mockRejectedValueOnce(new Error("HTTP 500 store unavailable"))
+      .mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.example:3128" });
+    renderScreen(true);
+    expect(
+      await screen.findByRole("heading", { name: "Host", level: 3 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /re-check this host/i }));
+    expect(await screen.findByText(/^Internet$/)).toBeInTheDocument();
+    expect(screen.getByText(/proxy\.corp\.example:3128/)).toBeInTheDocument();
+  });
+});
+
+// checks_redacted marks a body whose checks list was stripped for a member's
+// tier — absent for an operator. An operator whose builder really IS off
+// still gets the row and the honest Off sentence: this pins the row survives
+// for the only caller who now reaches this page.
+describe("AdminSettingsScreen — an operator's Image builder row", () => {
+  it("keeps the row and the honest Off sentence when the builder really is off", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ checks: [] }));
+    renderScreen();
+    await screen.findByRole("heading", { name: "Host", level: 3 });
+    expect(screen.getByText("Image builder")).toBeInTheDocument();
+    expect(screen.getByText(/devcontainer builds and --image wraps are unavailable/)).toBeInTheDocument();
   });
 });
