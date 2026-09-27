@@ -25,24 +25,13 @@ import (
 // governanceOmissionWarnings names what the DEPLOYMENT ceiling carries that
 // this profile does not.
 //
-// A governance profile REPLACES Config.DefaultPolicy for the principals it
-// binds; it does not compose with it. That is the right semantics — composing
-// would mean folding two specs through composer.Clamp, which is not a lattice
-// meet — but it has one sharp edge: a profile narrows and widens BY OMISSION,
-// silently. An author who writes a ceiling from scratch and forgets the
-// deployment's denied_domains has just un-walled every host that list was
-// protecting, and nothing about the write says so.
-//
-// So the write response says so. ADVISORY ONLY, never a refusal: both
-// directions are legitimate (narrowing is the feature; a profile that lifts a
-// deployment-wide restriction for one group is exactly what an admin authors
-// one for), and refusing either would make DefaultPolicy a floor this feature
-// deliberately does not have.
-//
-// Five checks, chosen because each is a field where an omission changes what a
-// member can actually reach, not merely how the document reads. Deliberately
-// NOT exhaustive over RunPolicySpec: a warning per field would bury the ones
-// that matter, and the ones that matter are the walls and the doors.
+// A governance profile REPLACES Config.DefaultPolicy for the principals it binds
+// (composing through composer.Clamp is not a lattice meet), so it narrows and
+// widens BY OMISSION, silently: forgetting the deployment's denied_domains
+// un-walls every host that list protected. ADVISORY ONLY, never a refusal: both
+// directions are legitimate, and refusing would make DefaultPolicy a floor this
+// feature deliberately does not have. Five checks, NOT exhaustive over
+// RunPolicySpec: only fields where an omission changes what a member can reach.
 func governanceOmissionWarnings(ceiling, deployment types.RunPolicySpec) []string {
 	var warns []string
 	if missing := missingEntries(deployment.DeniedDomains, ceiling.DeniedDomains); len(missing) > 0 {
@@ -141,35 +130,15 @@ type ceilingMemo struct {
 // do is the memo's whole contract: resolve at most once, and hand every caller
 // that one answer.
 //
-// Single-flight, not last-writer-wins: releasing the lock between the check
-// and the fill would let two concurrent callers both miss, both resolve, and
-// the loser return ITS OWN pair rather than the memo's — the store asked
-// twice, the two callers handed DIFFERENT profiles. That is precisely the
-// divergence the memo exists to remove: a security admin narrowing a profile
-// mid-request could still land a run whose egress was clamped under one
-// ceiling and whose grants were filtered under another.
-//
-// The lock is held across the resolve, deliberately. A concurrent caller waits
-// for the answer instead of starting a second read, which is the point — the
-// alternative (resolve twice, keep the first) still asks the store twice and
-// still lets the two reads straddle a profile edit. The cost is bounded by the
-// request itself: a single request fans out to at most a couple of goroutines
-// (dispatch runs inline on a WithoutCancel copy that shares these values), and
-// resolveEffectiveCeiling never re-enters this method, so there is no
-// self-deadlock to reason about.
-//
-// A waiter's own context is not consulted while it waits: it gets the answer the
-// first caller's resolve produced, cancelled context or not. That is correct for
-// this memo — the answer is about the PRINCIPAL, not about the waiter's
-// deadline, and handing one caller a "context cancelled" where another got a
-// ceiling would reintroduce the disagreement by another route.
-//
-// The scope is one request, which is what makes a lock held across a store read
-// safe to reason about at all. The memo lives on the request context
-// (ceilingMemoKey, installed once per authenticated request by the auth
-// middleware), so the longest anything waits here is one in-flight resolve for
-// the SAME principal in the SAME request — never another request's, and a
-// memoized failure dies with the request rather than souring the next one.
+// Single-flight, with the lock held across the resolve, deliberately: releasing
+// it between check and fill lets two callers both resolve and get DIFFERENT
+// profiles, so a profile edit mid-request could clamp a run's egress under one
+// ceiling and filter its grants under another. A waiter's own context is not
+// consulted: the answer is about the PRINCIPAL, not the waiter's deadline. Safe
+// because the scope is one request — the memo lives on the request context
+// (ceilingMemoKey, installed by the auth middleware), a request fans out to at
+// most a couple of goroutines, resolveEffectiveCeiling never re-enters this
+// method, and a memoized failure dies with the request.
 func (m *ceilingMemo) do(ctx context.Context, resolve func(context.Context) (governanceCeiling, error)) (governanceCeiling, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

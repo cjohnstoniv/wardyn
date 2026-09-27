@@ -21,7 +21,12 @@ import (
 // upstreamConnectTimeout bounds the CONNECT handshake with the corporate parent
 // proxy (dial + reply). Matches the 15s dialer in newProxy: an upstream that
 // accepts TCP but never answers must surface as a dial failure, never as a hang.
-const upstreamConnectTimeout = 15 * time.Second
+//
+// A var (not a const) purely so a test can shrink it instead of waiting out the
+// real 15s to exercise the timeout path — see
+// TestUpstreamConnectTimeout_ProductionValueUnchanged for the guard that the
+// production default itself is untouched.
+var upstreamConnectTimeout = 15 * time.Second
 
 // upstreamProxy is the OPTIONAL corporate parent proxy that wardyn-proxy chains
 // its egress through. In a locked-down corporate network the sandbox host has NO

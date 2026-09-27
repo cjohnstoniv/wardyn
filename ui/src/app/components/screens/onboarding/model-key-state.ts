@@ -52,8 +52,7 @@ export interface ModelKeyState {
   // ownKeyApplies(row) is false (the defect Appendix A finding 2 reports).
   done: boolean;
   // Whether the CARD's own "Sign in to AWS" button renders. The chip row
-  // keeps its own regardless of this (both call the same
-  // setAwsLoginOpen(true) — one HarnessLoginPane mount).
+  // keeps its own regardless of this (both open the shell's one door).
   button: boolean;
   // Whether "Use my own key instead" / the bring-your-own-key form can ever
   // appear — mirrors ownKeyApplies(row): hidden under a per_user row AND

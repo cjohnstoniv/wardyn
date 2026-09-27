@@ -35,7 +35,7 @@
 // Set-Cookie: wardyn_* dropped (cookie tossing). Both directions are pinned by
 // tests in uigateway_test.go.
 //
-// No content is recorded. ui.auth/ui.start/ui.open/ui.close say that a human
+// No content is recorded. ui.authorize/ui.start/ui.open/ui.close say that a human
 // opened and closed an app; there is no keystroke, screen or page capture on
 // this path, and these actions are deliberately distinct from session.attach so
 // a relay session can never appear in the recording picker as if it were one.
@@ -43,6 +43,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -215,7 +216,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// the run's own origin never sees — and would put one run's cookie on
 	// another run's origin. Refuse instead.
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "wrong host for run", "host": r.Host})
 		writeError(w, http.StatusForbidden, "this run's UI apps are served on a different host")
 		return
@@ -231,7 +232,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "invalid, expired, or already-used ticket"})
 		writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
 		return
@@ -246,13 +247,20 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
-		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			map[string]any{"reason": "not the run owner"})
 		writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot open a UI app (state="+string(run.State)+")")
+		return
+	}
+	// A kept run is RUNNING with its agent stopped: nothing to open.
+	if runIsKept(run) {
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
+			map[string]any{"reason": "run has ended"})
+		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
 		return
 	}
 
@@ -270,7 +278,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
-		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			map[string]any{"reason": "app not declared in the run's policy ui_apps"})
 		writeError(w, http.StatusForbidden, "no UI app named "+strconv.Quote(app)+" is declared in this run's policy ui_apps")
 		return
@@ -291,7 +299,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		Secure:   s.cfg.OIDCSecureCookies,
 		Expires:  now.Add(ttl),
 	})
-	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", declared.Name, "success",
+	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
 		map[string]any{"app": declared.Name, "port": declared.Port})
 	http.Redirect(w, r, uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
 }
@@ -344,7 +352,9 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	// exactly like the decision-ingest and attach keepalives: a human reading
 	// code in an editor is not idle, and the reaper must not stop the run under
 	// them.
-	if s.shouldTouch(runID) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
+	// "" is never ruleSourceCredentialReauthTimeout: a human relaying UI traffic
+	// is always real presence, so this touch is never excluded.
+	if s.shouldTouch(runID, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
@@ -510,6 +520,22 @@ func (b *uiDialErrBox) get() *uiDialError {
 	return b.err
 }
 
+// uiExecFailMsg turns a Runner.ExecStream launch failure into the message a
+// browser sees for the UI relay's own two launch points (the socat dial and
+// the launcher probe/start). sshExecStreamErrorMessage's own fallback arm
+// concatenates the raw error — the substrate's own text, e.g. a container
+// runtime detail — which is fine inside the SSH gateway's channel-local
+// stderr but not here: the UI relay's 502 body is read by a browser over the
+// SECOND, un-authenticated-by-session origin this file's own doc comment
+// describes, so it gets the same log-and-fixed-sentence treatment as every
+// other 5xx body in this package rather than the driver text.
+func uiExecFailMsg(ctx context.Context, action string, err error) string {
+	if errors.Is(err, runner.ErrExecStreamUnsupported) {
+		return sshExecStreamUnsupportedMsg
+	}
+	return loggedMsg(ctx, action, err)
+}
+
 // uiFail records a typed dial failure on the request's box (when there is one)
 // and returns it as the dial error.
 func uiFail(ctx context.Context, status int, msg string) error {
@@ -532,7 +558,7 @@ func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 	slog.WarnContext(r.Context(), "wardynd: ui relay failed", "path", r.URL.Path, "err", err)
-	writeError(w, http.StatusBadGateway, "the sandbox closed the UI connection: "+err.Error())
+	writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "the sandbox closed the UI connection", err))
 }
 
 // uiDial opens ONE relay connection: it re-checks the run is still live,
@@ -563,6 +589,10 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return nil, uiFail(ctx, http.StatusConflict, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
 	}
+	// A kept run is RUNNING with its agent stopped: the UI app is gone.
+	if runIsKept(run) {
+		return nil, uiFail(ctx, http.StatusConflict, "run has ended; the UI app is gone")
+	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
@@ -586,7 +616,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	})
 	if err != nil {
 		release()
-		return nil, uiFail(ctx, http.StatusBadGateway, sshExecStreamErrorMessage(err))
+		return nil, uiFail(ctx, http.StatusBadGateway, uiExecFailMsg(ctx, "start ui relay exec", err))
 	}
 
 	// Keepalive per connection, not per inbound request. handleUIRelay touches
@@ -689,7 +719,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port)},
 	})
 	if err != nil {
-		return uiFail(ctx, http.StatusBadGateway, sshExecStreamErrorMessage(err))
+		return uiFail(ctx, http.StatusBadGateway, uiExecFailMsg(ctx, "start ui app launcher", err))
 	}
 	// Both streams MUST be drained before Wait: they are unbuffered pipes off
 	// one demux goroutine (runner.ExecSession's contract), so an undrained byte

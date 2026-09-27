@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -51,8 +52,7 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	// malformed prefix or an unknown run (both branches above) stays silent;
 	// only a POSITIVELY identified foreign run reaches this audit. The 404
 	// recording.Handler writes on a false return is unaffected either way.
-	s.recordAudit(r.Context(), s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+	s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
 	return false
 }
 
@@ -129,7 +129,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "save recording: "+saveErr.Error())
+		writeServerError(w, r, "save recording", saveErr)
 		return
 	}
 

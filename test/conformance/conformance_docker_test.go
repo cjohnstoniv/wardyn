@@ -23,11 +23,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
 	dockerclient "github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/conformance"
 )
 
@@ -51,6 +56,7 @@ func TestConformanceDocker(t *testing.T) {
 	// Exercise the assembled production path: the orchestrator over the OCI
 	// substrate is what the control plane actually runs.
 	r := orchestrator.New(sub)
+	requireStrongestClass(t, r)
 
 	// The docker driver requires the control-plane-facing network to exist so
 	// the proxy sidecar can join it at sandbox creation. Create best-effort;
@@ -68,7 +74,70 @@ func TestConformanceDocker(t *testing.T) {
 		ExitArgv: func(code int) []string {
 			return []string{"sh", "-c", "exit " + strconv.Itoa(code)}
 		},
+		// busybox runs as root, and a root probe can chmod or rename a
+		// root-owned file without any capability; the managed-files case runs
+		// as the uid every agent image uses instead.
+		AgentUserImage: agentUserImage(t, "busybox:latest"),
 	})
+}
+
+// requireStrongestClass fails the leg when WARDYN_TEST_REQUIRE_CLASS is set and
+// is not the strongest class the daemon advertises. Every conformance case runs
+// at the strongest class, so this is what makes the nightly gVisor leg run
+// ManagedFiles, L0StructuralEgress and ExecStream under runsc — and go red, not
+// quietly back to runc, on a runner where runsc did not register.
+func requireStrongestClass(t *testing.T, r runner.Runner) {
+	t.Helper()
+	want := types.ConfinementClass(os.Getenv("WARDYN_TEST_REQUIRE_CLASS"))
+	if want == "" {
+		return
+	}
+	caps, err := r.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if n := len(caps.ConfinementClasses); n == 0 || caps.ConfinementClasses[n-1] != want {
+		t.Fatalf("WARDYN_TEST_REQUIRE_CLASS=%s but the strongest class this daemon advertises is not it (classes %v): is its runtime installed and registered with dockerd?",
+			want, caps.ConfinementClasses)
+	}
+	t.Logf("WARDYN_TEST_REQUIRE_CLASS=%s: every conformance case below runs at %s", want, want)
+}
+
+// agentUserImage commits base with USER 1000:1000 — the image contract's
+// agent identity — under a unique tag removed at cleanup.
+func agentUserImage(t *testing.T, base string) string {
+	t.Helper()
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		t.Fatalf("agentUserImage: create client: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if _, err := cli.ImageInspect(ctx, base); err != nil {
+		if err := dockerutil.PullImage(ctx, cli, base, "agentUserImage"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	suffix := uuid.NewString()[:8]
+	created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Name:   "wardyn-conformance-uid1000-" + suffix,
+		Config: &container.Config{Image: base, Cmd: []string{"true"}},
+	})
+	if err != nil {
+		t.Fatalf("agentUserImage: create: %v", err)
+	}
+	defer func() {
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, dockerclient.ContainerRemoveOptions{Force: true})
+	}()
+	ref := "wardyn-conformance-uid1000:" + suffix
+	if _, err := cli.ContainerCommit(ctx, created.ID, dockerclient.ContainerCommitOptions{Reference: ref, Changes: []string{"USER 1000:1000"}}); err != nil {
+		t.Fatalf("agentUserImage: commit: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = cli.ImageRemove(context.Background(), ref, dockerclient.ImageRemoveOptions{Force: true, PruneChildren: true})
+	})
+	return ref
 }
 
 // dockerRouteProbe is the L0 DefaultRouteProbe for the docker driver.

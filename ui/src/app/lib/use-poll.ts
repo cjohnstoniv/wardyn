@@ -55,6 +55,20 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
   }, [paused]);
 
   const inFlight = React.useRef(false);
+  // Set when a refocus arrives while a read is already in flight. The
+  // in-flight guard above is deliberate — it stops a burst of focus events
+  // from stacking requests — but the refocus it swallowed still wanted fresh
+  // data, and the flag only clears once the outstanding read lands. Coalesce
+  // rather than drop: remember the request and fire exactly ONE follow-up
+  // when that read settles, no matter how many refocus events arrived while
+  // it was outstanding.
+  const refocusPending = React.useRef(false);
+  // #510-F5 — settle()'s coalesced refocus follow-up used to fire unconditionally,
+  // including after the hook's own cleanup ran: a refocus arriving while a read
+  // is in flight, followed by an unmount before that read settles, ran the
+  // caller's fetch chain (and every setState inside it) against a dead screen.
+  // Set true in cleanup so settle can skip the follow-up instead.
+  const disposed = React.useRef(false);
 
   // One tick. Kept in a ref so the visibility listener and the interval invoke
   // the SAME guarded call rather than two copies of the rule.
@@ -74,26 +88,47 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     }
     if (!result || typeof (result as Promise<unknown>).then !== "function") return;
     inFlight.current = true;
-    void (result as Promise<unknown>).then(
-      () => {
-        inFlight.current = false;
-      },
-      () => {
-        // A REJECTED poll clears the guard too: a failing endpoint must not
-        // freeze this view on its last-good data forever.
-        inFlight.current = false;
-      },
-    );
+    const settle = () => {
+      inFlight.current = false;
+      // A refocus landed while this read was outstanding: run the coalesced
+      // follow-up now that the guard has cleared, instead of leaving the
+      // screen on the answer that was already stale when the person looked
+      // back.
+      if (refocusPending.current) {
+        refocusPending.current = false;
+        if (!disposed.current) tick.current();
+      }
+    };
+    // A REJECTED poll clears the guard too: a failing endpoint must not
+    // freeze this view on its last-good data forever.
+    void (result as Promise<unknown>).then(settle, settle);
+  };
+
+  // A refocus is handled separately from a plain interval tick: a stacked
+  // INTERVAL tick during a slow read is still dropped (unchanged), but a
+  // refocus that arrives on top of one is remembered instead.
+  const onRefocus = React.useRef(() => {});
+  onRefocus.current = () => {
+    if (inFlight.current) {
+      refocusPending.current = true;
+      return;
+    }
+    tick.current();
   };
 
   React.useEffect(() => {
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    disposed.current = false;
     const id = setInterval(() => tick.current(), intervalMs);
-    if (typeof document === "undefined") return () => clearInterval(id);
+    if (typeof document === "undefined")
+      return () => {
+        disposed.current = true;
+        clearInterval(id);
+      };
     // Coming back to the tab refreshes NOW: the alternative is a human staring
     // at up to intervalMs of state that was frozen while they were away.
     const onVisible = () => {
-      if (!document.hidden) tick.current();
+      if (!document.hidden) onRefocus.current();
     };
     document.addEventListener("visibilitychange", onVisible);
     // The hook's ONLY leak guard, and every screen that polls depends on it:
@@ -103,6 +138,8 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     // "stops polling on unmount" and "replaces the timer when intervalMs
     // changes" cases — before those, deleting it kept 64 tests green.
     return () => {
+      disposed.current = true;
+      refocusPending.current = false;
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };

@@ -21,14 +21,16 @@ the only thing keeping that code away from the console's session storage and
 admin actions is that it arrives on a different browser origin. See
 [Bounds](#bounds) for what that separation does and does not buy.
 
-> **Not available on the desktop tier (0.7).** The relay is built and tested,
-> but no `agent-vscode` or noVNC image is published, and a managed laptop has no
-> repo and no build path — `wardyn-desktop.sh` runs `--no-build` on purpose. So
+> **Not available on the desktop tier.** The relay is built and tested, and
+> `agent-vscode`/`agent-novnc` publish starting with the next tagged release
+> (#141), but neither is wired into `WARDYN_AGENT_IMAGES` by default — they
+> are opt-in — and a managed laptop has no repo and no build path anyway —
+> `wardyn-desktop.sh` runs `--no-build` on purpose. So
 > `deploy/desktop/wardyn.env*.example` ship `WARDYN_UI_SANDBOX_LISTEN` commented
-> out rather than publishing a port with nothing to serve. This lane works on a
-> **developer checkout** (`make agent-images`, then `make test-e2e-ui-sandbox`).
-> Publishing the UI images is deferred to 0.8; see
-> [docs/DESKTOP.md](DESKTOP.md) "Named gap: the browser lane".
+> out rather than publishing a port with nothing pinned to serve it. This lane
+> works on a **developer checkout** (`make agent-images`, then
+> `make test-e2e-ui-sandbox`); see [docs/DESKTOP.md](DESKTOP.md) "Named gap:
+> the browser lane" for the desktop-tier detail.
 >
 > The **one-line installer** (`install.sh`) is the same: it writes
 > `WARDYN_UI_SANDBOX_PORT` but leaves the listener off, for the same reason.
@@ -39,8 +41,8 @@ admin actions is that it arrives on a different browser origin. See
 `make agent-image-novnc`, declared as `"name": "novnc"`. It changed no server
 code, which was the whole prediction: an app rides the image, not a seam.
 
-**Base:** `agent-base`, deliberately not the `agent-claude-code` the code-server
-image uses. agent-base is the image contract with no vendor CLI and is what this
+**Base:** `agent-base` — the same default the code-server (`vscode/`) image
+uses. agent-base is the image contract with no vendor CLI and is what this
 project publishes; an X stack layered on node + npm + a vendor CLI is surface
 for nothing.
 
@@ -49,10 +51,12 @@ for comparison — an X stack is simply expensive). Listening ~1s into the 20s
 `uiEnsureWaitSecs` budget. If a change pushes size past ~1.4 GB, drop `xterm`
 then `openbox` before raising the ceiling — a relayed app needs neither.
 
-**Local build only**, like `agent-vscode`. Publishing an X stack would drag in
-the trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
-desktop — a supply-chain workstream, not an image. It is therefore **not
-available on the desktop tier**; see the note at the top.
+**Publishes from the next tagged release**, like `agent-vscode` (#141) — the
+trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
+desktop turned out to be exactly the supply-chain workstream predicted here,
+now landed. It is still **not available on the desktop tier by default**
+(neither image is wired into `WARDYN_AGENT_IMAGES` automatically); see the
+note at the top.
 
 **Confinement: both images run under CC2 (gVisor).** Measured, on a daemon with
 `runsc` registered — note that is the **native** `dockerd`, not Docker Desktop's
@@ -290,7 +294,7 @@ recorded is that a session *happened*, in the append-only audit log:
 
 | Action | When | Data |
 |---|---|---|
-| `ui.auth` | every enter — success and every denial | app, port; or the denial reason |
+| `ui.authorize` | every enter — success and every denial | app, port; or the denial reason |
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
@@ -313,7 +317,7 @@ expired — answers the same 403, so there is no oracle to probe.
 
 **Ticket.** Single-use, 30s TTL, owner-or-admin at mint
 (`POST /runs/{id}/attach-ticket`). A stale or already-redeemed ticket is a 403
-with a `ui.auth` denial in the log.
+with a `ui.authorize` denial in the log.
 
 **Only declared ports.** The port is captured from the effective policy when
 the ticket is redeemed and lives in the signed cookie, so no later request can
@@ -346,7 +350,7 @@ Two things that check does **not** catch, by design:
 And a connection already established (a relayed WebSocket) keeps working until
 it closes: killing the run is what ends an in-flight session, the same bound
 attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
-`ui.auth` / `denied` row naming the reason.
+`ui.authorize` / `denied` row naming the reason.
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
 hostname would otherwise hand console cookies to sandbox code: every forwarded
@@ -408,7 +412,7 @@ with the work it implies, not with a plan:
 | JetBrains Gateway | Gateway's normal flow has the **remote** host download a multi-gigabyte IDE backend; the sandbox's only egress is wardyn-proxy under the run's allowlist, so that download has nothing to reach — the same problem `remote.SSH.localServerDownload` solves for VS Code, but with a much larger artifact and no equally simple client switch. A backend baked into an image, or pushed over the existing SSH transport, is the shape it would take | Nothing built. No Wardyn image carries an IDE backend, and no one has run the client against a sandbox to find out where it stops |
 | RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client. That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one. X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route | Nothing built. No image ships an X session, and the desktop's audit/recording story is unwritten |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
-| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base` (not the vscode image's `agent-claude-code`) — an X stack does not need a language runtime. Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
+| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base`, the same default the vscode image now uses — an X stack does not need a language runtime. Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 
 **Decision criteria.** Before any of these becomes work, all of the following
 have to hold — they are the same properties that made the browser relay
@@ -446,7 +450,7 @@ over a `runner.ExecSession`, so the standard library handles the WebSocket
 `101` upgrade code-server needs without a second protocol implementation.
 Policy validation is `validateUIApps` (`internal/api/policy.go`), applied
 wherever a policy enters — stored, inline, or `WARDYN_DEFAULT_POLICY`. A run's
-declared apps are resolved from the `run.policy.effective` audit envelope, not
+declared apps are resolved from the `run.policy.resolve` audit envelope, not
 from `policy_id`: an inline or default policy has no row to fetch, and
 resolving through the id would hand an inline-policy run the default policy's
 apps.

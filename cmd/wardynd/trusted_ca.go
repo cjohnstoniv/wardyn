@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -175,6 +177,60 @@ func defaultPolicyMissingGatewayHosts(defaultPolicy types.RunPolicySpec, llmGate
 func warnMissingGatewayHosts(defaultPolicy types.RunPolicySpec, llmGateways map[string]string) {
 	for publicHost, gwHost := range defaultPolicyMissingGatewayHosts(defaultPolicy, llmGateways) {
 		slog.Warn("wardynd: an internal model gateway is configured but the default policy's allowed_domains does not list it — runs under that policy will fail to reach their model",
+			slog.String("public_host", publicHost), slog.String("gateway_host", gwHost))
+	}
+}
+
+// upstreamProxyNoBypassStore is the one read warnUpstreamProxyNoBypass makes
+// — an interface so the check is testable without a database, matching
+// bedrockPinRosterStore's shape (boot_deps.go).
+type upstreamProxyNoBypassStore interface {
+	GetSiteConfig(context.Context) (types.SiteConfig, error)
+}
+
+// warnUpstreamProxyNoBypass says, once at boot, that a corporate upstream
+// proxy is configured (SiteConfig.UpstreamProxyURL or UpstreamProxySecretRef)
+// but no UpstreamProxyNoProxy entry covers a configured LLM gateway host —
+// the exact routing question Proxy.bypassUpstream (internal/egress/proxy)
+// answers per dial at run time, asked here in advance with
+// proxy.NoProxyCovers. Without a covering entry every brokered call to that
+// gateway is CONNECTed through the upstream instead of dialled directly,
+// which times out on the private-endpoint estates the bypass list exists for
+// (see docs/OPERATIONS.md "Internal model gateway").
+//
+// THIS IS A BOOT-TIME READ, said in the log line itself: SiteConfig is
+// admin-editable afterwards through PUT /site-config, so the upstream proxy
+// and its bypass list can both change without a restart — this warning names
+// the snapshot this process booted with, not a live posture, and does not
+// re-fire when either setting changes underneath it.
+//
+// WARN, never a refusal, matching warnMissingGatewayHosts: most deployments
+// configure no upstream proxy at all, so this is advisory only for the
+// estates that do chain one. A GetSiteConfig failure is silent here, matching
+// warnBedrockSSOPinPosture — a boot that cannot reach the store has louder
+// problems than this notice.
+func warnUpstreamProxyNoBypass(ctx context.Context, st upstreamProxyNoBypassStore, llmGateways map[string]string) {
+	sc, err := st.GetSiteConfig(ctx)
+	if err != nil {
+		return
+	}
+	if sc.UpstreamProxyURL == "" && sc.UpstreamProxySecretRef == "" {
+		return
+	}
+	for publicHost, base := range llmGateways {
+		gwHost := ""
+		if u, err := url.Parse(base); err == nil { // ValidateLLMGateways guarantees this parses
+			gwHost = u.Hostname()
+		}
+		if gwHost == "" || proxy.NoProxyCovers(sc.UpstreamProxyNoProxy, gwHost) {
+			continue
+		}
+		slog.Warn("wardynd: BOOT-TIME READ — an upstream proxy is configured but no "+
+			"upstream_proxy_no_proxy entry covers this internal model gateway host, so at the "+
+			"moment this process started every brokered call to it will be CONNECTed through the "+
+			"upstream proxy instead of dialled directly; this can silently time out on an estate "+
+			"whose upstream cannot reach the gateway, and re-checks only on the next restart since "+
+			"SiteConfig is admin-editable without one",
 			slog.String("public_host", publicHost), slog.String("gateway_host", gwHost))
 	}
 }

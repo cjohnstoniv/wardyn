@@ -36,8 +36,13 @@ const (
 	// endpoint pair, same token injection.
 	routeApprovalsCreate = "/wardyn/v1/approvals"
 	routeApprovals       = "/wardyn/v1/approvals/"
-	routeRecordings      = "/wardyn/v1/recordings/"
-	routeScanResults     = "/wardyn/v1/scan-results/"
+	// routeApprovalsExpireSuffix (POST, {id}+suffix) is wardyn-toolgate's own
+	// give-up signal (#811): it closes the tool_call approval it raised the
+	// moment its wait deadline is reached, instead of leaving the row PENDING
+	// for the periodic sweep to catch up to.
+	routeApprovalsExpireSuffix = "/expire"
+	routeRecordings            = "/wardyn/v1/recordings/"
+	routeScanResults           = "/wardyn/v1/scan-results/"
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
 	// scan/verify result uploads.
@@ -102,6 +107,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerCreateApproval(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, routeApprovals):
 		p.handleBrokerApproval(w, r)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, routeApprovals) && strings.HasSuffix(path, routeApprovalsExpireSuffix):
+		p.handleBrokerExpireApproval(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeRecordings):
 		p.handleBrokerRecording(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeScanResults):
@@ -165,6 +172,20 @@ func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 		nil, "", ruleSourceApprovals, nil)
 }
 
+// handleBrokerExpireApproval forwards POST /wardyn/v1/approvals/{id}/expire to
+// the control plane's internal expire endpoint with the run token injected —
+// wardyn-toolgate's own give-up signal (#811), closing the tool_call approval
+// it raised itself rather than leaving it PENDING for the periodic sweep.
+func (p *Proxy) handleBrokerExpireApproval(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, routeApprovals), routeApprovalsExpireSuffix)
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "invalid approval id", http.StatusNotFound)
+		return
+	}
+	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals/"+id+"/expire",
+		nil, "", ruleSourceApprovals, nil)
+}
+
 // toolApprovalRequest is the SANDBOX-facing body for POST /wardyn/v1/approvals.
 // Payload is the shape the approvals UI already renders for a tool_call
 // (screens/approvals.tsx: {tool, cmd, env}).
@@ -207,9 +228,19 @@ type toolCallScope struct {
 // for a host it was never allowed to reach — and, approved, teach the workspace
 // an allow-list entry nothing ever asked for.
 func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxToolApprovalBody))
 	var body toolApprovalRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxToolApprovalBody)).Decode(&body); err != nil {
+	if err != nil || json.Unmarshal(raw, &body) != nil {
 		http.Error(w, "invalid tool approval request", http.StatusBadRequest)
+		return
+	}
+	// `lane` names a control-plane-raised escalation (the Azure DevOps
+	// capability hold). The typed re-marshal below would drop it anyway, but a
+	// sandbox that tries to say it is refused out loud rather than silently
+	// cleaned: the control plane refuses the same key on its own route.
+	if sandboxNamesLane(raw) {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
+		http.Error(w, "wardyn: a tool approval may not name a lane", http.StatusBadRequest)
 		return
 	}
 	if body.Kind != string(types.ApprovalToolCall) {
@@ -244,6 +275,31 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 	// raised this hold" to the approval it raised, without parsing the response.
 	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals",
 		fwd, "application/json", ruleSourceApprovals, approvalIDAlways)
+}
+
+// sandboxNamesLane reports whether the body, or its payload, carries a `lane`
+// key in any letter case (encoding/json matches keys case-insensitively).
+func sandboxNamesLane(raw []byte) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return false
+	}
+	for k, v := range top {
+		if strings.EqualFold(k, "lane") {
+			return true
+		}
+		if strings.EqualFold(k, "payload") {
+			var inner map[string]json.RawMessage
+			if json.Unmarshal(v, &inner) == nil {
+				for ik := range inner {
+					if strings.EqualFold(ik, "lane") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // clampToolField bounds a sandbox-supplied string for storage and marks any

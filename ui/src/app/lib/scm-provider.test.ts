@@ -10,7 +10,11 @@ import {
   hostError,
   laneOfName,
   LANE_META,
+  patLaneMeta,
   deriveProviders,
+  adoRepoName,
+  isADOAddress,
+  unescapeADOName,
 } from "./scm-provider";
 
 // Mirrors secrets.tsx:48's server-mirrored name policy. Duplicated rather
@@ -100,7 +104,7 @@ describe("LANE_META — honesty canon", () => {
       "The run works through a short-lived, scoped credential — your stored key stays in Wardyn.",
     );
     expect(LANE_META.pat.tooltip).toBe(
-      "A git access token is handed to git inside the sandbox — the process running there can read it.",
+      "A stored git access token is attached to the request by the proxy on the outbound leg — it never enters the sandbox.",
     );
     expect(LANE_META.ssh.tooltip).toBe(
       "A private SSH key is written to disk in the sandbox — the process running there can read it.",
@@ -115,20 +119,50 @@ describe("LANE_META — honesty canon", () => {
 
   it("pins the chip labels verbatim (U+00B7 middle dot, not a hyphen)", () => {
     expect(LANE_META.app.label).toBe("App · brokered");
-    expect(LANE_META.pat.label).toBe("PAT · in-sandbox");
+    expect(LANE_META.pat.label).toBe("PAT · brokered");
     expect(LANE_META.ssh.label).toBe("SSH · resident");
   });
 
   it("pins each lane's chip tone", () => {
     expect(LANE_META.app.tone).toBe("success");
-    expect(LANE_META.pat.tone).toBe("info");
+    // pat is patLaneMeta's ON shape (#381 default): brokered like the App
+    // lane, so it earns the same reassuring tone — "info" is the OFF
+    // (in-sandbox) tone, pinned in the patLaneMeta describe block below.
+    expect(LANE_META.pat.tone).toBe("success");
     expect(LANE_META.ssh.tone).toBe("warning");
   });
 
   it("pins each lane's residency — the fact a stored credential can actually produce", () => {
     expect(LANE_META.app.residency).toBe("brokered_mint");
-    expect(LANE_META.pat.residency).toBe("resident_env");
+    expect(LANE_META.pat.residency).toBe("proxy_injected");
     expect(LANE_META.ssh.residency).toBe("resident_mount");
+  });
+
+  // #381: the PAT lane's label/tooltip/residency are chosen from the
+  // operator's own WARDYN_GIT_PAT_BROKER switch — LANE_META.pat above is
+  // patLaneMeta's ON shape (the 0.7.10 default); this pins BOTH positions,
+  // including that the OFF position keeps the pre-0.7 wording verbatim (the
+  // issue's own "the old wording is still correct when the broker is off").
+  describe("patLaneMeta — both switch positions", () => {
+    it("on (default): brokered label, tone and residency", () => {
+      const meta = patLaneMeta(true);
+      expect(meta.label).toBe("PAT · brokered");
+      expect(meta.tooltip).toBe(CAPABILITY.gitPatLine);
+      expect(meta.tone).toBe("success");
+      expect(meta.residency).toBe("proxy_injected");
+      expect(meta).toEqual(LANE_META.pat);
+    });
+
+    it("off: the pre-0.7 in-sandbox label, tone and residency", () => {
+      const meta = patLaneMeta(false);
+      expect(meta.label).toBe("PAT · in-sandbox");
+      expect(meta.tooltip).toBe(CAPABILITY.gitPatLineResident);
+      expect(meta.tooltip).toBe(
+        "A git access token is handed to git inside the sandbox — the process running there can read it.",
+      );
+      expect(meta.tone).toBe("info");
+      expect(meta.residency).toBe("resident_env");
+    });
   });
 });
 
@@ -266,5 +300,54 @@ describe("deriveProviders", () => {
     // not exist anywhere in the output — the credential landed on the
     // registered host, it didn't spawn a third, wrong one.
     expect(rows.find((r) => r.host === "git.server.corp.com")).toBeUndefined();
+  });
+});
+
+// #485: the port of internal/adoscope/names.go's UnescapeName. The literal
+// cases are the Go twin's (TestEscapeName_RoundTripsEveryPermittedName,
+// TestUnescapeName_RefusesStructure) so the console decodes a name exactly as
+// the server does.
+describe("unescapeADOName", () => {
+  it.each([
+    ["Payments%20Platform", "Payments Platform"],
+    ["Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
+    ["Card%20Auth%20%28v2%29.Service", "Card Auth (v2).Service"],
+    ["Card Auth (v2).Service", "Card Auth (v2).Service"],
+    ["R&D%20Ops!", "R&D Ops!"],
+    ["Bob's%20@Tools~1", "Bob's @Tools~1"],
+    ["Caf%C3%A9%20%C3%89quipe", "Café Équipe"],
+    ["100%25%20Done", "100% Done"],
+    ["a+b", "a+b"], // "+" is a literal in a path, never a space
+  ])("%s decodes to %s", (raw, name) => {
+    expect(unescapeADOName(raw)).toBe(name);
+  });
+
+  it.each(["a%2Fb", "a%2fb", "a%5Cb", "a%252Fb", "a%25252Fb", "%2E%2E", "%2e", "..", "p%20", "%20p", "p.", "a%0Ab", "a%00", "a%7F", "%zz", "a%4", "a%"])(
+    "%s is refused",
+    (raw) => {
+      expect(unescapeADOName(raw)).toBeNull();
+    },
+  );
+});
+
+describe("adoRepoName", () => {
+  it.each([
+    ["https://dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
+    ["https://dev.azure.com/contoso/Payments Platform/_git/Card Auth (v2).Service", "Card Auth (v2).Service"],
+    ["https://contoso@dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20%28v2%29.Service", "Card Auth (v2).Service"],
+    ["https://contoso.visualstudio.com/Caf%C3%A9/_git/%C3%9Cn%C3%AFcode%20Repo", "Ünïcode Repo"],
+    ["git@ssh.dev.azure.com:v3/contoso/Payments%20Platform/Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
+  ])("%s is named %s", (locator, name) => {
+    expect(isADOAddress(locator)).toBe(true);
+    expect(adoRepoName(locator)).toBe(name);
+  });
+
+  it("names no other forge's repository", () => {
+    expect(isADOAddress("https://github.com/acme/payments%20svc")).toBe(false);
+    expect(adoRepoName("https://github.com/acme/payments%20svc")).toBeNull();
+    expect(adoRepoName("acme/payments-service")).toBeNull();
+    // "_git" alone does not make a host Azure DevOps (a provider row does).
+    expect(adoRepoName("https://github.com/acme/_git/re%20po")).toBeNull();
+    expect(adoRepoName("https://tfs.corp.example/tfs/c/Payments%20Platform/_git/Card%20Auth")).toBeNull();
   });
 });

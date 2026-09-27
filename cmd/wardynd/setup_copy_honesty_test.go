@@ -13,11 +13,10 @@ import (
 // TestSetupScriptTeamModeCopyIsHonest guards against scripts/setup.sh and
 // Makefile claiming team mode (multi-user) "does not exist" outright. A
 // packaged one-command team installer really doesn't exist, but admin/member
-// RBAC + SSO shipped in v0.5 on the same compose control plane (see
-// docs/OPERATIONS.md §Multi-user + deploy/compose/README.md) — the copy must
-// say so instead of implying multi-user access control isn't available at
-// all. Regression for W1-S1-1 (the honesty pass at bdee7d7 missed these two
-// front-door files).
+// RBAC + SSO run on the same compose control plane (see docs/OPERATIONS.md
+// §Multi-user + deploy/compose/README.md) — the copy must say so instead of
+// implying multi-user access control isn't available at all. Both front-door
+// files are checked.
 func TestSetupScriptTeamModeCopyIsHonest(t *testing.T) {
 	root := repoRoot(t)
 
@@ -58,7 +57,7 @@ func TestSetupScriptTeamModeCopyIsHonest(t *testing.T) {
 // risk only. The registry is wiped by ANY process restart, so a single
 // `replicas: 1` wardynd that restarts mid-run (upgrade, crash) reproduces the
 // identical empty-snapshot fail-open — the docs must say so, not imply
-// `replicas: 1` alone makes the gap inert. Regression for W21-S1-2.
+// `replicas: 1` alone makes the gap inert.
 func TestMaskRegistryFailOpenDocsNameSingleReplicaRestart(t *testing.T) {
 	root := repoRoot(t)
 

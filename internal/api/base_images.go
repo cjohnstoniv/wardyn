@@ -44,7 +44,32 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 	if !repoFieldSafe(img) {
 		return "image must not contain whitespace or control characters"
 	}
+	if !imageRefPathSafe(img) {
+		return fmt.Sprintf(image400DotSegment, "image")
+	}
 	return ""
+}
+
+// image400DotSegment — DRAFT (M2 canon pending). %s is the field name.
+const image400DotSegment = `%s is not an image reference — an image reference has no backslash and no "", "." or ".." path segment`
+
+// imageRefPathSafe reports whether an image ref has no backslash and no
+// empty, "." or ".." segment. No registry names an image that way, and an
+// image ref is also a capability value the console builds a control path from
+// (the Images tab's Available to), so a member-typed `../policy/<uuid>` must
+// never be stored.
+// Not repoLocatorPathSafe: that reads "host:5000/..." and "img:tag" as
+// scp-form and checks only what follows the colon.
+func imageRefPathSafe(ref string) bool {
+	if strings.Contains(ref, `\`) {
+		return false
+	}
+	for _, seg := range strings.Split(strings.TrimSpace(ref), "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // handleListBaseImages returns the catalog.
@@ -53,7 +78,7 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 func (s *Server) handleListBaseImages(w http.ResponseWriter, r *http.Request) {
 	list, err := s.cfg.Store.ListBaseImages(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list base images: "+err.Error())
+		writeServerError(w, r, "list base images", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"base_images": list})
@@ -81,7 +106,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if entry.Name == "" {
-		entry.Name = lastPathSegment(entry.Image)
+		entry.Name = lastPathSegment(entry.Image, nil)
 	}
 	if msg := validateBaseImageWrite(entry); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
@@ -89,7 +114,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.cfg.Store.UpsertBaseImage(r.Context(), entry)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert base image: "+err.Error())
+		writeServerError(w, r, "upsert base image", err)
 		return
 	}
 	status := http.StatusCreated
@@ -103,7 +128,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 		if explicitName != "" {
 			updated, uerr := s.cfg.Store.UpdateBaseImageName(r.Context(), created.ID, explicitName)
 			if uerr != nil {
-				writeError(w, http.StatusInternalServerError, "apply name to existing base image: "+uerr.Error())
+				writeServerError(w, r, "apply name to existing base image", uerr)
 				return
 			}
 			created = updated
@@ -134,7 +159,7 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "1"
 	names, err := s.cfg.Store.WorkspacesUsingBaseImage(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "check base image use: "+err.Error())
+		writeServerError(w, r, "check base image use", err)
 		return
 	}
 	if err := s.cfg.Store.DeleteBaseImage(r.Context(), id, force); err != nil {
@@ -148,7 +173,7 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "no such base image")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete base image: "+err.Error())
+		writeServerError(w, r, "delete base image", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

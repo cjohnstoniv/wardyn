@@ -4,6 +4,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,7 +68,7 @@ func linuxNative() dockerEnv {
 	return dockerEnv{goos: "linux", hasDocker: true, infoOK: true, osType: "linux", initSys: "systemd", family: "debian"}
 }
 
-// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents WHY W4-S1-7's
+// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents why
 // fix removed `wardyn setup` from dialHint's recovery text: the bare command is
 // a subcommand group with no RunE, so it exits 0 having started nothing — never
 // a working "start wardynd" recovery step.
@@ -93,7 +94,7 @@ func TestPlanWall(t *testing.T) {
 		{"rootless", func() dockerEnv { e := linuxNative(); e.rootless = true; return e }(), actUnsupported, "rootless"},
 		{"windows-containers", func() dockerEnv { e := linuxNative(); e.osType = "windows"; return e }(), actUnsupported, "Windows containers"},
 		{"no-docker", dockerEnv{goos: "linux"}, actUnsupported, "Docker isn't installed"},
-		// W4-S1-1 regression: `docker info` failing (permission/daemon) must
+		// `docker info` failing (permission/daemon) must
 		// refuse to guess, not silently fall through to the native-install plan
 		// (family/initSys zero-valued here would otherwise reach planWallNativeLinux's
 		// actPrint branch — offering a gVisor install on a host that, for all we
@@ -126,7 +127,7 @@ func TestPlanVault(t *testing.T) {
 	}{
 		{"kvm-native-print", kvm(), actPrint},
 		{"no-kvm-unsupported", linuxNative(), actUnsupported},
-		// W4-S1-1 regression, Vault side: same info-failed guard ahead of the
+		// Vault side: the same info-failed guard ahead of the
 		// desktop/rootless/kvm checks below it.
 		{"docker-info-failed", dockerEnv{goos: "linux", hasDocker: true, kvm: true}, actUnsupported},
 		{"desktop-unsupported", func() dockerEnv { e := kvm(); e.desktop = true; return e }(), actUnsupported},
@@ -144,10 +145,10 @@ func TestPlanVault(t *testing.T) {
 }
 
 // gVisor's release bucket is keyed by `uname -m` (x86_64/aarch64), not
-// amd64/arm64. gvisorBinaryScript gets this right; colimaWallScript used to
-// remap uname -m to amd64/arm64, which 404s on both Intel and Apple-Silicon
-// Colima VMs and silently leaves the host without Wall. Assert the two
-// scripts use the identical arch expression and that the remap is gone.
+// amd64/arm64. Remapping uname -m to amd64/arm64 404s on both Intel and
+// Apple-Silicon Colima VMs and silently leaves the host without Wall, so
+// assert that gvisorBinaryScript and colimaWallScript use the identical
+// arch expression and that no remap is present.
 func TestColimaWallScript_MatchesGvisorBinaryArchToken(t *testing.T) {
 	colima := colimaWallScript()
 	binary := gvisorBinaryScript(dockerEnv{})
@@ -195,12 +196,12 @@ func TestPlanVault_KataVersionFloor(t *testing.T) {
 	}
 }
 
-// TestKataScript_ZstdBootstrapIsFamilyAware is the W4-S1-3 regression:
-// kataScript's zstd bootstrap used to be a bare apt-get line even though
-// planVault offers Kata on every native-Linux family, so a fedora/arch/suse
-// operator hit "apt-get: command not found" instead of an install. Each known
-// family gets its own package manager; an unknown family fails with a named
-// message instead of guessing apt-get.
+// TestKataScript_ZstdBootstrapIsFamilyAware pins that kataScript's zstd
+// bootstrap is not a bare apt-get line: planVault offers Kata on every
+// native-Linux family, so a fedora/arch/suse operator must get an install,
+// not "apt-get: command not found". Each known family gets its own package
+// manager; an unknown family fails with a named message instead of guessing
+// apt-get.
 func TestKataScript_ZstdBootstrapIsFamilyAware(t *testing.T) {
 	cases := []struct {
 		family  string
@@ -234,8 +235,8 @@ func TestKataScript_ZstdBootstrapIsFamilyAware(t *testing.T) {
 // via the SAME WARDYN_KATA_VERSION env var an operator would set (no script
 // text is built from test input) — for a version matrix proving the floor is
 // inclusive (>=), rejects an older release, tolerates a "v"-prefixed tag, and
-// accepts a newer one: the exact CVE-2026-44210/-47243 regression this floor
-// exists to close.
+// accepts a newer one: the floor exists to keep out the releases
+// CVE-2026-44210/-47243 affect.
 func TestKataScript_FloorEnforcement(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not on PATH")
@@ -304,7 +305,7 @@ func TestDetectDockerUsesSharedPlatformDetector(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// executePlan exit-code honesty (W4-S1-8): a tier command must exit non-zero
+// executePlan exit-code honesty: a tier command must exit non-zero
 // on every path where the tier ended up NOT enabled — unsupported host,
 // plan-only (no --run), a declined/non-TTY confirm, and a script that ran
 // but left the runtime unregistered — instead of the old blanket exit 0.
@@ -325,7 +326,7 @@ func withFakeDocker(t *testing.T, out string) {
 }
 
 func TestExecutePlan_UnsupportedIsNonZero(t *testing.T) {
-	err := executePlan("wall", plan{action: actUnsupported, title: "t", why: "w"}, false, false)
+	err := executePlan(io.Discard, "wall", plan{action: actUnsupported, title: "t", why: "w"}, false, false)
 	if err == nil {
 		t.Fatal("expected a non-nil error for an unsupported host")
 	}
@@ -335,7 +336,7 @@ func TestExecutePlan_UnsupportedIsNonZero(t *testing.T) {
 }
 
 func TestExecutePlan_PlanOnlyWithoutRunIsNonZero(t *testing.T) {
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, false, false)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, false, false)
 	if err == nil {
 		t.Fatal("expected a non-nil error when --run was not passed")
 	}
@@ -357,7 +358,7 @@ func TestExecutePlan_DeclinedConfirmIsNonZero(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = origStdin }()
 
-	err = executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, false)
+	err = executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, false)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the confirm prompt is declined/EOF")
 	}
@@ -372,7 +373,7 @@ func TestExecutePlan_RunSucceedsButRuntimeMissingIsNonZero(t *testing.T) {
 	// as a Wall install whose daemon reload didn't take.
 	withFakeDocker(t, `{"OperatingSystem":"Ubuntu","OSType":"linux","Runtimes":{"runc":{}}}`)
 
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the runtime never shows up in `docker info`")
 	}
@@ -384,14 +385,14 @@ func TestExecutePlan_RunSucceedsButRuntimeMissingIsNonZero(t *testing.T) {
 func TestExecutePlan_RunSucceedsAndRuntimeRegisteredIsNil(t *testing.T) {
 	withFakeDocker(t, `{"OperatingSystem":"Ubuntu","OSType":"linux","Runtimes":{"runc":{},"runsc":{}}}`)
 
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
 	if err != nil {
 		t.Errorf("expected nil once docker info reports the runsc runtime, got %v", err)
 	}
 }
 
 func TestExecutePlan_ScriptFailureIsAnError(t *testing.T) {
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "exit 7"}, true, true)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "exit 7"}, true, true)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the install script itself fails")
 	}

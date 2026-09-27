@@ -46,7 +46,8 @@ beforeEach(() => {
   statusRefreshMock.mockReset();
 });
 
-describe("AgentsTab — the credential-source group has roving tabindex and arrow keys (F4-F13)", () => {
+describe("AgentsTab — the credential-source group has roving tabindex and arrow keys", () => {
+  // ticket: F4-F13
   // F4-F13 (Appendix A V8): only the checked role="radio" Button is a Tab
   // stop; arrow keys move both selection and focus between the pair.
   it("only the checked radio is a Tab stop; ArrowRight/ArrowLeft move selection and focus", async () => {
@@ -104,7 +105,8 @@ describe("AgentsTab — the credential-source group has roving tabindex and arro
 // F4-F9 (Appendix A V8): "Per person" on a bedrock_sso row with an empty
 // start URL is a guaranteed 400 (agent_providers.go's
 // validateAgentCredentialSource) — Save must not stay enabled over it.
-describe("AgentsTab — Save is withheld over an invalid per_user start URL (F4-F9)", () => {
+describe("AgentsTab — Save is withheld over an invalid per_user start URL", () => {
+  // ticket: F4-F9
   it("Save disables the moment Per person is picked with no start URL, and re-enables on a valid one", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] }, etag: '"e9"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);

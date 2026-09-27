@@ -11,7 +11,7 @@
 // description now names that reason too (without disambiguating which case
 // applies — preserves the anti-enumeration property).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
@@ -49,6 +49,9 @@ const auditMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
+  // attachSessions (run-detail.tsx) canonicalizes before comparing — the
+  // C-02 old/new-name pins below need the REAL mapping, not a stub.
+  canonicalAuditAction: (await importOriginal<typeof import("../../lib/api/audit")>()).canonicalAuditAction,
   // F6-F2: the REAL derivation, not a stub — every other test here leaves
   // listAuditMock at its default `[]`, which the real function already reads
   // as "no exit code" (identical to the old stub); only F6-F2's own test
@@ -87,6 +90,7 @@ import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { toast } from "sonner";
+import { aheadByHours } from "../../lib/test-clock";
 
 beforeEach(() => {
   // review R-07: clears toast.warning/error/success's call history too — the
@@ -201,7 +205,7 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
 // the run reached RUNNING yet?" into one gate, so an interactive run still
 // STARTING told its own OWNER the operator-only refusal plus a dead "Watch
 // the captured session →" link to a recording that cannot exist yet.
-describe("RunDetailScreen — F1-F1 a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
+describe("RunDetailScreen — a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
   it("an operator on a STARTING interactive run sees the starting notice, never the admin-role refusal", async () => {
     renderRun({ ...RUN, state: "STARTING", interactive: true });
     expect(await screen.findByText(RUN_COCKPIT.starting)).toBeInTheDocument();
@@ -229,7 +233,7 @@ describe("RunDetailScreen — F1-F1 a not-yet-running interactive run tells its 
 
 // F1-F2: the recording fetch had no ordering guard — a slow fetch for an
 // earlier-selected session could resolve AFTER a later one and overwrite it.
-describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a later selection", () => {
+describe("RunDetailScreen — a stale recording fetch never overwrites a later selection", () => {
   it("keeps the SECOND selection's cast when the first session's fetch resolves later", async () => {
     let resolveFirst!: (v: unknown) => void;
     // A's fetch stays pending; B's resolves to "missing" (null) immediately —
@@ -244,7 +248,7 @@ describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a l
         time: new Date().toISOString(),
         actor_type: "human",
         actor: "alice",
-        action: "session.recording",
+        action: "session.recording.write",
         target: "run-1~session-a",
         outcome: "success",
       },
@@ -253,7 +257,7 @@ describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a l
         time: new Date().toISOString(),
         actor_type: "human",
         actor: "bob",
-        action: "session.recording",
+        action: "session.recording.write",
         target: "run-1~session-b",
         outcome: "success",
       },
@@ -287,18 +291,19 @@ describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a l
 });
 
 // F1-F11/F1-F12: the session picker's own copy.
-describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker copy", () => {
+describe("RunDetailScreen — the recording tab's session-picker copy", () => {
   const session = {
     id: "e1",
-    time: "2026-01-01T00:04:00Z",
+    time: aheadByHours(-1),
     actor_type: "human",
     actor: "alice",
-    action: "session.recording",
+    action: "session.recording.write",
     target: "run-1~session-a",
     outcome: "success",
   };
 
-  it("F1-F12: names the session's END, not its start — recordings are emitted at detach", async () => {
+  it("names the session's END, not its start — recordings are emitted at detach", async () => {
+    // ticket: F1-F12
     listAuditMock.mockResolvedValue([session]);
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -310,7 +315,8 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
     expect(screen.queryByText(/^Attached/)).not.toBeInTheDocument();
   });
 
-  it("F1-F11: a picked SESSION with a missing cast gets session-scoped copy, not the run-scoped sentence", async () => {
+  it("a picked SESSION with a missing cast gets session-scoped copy, not the run-scoped sentence", async () => {
+    // ticket: F1-F11
     listAuditMock.mockResolvedValue([session]);
     getRecordingMock.mockResolvedValue(null);
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
@@ -324,7 +330,8 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
   });
 
   // Neg: the bare run id (no session picked) keeps the run-scoped sentence.
-  it("F1-F11 neg: the bare run id still gets the run-scoped sentence", async () => {
+  it("negative control: the bare run id still gets the run-scoped sentence", async () => {
+    // ticket: F1-F11
     getRecordingMock.mockResolvedValue(null);
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
     await screen.findByTestId("run-terminal-pane");
@@ -336,10 +343,93 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
   });
 });
 
+// C-02 (#1062): session.recording is session.recording.write's pre-0.8 name
+// (docs/AUDIT-ACTIONS.md's "Renamed in 0.8"). A row written under it before
+// the upgrade is never rewritten, so the picker must still index it — old-only,
+// new-only, and mixed with the 0.8 name, and with no duplicate entries even
+// though one action_prefix=session.recording fetch matches both names.
+describe("RunDetailScreen — the recording picker indexes both the pre- and post-0.8 action names (C-02)", () => {
+  const oldSession = {
+    id: "e-old", time: aheadByHours(-2), actor_type: "human", actor: "alice",
+    action: "session.recording", target: "run-1~session-old", outcome: "success",
+  };
+  const newSession = {
+    id: "e-new", time: aheadByHours(-1), actor_type: "human", actor: "bob",
+    action: "session.recording.write", target: "run-1~session-new", outcome: "success",
+  };
+
+  it("old-only: a pre-0.8 session.recording row still indexes", async () => {
+    listAuditMock.mockResolvedValue([oldSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    expect(await screen.findByText(/alice/)).toBeInTheDocument();
+  });
+
+  it("new-only: an 0.8 session.recording.write row indexes as before", async () => {
+    listAuditMock.mockResolvedValue([newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    expect(await screen.findByText(/bob/)).toBeInTheDocument();
+  });
+
+  it("mixed: both names index in time order with no duplicate entries", async () => {
+    listAuditMock.mockResolvedValue([oldSession, newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+
+    const options = await screen.findAllByRole("option");
+    // "Agent session" (the bare run id) + the two distinct attach sessions,
+    // oldest first, no duplicate.
+    expect(options.map((o) => o.textContent)).toEqual([
+      "Agent session",
+      sessionOptionLabel(oldSession as AuditEvent),
+      sessionOptionLabel(newSession as AuditEvent),
+    ]);
+  });
+
+  // Pins the EXACT-set filter (attachSessions, run-detail.tsx): a sibling
+  // action that merely STARTS WITH the family prefix must not index, even
+  // though the action_prefix="session.recording" fetch itself returns it.
+  // Mixed with a real session (not sent alone) — the picker only renders at
+  // all once at least one session indexes (run-detail.tsx's `sessions.length
+  // > 0` guard), so an empty-result case would prove nothing about the filter.
+  it("an unrelated sibling action (session.recording.other) does not index", async () => {
+    const other = {
+      id: "e-other", time: aheadByHours(-2), actor_type: "human", actor: "carol",
+      action: "session.recording.other", target: "run-1~session-other", outcome: "success",
+    };
+    listAuditMock.mockResolvedValue([other, newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    expect(await screen.findByText(/bob/)).toBeInTheDocument();
+    expect(screen.queryByText(/carol/)).not.toBeInTheDocument();
+  });
+
+  // Pins the dedup (attachSessions' `seen` set): the same event id returned
+  // twice (e.g. by two overlapping fetches) must still index once.
+  it("dedups: the same event id returned twice shows once", async () => {
+    listAuditMock.mockResolvedValue([newSession, newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual(["Agent session", sessionOptionLabel(newSession as AuditEvent)]);
+  });
+});
+
 // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
 // trail — past the 1000-row cap on the general fetch, the exit code and
 // ending both silently went "unknown". Scoped fetches keep them known.
-describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit trail", () => {
+describe("RunDetailScreen — the exit code survives a truncated audit trail", () => {
   it("still knows the exit code past 1000 rows of unrelated audit history", async () => {
     // The general (capped) fetch: 1000+ rows, none of them run.complete —
     // exactly what a chatty run does to the oldest-first LIST_LIMIT window.
@@ -352,8 +442,8 @@ describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit tra
       target: "example.com",
       outcome: "success",
     }));
-    listAuditMock.mockImplementation((_id: unknown, action?: string) => {
-      if (action === "run.complete") {
+    listAuditMock.mockImplementation((_id: unknown, filter?: { action?: string; actionPrefix?: string }) => {
+      if (filter?.action === "run.complete") {
         return Promise.resolve([
           {
             id: "complete-1",
@@ -367,7 +457,7 @@ describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit tra
           },
         ]);
       }
-      if (action === "run.kill" || action === "run.autostop" || action === "session.recording") {
+      if (filter?.action === "run.kill" || filter?.action === "run.autostop" || filter?.actionPrefix === "session.recording") {
         return Promise.resolve([]);
       }
       return Promise.resolve(noise);
@@ -385,17 +475,17 @@ describe("RunDetailScreen — R-5 the ending trio is skipped while the run is li
   it("never fetches run.complete/run.kill/run.autostop for a RUNNING run", async () => {
     renderRun({ ...RUN, state: "RUNNING" });
     await screen.findAllByText(RUN.task);
-    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.complete");
-    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.kill");
-    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.autostop");
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", { action: "run.complete" });
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", { action: "run.kill" });
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", { action: "run.autostop" });
   });
 
   // Neg: a terminal run still gets them — same tick, off its own fresh state.
   it("neg: still fetches them the moment the run's own state is terminal", async () => {
     renderRun({ ...RUN, state: "COMPLETED" });
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.complete"));
-    expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.kill");
-    expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.autostop");
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "run.complete" }));
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "run.kill" });
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "run.autostop" });
   });
 });
 
@@ -454,6 +544,46 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
     // two can never disagree.
     expect(await screen.findByText(/sandbox held/i)).toBeInTheDocument();
   });
+
+  // #509 — isHeld's two unconditional arms (tool_call, credential_reauth)
+  // (lib/types/approvals.ts) are shared by TWO call sites: the runs board
+  // (board-groups.test.ts, runs/title-group.test.tsx) and this command bar,
+  // via run-detail.tsx's `sandboxHeld={pending.some(isHeld)}`. Pinned here so
+  // the cockpit keeps stating the hold at any age — the server parks the
+  // agent on a PENDING row for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h
+  // default), and the console must not call it dead sooner.
+  it("a PENDING tool_call 25 hours old still states 'sandbox held' in the command bar", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "tool_call",
+        state: "PENDING",
+        requested_at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
+        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "WAITING_FOR_CONFIRMATION" });
+    expect(await screen.findByText(/sandbox held/i)).toBeInTheDocument();
+  });
+
+  // Once the server has actually moved the row to EXPIRED, it is no longer
+  // PENDING — the cockpit correctly stops claiming the sandbox is held.
+  it("an EXPIRED tool_call no longer states 'sandbox held' in the command bar", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "tool_call",
+        state: "EXPIRED",
+        requested_at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
+        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "WAITING_FOR_CONFIRMATION" });
+    await screen.findByTestId("run-summary-header");
+    expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
+  });
 });
 
 // hasWorkspace must cover workspace_id, not just workspace_ids: a record/
@@ -510,7 +640,7 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
 // D9: a pre-agent-start failure (mount failure, etc.) never gets an exit code
 // at all — failure_hint is the only place that run says why. Bare server
 // text, no prefix (the state badge already says "Failed").
-describe("RunDetailScreen — D9 failure-hint chip", () => {
+describe("RunDetailScreen — failure-hint chip", () => {
   it("a FAILED run with failure_hint shows the bare server text", async () => {
     renderRun({ ...RUN, state: "FAILED", failure_hint: "image not found on daemon" });
     expect(await screen.findByText("image not found on daemon")).toBeInTheDocument();
@@ -576,7 +706,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   }
 
   it("shows a truncation cue when the per-run window hits the 1000 cap", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(action ? [] : Array.from({ length: 1000 }, (_, i) => auditEvent(i))),
     );
     renderRun(RUN);
@@ -587,7 +717,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   });
 
   it("shows no truncation cue under the cap", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(action ? [] : [auditEvent(1)]),
     );
     renderRun(RUN);
@@ -604,7 +734,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
 // egress row whose target is the control plane. The tab must say who decided.
 describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
   it("renders the decision and the rule, not the control-plane host", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(
         action
           ? []
@@ -635,17 +765,74 @@ describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
 
 // W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
 // so the Audit tab's "open full Audit" link must carry the run — a bare /audit
-// drops a member on a feed that can never fill.
+// drops a member on a feed that can never fill. M-1b: the full-page Audit
+// screen is admin-only now, at /admin/audit.
 describe("RunDetailScreen — open full Audit link", () => {
-  it("carries the run id into /audit", async () => {
+  it("carries the run id into /admin/audit", async () => {
     renderRun(RUN);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /audit/i }));
 
     expect(await screen.findByRole("link", { name: /open full audit/i })).toHaveAttribute(
       "href",
-      "/audit?run_id=run-1",
+      "/admin/audit?run_id=run-1",
     );
+  });
+
+  it("neg: a user gets no link — the full Audit screen is Admin view only", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByRole("button", { name: /make a policy from this run/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /open full audit/i })).not.toBeInTheDocument();
+  });
+});
+
+// M-1b: the Recordings library is Admin view only and hidden from a security
+// admin until F1, so its link renders for an admin alone.
+describe("RunDetailScreen — Recordings library link", () => {
+  const CAST = { run_id: "run-1", header: { version: 2, width: 80, height: 24 }, events: [], cast: "" };
+
+  function renderAs(operator: boolean, securityOperator: boolean) {
+    getRunMock.mockResolvedValue({ ...RUN, state: "COMPLETED" });
+    getRecordingMock.mockResolvedValue(CAST);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={operator} securityOperator={securityOperator} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("an admin gets the link to /admin/recordings", async () => {
+    renderAs(true, true);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    expect(await screen.findByRole("link", { name: "Recordings library" })).toHaveAttribute("href", "/admin/recordings");
+  });
+
+  it("neg: a security admin and a user get no link", async () => {
+    for (const [op, sec] of [[false, true], [false, false]] as const) {
+      renderAs(op, sec);
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(await screen.findByRole("tab", { name: /recording/i }));
+      expect(await screen.findByText(/Recorded when the run's runner supports session capture/)).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Recordings library" })).not.toBeInTheDocument();
+      cleanup();
+    }
   });
 });
 
@@ -684,7 +871,7 @@ describe("RunDetailScreen — its approvals are scoped server-side", () => {
 
 // ui-member-cluster review sweep: canDecideApproval on this tab reads
 // securityOperator (the SECURITY tier — admin OR security admin,
-// authorizeMemberDecision's early return), not plain isOperator — so the
+// authorizeUserDecision's early return), not plain isOperator — so the
 // refusal chip must name SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON,
 // which undersells who the gate actually admits.
 describe("RunDetailScreen — the Approvals tab's decision gate names the security tier, not plain admin", () => {
@@ -760,156 +947,5 @@ describe("RunDetailScreen — a failed recording fetch is not a claim about the 
 
     const pane = await screen.findByTestId("run-terminal-pane");
     await waitFor(() => expect(pane).toHaveTextContent(RUN_COCKPIT.recordingMissing));
-  });
-});
-
-// R4-F073/F074: the cockpit fires FIVE requests per DETAIL_POLL_MS tick, and
-// load() used to fire-and-forget — so a control plane slower than the interval
-// stacked a new set of five on every tick (34 concurrent in-flight measured at
-// 12s latency, 97 at 40s), and a BACKGROUNDED tab kept paying all of it for a
-// human who could see none of it. load() now RETURNS its Promise.all so
-// usePoll's in-flight guard has something to wait on.
-describe("RunDetailScreen — a slow or unwatched control plane costs one set of requests, not one per tick", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    // Only the document.hidden spy is undone here: vi.restoreAllMocks() would
-    // also strip the module mocks' inline mockResolvedValue()s, which this
-    // file's beforeEach does not re-seed.
-    hiddenSpy?.mockRestore();
-    hiddenSpy = null;
-  });
-  let hiddenSpy: ReturnType<typeof vi.spyOn> | null = null;
-
-  it("does not stack a second poll on top of one that has not answered", async () => {
-    let settleRun: ((r: unknown) => void) | null = null;
-    getRunMock.mockReset();
-    // The FIRST (foreground) load answers so the screen renders; every poll
-    // after it hangs, which is exactly the slow-backend case.
-    getRunMock
-      .mockResolvedValueOnce({ ...RUN, state: "RUNNING" })
-      .mockImplementation(() => new Promise((res) => (settleRun = res)));
-
-    render(
-      <MemoryRouter initialEntries={["/runs/run-1"]}>
-        <Routes>
-          <Route path="/runs/:id" element={<RunDetailScreen />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(getRunMock).toHaveBeenCalled());
-    await screen.findAllByText(RUN.task);
-    const afterFirstLoad = getRunMock.mock.calls.length;
-
-    // One tick starts a poll; five more intervals go by with it unanswered.
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(getRunMock.mock.calls.length).toBe(afterFirstLoad + 1);
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(getRunMock.mock.calls.length).toBe(afterFirstLoad + 1);
-
-    // ...and the poller is not wedged: the moment it answers, ticks resume.
-    settleRun!({ ...RUN, state: "RUNNING" });
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(getRunMock.mock.calls.length).toBeGreaterThan(afterFirstLoad + 1);
-  });
-
-  it("polls nothing at all while the tab is hidden", async () => {
-    getRunMock.mockReset();
-    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
-    render(
-      <MemoryRouter initialEntries={["/runs/run-1"]}>
-        <Routes>
-          <Route path="/runs/:id" element={<RunDetailScreen />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    await screen.findAllByText(RUN.task);
-
-    hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true) as never;
-    document.dispatchEvent(new Event("visibilitychange"));
-    const before = getRunMock.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(60_000); // fifteen ticks nobody can see
-    expect(getRunMock.mock.calls.length).toBe(before);
-  });
-});
-
-// R4-F141: load() awaited FIVE fetches with Promise.all, so ONE subsidiary
-// rejection took the whole cockpit down to ErrorState's "We couldn't reach the
-// Wardyn control plane" — an outage claim that is false when GET /runs/{id}
-// answered 200, and one that costs a live run its Kill button, its terminal and
-// its approvals strip. The rejection is routine: handleListApprovals answers
-// 500 "approval listing is not scoped for members on this backend" without
-// ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded audit
-// store fails listAudit.
-const CONTROL_PLANE_SENTENCE = "We couldn't reach the Wardyn control plane. Please try again.";
-
-describe("RunDetailScreen — a failing side fetch is not an outage", () => {
-  it("keeps the cockpit — heading, state and Kill — when audit and approvals both fail", async () => {
-    listAuditMock.mockReset();
-    listAuditMock.mockRejectedValue(new Error("audit store degraded"));
-    listApprovalsMock.mockReset();
-    listApprovalsMock.mockRejectedValue(new Error("approval listing is not scoped for members"));
-
-    renderRun({ ...RUN, state: "RUNNING" });
-
-    // The run rendered, so the page must say what the run says.
-    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
-    // ...and the one control that ends a runaway run is still reachable.
-    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
-    expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
-  });
-
-  it("still errors when the RUN itself is the fetch that failed", async () => {
-    getRunMock.mockReset();
-    getRunMock.mockRejectedValue(new Error("control plane down"));
-    render(
-      <MemoryRouter initialEntries={["/runs/run-1"]}>
-        <Routes>
-          <Route path="/runs/:id" element={<RunDetailScreen />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText(CONTROL_PLANE_SENTENCE)).toBeInTheDocument();
-  });
-});
-
-// R4-F127: the foreground/background split at the end of load() is the rule
-// that a poll blip must not wipe a live cockpit — and nothing tested it, so
-// deleting the `if (foreground)` guard left all sixteen tests green. A blip
-// here is not cosmetic: the ErrorState it would render carries no run state, no
-// terminal and no Kill button, and it would return every DETAIL_POLL_MS.
-describe("RunDetailScreen — a background poll blip keeps the last-good cockpit", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("does not replace the page with the control-plane error when a tick fails", async () => {
-    getRunMock.mockReset();
-    // The foreground load answers; every poll after it rejects.
-    getRunMock
-      .mockResolvedValueOnce({ ...RUN, state: "RUNNING" })
-      .mockRejectedValue(new Error("control plane hiccup"));
-
-    render(
-      <MemoryRouter initialEntries={["/runs/run-1"]}>
-        <Routes>
-          <Route path="/runs/:id" element={<RunDetailScreen />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    await screen.findAllByText(RUN.task);
-    const afterFirstLoad = getRunMock.mock.calls.length;
-
-    await vi.advanceTimersByTimeAsync(20_000); // five ticks, all rejecting
-    expect(getRunMock.mock.calls.length).toBeGreaterThan(afterFirstLoad);
-
-    expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
-    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
   });
 });

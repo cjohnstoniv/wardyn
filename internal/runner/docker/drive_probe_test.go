@@ -86,8 +86,12 @@ func TestProbeDrive_RunsAsTheAgentUID(t *testing.T) {
 	if got == nil {
 		t.Fatal("no drive-probe container was created")
 	}
-	if got.cfg.User != driveProbeUser {
-		t.Errorf("probe container User = %q, want %q (the agent uid, never root)", got.cfg.User, driveProbeUser)
+	// The literal, not the driveProbeUser constant: a test that compares the
+	// constant to itself would still pass if the constant's own value regressed
+	// away from the agent image's real uid:gid — the property this test exists
+	// to pin.
+	if got.cfg.User != "1000:1000" {
+		t.Errorf("probe container User = %q, want %q (the agent uid, never root)", got.cfg.User, "1000:1000")
 	}
 	if !got.removed {
 		t.Error("the throwaway probe container was not removed")
@@ -130,6 +134,14 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Since F1, ProbeDrive itself only CHECKS presence of the pinned probe
+	// image and never pulls it (that is PrewarmImages' job) — so on a fresh
+	// daemon this test must pre-pull it, the same way it already pre-pulls
+	// "busybox:latest" below for makeRootOwnedHostDir's own unchecked
+	// ContainerCreate.
+	if err := d.ensureImage(ctx, defaultDriveProbeImage, nil); err != nil {
+		t.Fatalf("pull probe image: %v", err)
+	}
 	if err := d.ensureImage(ctx, "busybox:latest", nil); err != nil {
 		t.Fatalf("pull busybox: %v", err)
 	}

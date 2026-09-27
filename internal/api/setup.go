@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -108,7 +109,7 @@ type SetupStatus struct {
 	// decides llmProvenance's detail (resident CLI login, a secret-name
 	// heuristic, Bedrock, a managed harness token) OR'd with an AI-provider
 	// Integration being configured. It exists
-	// because a MEMBER'S redacted response (redactSetupStatusForMember) drops
+	// because a MEMBER'S redacted response (redactSetupStatusForUser) drops
 	// the checks/providers/secret-name detail that would otherwise let the
 	// console derive this itself — LLMReady is computed BEFORE redaction and
 	// deliberately left untouched BY it, so the console's readiness chip / new-run
@@ -123,14 +124,34 @@ type SetupStatus struct {
 	// why a member whose own AWS session had lapsed read a green chip off it).
 	// Redaction-safe by construction and KEPT for a member: see SetupModelAccess.
 	ModelAccess SetupModelAccess `json:"model_access,omitzero"`
+	// SCMAccess is THIS PRINCIPAL's Azure DevOps access state — scmaccess.go's
+	// computeSCMAccess, ModelAccess's sibling for #386. Zero value (state "")
+	// when no Azure DevOps row is configured; safe for a member by
+	// construction (their own state, computed from their own OIDC subject).
+	SCMAccess SCMAccess `json:"scm_access,omitzero"`
 	// TrustedCACerts is the number of additional roots WARDYN_TRUSTED_CA_FILE
 	// loaded at boot (0 = unset). Derived from Config.TrustedCAPEM, never a
 	// second boot-time field — see handleSetupStatus. Go + test only: no
 	// console reader exists yet (the ui/src/app/lib/types.ts mirror is
 	// hand-maintained, added when the Network step renders it) and
-	// redactSetupStatusForMember does not zero it — a bare count carries no
+	// redactSetupStatusForUser does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
+	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
+	// member-safe shape (SetupModelProvider) — the same for every tier, so the
+	// member redaction has nothing to strip. Absent with no provider block,
+	// which is today.
+	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
+	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
+	// ModelProviders (MP-12) — one row per provider, generalising the single
+	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
+	// checklist read this instead of grading one hardcoded lane, so a person
+	// granted several providers sees all of them. Kept for members: a state
+	// name, an already-composed action sentence, and a deadline instant — no
+	// secret names, no start URL. The pin-mismatch action is the one place the
+	// pinned account and role appear (SetupProviderAccess's doc). Absent with
+	// no provider block.
+	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -207,7 +228,7 @@ type SetupRunner struct {
 	// The Workspace Providers screen renders it beside default_disk_mib so an
 	// admin setting a number can see whether anything will hold it.
 	//
-	// Operator-only: redactSetupStatusForMember rebuilds this struct with
+	// Operator-only: redactSetupStatusForUser rebuilds this struct with
 	// ConfinementClasses alone, so the word never reaches a member. It is
 	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
 	// field by field.
@@ -392,87 +413,6 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 	}, true
 }
 
-// agentImageCheck reports the resolved claude-code agent image so an operator
-// sees, before a run ever fails, whether it is the Node-only convention image
-// or a provisioned override — the readiness surface for the multi-toolchain image's
-// BLOCKER-1 (a non-JS workspace exit-127s on the shipped default, silently).
-// wardynd has no docker CLI (the compose build is distroless static) and no
-// wired image-inspect capability on the Runner interface, so this is a NAME
-// heuristic against the two known-Node-only convention refs, not a real
-// `docker inspect` — labeled honestly as such rather than guessing further.
-// Always info/warn, never fail: an operator-chosen image is assumed
-// provisioned on purpose.
-func agentImageCheck(images map[string]string) SetupCheck {
-	ref := agentImage("claude-code", images)
-	if isConventionLimitedToolchainImage(ref) {
-		// Info, not warn. This is the SHIPPED DEFAULT: it is true of every stock
-		// install, it is documented rather than misconfigured, and it clears only
-		// by building or wiring a multi-toolchain image that a JS/Python operator
-		// never needs. setup_checks.go reserves "info" for exactly that —
-		// permanent or purely optional — and the first-run gate (ui setup-gate.ts)
-		// redirects on warn, so grading this warn locked every stock install in
-		// the funnel with no in-product way out.
-		return SetupCheck{
-			ID: "agent_image", Label: "Agent image toolchains", Status: "info",
-			Detail: "The configured claude-code agent image (" + ref + ") is a shipped convention image with a " +
-				"limited toolchain — a Go, Rust or Java workspace will fail verify/record with exit 127 " +
-				"(toolchain not found).",
-			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (helm: env.WARDYN_AGENT_IMAGES) (e.g. build deploy/images/full " +
-				"(the fat toolchain image), or your own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a " +
-				"per-run base image in the New Run wizard's \"Sandbox image\" field — Wardyn wraps it with the runner tools.",
-		}
-	}
-	// The setup connectivity probe (site_config_probe.go) dispatches the "base"
-	// image, never "claude-code" (a probe is a bare curl task, not a coding
-	// agent). The claude-code catalog row's ImageKey ALSO points at
-	// base, so on a stock deployment these are the same image and stating them
-	// as a contrast would present one image as two. They diverge only when an
-	// operator pins claude-code in WARDYN_AGENT_IMAGES — which is exactly when
-	// an operator needs to know the probe does not follow that pin.
-	probeRef := agentImage("base", images)
-	detail := "claude-code harness image: " + ref + ". "
-	if probeRef != ref {
-		detail += "The setup connectivity probe runs the `base` image instead: " + probeRef + ". "
-	}
-	return SetupCheck{
-		ID: "agent_image", Label: "Agent image toolchains", Status: "info",
-		Detail: detail + "Wardyn cannot inspect image contents from the " +
-			"control plane (no docker CLI in the distroless build) — verify a workspace to confirm its toolchains.",
-	}
-}
-
-// isConventionLimitedToolchainImage reports whether ref is one of Wardyn's own
-// shipped convention images — the ones known, by construction, to carry a
-// limited toolchain, so a Go/Rust/Java workspace fails verify/record at exit 127.
-//
-// agent-base is in this set. It is reachable because the claude-code catalog
-// row's ImageKey points at `base` (agent-claude-code is not published), so the
-// ghcr fallback resolves here — and without this entry
-// the check silently downgraded from warn to info for the DEFAULT install,
-// which is exactly the configuration that most needs the warning. Verified
-// against ghcr.io/cjohnstoniv/agent-base:0.6.4: node, npm, python3 and git are
-// present; go, java and cargo are not.
-//
-// The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
-func isConventionLimitedToolchainImage(ref string) bool {
-	// Prefix, not an exact tag: the ghcr convention carries the daemon's own
-	// version tag, not a fixed :latest — every published tag is the same
-	// convention image.
-	for _, p := range []string{
-		"ghcr.io/cjohnstoniv/agent-claude-code:",
-		"ghcr.io/cjohnstoniv/agent-base:",
-	} {
-		if strings.HasPrefix(ref, p) {
-			return true
-		}
-	}
-	switch ref {
-	case "wardyn/agent-claude-code:local", "wardyn/agent-claude-code:demo", "wardyn/agent-base:local":
-		return true
-	}
-	return false
-}
-
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind
 // humanOrAdminAuth (reaching it already proves auth: local-mode bypass, an OIDC
 // session, or the admin bearer), so it may enumerate resident CLIs, present
@@ -482,7 +422,8 @@ func isConventionLimitedToolchainImage(ref string) bool {
 // The handler gathers state; every checklist row is a small pure function below
 // (one per item, in the order the wizard renders them).
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// One capability snapshot for every per-person list below (capVisible).
+	ctx := withCapBatch(r.Context())
 
 	// auth: same derivation handleMe uses, plus the "disabled" edge (no auth
 	// configured at all — practically unreachable here since adminAuth would have
@@ -561,7 +502,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// AI-provider Integration being configured, computed ONCE here and reused
 	// below for resp.Integrations so effectiveIntegrations() is not walked
 	// twice. Computed BEFORE redaction and left untouched by it (see
-	// redactSetupStatusForMember) — a member's console needs the ANSWER even
+	// redactSetupStatusForUser) — a member's console needs the ANSWER even
 	// though it can no longer see the detail that produced it.
 	//
 	// PLATFORM-API-7: use the *Using form, reusing the present/providers/bedrock
@@ -569,16 +510,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// listing, a CLI sweep + subscription peek, and an AWS-SSO-blob age decrypt.
 	integrations := s.integrationsWithCapabilitiesUsing(ctx, present, providers, bedrock)
 	llmReady := computeLLMReady(llmDetail, integrations)
+	modelProviders, providerAccess, providerChecks := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
-	// they cannot clear.
-	checks := []SetupCheck{
-		runnerCheck(rnr),
-		agentImageCheck(s.cfg.AgentImages),
-		envBuilderCheck(s.cfg.ImageBuilder != nil),
-		llmProviderCheck(llmDetail, bedrock),
-	}
+	// they cannot clear. Each granted provider's own row follows LLM access.
+	checks := append([]SetupCheck{
+		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
+		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
+		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock, providerAccess),
+	}, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
@@ -611,13 +552,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	checks = append(checks, ageKeyCheck(s.cfg.AgeKeyDurable),
-		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
+	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate)...)
+	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
 	// conditional check gates on its own applicability).
 	oidcConfigured := s.cfg.OIDC != nil
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured)); ok {
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured), oidcConfigured && s.cfg.OIDC.HasOperatorEmails(), s.oidcDefaultRoleIsAdmin(oidcConfigured)); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
@@ -704,10 +645,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harness:            harnessCreds,
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
-		Integrations: integrations,
-		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
-		LLMReady:     llmReady,
-		ModelAccess:  modelAccess,
+		// Every list holds only what this caller may use (capVisible; model providers
+		// on the roster line, funlen ratchet); llmReady stays the deployment fact.
+		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
+		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
+		LLMReady:    llmReady,
+		ModelAccess: modelAccess,
+		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
@@ -719,7 +663,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForMember(resp, ssoScope.perUser)
+		resp = redactSetupStatusForUser(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -738,7 +682,19 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 	return err == nil && len(rows) > 0
 }
 
-// redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
+// oidcDefaultRoleIsAdmin reports whether WARDYN_OIDC_DEFAULT_ROLE resolves to
+// admin — ssoRBACCheck's defaultRoleAdmin input (#491). Split out of
+// handleSetupStatus (which is otherwise inline) to keep it under the gocyclo
+// gate; s.cfg.OIDC already carries the boot-validated DefaultRole, so no new
+// Config field is needed. Deciding "is this the admin role" is
+// oidc.Authenticator's own call (DefaultRoleIsAdmin), not a bare == RoleAdmin
+// comparison here — internal/api/refusal_test.go's roleComparisons guard
+// stays shrink-only.
+func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
+	return oidcConfigured && s.cfg.OIDC.DefaultRoleIsAdmin()
+}
+
+// redactSetupStatusForUser drops the operator/admin-facing DIAGNOSTIC detail
 // a member has no route to act on — the environment/credential checklist rows,
 // resident-CLI login detection, and secret NAMES — the explicit drop list
 // (checks/providers/secret names/runner detail), plus the integration rows' OWN
@@ -765,7 +721,10 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
 // ownAWSRow says the aws harness row is the CALLER'S OWN capture (a per_user
 // row scoped the read to their namespace). It decides one field — see Harness.
-func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
+// ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
+// false under a per_user bedrock_sso row (which has no bearer lane of its
+// own to read). It decides one field too — see Bedrock.
+func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
@@ -784,7 +743,14 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// already the member-safe form modelaccess.go computes SetupModelAccess
 	// from — nothing here is new information a member's own ModelAccess row
 	// (kept below) does not already imply.
+	// BearerPresent is the one exception (#337): kept under ownBearerRow only,
+	// it is already scoped to the CALLER's own namespace (bedrockBearerFor),
+	// so it carries no host-credential posture — only "does MY key exist".
+	bearerPresent := st.Bedrock.BearerPresent
 	st.Bedrock = SetupBedrock{Ready: st.Bedrock.Ready}
+	if ownBearerRow {
+		st.Bedrock.BearerPresent = bearerPresent
+	}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
@@ -813,7 +779,7 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// contradiction: one credential-ref list withheld, an equivalent one beside
 	// it passed through, together with the internal egress hosts and the
 	// operator's connection config.
-	st.Integrations = memberSafeIntegrations(st.Integrations)
+	st.Integrations = userSafeIntegrations(st.Integrations)
 	// ModelAccess is KEPT, deliberately, and it is the reason a member's chip can
 	// stop reading llm_ready (a DEPLOYMENT fact that read green over their own
 	// lapsed session). It carries a state name, a wire mechanism value and one
@@ -823,8 +789,8 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// PROJECTED, not passed through: under `shared` the graded blob is the
 	// OPERATOR's, and the `expiring` arm's action line carried their lapse
 	// timestamp verbatim — a credential deadline put back into a body this
-	// function had just stripped it from. See memberModelAccess (modelaccess.go).
-	st.ModelAccess = memberModelAccess(st.ModelAccess)
+	// function had just stripped it from. See userModelAccess (modelaccess.go).
+	st.ModelAccess = userModelAccess(st.ModelAccess)
 	if len(st.Harness) > 0 {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {
@@ -900,7 +866,7 @@ func claudeLoginSignal(providers []SetupProvider) (bool, string) {
 func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, scope awsSSOScope) ([]SetupHarness, string, SetupModelAccess) {
 	var out []SetupHarness
 	managedDetail := ""
-	if blob, ok, err := s.readManagedBlob(ctx, "anthropic"); err == nil && ok {
+	if blob, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "anthropic"); err == nil && ok {
 		out = append(out, SetupHarness{
 			Provider: "anthropic", Captured: true,
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
@@ -912,7 +878,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 	// Scoped: under a per_user row this is the CALLER's own captured session, not
 	// the operator's — the whole point of per_user, and the reason the probe
 	// below can speak for this person rather than for the deployment.
-	blob, found, err := s.readAWSSSOBlob(ctx, scope)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
 	if err != nil {
 		// A wedged store is not a credential fact. readHarnessBlob propagates
 		// every non-ErrNotFound error precisely so a rotated age key or a PG blip

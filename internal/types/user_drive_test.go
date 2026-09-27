@@ -102,7 +102,7 @@ func TestDriveHomeName(t *testing.T) {
 		// resolve for a claim that was not an address. email_local above is the
 		// corporate-home case it looked like it served.
 		{name: "an unknown template is refused, never guessed", tmpl: HomeTemplate("email"), subject: "alice", wantErr: true},
-		// A LEADING DOT is the dotfile class the member-mount rules refuse by
+		// A leading dot is the dotfile class the member-mount rules refuse by
 		// segment; ".." is the traversal, excluded by the same clause.
 		{name: "a leading dot is refused", tmpl: HomeTemplateSub, subject: ".ssh", wantErr: true},
 		{name: "a traversal is refused", tmpl: HomeTemplateSub, subject: "..", wantErr: true},
@@ -143,7 +143,7 @@ func TestDriveHomeName(t *testing.T) {
 // subdomain, a Docker home is a volume-name component, and they are NOT the
 // same alphabet.
 //
-// THE MOTIVATING CASE IS THE FIRST ROW. An Entra `sub` is base64url and
+// The motivating case is the first row. An Entra `sub` is base64url and
 // routinely carries `_`, which is legal in a Docker volume name and illegal in
 // a DNS-1123 name. Before the split, a `k8s_pvc` + `sub` drive validated at the
 // write boundary, was stored, and then failed at BIND time — on somebody's run,
@@ -248,6 +248,7 @@ func TestDriveObjectName(t *testing.T) {
 		hostRoot string
 		drive    string
 		home     string
+		scheme   DriveObjectScheme
 		want     string
 	}{
 		{name: "a volume carries the drive slug", backend: DriveBackendDockerVolume, drive: "Corp NAS", home: "d-abc", want: "wardyn-drive-corp-nas-d-abc"},
@@ -258,9 +259,16 @@ func TestDriveObjectName(t *testing.T) {
 		{name: "a punctuated name folds to one dash", backend: DriveBackendK8sPVC, drive: "  Corp NAS (eng)! ", home: "alice", want: "wardyn-drive-corp-nas-eng-alice"},
 		{name: "host path joins the root", backend: DriveBackendHostPath, hostRoot: "/srv/homes", drive: "Corp NAS", home: "alice", want: "/srv/homes/alice"},
 		{name: "host path is cleaned", backend: DriveBackendHostPath, hostRoot: "/srv/homes/", drive: "Corp NAS", home: "alice", want: "/srv/homes/alice"},
+		// #163's compatibility pin, explicit rather than incidental: a row on
+		// the ORIGINAL scheme (every row that predates migration 0067, and the
+		// column's own DEFAULT) derives BYTE-IDENTICALLY to every case above
+		// that left scheme unset — because neither substrate can rename a
+		// storage object, a pre-migration row's members must keep binding
+		// exactly the object they always did.
+		{name: "an explicit slug-scheme row matches today's name exactly", backend: DriveBackendDockerVolume, drive: "Corp NAS", home: "d-abc", scheme: DriveObjectSchemeSlug, want: "wardyn-drive-corp-nas-d-abc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := UserDrive{ID: uuid.New(), Name: tc.drive, Backend: tc.backend, HostRoot: tc.hostRoot}
+			d := UserDrive{ID: uuid.New(), Name: tc.drive, Backend: tc.backend, HostRoot: tc.hostRoot, ObjectScheme: tc.scheme}
 			if got := DriveObjectName(d, tc.home); got != tc.want {
 				t.Errorf("DriveObjectName = %q, want %q", got, tc.want)
 			}
@@ -268,19 +276,65 @@ func TestDriveObjectName(t *testing.T) {
 	}
 }
 
-// TestDriveObjectNameSeparatesTwoDrivesOnOneHome pins the invariant the volume
-// arm used to break: a name WARDYN MINTS identifies the drive as well as the
-// person.
+// TestDriveObjectNameIDScheme pins #163's fix: a NEW drive (object_scheme
+// "id") mints a fixed-width fragment in place of the slug, so nothing an
+// admin types into the drive's name — or a member's home_override — can shift
+// where <home> begins.
+func TestDriveObjectNameIDScheme(t *testing.T) {
+	id, err := uuid.Parse("11111111-2222-3333-4444-555555555555")
+	if err != nil {
+		t.Fatalf("parse fixture uuid: %v", err)
+	}
+	const wantID = "11111111222233334444555555555555" // dashless, 32 hex chars, always
+	if got := DriveObjectID(id); got != wantID {
+		t.Fatalf("DriveObjectID = %q, want %q", got, wantID)
+	}
+
+	for _, backend := range []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC, DriveBackendK8sPVCStatic} {
+		t.Run(string(backend), func(t *testing.T) {
+			d := UserDrive{ID: id, Name: "Corp NAS", Backend: backend, ObjectScheme: DriveObjectSchemeID}
+			want := "wardyn-drive-" + wantID + "-d-abc"
+			if got := DriveObjectName(d, "d-abc"); got != want {
+				t.Errorf("DriveObjectName = %q, want %q", got, want)
+			}
+		})
+	}
+
+	// The whole point: the drive's NAME plays no part in an id-scheme object
+	// name, so renaming it — the exact act that moves a slug-scheme object —
+	// mints the identical string.
+	t.Run("renaming the drive does not move an id-scheme object", func(t *testing.T) {
+		before := UserDrive{ID: id, Name: "Corp NAS", Backend: DriveBackendK8sPVC, ObjectScheme: DriveObjectSchemeID}
+		after := UserDrive{ID: id, Name: "Corp NAS — renamed for Q3", Backend: DriveBackendK8sPVC, ObjectScheme: DriveObjectSchemeID}
+		if got, want := DriveObjectName(before, "alice"), DriveObjectName(after, "alice"); got != want {
+			t.Errorf("renaming an id-scheme drive changed its object name: %q -> %q", got, want)
+		}
+	})
+
+	// A share's object name is never minted (DriveObjectNamedByWardyn is false
+	// for host_path), so object_scheme has no effect on it at all — the same
+	// "beside DriveSlug, never replacing it on that arm" the type's own doc
+	// states.
+	t.Run("a share ignores object_scheme entirely", func(t *testing.T) {
+		d := UserDrive{ID: id, Name: "Corp NAS", Backend: DriveBackendHostPath, HostRoot: "/srv/homes", ObjectScheme: DriveObjectSchemeID}
+		if got, want := DriveObjectName(d, "alice"), "/srv/homes/alice"; got != want {
+			t.Errorf("DriveObjectName = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestDriveObjectNameSeparatesTwoDrivesOnOneHome pins that a name Wardyn mints
+// identifies the drive as well as the person.
 //
 // It reads as though the home alone were enough, because a `hash` home folds
 // the drive id and one member's two drives are already two homes. A
 // home_override does not fold it: the admin writes "Bob's directory is bsmith"
 // on the GRANT, and user_drive_grants is UNIQUE on (subject_type, subject), so
-// re-pointing that one grant IS how a member moves between drives. With no slug
-// both sides of the re-point named one volume — Bob mounting the old drive's
-// contents under the new drive's name, size and writable posture — and an
-// offboarding command naming `wardyn-drive-bsmith` could not say which drive it
-// was reclaiming.
+// re-pointing that one grant is how a member moves between drives. Without the
+// slug both sides of the re-point would name one volume — Bob mounting the old
+// drive's contents under the new drive's name, size and writable posture — and
+// an offboarding command naming `wardyn-drive-bsmith` could not say which
+// drive it was reclaiming.
 func TestDriveObjectNameSeparatesTwoDrivesOnOneHome(t *testing.T) {
 	// What a user-tier home_override derives on ANY drive, unchanged by the
 	// template, which is why the F034 template rule does not cover this.
@@ -340,7 +394,7 @@ func TestDriveSubjectHash(t *testing.T) {
 	if other := DriveSubjectHash("alice@acquired.example"); other == alice {
 		t.Error("two principals sharing an email local part hashed the same — the label could not tell them apart")
 	}
-	// A LABEL IS PUBLIC: `docker volume inspect` echoes it to anyone who can
+	// A label is public: `docker volume inspect` echoes it to anyone who can
 	// reach the daemon, so no part of the claim may survive into it.
 	if strings.Contains(alice, "alice") || strings.Contains(alice, "@") {
 		t.Errorf("hash %q carries the claim — a Docker label is echoed verbatim by `docker volume inspect`", alice)
@@ -350,7 +404,7 @@ func TestDriveSubjectHash(t *testing.T) {
 	if DriveSubjectHash("  ALICE@CORP.EXAMPLE ") != alice {
 		t.Error("the subject is not trimmed and lowercased the way DriveHomeName folds it")
 	}
-	// EMPTY MEANS NO LABEL, not the digest of "": that value would be one
+	// Empty means no label, not the digest of "": that value would be one
 	// fingerprint shared by every caller with no identity — the single answer
 	// that could make two principals look like one.
 	if got := DriveSubjectHash("   "); got != "" {
@@ -471,7 +525,7 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.StorageClass, d.SizeMiB = DriveBackendK8sPVC, "fast", 10240
 			}),
 			target: "k8s"},
-		// THE ONE BACKEND WHERE SIZE IS NOT A DISPLAY VALUE. A k8s_pvc drive's
+		// The one backend where size is not a display value. A k8s_pvc drive's
 		// size becomes resources.requests.storage, and a claim requesting zero
 		// bytes is rejected by the apiserver — so the value every other backend
 		// reads as "no allocation shown" is, here, a row whose every member's run
@@ -500,7 +554,7 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
 			}),
 			target: "docker"},
-		// THE MIRROR OF "a share cannot be hashed", and the security half of the
+		// The mirror of "a share cannot be hashed", and the security half of the
 		// pair. A MANAGED object is named by the HOME alone, so two people whose
 		// addresses share the part before the "@" — the ordinary merged-tenant
 		// shape — would be allocated ONE volume or PVC, with write access to each
@@ -628,13 +682,12 @@ func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
 	// directories exist already under names Wardyn did not choose, so a claim
 	// template is the ONLY thing that can name one.
 	//
-	// CORRECTED: this subtest used to make the same claim for k8s_pvc_static, on
-	// the managed/share split. It does not hold there — Wardyn MINTS a static
-	// claim's name (DriveObjectNamedByWardyn), so the collision half of the rule
-	// above applies to it verbatim: `email_local` folds two addresses onto one
-	// claim and the driver's static arm has no per-drive labels to separate them.
-	// Only the EXPOSURE half is relaxed, because an admin has to recognise the
-	// claims they pre-provision.
+	// k8s_pvc_static does not get this exemption, despite the managed/share
+	// split: Wardyn mints a static claim's name (DriveObjectNamedByWardyn), so
+	// the collision half of the rule above applies to it verbatim —
+	// `email_local` folds two addresses onto one claim and the driver's static
+	// arm has no per-drive labels to separate them. Only the exposure half is
+	// relaxed, because an admin has to recognise the claims they pre-provision.
 	t.Run("host_path still takes both claim templates", func(t *testing.T) {
 		for _, tmpl := range []HomeTemplate{HomeTemplateSub, HomeTemplateEmailLocal} {
 			d := UserDrive{Name: "Corp NAS", Backend: DriveBackendHostPath, HostRoot: "/srv/homes", HomeTemplate: tmpl}
@@ -664,9 +717,9 @@ func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
 		}
 	})
 
-	// WHY the refusal exists, stated as the collision it now makes
-	// unauthorable. Built by hand rather than through ValidateUserDrive,
-	// because after the fix this row cannot be written.
+	// Why the refusal exists, stated as the collision it makes unauthorable.
+	// Built by hand rather than through ValidateUserDrive, because
+	// ValidateUserDrive refuses this row.
 	t.Run("the collision the refusal prevents", func(t *testing.T) {
 		d := UserDrive{ID: uuid.New(), Name: "Corp NAS", Backend: DriveBackendDockerVolume, HomeTemplate: HomeTemplateEmailLocal}
 		one, err := DriveHomeName(d, "alice@corp.example", "")

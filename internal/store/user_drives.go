@@ -25,7 +25,7 @@ import (
 )
 
 const userDriveCols = `id, name, backend, host_root, storage_class, home_template, ` +
-	`size_mib, writable, reclaim, created_at, updated_at, created_by`
+	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme`
 
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 	`size_mib_override, writable_override, home_override, enabled, created_at, created_by`
@@ -60,10 +60,18 @@ var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClash
 // PRECONDITION the API's re-home gate hands in ($12, asserted under the row lock
 // UpsertUserDrive takes), and the cross-row home-namespace rule above. An empty
 // result means one of them refused — never that the row is missing.
+// object_scheme is the ONE column this statement never takes a caller value
+// for (types.DriveObjectScheme's own doc states why): the INSERT branch writes
+// the literal 'id' and the ON CONFLICT branch's SET references the TARGET
+// table's own current value — never EXCLUDED.object_scheme — which is what
+// "carries the stored value through on UPDATE" means in code. A row minted by
+// this statement is therefore 'id' from the moment it exists and stays
+// whatever it already was on every later edit, unconditionally; there is no
+// argument position for a request to influence it.
 var userDriveUpsertSQL = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by, name_slug)
-		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text
+			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text
 		WHERE (NOT $12::boolean OR NOT EXISTS (
 			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
 		))
@@ -74,7 +82,8 @@ var userDriveUpsertSQL = `
 			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
 			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
-			    name_slug = EXCLUDED.name_slug, updated_at = now()
+			    name_slug = EXCLUDED.name_slug, updated_at = now(),
+			    object_scheme = user_drives.object_scheme
 		RETURNING ` + userDriveCols
 
 // userDriveDest is the scan target list for userDriveCols, written ONCE so the
@@ -83,7 +92,7 @@ var userDriveUpsertSQL = `
 // twelve destinations in the same order.
 func userDriveDest(d *types.UserDrive) []any {
 	return []any{&d.ID, &d.Name, &d.Backend, &d.HostRoot, &d.StorageClass, &d.HomeTemplate,
-		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy}
+		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme}
 }
 
 // userDriveGrantDest is the same for userDriveGrantCols. writable_override is
@@ -396,7 +405,7 @@ func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
 // user_drive_grants_drive_id_idx.
 func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error) {
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
-			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by,
+			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
 			COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
@@ -658,8 +667,8 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 	return collect(ctx, s.Pool, "list", "user drive grants", q, args, scanUserDriveGrant)
 }
 
-// userDriveTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —
-// user > group > all. Written once, as SQL, and spliced into BOTH the resolver
+// userDriveTierOrder ranks the four subject tiers MOST SPECIFIC FIRST —
+// user > group > user_type > all. Written once, as SQL, and spliced into BOTH the resolver
 // and the console listing so the two can never disagree about what "most
 // specific" means. Deliberately a SEPARATE constant from governanceTierOrder
 // despite the identical text: these two are the same RULE over different
@@ -672,7 +681,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 // user_drives has no subject_type column (migration 0054) — the only other
 // table in that JOIN. A migration that added one would make this ambiguous, and
 // Postgres would say so loudly rather than silently re-rank.
-const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END`
+const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 WHEN 'user_type' THEN 2 ELSE 3 END`
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the grant
 // that won, and the tier it won at — or ErrNotFound when no grant matches,
@@ -685,9 +694,10 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 // btree so there is no second implementation in Go for a caller to skip,
 // mis-order, or forget. Ranked, in order:
 //
-//  1. tier — user > group > all. A grant is one admin explicitly naming one
-//     principal, so the more specific naming wins outright; no priority in the
-//     group tier can beat a user-tier row.
+//  1. tier — user > group > user_type > all. A grant is one admin explicitly
+//     naming one principal, so the more specific naming wins outright; no
+//     priority in the group tier can beat a user-tier row. A person holds one
+//     type, so the type tier matches at most one row.
 //  2. within the user tier, a sub-keyed match beats an email-keyed one.
 //     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
 //     email) and an admin may legitimately have written a grant against either.
@@ -744,7 +754,9 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 // and `x = ANY(NULL)` is NULL rather than false. It fails closed either way,
 // but a predicate whose behavior depends on a driver detail is not one to leave
 // standing at an authorization boundary.
-func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string) (
+//
+// userType is the caller's one type id; "" matches no row.
+func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string, userType string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	if userSubjects == nil {
 		userSubjects = []string{}
@@ -753,7 +765,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 		groups = []string{}
 	}
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
-			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by,
+			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
 			g.id, g.subject_type, g.subject, g.drive_id, g.priority,
 			g.size_mib_override, g.writable_override, g.home_override, g.enabled,
 			g.created_at, g.created_by
@@ -761,7 +773,8 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 		JOIN user_drives d ON d.id = g.drive_id
 		WHERE (g.subject_type = 'all'
 		   OR (g.subject_type = 'user'  AND g.subject = ANY($1::text[]))
-		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[])))
+		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[]))
+		   OR (g.subject_type = 'user_type' AND g.subject = $3))
 		ORDER BY
 			` + userDriveTierOrder + `,
 			CASE g.subject_type WHEN 'user'
@@ -774,7 +787,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 	var d types.UserDrive
 	var g types.UserDriveGrant
 	dest := append(userDriveDest(&d), userDriveGrantDest(&g)...)
-	err := s.Pool.QueryRow(ctx, q, userSubjects, groups).Scan(dest...)
+	err := s.Pool.QueryRow(ctx, q, userSubjects, groups, userType).Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, "", ErrNotFound
 	}

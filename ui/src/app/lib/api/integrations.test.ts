@@ -8,6 +8,7 @@ import { baseStatus } from "../../lib/test-fixtures";
 import { T } from "../integrations";
 import { aiServerId, deriveIntegrations } from "./integrations";
 import type { SiteConfig } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // The Add dialog resolves which wire row to adopt/PUT via this helper,
 // BEFORE its first reload can hand it a derived IntegrationRow of its own —
@@ -128,14 +129,15 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.posture).toEqual({ kind: "region_model_unset" });
   });
 
-  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured (RIDER B7-F6)", () => {
+  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured", () => {
+    // ticket: B7-F6 (rider)
     const [row] = deriveIntegrations(baseStatus({ bedrock: { ready: true, creds_present: false } }), null, []).ai;
     expect(row.id).toBe("ai:bedrock");
     expect(row.posture).toEqual({ kind: "configured" });
     // The member's OWN captured session still drives the SSO posture.
     const sso = baseStatus({
       bedrock: { ready: true, creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: "2026-01-01T14:20:00Z", expired: false }],
+      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
     });
     expect(deriveIntegrations(sso, null, []).ai[0].posture.kind).toBe("session_expires");
     // Negative control: ready:false with region/model unset still reads region_model_unset.
@@ -153,7 +155,7 @@ describe("deriveIntegrations — AI providers", () => {
   it("Bedrock: an unexpired AWS SSO session reads 'Session expires HH:MM'", () => {
     const status = baseStatus({
       bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: "2026-01-01T14:20:00Z", expired: false }],
+      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
     });
     const [row] = deriveIntegrations(status, null, []).ai;
     expect(row.bedrockLane).toBe("sso");
@@ -206,12 +208,29 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(data.scm[0].residency).not.toBe("notbuilt");
   });
 
-  it("a github-pat secret yields a resident_env row, not the live-check row", () => {
+  it("a github-pat secret yields a proxy_injected row (#381 default) when the switch is unknown or on", () => {
     const data = deriveIntegrations(baseStatus(), { scm_hosts: ["github.com"] }, ["git-pat-github-com"]);
     const [row] = data.scm;
-    expect(row.residency).toBe("resident_env");
+    // patLaneMeta's ON shape (scm-provider.ts): since 0.7 WARDYN_GIT_PAT_BROKER
+    // defaults on, so a stored PAT is attached by the proxy, not resident in
+    // the sandbox — siteConfig here carries no workspace_providers block (a
+    // member caller, or an operator whose GET hasn't loaded it yet), so this
+    // shows the real 0.7.10 default rather than guessing the pre-0.7 one.
+    expect(row.residency).toBe("proxy_injected");
     expect(row.isGithubApp).toBeFalsy();
     expect(row.canReCheck).toBeFalsy();
+  });
+
+  it("a github-pat secret yields a resident_env row when siteConfig reports the broker OFF (#381)", () => {
+    // ticket: F8
+    const data = deriveIntegrations(
+      baseStatus(),
+      { scm_hosts: ["github.com"], workspace_providers: { git_pat_broker_enabled: false } },
+      ["git-pat-github-com"],
+    );
+    const [row] = data.scm;
+    expect(row.residency).toBe("resident_env");
+    expect(row.chips.find((c) => c.label === "PAT · in-sandbox")).toBeTruthy();
   });
 
   it("the GitHub App is Unknown until a later wave wires the real ref-confinement check, but Re-check is real", () => {

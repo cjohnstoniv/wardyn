@@ -25,7 +25,7 @@
 // pin-counts for the blast radius).
 import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
 import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType, type CapabilityRow } from "../integrations";
-import { deriveProviders, LANE_META, slugHost, type Lane } from "../scm-provider";
+import { deriveProviders, LANE_META, patLaneMeta, slugHost, type Lane } from "../scm-provider";
 import { relativeTime, clockTime } from "../format";
 import type { SetupStatus, SiteConfig } from "../types";
 import type { WireIntegration } from "../types/setup";
@@ -366,15 +366,28 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
 
 // SCM hosts
 
+// #381 F3: pat's meta depends on the real WARDYN_GIT_PAT_BROKER switch;
+// app/ssh keep reading the static LANE_META. Shared by scmResidency and the
+// chip generation below so the two can never disagree with each other.
+function laneMeta(l: Lane, patBrokerEnabled: boolean) {
+  return l === "pat" ? patLaneMeta(patBrokerEnabled) : LANE_META[l];
+}
+
 // Only the kinds a stored credential can actually produce (deriveProviders
 // only pushes a lane when its secret/App flag is real) — brokered for the App,
 // resident for a written key/token.
-function scmResidency(lanes: Lane[]): ResidencyKind {
-  const kinds = new Set(lanes.map((l) => LANE_META[l].residency));
+function scmResidency(lanes: Lane[], patBrokerEnabled: boolean): ResidencyKind {
+  const kinds = new Set(lanes.map((l) => laneMeta(l, patBrokerEnabled).residency));
   return kinds.size === 1 ? [...kinds][0] : "varies";
 }
 
 function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, present: string[]): IntegrationRow[] {
+  // #381 F3: the real switch when siteConfig carries it (an operator's own
+  // GET /site-config projects workspace_providers.git_pat_broker_enabled the
+  // same way GET /workspace-providers does) — the 0.7.10 default otherwise,
+  // for a member caller (siteConfig is operator-only and null for them) or a
+  // never-configured install (absent until a git row exists).
+  const patBrokerEnabled = siteConfig?.workspace_providers?.git_pat_broker_enabled ?? true;
   // effective_scm_hosts is the server's projected union (workspace providers
   // MINUS every host a provider row claims, UNION every enabled row's hosts) —
   // the one spelling of the claim rule, in Go (internal/api/workspace_providers.go
@@ -423,8 +436,11 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
       category: "scm_host" as const,
       name: r.brand,
       typeLabel: r.host,
-      chips: r.lanes.map((l) => ({ label: LANE_META[l].label, tone: LANE_META[l].tone, tooltip: LANE_META[l].tooltip })),
-      residency: scmResidency(r.lanes),
+      chips: r.lanes.map((l) => {
+        const m = laneMeta(l, patBrokerEnabled);
+        return { label: m.label, tone: m.tone, tooltip: m.tooltip };
+      }),
+      residency: scmResidency(r.lanes, patBrokerEnabled),
       // The ref-confinement check that would answer Ref-confined/Unconfined
       // doesn't exist server-side yet — Unknown is the honest default until
       // it does. Re-check still refreshes real local facts (e.g. the Stored

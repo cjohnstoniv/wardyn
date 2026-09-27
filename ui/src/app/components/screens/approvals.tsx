@@ -20,11 +20,14 @@ import { toast } from "sonner";
 import {
   canDecideApproval,
   decisionArgs,
+  isAdoCapabilityRequest,
+  isAdoConsentRequest,
   isTerminalRunState,
   type AgentRun,
   type ApprovalKind,
   type ApprovalRequest,
   type ApprovalScope,
+  type DecisionOptions,
 } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { anyCapabilityEnforced, capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
@@ -38,12 +41,17 @@ import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/code-block";
+import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
-import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
-import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
+import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
+import { resolveDoor } from "../../lib/model-access";
+import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
+import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
+import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
 import {
   APPROVAL,
   APPROVAL_BANNER_LABEL,
@@ -167,7 +175,7 @@ interface Banner {
 }
 
 // The fail-closed audience: no viewer in hand is "this is not yours to clear".
-const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "" };
+const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
 // PendingCard calls it before any scope has been chosen (the picker lives
@@ -211,12 +219,20 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
       const host = str(scope, "host");
       if (ck === "git_pat") {
         return {
-          what: `A git access token${host ? ` for ${host}` : ""} is handed to git inside the sandbox${ttl}.`,
-          // The git_pat nuance: unlike a brokered credential, this value is
-          // readable by the agent's process (CAPABILITY.gitPatLine), and the
-          // PAT itself is a long-lived operator secret Wardyn cannot expire or
-          // down-scope — never claim otherwise here.
-          blast: `${CAPABILITY.gitPatLine} Wardyn can't expire or down-scope a PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
+          // #381 F3: this card is MEMBER-facing and this screen has no access
+          // to the deployment's WARDYN_GIT_PAT_BROKER switch (the providers
+          // endpoint it would read from is operator-only) — so it must never
+          // assert a residency it cannot know. "authenticates" is true either
+          // way; CAPABILITY.gitPatLine is deliberately NOT reused here (that
+          // constant states the broker-ON default only).
+          what: `A stored git access token${host ? ` for ${host}` : ""} authenticates this clone${ttl}.`,
+          // The git_pat nuance: unlike a minted/scoped credential, the PAT
+          // itself is a long-lived operator secret Wardyn cannot expire or
+          // down-scope from its side — never claim otherwise here, and say
+          // "stored" so this reads as the stored-PAT lane's limit, not every
+          // credential kind's. The residency sentence names BOTH postures
+          // rather than picking one this screen can't verify (#381 F3).
+          blast: `Depending on this deployment's PAT broker setting, the token is attached to the request by the proxy on the outbound leg, or handed to git inside the sandbox where the process running there can read it. Either way, Wardyn can't expire or down-scope a stored PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
         };
       }
       if (ck === "ssh_key") {
@@ -259,6 +275,14 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
       // process reads the decision and proceeds. Never claim "once" or "only
       // this command"; both the cmd string and any execution guarantee are
       // requester-supplied.
+      //
+      // STAYS TRUE HERE: an Azure DevOps escalation never reaches this
+      // branch — isAdoCapabilityRequest routes it to AdoCapabilityCard
+      // before deriveBanner is ever called (see PendingCard below), because
+      // for THAT one lane the claim above is false (ADO.
+      // TOOL_CALL_NOTE, rendered once on this screen, says why). Every other
+      // tool_call still lands here, and the sentence below is still honest
+      // for all of them.
       return {
         what: cmd
           ? `The run asks permission to run ${cmd}${env ? ` against ${env}` : ""} (as reported by the requester).`
@@ -383,7 +407,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       const args = decisionArgs(decisionScope, until);
       if (prompt.action === "approve") await api.approve(prompt.id, reason, ...args);
       else await api.deny(prompt.id, reason, ...args);
-      toast.success(prompt.action === "approve" ? "Request approved" : "Request denied");
+      toast.success(prompt.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setPrompt(null);
       // F5-F11: load() would flip status back to "loading" first — the whole
       // queue would flash to a skeleton after every single decision, losing
@@ -398,12 +422,39 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       return true;
     } catch (err) {
       toast.error(
-        prompt.action === "approve" ? "Failed to approve request" : "Failed to deny request",
+        prompt.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED,
         { description: getErrorMessage(err) },
       );
       return false;
     }
   };
+
+  // decideAdoDirect — the ADO capability card's own decide path. It bypasses
+  // ReasonDialog entirely: the frozen mock (§9 Q2) draws the card's own
+  // Approve/Deny-and-scope control with no reason field and no modal, unlike
+  // every other kind on this screen. `opts` always carries an explicit
+  // decision_scope — see ado-capability-card.tsx's adoDecisionArgs for why a
+  // bodyless decide can't be used here.
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+    try {
+      if (approve) await api.approve(id, "approved", ...opts);
+      else await api.deny(id, "denied", ...opts);
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
+      fetchAll().catch(() => {
+        /* transient refresh failure — the decide itself already succeeded */
+      });
+      onChanged?.();
+    } catch (err) {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
+        description: getErrorMessage(err),
+      });
+    }
+  };
+
+  // The pending queue's own tool_call items, and only those — the screen-
+  // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
+  // when a tool_call approval is actually in view.
+  const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
 
   return (
     <div className="mx-auto max-w-[880px] px-6 py-6">
@@ -421,6 +472,14 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       )}
 
       <TruncatedNote count={longestList} cap={LIST_LIMIT} />
+
+      {/* S10: replaces the sentence this design falsifies (§7.8
+          TOOL_CALL_NOTE) — an Azure DevOps escalation IS enforced, held at
+          the proxy until decided; every OTHER tool_call approval is still
+          the record-only kind deriveBanner's tool_call case describes. */}
+      {anyToolCall && (
+        <p className="mb-4 max-w-[72ch] text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
+      )}
 
       <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>
@@ -449,9 +508,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
-              title={role === "member" ? "Approvals raised by your runs appear here." : "You're all caught up"}
+              title={role === "user" ? "Approvals raised by your runs appear here." : "You're all caught up"}
               description={
-                role === "member"
+                role === "user"
                   ? undefined
                   : "New credential, egress, and tool-call requests appear here the moment an agent needs you."
               }
@@ -470,6 +529,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 item={a}
                 caps={caps}
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
+                onAdoDecide={decideAdoDirect}
               />
             ))}
           </div>
@@ -515,12 +575,16 @@ function PendingCard({
   item,
   caps,
   onAct,
+  onAdoDecide,
 }: {
   item: ApprovalRequest;
   // The viewer's own capability set, or null when the question doesn't apply
   // (an admin, or an answer still in flight).
   caps: MeCapabilities | null;
   onAct: (action: "approve" | "deny") => void;
+  // S10 — the Azure DevOps capability card's own decide path; see
+  // decideAdoDirect's doc above for why it bypasses onAct/ReasonDialog.
+  onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
 }) {
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
@@ -532,14 +596,29 @@ function PendingCard({
   // default in exactly the window the answer is audience-dependent and the
   // audience is unknown.
   const door = useModelAccessDoor();
-  const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal });
-  const banner = deriveBanner(item.kind, scope, reauth);
+  const view = useConsoleMode();
+  const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal, view });
+  const { status } = useShellSetupStatus();
+  const reauthProvider = reauth.provider
+    ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.provider)
+    : "";
+  // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
+  // personal reauth door either, even on the admin's own row — same rule as
+  // the cockpit's ReauthRow, with a switch link back to it there instead. The
+  // shared lane (an admin-mode control until MP-4b) is unaffected.
+  const reauthCanAct = view === "admin" && !reauth.shared ? false : reauth.canAct;
+  const reauthOwnRow = view === "admin" && !reauth.shared && reauth.mine;
+  // A hold whose provider this person has no door for any more (removed, or no
+  // agent of theirs uses it) gets its hint alone, never a button that opens
+  // nothing — the failure block's rule (ProviderDoor).
+  const reauthDoor = reauthCanAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
+  const banner = deriveBanner(item.kind, scope, reauthCanAct === reauth.canAct ? reauth : { ...reauth, canAct: reauthCanAct });
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
   // regardless of ownership — see canDecideApproval's doc for why. This list
   // is already scoped to rows the caller owns (or every row, for an admin),
   // so ownership itself needs no re-check here.
-  // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
+  // useSecurityOperator, not useOperator (0.7 §B): authorizeUserDecision
   // early-returns for isSecurityOperator (approvals.go:392) — the security
   // tier decides ANY kind on ANY run, org-wide. Deciding a verdict is that
   // tier's whole purpose; the caps fetch above stays on useOperator because
@@ -547,7 +626,7 @@ function PendingCard({
   const securityOperator = useSecurityOperator();
   const kindDecidable = canDecideApproval(securityOperator, item.kind);
   // The `egress_host` capability bounds which hosts a member may DECIDE on —
-  // the authorizeMemberDecision seam (approvals.go). Advisory here: the server
+  // the authorizeUserDecision seam (approvals.go). Advisory here: the server
   // refuses it anyway, this just says so before the click instead of after.
   // Guarded on the security tier in the same ORDER the server checks: its
   // early return happens BEFORE this capability leg, so a security admin is
@@ -570,6 +649,55 @@ function PendingCard({
   const runEnded = !!run && isTerminalRunState(run.state);
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
 
+  // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
+  // raise) gets ITS OWN card, not this generic one: it needs fields
+  // (repository, ref class, the composed command) and a scope control (Once
+  // / This run only, never until/always) that deriveBanner/canDecideApproval
+  // above don't model — see AdoCapabilityCard's own doc comment. `run` is
+  // handed through AS-IS (undefined/null/loaded) — the card itself renders
+  // the loading/error states now (round-2 fix F10), rather than this caller
+  // collapsing "still loading" into "not yours".
+  // usePrincipal(), not door.principal: the consent door's ownership question
+  // here is "is the viewer the row's OWNER subject" (adoConsentScopeBody.Owner
+  // on the wire), a plain identity comparison, not the model-access door's
+  // own audience predicate.
+  const principal = usePrincipal();
+  // "approve" | "deny" while that decision is in flight, else null (#458) —
+  // see AdoCapabilityCard's own `busy` doc for why a single boolean isn't
+  // enough to spin only the pressed button.
+  const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
+  // N1 (round 2): PendingCard only ever receives PENDING rows today
+  // (pendingItems is fetched via api.listApprovals("PENDING")), but the
+  // state check is explicit here too — defense-in-depth against this
+  // component ever being reused for a broader list, and the single rule
+  // "AdoCapabilityCard only ever renders a PENDING row" stays true
+  // everywhere it mounts, not just by construction at the one caller that
+  // happens to pre-filter today.
+  if ((isAdoCapabilityRequest(item) || isAdoConsentRequest(item)) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        <RunContextRow runId={item.run_id} onRun={setRun} />
+        <AdoCapabilityCard
+          item={item}
+          securityOperator={securityOperator}
+          viewerPrincipal={principal}
+          run={run}
+          busy={adoBusy}
+          onApprove={async (opts) => {
+            setAdoBusy("approve");
+            await onAdoDecide(item.id, true, opts);
+            setAdoBusy(null);
+          }}
+          onDeny={async (opts) => {
+            setAdoBusy("deny");
+            await onAdoDecide(item.id, false, opts);
+            setAdoBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -583,6 +711,12 @@ function PendingCard({
           <ApprovalStateBadge state={item.state} />
         </span>
       </div>
+
+      {/* #543: which AWS provider the hold is for — a sign-in to another
+          one cannot clear it. */}
+      {item.kind === "credential_reauth" && reauthProvider && (
+        <p className="mt-1 text-xs text-muted-foreground">{REAUTH_ROW.PROVIDER(reauthProvider)}</p>
+      )}
 
       <RunContextRow runId={item.run_id} onRun={setRun} />
 
@@ -639,7 +773,11 @@ function PendingCard({
              disabled: a disabled Approve reads as "an admin can do this", and
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */
-          reauth.canAct ? <ReauthAction /> : null
+          reauthDoor ? (
+            <ReauthAction provider={reauth.provider} />
+          ) : reauthOwnRow ? (
+            <OpenInUserView />
+          ) : null
         ) : (
           <>
             <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
@@ -688,13 +826,14 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
   // 0 §6) — undefined for EXPIRED (ExpireStale deliberately writes no scope:
   // an expiry is a sweep nobody decided) and for every other kind.
   const scopeBadge = approvalScopeBadge(item);
+  const view = useConsoleMode();
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
       <Link
-        to={`/runs/${encodeURIComponent(item.run_id)}`}
+        to={runPath(view, item.run_id)}
         className="font-mono text-xs text-muted-foreground hover:text-foreground"
         title={`Open run ${item.run_id}`}
       >
@@ -731,11 +870,14 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
  * everyone else reads the card's hint, which names whose sign-in is awaited,
  * and gets no control at all.
  */
-function ReauthAction() {
+function ReauthAction({ provider }: { provider: string }) {
   const door = useModelAccessDoor();
   useClaimModelAccessDoor(true);
+  // The hold's OWN provider's door (#543): the claude-code default may be
+  // another AWS provider, whose sign-in cannot clear it.
+  const open = () => door.openDoor(provider ? { for: { provider } } : undefined);
   return (
-    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={() => door.openDoor()}>
+    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={open}>
       {REAUTH_ROW.action}
     </Button>
   );

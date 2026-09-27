@@ -8,6 +8,9 @@ package oidc
 import (
 	"encoding/base64"
 	"net/http"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // EncodeSessionForTest calls the unexported encodeSession method so that
@@ -78,8 +81,17 @@ func SetRevocationsForTest(a *Authenticator, r SessionRevocations) {
 // DeriveRoleForTest exposes deriveRole for direct table-testing of role
 // derivation precedence and Match provenance, without driving a signed ID
 // token through the whole callback for every case.
+//
+// It derives against the built-in type alone, which is every tier-only case;
+// DeriveForTest takes the user types too.
 func DeriveRoleForTest(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, matches []Match, ok bool) {
-	return deriveRole(rolesClaim, groupsClaim, email, roleMap, legacyAdminEmails, defaultRole)
+	d := deriveRole(rolesClaim, groupsClaim, email, roleMap, legacyAdminEmails, defaultRole, userTypeIndex(nil))
+	return d.Role, d.Matches, d.OK()
+}
+
+// DeriveForTest is deriveRole against a caller-supplied user-type list.
+func DeriveForTest(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string, userTypes []types.UserType) Derivation {
+	return deriveRole(rolesClaim, groupsClaim, email, roleMap, legacyAdminEmails, defaultRole, userTypeIndex(userTypes))
 }
 
 // MergeRoleMapsForTest exposes mergeRoleMaps so the chart/console merge rules
@@ -110,4 +122,13 @@ func NewTolerantJWKSClientForTest(base *http.Client) *http.Client {
 func FilterJWKSForTest(body []byte) (out []byte, droppedCount int) {
 	out, dropped := filterJWKS(body)
 	return out, len(dropped)
+}
+
+// SetLoginGrantTimeoutForTest shortens the per-call login-grant sink deadline
+// so a test can prove a stalled sink does not stall the login without waiting
+// the real three seconds.
+func SetLoginGrantTimeoutForTest(a *Authenticator, d time.Duration) {
+	a.grants.mu.Lock()
+	defer a.grants.mu.Unlock()
+	a.grants.timeout = d
 }

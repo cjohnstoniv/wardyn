@@ -53,12 +53,29 @@ type dockerAPI interface {
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	// ContainerPause / ContainerUnpause back runner.Freezer (FreezeSandbox /
+	// ThawSandbox, RL-6): pause the agent's process in place — memory, disk and
+	// any established TCP connection keep their state — without stopping or
+	// removing it.
+	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
+	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 	// ContainerWait blocks until the container reaches condition and yields its
 	// exit code. Used by Wait for EXEC-LESS runtimes (krun microVMs), whose agent
 	// workload runs as the container's MAIN process rather than a docker exec.
 	// The v29 client folds the old (status, error) channel pair into a single
 	// ContainerWaitResult carrying both channels (.Result / .Error).
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
+	// CopyToContainer extracts a tar archive into a container's filesystem as
+	// ROOT. It is how SandboxSpec.ManagedFiles is delivered, and it is called
+	// between ContainerCreate and ContainerStart — the only window in which a
+	// file the agent cannot modify can be placed without racing the agent.
+	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	// ContainerStatPath tells deliverManagedFiles whether a managed file's
+	// directory already exists (in the image or as a mount) before the copy.
+	ContainerStatPath(ctx context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error)
+	// CopyFromContainer reads /etc and /etc/passwd out of a created container,
+	// so checkManagedFileImage can vet the image without running anything.
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)

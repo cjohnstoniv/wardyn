@@ -6,8 +6,21 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DIRECTORY, GOVERNANCE, MEMBER, POSITIONING } from "./governance-copy";
+import {
+  AUTONOMY_BOUND,
+  AUTONOMY_RAIL,
+  autonomyBoundSentence,
+  DIRECTORY,
+  foldAutonomyRubric,
+  GOVERNANCE,
+  LIMITS_CHIP,
+  MEMBER,
+  POSITIONING,
+  RUBRIC,
+} from "./governance-copy";
 import { PEOPLE } from "./people-access-copy";
+import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/governance";
+import { parseFrozenTables } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
@@ -30,32 +43,12 @@ import { PEOPLE } from "./people-access-copy";
 // a file: URL under the jsdom environment, so it can't resolve this.
 const DOC = resolve(process.cwd(), "../docs/design/governance-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.9's tables. */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2 onward only: §7.1 is the reused-canon table (strings that live in
-      // permissions-copy.ts / people-access-copy.ts / the server), not keys
-      // this module freezes.
-      inSection = /^### 7\.[2-9]\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    // §7.8 is a three-column table (Key | Today | Frozen) — the FROZEN column
-    // is the canon; "Today" is the string being replaced.
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2 onward only: §7.1 is the reused-canon table (strings that live in
+// permissions-copy.ts / people-access-copy.ts / the server), not keys this
+// module freezes. §7.8 is a three-column table (Key | Today | Frozen) —
+// parseFrozenTables() takes the LAST cell, so it reads the FROZEN column
+// (the canon) rather than "Today" (the string being replaced).
+const doc = parseFrozenTables(DOC, /^### 7\.[2-9]\b/);
 
 // The two keys whose doc cell carries an "A / B" pluralisation alternation
 // rather than a single renderable string — checked in their own test.
@@ -154,6 +147,7 @@ const rendered: Record<string, string> = {
   "WARN_STORED_CLAMPED(policy, name)": MEMBER.WARN_STORED_CLAMPED("{policy}", "{name}"),
   "WARN_WORKSPACE_DENIED(host, name)": MEMBER.WARN_WORKSPACE_DENIED("{host}", "{name}"),
   "WARN_GRANT_DROPPED(name, kind, reason)": MEMBER.WARN_GRANT_DROPPED("{name}", "{kind}", "{reason}"),
+  "WARN_PUSH_RULES_DROPPED(name)": MEMBER.WARN_PUSH_RULES_DROPPED("{name}"),
   DENIED_STALE_GROUPS: MEMBER.DENIED_STALE_GROUPS,
   "DENIED_SEEDED_IMAGE(image)": MEMBER.DENIED_SEEDED_IMAGE("{image}"),
   DENIED_WORKSPACE_LLM_CRED: MEMBER.DENIED_WORKSPACE_LLM_CRED,
@@ -174,8 +168,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 96 frozen keys in the doc", () => {
-    expect(doc.size).toBe(96);
+  it("finds all 97 frozen keys in the doc", () => {
+    expect(doc.size).toBe(97);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -240,7 +234,7 @@ describe("governance-copy — the §7.3 {matched} vocabulary (ADDITION)", () => 
 
 describe("governance-copy — the reuse rules §7 spells out", () => {
   // §7.9: one string for the picker option, the table chip and the mapped-role
-  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_MEMBER. Two homes for one
+  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_USER. Two homes for one
   // frozen label is how they drift — this pins the reference, not a copy.
   it("DIRECTORY.ROLE_SECURITY_ADMIN IS PEOPLE.ROLE_SECURITY_ADMIN", () => {
     expect(DIRECTORY.ROLE_SECURITY_ADMIN).toBe(PEOPLE.ROLE_SECURITY_ADMIN);
@@ -273,5 +267,119 @@ describe("governance-copy — the reuse rules §7 spells out", () => {
     }
     expect(GOVERNANCE).not.toHaveProperty("OMISSION_BODY");
     expect(GOVERNANCE).not.toHaveProperty("GRANT_BOUND_BODY");
+  });
+});
+
+// #93/#96 — the autonomy rubric. These strings live outside GOVERNANCE/MEMBER
+// (never parsed from governance-prompt.md — the mock they were transcribed
+// from is a scratchpad, not docs/), so they get their own direct pins rather
+// than a doc-table comparison.
+describe("RUBRIC — the profile editor's rubric section", () => {
+  it("has one [label, why] row for every one of the nine AutonomyRubric fields, in the fixed order", () => {
+    expect(Object.keys(RUBRIC.ROWS).sort()).toEqual([...AUTONOMY_RUBRIC_ROW_KEYS].sort());
+    for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
+      const [label, why] = RUBRIC.ROWS[k];
+      expect(label.length).toBeGreaterThan(0);
+      expect(why.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("SET_NOTE and EMPTY_NOTE match the mock round's frozen wording", () => {
+    expect(RUBRIC.SET_NOTE(3, "Gated")).toBe("3 of 9 rows set a cap. The lowest is Gated.");
+    expect(RUBRIC.EMPTY_NOTE).toBe("No row sets a cap, so this profile leaves autonomy exactly as it is today.");
+  });
+});
+
+describe("foldAutonomyRubric", () => {
+  it("nil/undefined rubric folds to no set rows and no lowest level", () => {
+    expect(foldAutonomyRubric(undefined)).toEqual({ setKeys: [], lowest: null });
+    expect(foldAutonomyRubric(null)).toEqual({ setKeys: [], lowest: null });
+    expect(foldAutonomyRubric({})).toEqual({ setKeys: [], lowest: null });
+  });
+
+  it("the lowest level wins over every OTHER set row, whatever order they were set in", () => {
+    expect(
+      foldAutonomyRubric({ egress_open: "L3", secrets_powerful: "L0", confinement_cc1: "L2" }),
+    ).toEqual({ setKeys: ["egress_open", "secrets_powerful", "confinement_cc1"], lowest: "L0" });
+  });
+
+  it("setKeys carries every set row, unset rows excluded", () => {
+    expect(foldAutonomyRubric({ egress_open: "L1", egress_reviewed: undefined }).setKeys).toEqual(["egress_open"]);
+  });
+});
+
+describe("LIMITS_CHIP.AUTONOMY — ruling 2 (#96 review)", () => {
+  it("names the strictest cap on the chip face itself, not merely that a rubric exists", () => {
+    expect(LIMITS_CHIP.AUTONOMY("Attended")).toBe("Autonomy: Attended at the strictest");
+  });
+});
+
+describe("AUTONOMY_BOUND / autonomyBoundSentence — ruling 1 (#96 review)", () => {
+  it("every row has its own frozen one-cause sentence, in the 'Bound by...' shape", () => {
+    for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
+      expect(AUTONOMY_BOUND[k]).toMatch(/^Bound by this run's /);
+      expect(AUTONOMY_BOUND[k].endsWith(".")).toBe(true);
+    }
+    expect(AUTONOMY_BOUND.secrets_powerful).toBe("Bound by this run's secrets: it carries a credential that can write.");
+    expect(AUTONOMY_BOUND.confinement_cc1).toBe("Bound by this run's barrier: Fence, confinement class CC1.");
+  });
+
+  it("a single cause renders the SAME sentence AUTONOMY_BOUND carries, unchanged", () => {
+    for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
+      expect(autonomyBoundSentence([k])).toBe(AUTONOMY_BOUND[k]);
+    }
+  });
+
+  it("no bound_by at all falls back to the no-cap sentence rather than an empty claim", () => {
+    expect(autonomyBoundSentence([])).toBe(AUTONOMY_RAIL.NO_CAP);
+  });
+
+  // Ruling 1's own example (governance.spec.ts issue #96, the review comment):
+  // "Bound by this run's secrets and its barrier: it carries a credential
+  // that can write, behind a Fence (confinement class CC1)." is the mock's
+  // scaffold illustration, not a frozen sentence (it lives in the mock's
+  // .qblock, which the mock's own header marks as review material that ships
+  // nowhere) — this pins the SHAPE the ruling requires instead: every tied
+  // cause named, never just the first.
+  it("a two-way tie names BOTH causes, not just the first", () => {
+    const s = autonomyBoundSentence(["secrets_powerful", "confinement_cc1"]);
+    expect(s).toContain("secrets");
+    expect(s).toContain("barrier");
+    expect(s).toContain("it carries a credential that can write");
+    expect(s).toContain("Fence, confinement class CC1");
+    // NOT the single-cause sentence for either cause alone — this is the
+    // regression ruling 1 exists to prevent (bound_by[0] only).
+    expect(s).not.toBe(AUTONOMY_BOUND.secrets_powerful);
+    expect(s).not.toBe(AUTONOMY_BOUND.confinement_cc1);
+  });
+
+  it("a three-way tie names all three causes", () => {
+    const causes: AutonomyRubricRowKey[] = ["egress_open", "secrets_none", "confinement_cc3"];
+    const s = autonomyBoundSentence(causes);
+    expect(s).toContain("network reach");
+    expect(s).toContain("secrets");
+    expect(s).toContain("barrier");
+    expect(s).toContain("it can reach hosts beyond the baseline");
+    expect(s).toContain("it carries none");
+    expect(s).toContain("Vault, confinement class CC3");
+  });
+
+  // Finding 4 (#339 review): confinement's own detail carries a comma
+  // ("Fence, confinement class CC1"), so joining a three-way tie's details
+  // with plain ", " used to read as FOUR comma-separated fragments instead
+  // of three. Semicolons between details keep the three causes distinct.
+  it("a three-way tie stays unambiguous when one detail carries its own comma", () => {
+    const causes: AutonomyRubricRowKey[] = ["egress_open", "secrets_powerful", "confinement_cc1"];
+    const s = autonomyBoundSentence(causes);
+    expect(s).toContain("network reach");
+    expect(s).toContain("secrets");
+    expect(s).toContain("barrier");
+    expect(s).toContain("it can reach hosts beyond the baseline");
+    expect(s).toContain("it carries a credential that can write");
+    expect(s).toContain("Fence, confinement class CC1");
+    // Exactly three semicolon-delimited details — the comma inside
+    // confinement's own detail never reads as a fourth item boundary.
+    const detailClause = s.slice(s.indexOf(": ") + 2, -1);
+    expect(detailClause.split("; ")).toHaveLength(3);
   });
 });

@@ -73,6 +73,15 @@ type Options struct {
 	// DefaultRouteProbe's reason: only the substrate knows how to read its own
 	// object. Nil ⇒ that sub-case is skipped.
 	EphemeralStorageProbe func(t *testing.T, ref string)
+	// AgentUserImage, when set, is SandboxImage run as uid 1000 — the identity
+	// the image contract gives every agent image. The managed-files case runs
+	// on it and then requires the probe to report uid 1000, because a root
+	// probe can rename, chmod and rewrite a root-owned file without any
+	// capability and so proves nothing about immutability. Empty ⇒ the case
+	// runs on SandboxImage, asserting those refusals only when the probe is not
+	// root (the Kubernetes substrate runs the agent as uid 1000 whatever the
+	// image's USER) and logging them otherwise.
+	AgentUserImage string
 }
 
 func (o Options) timeout() time.Duration {
@@ -102,6 +111,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
 	t.Run("ExecStreamLoopbackRelay", func(t *testing.T) { testExecStreamLoopbackRelay(t, r, opts) })
 	t.Run("EphemeralDiskLimit", func(t *testing.T) { testEphemeralDiskLimit(t, r, opts) })
+	t.Run("ManagedFiles", func(t *testing.T) { testManagedFiles(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.
@@ -500,6 +510,11 @@ type RecordingOptions struct {
 	// DefaultRouteProbe uses, so a driver CI without a recorder substrate does
 	// not hard-fail, but a driver CI that wires the probe verifies the contract.
 	RecordingProbe RecordingProbe
+	// MutateSpec, when non-nil, edits the recording sandbox's spec after the
+	// confinement class is pinned and before CreateSandbox. A recording
+	// driver's proxy needs a control plane to upload the cast to, which
+	// minimalSpec does not carry; the caller supplies it here.
+	MutateSpec func(*runner.SandboxSpec)
 }
 
 // CheckRecordingCapability is the recording-capability honesty gate. It is an
@@ -563,6 +578,9 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 
 	spec := minimalSpec(opts.image())
 	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+	if opts.MutateSpec != nil {
+		opts.MutateSpec(&spec)
+	}
 
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {
@@ -592,8 +610,20 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 // and is intentionally left to each caller rather than folded in here.
 func createStrongestSandbox(t *testing.T, ctx context.Context, r runner.Runner, caps runner.Capabilities, opts Options, caseName string) runner.Sandbox {
 	t.Helper()
+	return createStrongestSandboxWith(t, ctx, r, caps, opts, caseName, nil)
+}
+
+// createStrongestSandboxWith is createStrongestSandbox with one hook: mutate,
+// when non-nil, edits the spec after the class is pinned and before the
+// create. Exactly one case needs it — the managed-file case has to put
+// something IN the spec rather than only read the sandbox back.
+func createStrongestSandboxWith(t *testing.T, ctx context.Context, r runner.Runner, caps runner.Capabilities, opts Options, caseName string, mutate func(*runner.SandboxSpec)) runner.Sandbox {
+	t.Helper()
 	spec := minimalSpec(opts.image())
 	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+	if mutate != nil {
+		mutate(&spec)
+	}
 
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {

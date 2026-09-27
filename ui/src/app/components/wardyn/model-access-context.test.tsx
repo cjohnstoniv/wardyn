@@ -111,18 +111,18 @@ function Relauncher({ onSignedIn, label = "relauncher" }: { onSignedIn: () => vo
   return (
     <div>
       <span data-testid={`${label}-open`}>{String(door.open)}</span>
-      <button type="button" onClick={() => door.openDoor(null, onSignedIn)}>{`${label} open`}</button>
+      <button type="button" onClick={() => door.openDoor({ onSignedIn })}>{`${label} open`}</button>
       <button type="button" onClick={door.signedIn}>{`${label} signed in`}</button>
       <button type="button" onClick={door.closeDoor}>{`${label} cancel`}</button>
     </div>
   );
 }
 
-// openDoor(returnTo, onSignedIn): the New Run rail opens the door on the
+// openDoor({ onSignedIn }): the New Run rail opens the door on the
 // server's model-credential refusal and must launch again when — and only
 // when — the sign-in COMPLETES. `open` falls the same way on Escape, so the
 // completion is reported through signedIn(), which the dialog's onDone calls.
-describe("openDoor(returnTo, onSignedIn) — a completed sign-in reaches the surface that opened the door", () => {
+describe("openDoor({ onSignedIn }) — a completed sign-in reaches the surface that opened the door", () => {
   it("signedIn() closes the door and calls the callback exactly once", async () => {
     const relaunch = vi.fn();
     render(

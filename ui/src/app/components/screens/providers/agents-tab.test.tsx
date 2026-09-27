@@ -16,6 +16,14 @@ import { AGENTS, AGENTS_DRAFT, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/w
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab, agentCapabilityFor } from "./agents-tab";
+import { baseStatus } from "../../../lib/test-fixtures";
+import { WithDoor } from "../../../../test/door-harness";
+
+// The tab's sign-in button opens the shell's one door (#544), whose AWS pane
+// reads the SHELL's status — the server's settled rows, `harnesses` here.
+const withDoor = (ui: JSX.Element, harnesses: SetupHarnessTool[]) => (
+  <WithDoor status={baseStatus({ harnesses })}>{ui}</WithDoor>
+);
 
 const getAgentProvidersMock = vi.fn();
 const putAgentProvidersMock = vi.fn();
@@ -461,7 +469,8 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
       etag: '"s1"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
-    render(<AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const tab = <AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />;
+    render(withDoor(tab, HARNESSES_PER_USER_SAVED));
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     expect(await screen.findByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
@@ -476,7 +485,8 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
       etag: '"s2"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const tab = <AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />;
+    render(withDoor(tab, HARNESSES));
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     await screen.findByTestId("login-start-url-prompt");
@@ -495,7 +505,8 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
       etag: '"s3"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const tab = <AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />;
+    render(withDoor(tab, HARNESSES));
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     await screen.findByTestId("login-start-url-prompt");
@@ -713,13 +724,16 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     });
     const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
     render(
-      <AgentsTab
-        harnesses={DISABLED_PER_USER_HARNESSES}
-        operator
-        modelAccess={modelAccess}
-        onRetryRoster={retryRosterMock}
-        onStatusRefresh={statusRefreshMock}
-      />,
+      withDoor(
+        <AgentsTab
+          harnesses={DISABLED_PER_USER_HARNESSES}
+          operator
+          modelAccess={modelAccess}
+          onRetryRoster={retryRosterMock}
+          onStatusRefresh={statusRefreshMock}
+        />,
+        DISABLED_PER_USER_HARNESSES,
+      ),
     );
     const row = await screen.findByTestId("agent-row-claude-code");
     // The draft's disabled: false wins the Switch — the row body renders.
@@ -732,12 +746,15 @@ describe("AgentsTab — the per_user sign-in banner", () => {
   });
 });
 
-// Appendix A finding 5, agents-tab half: not_applicable is the admin-token
-// principal's own answer and carries no chip label — the whole claude-code
-// block (chip + ADMIN_OWN_CHIP_NOTE + sign-in CTA) must not render at all,
-// never an empty chip with the note still underneath it.
-describe("AgentsTab — not_applicable renders no model-access block at all", () => {
-  it("no chip, no ADMIN_OWN_CHIP_NOTE, no sign-in CTA", async () => {
+// #158 (Appendix A finding 5, agents-tab half, rewritten): not_applicable now
+// carries a real, neutral chip label (MODEL_ACCESS_CHIP_LABEL.not_applicable)
+// — the whole claude-code block renders, chip + ADMIN_OWN_CHIP_NOTE, same as
+// any other state. It still offers NO sign-in CTA: there is no person here
+// to sign in as. Further not_applicable cases (tone, prominence) live in
+// agents-tab-model-access.test.tsx (agents-tab.test.tsx sits at the
+// file-size cap).
+describe("AgentsTab — not_applicable renders its own chip, never a sign-in CTA", () => {
+  it("chip + ADMIN_OWN_CHIP_NOTE render, no sign-in CTA, no per-user banner", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       etag: '"na1"',
@@ -745,7 +762,8 @@ describe("AgentsTab — not_applicable renders no model-access block at all", ()
     const modelAccess: SetupModelAccess = { state: "not_applicable" };
     render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
+    expect(within(row).getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeInTheDocument();
+    expect(within(row).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
   });

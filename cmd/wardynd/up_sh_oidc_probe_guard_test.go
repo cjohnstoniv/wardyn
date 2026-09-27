@@ -10,18 +10,18 @@ import (
 	"testing"
 )
 
-// TestUpShLocalModeProbeSkipsUnderOIDC is the regression for bug-ops-2: scripts/
-// up.sh's post-boot "local-mode no-auth gate" smoke hits the gated /api/v1/me
-// endpoint with NO auth token. That only means something in LOCAL_MODE — under
-// SSO (WARDYN_OIDC_ISSUER set, per the OIDC-clobber guard earlier in the same
-// function) /api/v1/me correctly requires a real session and 401s regardless of
-// WARDYN_LOCAL_TRUST_FORWARDER, per TestLocalTrustForwarderAllowsGatewayPeer in
-// internal/api/auth_hardening_test.go which exercises LocalTrustForwarder only
-// under LocalMode:true. Before the fix that 401 fell into the probe's generic
-// "inconclusive, check logs" branch, sending an SSO operator chasing a forwarder
-// problem that doesn't exist. up.sh has no shell test harness, so this guard reads
-// the script text (matching the repo's existing envdoc/policydoc guard-test
-// pattern) and asserts the probe is gated on WARDYN_OIDC_ISSUER before it runs.
+// TestUpShLocalModeProbeSkipsUnderOIDC: scripts/up.sh's post-boot "local-mode
+// no-auth gate" smoke hits the gated /api/v1/me endpoint with no auth token. That
+// only means something in LOCAL_MODE — under SSO (WARDYN_OIDC_ISSUER set, per the
+// OIDC-clobber guard earlier in the same function) /api/v1/me correctly requires a
+// real session and 401s regardless of WARDYN_LOCAL_TRUST_FORWARDER, per
+// TestLocalTrustForwarderAllowsGatewayPeer in internal/api/auth_hardening_test.go
+// which exercises LocalTrustForwarder only under LocalMode:true. Run under SSO,
+// that 401 would fall into the probe's generic "inconclusive, check logs" branch
+// and send an SSO operator chasing a forwarder problem that doesn't exist. up.sh
+// has no shell test harness, so this guard reads the script text (matching the
+// repo's existing envdoc/policydoc guard-test pattern) and asserts the probe is
+// gated on WARDYN_OIDC_ISSUER before it runs.
 func TestUpShLocalModeProbeSkipsUnderOIDC(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "up.sh"))
 	if err != nil {
@@ -125,21 +125,20 @@ func TestUpShOIDCProbeMatcher_RejectsAnInvertedGuard(t *testing.T) {
 	}
 }
 
-// TestUpShProbeCarriesLoopbackHostAndBearer is the regression for ADV2-01 /
-// ADV2-02. scripts/up.sh's post-boot probes run a throwaway curl container on
-// the compose network, so the request reaches wardynd from a NON-loopback peer
-// (a container on the bridge — the same shape as the docker gateway a real host
-// UI/CLI request arrives as). Sent bare, that request is rejected in every
-// compose posture and the probes were therefore useless: in local mode the
-// DNS-rebinding Host guard 403s the Docker-DNS authority "wardynd:8080"
-// (isLoopbackHost, internal/api/http.go), and with local mode off the
-// humanOrAdminAuth group 401s an unauthenticated call. So the "local-mode
-// no-auth gate REJECTED a non-loopback peer" warning fired on EVERY `make
-// setup` — the probe could never return 200 and could never detect the
-// forwarder regression it exists to detect — and the post-boot LLM-ready policy
-// re-pick behind /api/v1/setup/status was unreachable dead code.
+// TestUpShProbeCarriesLoopbackHostAndBearer: scripts/up.sh's post-boot probes
+// run a throwaway curl container on the compose network, so the request reaches
+// wardynd from a non-loopback peer (a container on the bridge — the same shape
+// as the docker gateway a real host UI/CLI request arrives as). Sent bare, that
+// request is rejected in every compose posture: in local mode the DNS-rebinding
+// Host guard 403s the Docker-DNS authority "wardynd:8080" (isLoopbackHost,
+// internal/api/http.go), and with local mode off the humanOrAdminAuth group
+// 401s an unauthenticated call. A bare probe would fire the "local-mode no-auth
+// gate REJECTED a non-loopback peer" warning on every `make setup`, could never
+// return 200 or detect the forwarder fault it exists to detect, and would leave
+// the post-boot LLM-ready policy re-pick behind /api/v1/setup/status
+// unreachable.
 //
-// Both are one cause, so there is one fix: wardynd_probe overrides Host with a
+// Both have one cause and one fix: wardynd_probe overrides Host with a
 // loopback authority (reproducing the real host request's own Host, which
 // leaves the PEER gate fully exercised) and carries the admin bearer. This
 // guard pins those two headers on the helper; the shell-level behaviour — that
@@ -169,7 +168,7 @@ func TestUpShProbeCarriesLoopbackHostAndBearer(t *testing.T) {
 	}
 
 	// One way to ask: any OTHER in-network curl invocation is a second, bare
-	// request shape that the gates reject exactly as before the fix.
+	// request shape that the gates reject.
 	if n := len(regexp.MustCompile(`curlimages/curl`).FindAllString(src, -1)); n != 1 {
 		t.Errorf("scripts/up.sh has %d curlimages/curl invocations, want exactly 1 (inside wardynd_probe) — a bare in-network probe is answered 403/401 in every compose posture (ADV2-01/ADV2-02)", n)
 	}

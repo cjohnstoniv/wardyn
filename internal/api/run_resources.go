@@ -159,7 +159,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 
 	// A run that never dispatched has no sandbox to meter. Without this the ref
 	// went straight to ExecStream, which errored into the audit branch below:
-	// a 500 and a run.resources FAILURE row every 4s per open tab, for a
+	// a 500 and a run.resources.fail FAILURE row every 4s per open tab, for a
 	// PENDING/STARTING run that is simply not up yet. It also read as a
 	// different fact from the Files widget beside it, which returns a crisp 409
 	// for exactly this state — the same split verdict the no-runner case was
@@ -185,13 +185,19 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		// row per tick (the success path) would flood the trail. A failure is
 		// the rare, interesting case an operator would want in the log.
 		at, principal := actorFromRequest(r)
-		s.recordAudit(r.Context(), s.auditEvent(&id, at, principal, "run.resources", id.String(), "failure",
+		s.recordAudit(r.Context(), s.auditEvent(&id, at, principal, "run.resources.fail", id.String(), "failure",
 			mustJSON(map[string]any{"error": err.Error()})))
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
 			// The human sentence AND the sentinel: the UI shows the first, an
 			// operator reading a response body needs the second to tell this
 			// apart from the no-runner-configured guard above, which produces
-			// the same status and the same first half.
+			// the same status and the same first half. err here is always
+			// runner.ErrExecStreamUnsupported (just matched above) — a fixed
+			// sentinel string ("runner: ExecStream not supported"), never
+			// driver/substrate text, so #173 does not apply: see
+			// server_error_driver_text_guard_test.go's allowlist entry for
+			// this line, and TestRunResources_ExecStreamUnsupported_Returns501,
+			// which pins the sentinel staying in the body.
 			writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg+": "+err.Error())
 			return
 		}

@@ -199,3 +199,88 @@ describe("usePoll — a hidden tab", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 });
+
+// #275: the in-flight guard dropped a refocus that arrived while a read was
+// already outstanding — the flag only cleared when that read settled, so the
+// person who returned to the tab mid-read got no refresh at all and kept
+// seeing stale data for the rest of the interval. Fixed by coalescing: a
+// refocus during an in-flight read is remembered and fires exactly once when
+// that read settles.
+describe("usePoll — refocus coalescing", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // Drives the same visibilitychange event the browser fires, rather than
+  // calling into the hook's internals.
+  function refocus() {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  it("a refocus during an in-flight read produces exactly ONE follow-up read once it settles", async () => {
+    let settle: (() => void) | null = null;
+    const fn = vi.fn(() => new Promise<void>((res) => (settle = res)));
+    renderHook(() => usePoll(fn, 1000, false));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // the read that's now in flight
+
+    refocus(); // arrives while that read is still outstanding
+    expect(fn).toHaveBeenCalledTimes(1); // not dropped, but not fired yet either
+
+    settle!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).toHaveBeenCalledTimes(2); // the coalesced follow-up fired
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).toHaveBeenCalledTimes(2); // and nothing further fires on its own
+  });
+
+  it("ten refocus events during one in-flight read still produce exactly ONE follow-up", async () => {
+    let settle: (() => void) | null = null;
+    const fn = vi.fn(() => new Promise<void>((res) => (settle = res)));
+    renderHook(() => usePoll(fn, 1000, false));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 10; i++) refocus();
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    settle!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).toHaveBeenCalledTimes(2); // one follow-up, not ten
+  });
+
+  it("a refocus with nothing in flight fires immediately, same as today", () => {
+    const fn = vi.fn();
+    renderHook(() => usePoll(fn, 1000, false));
+    expect(fn).not.toHaveBeenCalled();
+
+    refocus();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  // #510-F5: a refocus that arrived while a read was in flight, followed by an
+  // unmount BEFORE that read settled, still ran the coalesced follow-up —
+  // against a dead component. The cleanup now marks the hook disposed so
+  // settle() skips the follow-up instead.
+  it("does not run the coalesced follow-up if the hook unmounted before the in-flight read settled", async () => {
+    let settle: (() => void) | null = null;
+    const fn = vi.fn(() => new Promise<void>((res) => (settle = res)));
+    const { unmount } = renderHook(() => usePoll(fn, 1000, false));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // the read that's now in flight
+
+    refocus(); // coalesced follow-up armed
+    unmount();
+
+    settle!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).toHaveBeenCalledTimes(1); // no follow-up against the unmounted hook
+  });
+});

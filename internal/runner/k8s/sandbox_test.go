@@ -39,7 +39,7 @@ import (
 // installCanaryReactor's doc for why) and overlays ONLY Status.PodIP, so a
 // caller that Gets the same pod again later (e.g. to inspect its Spec) still
 // sees everything CreateSandbox actually set — a bare synthesized stub here
-// previously left Spec.Containers empty and panicked such a caller.
+// would leave Spec.Containers empty and panic such a caller.
 func installProxyIPReactor(t *testing.T, cs *fake.Clientset, ip string) {
 	t.Helper()
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -229,7 +229,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		}
 		createOrder = append(createOrder, a.GetResource().Resource)
 	}
-	// NetworkPolicies FIRST, then the Secret (W6-S4: the policies must strictly
+	// NetworkPolicies first, then the Secret (the policies must strictly
 	// outlive the Secret so the orphan sweep can find it by their labels without
 	// holding `secrets: list`), then proxy pod, then agent pod.
 	want := []string{"networkpolicies", "networkpolicies", "secrets", "pods", "pods"}
@@ -540,8 +540,8 @@ func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
 	assertRunObjectsGone(t, cs, spec.RunID)
 }
 
-// TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols is the
-// bug-k8s-1 regression test: CreateSandbox's failure path must share the
+// TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols:
+// CreateSandbox's failure path must share the
 // SAME H3 wait-before-netpol-drop guard as StopSandbox/KillSandbox, not a
 // hand-rolled fire-and-forget rollback list. A rollback that deletes the
 // NetworkPolicies the instant the proxy pod's Delete is ISSUED (not once
@@ -715,8 +715,8 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 		t.Fatalf("get agent pod: %v", err)
 	}
 	// The drive is found BY NAME, not at index 0: since 0.7.5 a pod with a disk
-	// budget also carries the two scratch emptyDirs (ephemeralScratchVolumes),
-	// and this case is about the drive, not about volume ordering.
+	// budget also carries the scratch emptyDirs (ephemeralScratchVolumes), and
+	// this case is about the drive, not about volume ordering.
 	if len(pod.Spec.Volumes) != 1+len(wantScratch) {
 		t.Fatalf("agent pod volumes = %v, want the drive plus the %d scratch volumes", pod.Spec.Volumes, len(wantScratch))
 	}
@@ -1099,11 +1099,12 @@ func TestCreateSandbox_SecretEnvRidesTheRunSecret(t *testing.T) {
 
 // TestPodStuckReason covers the sentence a pod that never started produces.
 //
-// The motivating case is the drive one: a claim that never bound leaves the pod
-// Pending with NO container status at all, so every check inside
-// waitContainerRunning's poll is reading an empty list and the caller used to
-// get "context deadline exceeded" and nothing else. The scheduler had been
-// saying why for the whole three minutes, in the one place nothing looked.
+// The motivating case is the drive one: a claim that never bound leaves the
+// pod Pending with no container status at all, so every check inside
+// waitContainerRunning's poll reads an empty list, and without this the
+// caller gets "context deadline exceeded" and nothing else — while the
+// scheduler has been saying why the whole time, in the one place nothing
+// looked.
 func TestPodStuckReason(t *testing.T) {
 	unbound := "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available"
 	for _, tc := range []struct {

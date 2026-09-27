@@ -3,7 +3,7 @@
 
 package main
 
-// THE CENSUS THAT MAKES THE ISOLATION CLAIM ENFORCEABLE.
+// The census that makes the isolation claim enforceable.
 //
 // Audit-chain link correctness rests on the isolation level of the transaction
 // doing the writing: since 0056 the head read that decides prev_hash runs inside
@@ -82,6 +82,12 @@ var auditWriterPins = map[string]string{
 var declaredNonAuditTx = map[string]string{
 	"internal/db/db.go:applyMigration": "runs one migration's DDL and records it in schema_migrations; it never inserts " +
 		"into audit_events, and migration DDL is not chain-linked",
+	"internal/db/advisory_lock_keyed.go:AdvisoryLockKeyed": "exists ONLY to scope SET LOCAL lock_timeout around the " +
+		"pg_advisory_lock that bounds the wait (SET LOCAL reverts at commit, so nothing leaks onto the pooled " +
+		"connection). It carries no DML at all — no INSERT, UPDATE or DELETE, on audit_events or anything else — " +
+		"so it writes no chain-linked row and its isolation level decides nothing. The LOCK it takes is " +
+		"session-level and deliberately outlives the commit; the caller's guarded work runs afterwards, on its " +
+		"own connection and its own transactions, which are classified on their own",
 	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations to restore " +
 		"a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot commit a superseded " +
 		"function body (B8-F1). The replay set contains no DML at all — no INSERT, UPDATE or DELETE, on audit_events " +

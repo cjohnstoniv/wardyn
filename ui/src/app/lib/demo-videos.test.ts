@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { EPISODES, MEMBER_SECTION_IDS, episodeUrl, releasePageUrl, episodesFor } from "./demo-videos";
+import { DEFAULT_DEMO_VIDEO_BASE_URL, EPISODES, MEMBER_SECTION_IDS, episodeUrl, releasePageUrl, episodesFor } from "./demo-videos";
 import { STEP_LABEL } from "../components/screens/setup/steps";
 
 describe("demo-videos", () => {
@@ -21,6 +21,23 @@ describe("demo-videos", () => {
     expect(e).toBeDefined();
     expect(e!.tag).toBeNull();
     expect(episodeUrl(e!)).toBeNull();
+  });
+
+  it("DEFAULT_DEMO_VIDEO_BASE_URL is exactly the GitHub base episodeUrl falls back to", () => {
+    const e = EPISODES.find((x) => x.id === "01")!;
+    expect(episodeUrl(e)).toBe(`${DEFAULT_DEMO_VIDEO_BASE_URL}/${e.tag}/${e.file}`);
+  });
+
+  it("builds the download URL from an operator-configured mirror base", () => {
+    const e = EPISODES.find((x) => x.id === "01")!;
+    expect(episodeUrl(e, "https://videos.airgapped.example/wardyn-demos")).toBe(
+      "https://videos.airgapped.example/wardyn-demos/v0.7.0/wardyn-01-why-govern-agents.mp4",
+    );
+  });
+
+  it("a reserved episode stays null even with a mirror base configured (tag===null contract holds)", () => {
+    const e = EPISODES.find((x) => x.id === "02b")!;
+    expect(episodeUrl(e, "https://videos.airgapped.example/wardyn-demos")).toBeNull();
   });
 
   it("builds the release page URL", () => {

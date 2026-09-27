@@ -10,20 +10,20 @@ import (
 	"time"
 )
 
-// TestTunnelReleasesBothSidesWhenOneDirectionEnds pins F079: an opaque CONNECT
-// tunnel whose client side goes away while the upstream stays SILENT must
-// release both sockets (and therefore both copy goroutines) instead of pinning
-// them until the upstream eventually speaks.
+// TestTunnelReleasesBothSidesWhenOneDirectionEnds: an opaque CONNECT tunnel
+// whose client side goes away while the upstream stays silent must release
+// both sockets (and therefore both copy goroutines) instead of pinning them
+// until the upstream eventually speaks.
 //
-// tunnel() used to wg.Wait() for BOTH io.Copy directions before closing
-// anything, so an upstream that never sends and never closes — an
-// attacker-controlled allowed host, a hung TLS endpoint, a dropped FIN — held
+// A tunnel() that waited (wg.Wait) for both io.Copy directions before closing
+// anything would let an upstream that never sends and never closes — an
+// attacker-controlled allowed host, a hung TLS endpoint, a dropped FIN — hold
 // the hijacked client socket, the upstream socket and 2 goroutines forever:
 // the listener's IdleTimeout does not apply to a hijacked connection and the
-// opaque lane has no deadline of its own. A process inside the sandbox chooses
-// how many of these it opens.
+// opaque lane has no deadline of its own. A process inside the sandbox
+// chooses how many of these it opens.
 //
-// The upstream end here NEVER reads, writes or closes, so on the old shape
+// The upstream end here never reads, writes or closes, so under that shape
 // nothing below can complete.
 func TestTunnelReleasesBothSidesWhenOneDirectionEnds(t *testing.T) {
 	client, clientPeer := net.Pipe()     // the hijacked sandbox connection
@@ -52,8 +52,8 @@ func TestTunnelReleasesBothSidesWhenOneDirectionEnds(t *testing.T) {
 	}
 }
 
-// TestTunnelStillRelaysBothDirections is the no-regression half: the
-// first-finisher close must not cost the tunnel its ordinary duplex relay.
+// TestTunnelStillRelaysBothDirections is the other half: the first-finisher
+// close must not cost the tunnel its ordinary duplex relay.
 func TestTunnelStillRelaysBothDirections(t *testing.T) {
 	client, clientPeer := net.Pipe()
 	upstream, upstreamPeer := net.Pipe()

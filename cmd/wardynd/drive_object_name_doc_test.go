@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -25,6 +27,11 @@ const (
 	slugSentinel = "Zqslugz"
 	homeSentinel = "zqhomez"
 )
+
+// idSchemeSentinel is a fixed drive id, fed to types.DriveObjectID exactly as
+// slugSentinel is fed to types.DriveSlug — so the id-scheme shape below is
+// DERIVED from the real function (#163), not typed out separately from it.
+var idSchemeSentinel = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 
 // driveNameToken matches a documented minted-object name and everything the doc
 // writes after it, up to whatever punctuation ends it in prose or code.
@@ -63,6 +70,64 @@ func mintedShapes(t *testing.T) map[types.DriveBackend]string {
 	return out
 }
 
+// idSchemeShapes is mintedShapes' twin for object_scheme "id" (#163): the
+// fixed-width shape every drive registered from migration 0067 onward mints,
+// derived from types.DriveObjectID exactly as mintedShapes derives the slug
+// shape from types.DriveSlug.
+//
+// A SEPARATE function rather than a scheme parameter threaded through
+// mintedShapes, because TestDriveSubstrateSectionsUseTheirOwnShape needs ONE
+// canonical shape per backend — the dimension a docker_volume/k8s_pvc pair
+// diverging would show up on — and that check has nothing to do with which
+// scheme a row is on; mixing both dimensions into one map would force it to
+// pick a scheme for a question that is not about schemes.
+func idSchemeShapes(t *testing.T) map[types.DriveBackend]string {
+	t.Helper()
+	idHex := types.DriveObjectID(idSchemeSentinel)
+	out := map[types.DriveBackend]string{}
+	for _, b := range types.DriveBackends {
+		if b == types.DriveBackendHostPath {
+			continue
+		}
+		d := types.UserDrive{Backend: b, ID: idSchemeSentinel, ObjectScheme: types.DriveObjectSchemeID}
+		name := types.DriveObjectName(d, homeSentinel)
+		shape := strings.ReplaceAll(name, idHex, "<drive-id-hex>")
+		shape = strings.ReplaceAll(shape, homeSentinel, "<home>")
+		if strings.Contains(shape, idHex) || strings.Contains(shape, homeSentinel) {
+			t.Fatalf("backend %s produced %q on the id scheme — the sentinels no longer survive the naming function; re-derive this guard", b, name)
+		}
+		out[b] = shape
+	}
+	if len(out) == 0 {
+		t.Fatal("no minted backends found in types.DriveBackends — revisit this guard")
+	}
+	return out
+}
+
+// allMintedShapes is the UNION of every object name a minted backend can
+// produce across BOTH object schemes (#163) — the set
+// TestDocumentedDriveObjectNamesMatchTheFunction and
+// TestDriveNamingCommentsMatchTheFunction check every documented name
+// against. A row's scheme is fixed for its whole life (store.UpsertUserDrive:
+// 'id' on every INSERT, the stored value carried through on every UPDATE), so
+// BOTH shapes are live in a running deployment at once — a doc describing
+// either one is describing a real row, not a retired or hypothetical one.
+func allMintedShapes(t *testing.T) []string {
+	t.Helper()
+	out := make([]string, 0, 4)
+	add := func(m map[types.DriveBackend]string) {
+		for _, s := range m {
+			if !slices.Contains(out, s) {
+				out = append(out, s)
+			}
+		}
+	}
+	add(mintedShapes(t))
+	add(idSchemeShapes(t))
+	slices.Sort(out)
+	return out
+}
+
 // TestDocumentedDriveObjectNamesMatchTheFunction asserts, over EVERY markdown
 // file in the repository, that a documented `wardyn-drive-…` name is a name
 // types.DriveObjectName can actually produce.
@@ -76,14 +141,7 @@ func mintedShapes(t *testing.T) map[types.DriveBackend]string {
 // restated in the threat model and the audit-actions reference, which no
 // file-list drawn from the runbook would have named either.
 func TestDocumentedDriveObjectNamesMatchTheFunction(t *testing.T) {
-	shapes := mintedShapes(t)
-	allowed := make([]string, 0, len(shapes))
-	for _, s := range shapes {
-		if !slices.Contains(allowed, s) {
-			allowed = append(allowed, s)
-		}
-	}
-	slices.Sort(allowed)
+	allowed := allMintedShapes(t)
 
 	// Prose forms that are not a single object's name: the glob an operator
 	// greps with, and the rename discussion's "the name a rename moves TO".
@@ -229,38 +287,26 @@ func trackedMarkdown(t *testing.T, root string) []string {
 // written repo-wide so a section-scoped check could not miss the runbook's
 // reclaim command. It still could not see the RATIONALE COMMENTS in
 // internal/types/user_drive.go, which restate the minted shape to carry a
-// security argument about what an object name exposes — and which went on
-// stating the retired pre-slug rule (`wardyn-drive-<home>`, "named by the HOME
-// and by nothing else") after every minted name took the drive slug. A reader
+// security argument about what an object name exposes — and which must not state
+// the retired pre-slug rule (`wardyn-drive-<home>`, "named by the HOME and by
+// nothing else") now that every minted name carries the drive slug. A reader
 // auditing the managed-backend template refusal reads those comments as the
-// specification; one of them claimed a managed object is named by the home "and
-// by nothing else", which is a claim about the very exposure that refusal bounds.
+// specification, so a comment claiming a managed object is named by the home "and
+// by nothing else" misstates the very exposure that refusal bounds.
 //
-// SCOPED TO THAT ONE FILE, DELIBERATELY, and the reason is what a repo-wide
-// version could not do. Run over all of cmd/ and internal/, this flags four more
-// sites, and only two are defects: internal/api/user_drives.go's rename gate
-// says the shape is `wardyn-drive-<drive-slug>-<home>` and then correctly
-// recounts that "it used to be `wardyn-drive-<home>`" — load-bearing history the
-// fix wave wrote on purpose. A guard that cannot tell a stale SPECIFICATION from
-// a deliberate account of what changed would demand the history be deleted, and
-// would be silenced within a round. This file DEFINES DriveObjectName, so its
-// own comments have no business narrating a retired shape at all; every other
-// package legitimately may. The genuinely stale siblings this found are filed,
-// not allowlisted.
+// Scoped to that one file, deliberately. Other packages may name the retired
+// shape on purpose — to explain what a rename gate refuses, say — and a guard
+// that cannot tell a stale specification from a deliberate account of what
+// changed would demand that account be deleted, and would be silenced within a
+// round. This file defines DriveObjectName, so its own comments have no business
+// narrating a retired shape at all; every other package legitimately may.
 //
 // Only tokens carrying a `<placeholder>` are checked. `wardyn-drive-bsmith` in
 // DriveObjectName's own doc is a deliberate example of the RETIRED name, quoted
 // to explain why the slug was added; a concrete example is not a template, and
 // flagging it would be flagging the explanation of the fix.
 func TestDriveNamingCommentsMatchTheFunction(t *testing.T) {
-	shapes := mintedShapes(t)
-	allowed := make([]string, 0, len(shapes))
-	for _, s := range shapes {
-		if !slices.Contains(allowed, s) {
-			allowed = append(allowed, s)
-		}
-	}
-	slices.Sort(allowed)
+	allowed := allMintedShapes(t)
 
 	const rel = "internal/types/user_drive.go"
 	path := filepath.Join(repoRoot(t), rel)

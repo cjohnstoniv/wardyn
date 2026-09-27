@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 )
 
-// TestBedrockPlainHTTPIsAudibleAtBoot (W6-S7) pins the runtime signal for the
+// TestBedrockPlainHTTPIsAudibleAtBoot pins the runtime signal for the
 // SECOND relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks.
 //
 // Only the AWS SSO override was audible: it WARNs on every boot that carries it
@@ -34,13 +34,17 @@ func TestBedrockPlainHTTPIsAudibleAtBoot(t *testing.T) {
 		f := &bootFlags{
 			anthropicBaseURL:       &empty,
 			openaiBaseURL:          &empty,
+			anthropicGatewayHeader: &empty,
+			anthropicGatewayFormat: &empty,
+			openaiGatewayHeader:    &empty,
+			openaiGatewayFormat:    &empty,
 			bedrockBaseURL:         &baseURL,
 			bedrockRegion:          &region,
 			bedrockModel:           &model,
 			allowTestEndpoints:     &ack,
 			awsSSOEndpointOverride: &override,
 		}
-		_, _, _, err := validateModelEndpoints(f)
+		_, _, _, _, err := validateModelEndpoints(f)
 		return buf.String(), err
 	}
 

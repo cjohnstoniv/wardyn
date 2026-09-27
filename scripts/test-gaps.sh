@@ -58,9 +58,10 @@ MODULE="github.com/cjohnstoniv/wardyn/"
 # Packages whose real coverage requires a live Docker daemon (WARDYN_TEST_DOCKER).
 DOCKER_RE='^(internal/runner/docker|internal/envbuild|cmd/wardyn-runner)(/|$)'
 # Packages whose real coverage requires a real Kubernetes cluster
-# (WARDYN_TEST_K8S=1 / make test-conformance-k8s / kind-sso-walk.sh) — X1c-F13:
-# these funcs used to fall into "Untested" with nothing distinguishing "nobody
-# has ever exercised this" from "this needs a cluster no per-PR run has".
+# (WARDYN_TEST_K8S=1 / make test-conformance-k8s / kind-sso-walk.sh) — a past
+# review found these funcs used to fall into "Untested" with nothing
+# distinguishing "nobody has ever exercised this" from "this needs a cluster
+# no per-PR run has".
 K8S_RE='^(internal/runner/k8s)(/|$)'
 
 # classify emits: <category>\t<pkg>\t<func>\t<file:line>
@@ -282,7 +283,7 @@ render_cat() {
   echo "## Kubernetes-gated — need a real cluster (WARDYN_TEST_K8S=1)"
   echo
   echo "internal/runner/k8s's session funcs (Attach/Close/ExecStream/Read/Resize/Write)"
-  echo "— X1c-F13: these used to fall into \"Untested\" above with nothing distinguishing"
+  echo "— a past review found these used to fall into \"Untested\" above with nothing distinguishing"
   echo "\"nobody has ever exercised the k8s substrate\" from \"this needs a cluster no"
   echo "per-PR run has.\" Classified by package (no cluster here to prove it)."
   echo
@@ -313,6 +314,17 @@ result for them is evidence only for the tip somebody actually ran it on.
   read 0.0% in the K8S-gated bucket above. Prereqs: `make kind-quickstart` +
   `make kind-sso`; recipe in docs/OPERATIONS.md, "Testing AWS SSO without an
   AWS tenant".
+- `WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh` — **the Azure DevOps
+  walk** (0.7.10, `scripts/lib/kind-sso-walk-ado.sh`). The console signs in
+  against a fake Entra tenant (`test/adofake/cmd`, a TLS-terminating forward
+  proxy trusted through a walk CA) instead of Dex. The admin signs in before any
+  Azure DevOps row exists and writes the row; the member's login is then widened
+  and captures one blob, the member's (`ado_entra_login.go`); the member's exec
+  run resolves its injection (`injection_ado.go`) and reads REST and runs
+  `git ls-remote` through the proxy's gate and broker; and the fake's `/_seen`
+  records the member's subject and never the admin's. Prereqs: `make
+  kind-quickstart` on port 8580 + `WARDYN_KIND_SSO_PROFILE=ado make kind-sso`;
+  recipe in deploy/kind/sso/README.md.
 - `scripts/run-e2e-ssh-k8s.sh` (`make test-e2e-ssh-k8s`) — the SSH gateway over
   the k8s exec lane: `internal/runner/k8s`'s Attach/Close/ExecStream/Read/
   Resize/Write, every one of them listed in the K8S-gated bucket above.

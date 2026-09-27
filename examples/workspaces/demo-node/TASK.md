@@ -45,7 +45,7 @@ New Run form verbatim.
 1. `node --test` passes inside the sandbox and `GET /api/v1/runs/{id}/files`
    reports a non-empty diff.
 2. Audit has `approval.decide outcome=approved` → `egress.allow` for
-   `example.com`, and `NOTES.md` records `200`. **Not `egress.pending`**: the
+   `example.com`, and `NOTES.md` records `200`. **Not `egress.hold`**: the
    ceiling clamp is member-only (`inline_policy.go` gates it on
    `!isOperator`), so a demo run keeps `wait_for_review` and the request is
    genuinely HELD — an approved hold logs only the allow.

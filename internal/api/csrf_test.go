@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── CSRF: the same-origin guard on a COOKIE-authenticated mutating request ──
+// CSRF: the same-origin guard on a cookie-authenticated mutating request
 //
 // Two guards, one rule, pinned together. LocalMode has refused a cross-origin
 // mutating request since FIX #8's sibling (http.go's local arm) but nothing
@@ -97,7 +97,7 @@ func csrfDo(t *testing.T, srv *Server, method, path, host, origin, secFetchSite,
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 
@@ -176,7 +176,7 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// ACCEPTED BEHAVIOUR CHANGE (0.7.3), pinned so it is a decision and
+			// Accepted behaviour change (0.7.3), pinned so it is a decision and
 			// not a surprise: browsers treat localhost and 127.0.0.1 as two
 			// different SITES, so a page at http://localhost:<port> posting to
 			// http://127.0.0.1:<port> now carries Sec-Fetch-Site: cross-site
@@ -203,10 +203,11 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// RULE 3's OWN WORDS (S2-02): the CLI/API fallthrough is "no Origin
-			// AND no Sec-Fetch-Site". A browser that omits Origin on a same-site
+			// Rule 3's own words: the CLI/API fallthrough is "no Origin AND no
+			// Sec-Fetch-Site". A browser that omits Origin on a same-site
 			// top-level form POST — the sibling host on a shared parent domain,
-			// again — used to land in it, because only "cross-site" refused.
+			// again — must not land in it just because only "cross-site" is
+			// refused.
 			name:             "Sec-Fetch-Site: same-site with no Origin",
 			secFetchSite:     "same-site",
 			wantLocalRefused: true,
@@ -337,13 +338,13 @@ func TestCSRFGuard_BearerCallerIsNotRefused(t *testing.T) {
 	r.Header.Set("Origin", "https://evil.example")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	if w.Code != http.StatusFound {
 		t.Fatalf("bearer caller with a cross-site Origin: code = %d, want 302 (exempt by construction)\nbody: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestCSRFGuard_EveryMutatingRouteIsFenced is the REGRESSION FENCE, and it
+// TestCSRFGuard_EveryMutatingRouteIsFenced is the route-wide fence, and it
 // hand-lists nothing. The table above drives one route (POST /auth/logout, the
 // most harmless mutation in the API); this walks authz_test.go's
 // chi.Walk-derived routeMatrix — the file's own doctrine, and the thing that
@@ -375,9 +376,9 @@ func TestCSRFGuard_EveryMutatingRouteIsFenced(t *testing.T) {
 			// No credential is consulted, so there is no ambient authority to
 			// forge — the CSRF question does not arise.
 			continue
-		case classInternal:
-			// Run-token / ground-truth BEARER lanes: no cookie, exempt by
-			// construction exactly as the admin bearer is.
+		case classInternal, classDevice:
+			// Run-token / ground-truth / device BEARER credentials: no cookie,
+			// exempt by construction exactly as the admin bearer is.
 			continue
 		}
 		fenced++
@@ -402,7 +403,7 @@ func TestCSRFGuard_EveryMutatingRouteIsFenced(t *testing.T) {
 }
 
 // TestCSRFGuard_RefusalIsAudited pins the SIEM half in both modes: a refusal
-// emits the EXISTING auth.failed action with reason cross_origin_refused, so
+// emits the EXISTING auth.fail action with reason cross_origin_refused, so
 // "is someone attacking this" and "why did the console stop saving" are
 // answerable from the trail. The guard short-circuits above adminAuth (the
 // chokepoint every other public-API refusal funnels through), so without an
@@ -441,19 +442,19 @@ func TestCSRFGuard_RefusalIsAudited(t *testing.T) {
 	})
 }
 
-// assertCSRFAudited finds the auth.failed row and checks the shape every other
+// assertCSRFAudited finds the auth.fail row and checks the shape every other
 // refusal in this middleware writes: system actor, failure outcome, the request
 // path as Target, a source IP, and the content-free reason.
 func assertCSRFAudited(t *testing.T, events []types.AuditEvent, path string) {
 	t.Helper()
 	var ev *types.AuditEvent
 	for i := range events {
-		if events[i].Action == "auth.failed" {
+		if events[i].Action == "auth.fail" {
 			ev = &events[i]
 		}
 	}
 	if ev == nil {
-		t.Fatalf("no auth.failed audit event recorded for a CSRF refusal; events = %+v", events)
+		t.Fatalf("no auth.fail audit event recorded for a CSRF refusal; events = %+v", events)
 	}
 	if ev.ActorType != types.ActorSystem || ev.Outcome != "failure" {
 		t.Errorf("ActorType/Outcome = %q/%q, want system/failure", ev.ActorType, ev.Outcome)

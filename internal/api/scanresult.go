@@ -88,7 +88,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "persist source profile: "+err.Error())
+		writeServerError(w, r, "persist source profile", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
@@ -108,13 +108,9 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 // RAISE NeedsReview, and FAILS OPEN — any advisor error (incl. a bounded CLI
 // timeout) keeps profile unchanged, so a caller's own persist/upload can never
 // fail because of it. aiChanged reports whether it actually flipped Source to
-// SourceAIAssisted (the audit discriminator every caller records).
-//
-// Shared by every scan LANE: the sandboxed repo-scan upload
-// (uploadSourceScanResult) and the host-side local_dir scan
-// (scanLocalDirSource) both derive a profile from ScanFacts, so both get the
-// SAME advisory gap-fill on the SAME gate — a local_dir source is not a
-// second-class scan lane the flag quietly skips.
+// SourceAIAssisted (the audit discriminator every caller records). Shared by
+// every scan LANE (uploadSourceScanResult and scanLocalDirSource), so a
+// local_dir source gets the SAME gap-fill on the SAME gate.
 func (s *Server) applyScanAIAdvisor(ctx context.Context, facts workspacescan.ScanFacts, profile workspacescan.WorkspaceProfile) (result workspacescan.WorkspaceProfile, aiRan, aiChanged bool) {
 	if s.cfg.ScanAIAdvisor == nil || !workspacescan.ShouldAdvise(profile, facts) {
 		return profile, false, false

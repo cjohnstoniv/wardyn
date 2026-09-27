@@ -308,11 +308,11 @@ func TestScan_ManifestCapTruncatesToLowConfidence(t *testing.T) {
 	}
 }
 
-// TestScan_SourceFileBudgetTruncatesToLowConfidence is W9-S1-4: past the
-// per-scan source-file budget (maxSourceFilesScanned), extra files used to
-// be silently skipped — the scan then reported confidence=high over a tree
-// it never fully walked, contradicting the package's own bound-lowers-
-// confidence promise (scan.go's lowConfidence := facts.Truncated || ...).
+// TestScan_SourceFileBudgetTruncatesToLowConfidence: past the per-scan
+// source-file budget (maxSourceFilesScanned), extra files are skipped, so the
+// scan must report low confidence rather than high over a tree it never fully
+// walked — the package's own bound-lowers-confidence promise (scan.go's
+// lowConfidence := facts.Truncated || ...).
 func TestScan_SourceFileBudgetTruncatesToLowConfidence(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module x\n\ngo 1.22\n") // gives Scan something to detect at all
@@ -326,7 +326,7 @@ func TestScan_SourceFileBudgetTruncatesToLowConfidence(t *testing.T) {
 	}
 }
 
-// TestScan_OverlongLineTruncatesToLowConfidence is W9-S1-4's other half: a
+// TestScan_OverlongLineTruncatesToLowConfidence is other half: a
 // line over eachLine's 64 KiB Buffer cap makes bufio.Scanner.Scan() stop with
 // ErrTooLong — silently, exactly like a clean EOF, unless the caller checks
 // Err(). A minified bundle or a base64 blob past the cutoff must not scan as

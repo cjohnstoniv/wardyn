@@ -18,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -70,8 +71,8 @@ func TestCreateSandbox_FailsClosedOnUnenforceableCaps(t *testing.T) {
 // counterpart of TestCreateSandbox_FailsClosedOnUnenforceableCaps: the
 // exec-based path checks verifyCapsEnforced right after ContainerCreate
 // (in CreateSandbox), but the exec-less path defers ContainerCreate+Start to
-// runAsMainProcess (invoked from Exec) — which used to skip the check
-// entirely and start the untrusted workload uncapped. Locks in that
+// runAsMainProcess (invoked from Exec), which must not skip the check and
+// start the untrusted workload uncapped. Locks in that
 // runAsMainProcess applies the identical fail-closed gate (and honors the
 // same AllowUnenforceableCaps override) before ever starting the container.
 func TestExecLess_FailsClosedOnUnenforceableCaps(t *testing.T) {
@@ -142,7 +143,7 @@ func newTestDriver(f *fakeDocker) *Driver {
 	return newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 }
 
-// TestDriver_ImageRemove is the bug-workspace-1 regression at the driver
+// TestDriver_ImageRemove pins image reclaim at the driver
 // level: runner.ImageRemover must actually reclaim a present image and treat
 // an already-absent one as a no-op (idempotent, same StopSandbox-style
 // contract), never surfacing "not found" as an error to a best-effort caller.
@@ -216,6 +217,7 @@ func TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef(t *testing.T) {
 }
 
 func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
+	testfloor.Mark(t, "docker")
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
@@ -293,7 +295,7 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 
 	// Proxy env carries the FULL sidecar config as one JSON var: run token,
 	// control-plane URL, and the run's egress policy (a proxy without a
-	// policy fails closed — the GAP-1 regression this guards against).
+	// policy fails closed, which this guards).
 	var cfgJSON string
 	for _, e := range proxy.cfg.Env {
 		if strings.HasPrefix(e, "WARDYN_PROXY_CONFIG_JSON=") {
@@ -393,6 +395,7 @@ func TestCreateSandbox_TopologyPreservesL0UnderGVisor(t *testing.T) {
 }
 
 func TestCreateSandbox_FailClosedOnMissingRuntime(t *testing.T) {
+	testfloor.Mark(t, "docker")
 	f := newFakeDocker() // runc only, no runsc
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
@@ -530,22 +533,21 @@ func TestTeardown_UnresolvableRunReportsError(t *testing.T) {
 	}
 }
 
-// TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork is
-// W15-W15c-terminal-lifecycle-2: when the agent container is ALREADY GONE
-// (crashed, OOM-killed, or a concurrent teardown beat this one to it),
-// ContainerInspect returns not-found and the label/name recovery on the
-// err==nil branch never runs at all — teardown used to report success
-// without ever trying to resolve the run id, leaking the sibling proxy
-// sidecar (still holding the run's credentials) and the per-run network.
-// Ref must recover via runIDFromAgentName(ref) on BOTH substrates:
-//   - krun (exec-less/CC3): ref was already the deterministic agent name
-//     (agentContainerName(runID)) even before this fix.
+// TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork: when the agent
+// container is already gone (crashed, OOM-killed, or a concurrent teardown
+// beat this one to it), ContainerInspect returns not-found and the label/name
+// recovery on the err==nil branch never runs at all — so teardown must still
+// resolve the run id, or it reports success while leaking the sibling proxy
+// sidecar (still holding the run's credentials) and the per-run network. Ref
+// must recover via runIDFromAgentName(ref) on both substrates:
+//   - krun (exec-less/CC3): ref is the deterministic agent name
+//     (agentContainerName(runID)).
 //   - runc/gVisor (exec-based, the DEFAULT/common substrate): CreateSandbox
-//     used to return the daemon's own opaque agentResp.ID as Ref instead —
-//     unrelated to the run id — so this fallback silently no-op'd for every
-//     ordinary run. createIDOverride makes the fake hand back an ID that
-//     actually diverges from the name (fakeDocker's default id==name
-//     simplification would otherwise mask this exact regression).
+//     must return that name as Ref too, not the daemon's own opaque
+//     agentResp.ID — unrelated to the run id — or this fallback silently
+//     no-ops for every ordinary run. createIDOverride makes the fake hand
+//     back an ID that actually diverges from the name (fakeDocker's default
+//     id==name simplification would otherwise mask exactly that).
 func TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -804,15 +806,16 @@ func TestExecLess_MainProcessLifecycle(t *testing.T) {
 	}
 }
 
-// TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus pins driver.go's
-// half of W15-c: AgentStatus must treat the mainProcessExecID sentinel exactly
-// like "" — fall back to container Status — never probe it as a real docker
-// exec id, since "main-process" is never actually passed to ExecCreate.
-// f.execGone models that truthfully (the daemon has never heard of this id).
+// TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus pins
+// driver.go's half of the exec-less sentinel: AgentStatus must treat
+// mainProcessExecID exactly like "" — fall back to container Status — never
+// probe it as a real docker exec id, since "main-process" is never actually
+// passed to ExecCreate. f.execGone models that truthfully (the daemon has
+// never heard of this id).
 //
-// Counterfactual (base 6d76911, which has no sentinel case): AgentStatus tries
-// ExecInspect("main-process"), the fake reports it not-found, and — because the
-// container is still RUNNING — the AMBIGUOUS-404 branch (GAP-RECONCILE-1)
+// Counterfactual: without the sentinel case AgentStatus tries
+// ExecInspect("main-process"), the fake reports it not-found, and — because
+// the container is still RUNNING — the ambiguous-404 branch (GAP-RECONCILE-1)
 // returns an ERROR instead of a live status, so this test's `err != nil` check
 // fails red.
 func TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus(t *testing.T) {
@@ -890,7 +893,7 @@ func TestAttach_OpensInteractiveShellNotTrackedAsAgentExec(t *testing.T) {
 	}
 	// Pin the GOTMPDIR prep guard on the RECORDED exec argv itself — not just
 	// against the attachShell var (which the check above already compares
-	// against itself and so can never catch a regression in attachShell's own
+	// against itself and so can never catch a change in attachShell's own
 	// content). Session prep in agent-run-lib.sh does the same work, but only
 	// after slower steps, so this shell must run it too or `go build` fails in
 	// the attach terminal on an envbuilt/BYO image whose GOTMPDIR dir was never
@@ -1167,4 +1170,138 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 			t.Fatalf("ensureImage with a nil callback: %v", err)
 		}
 	})
+}
+
+// TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy is the lease end on
+// Docker: the agent container is stopped but NOT removed (its writable layer is
+// the kept files), the proxy sidecar is removed (no network path), and the
+// per-run network stays. A second end is a no-op, and a later kill still tears
+// the kept sandbox down completely.
+func TestEndSandbox_StopsTheAgentAndTheProxyAndKeepsThem(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+
+	for i := range 2 {
+		if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("EndSandbox #%d: %v", i+1, err)
+		}
+	}
+	agent := f.containers[sb.Ref]
+	if agent == nil || agent.removed || agent.state == nil || agent.state.Status != "exited" {
+		t.Fatalf("agent after the end = %+v; want stopped and still present", agent)
+	}
+	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed || p.state == nil || p.state.Running {
+		t.Error("the proxy sidecar must be stopped at the end — it is the agent's only network path — and kept for a revive to read")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; !ok {
+		t.Error("the per-run network was removed at the end; teardown owns it")
+	}
+
+	if err := d.KillSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("KillSandbox of the kept sandbox: %v", err)
+	}
+	if !f.containers[sb.Ref].removed || !f.containers[proxyContainerName(runID)].removed {
+		t.Error("a kill after the end must remove the kept agent and proxy containers")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; ok {
+		t.Error("a kill after the end must remove the per-run network")
+	}
+}
+
+// TestStopProxy_StopsOnlyTheProxy is a run lost to a control-plane outage
+// on Docker: the proxy sidecar, the agent's only network path, is stopped and
+// kept (its config is what a revive reads back), while the agent container
+// keeps running so a proxy-only revive can pick it up. A second stop is a
+// no-op.
+func TestStopProxy_StopsOnlyTheProxy(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+
+	for i := range 2 {
+		if err := d.StopProxy(ctx, sb.Ref); err != nil {
+			t.Fatalf("StopProxy #%d: %v", i+1, err)
+		}
+	}
+	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed || p.state == nil || p.state.Running {
+		t.Errorf("proxy after StopProxy = %+v; want it stopped and kept", p)
+	}
+	if agent := f.containers[sb.Ref]; agent == nil || agent.removed || agent.state == nil || !agent.state.Running {
+		t.Fatalf("agent after StopProxy = %+v; want it still running", agent)
+	}
+}
+
+// TestFreezeSandbox_PausesTheAgentOnly is runner Freeze/Thaw on Docker
+// (runner.Freezer, long-holds design rev 4 §3.1): FreezeSandbox pauses the
+// agent container and leaves the proxy sidecar untouched (it must keep
+// renewing/answering decisions while the agent is frozen). A second freeze is
+// idempotent (the daemon's "already paused" conflict must not surface).
+// ThawSandbox resumes it, and a second thaw is likewise idempotent. Status
+// keeps reporting RUNNING throughout — a pause never invents a new RunState.
+func TestFreezeSandbox_PausesTheAgentOnly(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+	proxyRef := proxyContainerName(runID)
+
+	for i := range 2 {
+		if err := d.FreezeSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("FreezeSandbox #%d: %v", i+1, err)
+		}
+	}
+	agent := f.containers[sb.Ref]
+	if agent == nil || agent.state == nil || !agent.state.Paused {
+		t.Fatalf("agent after freeze = %+v; want paused", agent)
+	}
+	if st, err := d.Status(ctx, sb.Ref); err != nil || st.State != types.RunRunning {
+		t.Errorf("Status of a paused agent = %+v, %v; want RunRunning (paused must not be a new RunState)", st, err)
+	}
+	proxy := f.containers[proxyRef]
+	if proxy == nil || (proxy.state != nil && proxy.state.Paused) {
+		t.Errorf("proxy after freeze = %+v; the proxy must never be paused", proxy)
+	}
+
+	for i := range 2 {
+		if err := d.ThawSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("ThawSandbox #%d: %v", i+1, err)
+		}
+	}
+	if agent = f.containers[sb.Ref]; agent == nil || agent.state == nil || agent.state.Paused {
+		t.Fatalf("agent after thaw = %+v; want not paused", agent)
+	}
+}
+
+// TestFreezeSandbox_MissingRefIsIdempotent mirrors the Stop/Kill/End
+// contract: Freeze/Thaw of a ref that no longer exists is success, not an
+// error, so a pause that races a teardown never turns into a caller-visible
+// failure.
+func TestFreezeSandbox_MissingRefIsIdempotent(t *testing.T) {
+	f := newFakeDocker()
+	d := newTestDriver(f)
+	ctx := context.Background()
+	if err := d.FreezeSandbox(ctx, "no-such-ref"); err != nil {
+		t.Errorf("FreezeSandbox of a missing ref: %v", err)
+	}
+	if err := d.ThawSandbox(ctx, "no-such-ref"); err != nil {
+		t.Errorf("ThawSandbox of a missing ref: %v", err)
+	}
 }

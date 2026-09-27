@@ -89,7 +89,7 @@ func TestUpsertAttributionNamesTheAllocationWhenTheNamespaceGuardCannotHaveFired
 		}
 	})
 
-	// THE NEGATIVE CONTROLS, and they are what keep this from becoming "every
+	// The negative controls, and they are what keep this from becoming "every
 	// refusal is an allocation".
 	t.Run("a share keeps the namespace answer", func(t *testing.T) {
 		share := types.UserDrive{ID: uuid.New(), Name: "Corp NAS",

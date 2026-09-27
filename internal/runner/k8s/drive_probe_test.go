@@ -15,9 +15,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// TestProbeDrive_BoundClaimIsReadable pins the one positive answer this
-// substrate can honestly give: a claim it can Get, that is Bound.
-func TestProbeDrive_BoundClaimIsReadable(t *testing.T) {
+// TestProbeDrive_BoundClaimIsUnknown pins the interface contract
+// (runner.go: DriveProbeReadable means the probe ran AS THE AGENT'S OWN
+// UID): a Bound claim proves the volume is provisioned and attachable, not
+// that the agent's own uid can read it once mounted, and this driver has no
+// pod-less way to ask that question — so even its best case stays Unknown,
+// never a guessed pass.
+func TestProbeDrive_BoundClaimIsUnknown(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	drive := testDriveMount()
 	if _, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Create(context.Background(), &corev1.PersistentVolumeClaim{
@@ -31,8 +35,8 @@ func TestProbeDrive_BoundClaimIsReadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
-	if probe.Result != runner.DriveProbeReadable {
-		t.Errorf("result = %q, want %q", probe.Result, runner.DriveProbeReadable)
+	if probe.Result != runner.DriveProbeUnknown {
+		t.Errorf("result = %q, want %q for a merely Bound claim", probe.Result, runner.DriveProbeUnknown)
 	}
 }
 

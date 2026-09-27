@@ -33,6 +33,7 @@ func TestDispatch_ExecTaskMode_SetsSandboxEnv(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create exec-mode run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForCreates(t, 1) // dispatch runs after the 201
 	if fr.lastSpec.Env["WARDYN_TASK_MODE"] != "exec" {
 		t.Errorf("Env[WARDYN_TASK_MODE] = %q, want exec", fr.lastSpec.Env["WARDYN_TASK_MODE"])
 	}
@@ -42,6 +43,7 @@ func TestDispatch_ExecTaskMode_SetsSandboxEnv(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create default-mode run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForCreates(t, 2) // dispatch runs after the 201
 	if v, ok := fr.lastSpec.Env["WARDYN_TASK_MODE"]; ok {
 		t.Errorf("Env[WARDYN_TASK_MODE] = %q on a default run, want absent", v)
 	}
@@ -75,6 +77,7 @@ func TestDispatch_InteractiveStart_SetsSandboxEnv(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create agent-start run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForCreates(t, 1) // dispatch runs after the 201
 	if fr.lastSpec.Env["WARDYN_INTERACTIVE_START"] != "agent" {
 		t.Errorf("Env[WARDYN_INTERACTIVE_START] = %q, want agent", fr.lastSpec.Env["WARDYN_INTERACTIVE_START"])
 	}
@@ -84,6 +87,7 @@ func TestDispatch_InteractiveStart_SetsSandboxEnv(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create default interactive run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForCreates(t, 2) // dispatch runs after the 201
 	if v, ok := fr.lastSpec.Env["WARDYN_INTERACTIVE_START"]; ok {
 		t.Errorf("Env[WARDYN_INTERACTIVE_START] = %q on a default interactive run, want absent", v)
 	}
@@ -93,6 +97,7 @@ func TestDispatch_InteractiveStart_SetsSandboxEnv(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create batch run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForCreates(t, 3) // dispatch runs after the 201
 	if v, ok := fr.lastSpec.Env["WARDYN_INTERACTIVE_START"]; ok {
 		t.Errorf("Env[WARDYN_INTERACTIVE_START] = %q on a BATCH run, want absent (the interactive gate)", v)
 	}

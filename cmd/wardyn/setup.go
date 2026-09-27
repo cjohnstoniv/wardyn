@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -90,7 +91,7 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Println(string(raw))
+				fmt.Fprintln(cmd.OutOrStdout(), string(raw))
 				return nil
 			}
 			st, err := fetchSetupStatus(cmd.Context(), c)
@@ -101,11 +102,11 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 			if st.Ready {
 				ready = "ready"
 			}
-			fmt.Printf("Wardyn setup: %s\n", ready)
+			fmt.Fprintf(cmd.OutOrStdout(), "Wardyn setup: %s\n", ready)
 			for _, ck := range st.Checks {
-				fmt.Printf("  [%-4s] %s: %s\n", ck.Status, ck.Label, ck.Detail)
+				fmt.Fprintf(cmd.OutOrStdout(), "  [%-4s] %s: %s\n", ck.Status, ck.Label, ck.Detail)
 				if ck.Fix != "" {
-					fmt.Printf("          → %s\n", ck.Fix)
+					fmt.Fprintf(cmd.OutOrStdout(), "          → %s\n", ck.Fix)
 				}
 			}
 			return nil
@@ -146,13 +147,13 @@ func setupTierCmd(use string) *cobra.Command {
 		Use:   use,
 		Short: fmt.Sprintf("Set up the %s tier", label),
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			e := detectDocker()
 			p := planWall(e)
 			if use == "vault" {
 				p = planVault(e)
 			}
-			return executePlan(use, p, run, yes)
+			return executePlan(cmd.OutOrStdout(), use, p, run, yes)
 		},
 	}
 	cmd.Flags().BoolVar(&run, "run", false, "actually execute the install (default: print the plan)")
@@ -444,30 +445,30 @@ func planVault(e dockerEnv) plan {
 // Docker without the runtime registered) can say so on stderr and exit
 // non-zero, letting a script/CI caller branch on whether the tier actually
 // ended up available.
-func executePlan(use string, p plan, run, yes bool) error {
-	fmt.Printf("%s\n\n%s\n", p.title, p.why)
+func executePlan(w io.Writer, use string, p plan, run, yes bool) error {
+	fmt.Fprintf(w, "%s\n\n%s\n", p.title, p.why)
 
 	if p.action == actUnsupported {
 		if p.script != "" {
-			fmt.Print("\n" + indentBlock(p.script) + "\n")
+			fmt.Fprint(w, "\n"+indentBlock(p.script)+"\n")
 		}
 		if p.hostHint != "" {
-			fmt.Println(p.hostHint)
+			fmt.Fprintln(w, p.hostHint)
 		}
 		return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: unsupported on this host", use)}
 	}
 
-	fmt.Println("\nIt will run (with sudo as needed):")
-	fmt.Print(indentBlock(p.script))
+	fmt.Fprintln(w, "\nIt will run (with sudo as needed):")
+	fmt.Fprint(w, indentBlock(p.script))
 	if p.hostHint != "" {
-		fmt.Println("\n" + p.hostHint)
+		fmt.Fprintln(w, "\n"+p.hostHint)
 	}
 	if !run {
-		fmt.Println("\nRe-run with --run to execute (or copy the commands above), then Re-check in the UI.")
+		fmt.Fprintln(w, "\nRe-run with --run to execute (or copy the commands above), then Re-check in the UI.")
 		return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: printed the plan only (pass --run to execute)", use)}
 	}
-	if !yes && !confirm("\nProceed now?") {
-		fmt.Println("Aborted.")
+	if !yes && !confirm(w, "\nProceed now?") {
+		fmt.Fprintln(w, "Aborted.")
 		return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: aborted (declined, or stdin is non-interactive)", use)}
 	}
 	if err := runScript(p.script); err != nil {
@@ -484,11 +485,11 @@ func executePlan(use string, p plan, run, yes bool) error {
 	rtName := tierRuntimeName(use)
 	if info, ok := dockerInfo(); ok {
 		if _, present := info.Runtimes[rtName]; present {
-			fmt.Printf("\nDocker reports the %q runtime registered — the %s tier is enabled.\n", rtName, use)
+			fmt.Fprintf(w, "\nDocker reports the %q runtime registered — the %s tier is enabled.\n", rtName, use)
 			return nil
 		}
 	}
-	fmt.Printf("\nThe install script ran, but Docker does not report a %q runtime yet.\n"+
+	fmt.Fprintf(w, "\nThe install script ran, but Docker does not report a %q runtime yet.\n"+
 		"Finish any manual step above (e.g. the daemon.json edit + restart), then re-run `wardyn setup status` to confirm.\n",
 		rtName)
 	return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: runtime %q not visible in `docker info` after install", use, rtName)}
@@ -733,8 +734,8 @@ func runScript(script string) error {
 	return c.Run()
 }
 
-func confirm(prompt string) bool {
-	fmt.Printf("%s [y/N] ", prompt)
+func confirm(w io.Writer, prompt string) bool {
+	fmt.Fprintf(w, "%s [y/N] ", prompt)
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	line = strings.TrimSpace(strings.ToLower(line))
 	return line == "y" || line == "yes"

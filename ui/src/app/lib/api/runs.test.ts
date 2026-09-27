@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runs } from "./runs";
+import { aheadByHours } from "../test-clock";
 
 // grantsFromRecords projects the GET /runs/{id}/grants ELIGIBILITY records into
 // the CredentialGrant rows the run-detail screen renders. It had zero coverage
@@ -25,11 +26,12 @@ describe("runs.getGrants — grant-record projection", () => {
     });
 
   it("compacts a grant with a scope object and reports it active", async () => {
+    const mintedAt = aheadByHours(-1);
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
         {
           id: "g-1",
-          created_at: "2026-07-17T00:00:00Z",
+          created_at: mintedAt,
           spec: { kind: "github_token", scope: { repo: "acme/widgets" } },
         },
       ]),
@@ -39,7 +41,7 @@ describe("runs.getGrants — grant-record projection", () => {
       id: "g-1",
       audience: "github_token",
       state: "active",
-      minted_at: "2026-07-17T00:00:00Z",
+      minted_at: mintedAt,
     });
     expect(g.scope).toBe('github_token {"repo":"acme/widgets"}');
   });
@@ -89,3 +91,40 @@ describe("runs.listRuns — recording-meta opt-in", () => {
   });
 });
 
+// #159: opting into BOTH limit and offset switches listRuns() onto explicit
+// server-side paging and widens its return to { runs, truncated } — reading
+// X-Wardyn-Truncated off the response, which unwrapList's bare array return
+// could never carry. A caller that omits either (every caller above) keeps
+// getting the plain array, unchanged.
+describe("runs.listRuns — explicit paging (#159)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const jsonResponse = (body: unknown, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json", ...headers } });
+
+  it("sends the explicit ?limit=&offset= instead of the default page", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([]));
+    await runs.listRuns({ limit: 100, offset: 200 });
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("limit=100");
+    expect(url).toContain("offset=200");
+  });
+
+  it("reports truncated:true from X-Wardyn-Truncated and returns the rows under .runs", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "run-1" }], { "X-Wardyn-Truncated": "true" }));
+    const got = await runs.listRuns({ limit: 100, offset: 0 });
+    expect(got.truncated).toBe(true);
+    expect(got.runs).toHaveLength(1);
+  });
+
+  it("reports truncated:false when the header is absent", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([]));
+    const got = await runs.listRuns({ limit: 100, offset: 0 });
+    expect(got.truncated).toBe(false);
+  });
+});

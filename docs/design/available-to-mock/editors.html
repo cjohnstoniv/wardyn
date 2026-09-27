@@ -1,0 +1,346 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Available to editors</title>
+<!--
+  "Available to" mock, the four editors (#923) · static, for owner review.
+  #923 names four families: stored policy, model provider, integration, base image. They
+  share one control, so this page has one section per family showing where the control sits
+  and what differs; the control's own states are on states.html.
+  Every PRODUCT string is canon.html's row, byte for byte (Packet UT-A = user-types packet A;
+  Packet MP-B = model-providers packet B; Reused = on main; New = waits on index.html's
+  decisions; Wire = a server sentence).
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel` strips and
+  these comments are review scaffolding. Everything inside a `.frame` is the product.
+  One teal button per surface: Save in the provider editor; Add image on the Images tab and
+  in its dialog. The policy sheet has none (Edit policy is outline, as today).
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Available to — the four editors (#923)</h1>
+    <div class="sub">One section per family #923 names; they share one control. Static: nothing here is wired.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a class="cur" href="editors.html">The four editors</a><a href="states.html">States</a><a href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ================= 1. STORED POLICY ================= -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>1 · Stored policy</span><b>Policies → a policy → its detail sheet. The control goes after the policy's facts and before View raw JSON, where #919's first commit put it. Kind <span class="mono">policy</span>, value = the policy id (needs #818).</b></div>
+  <div class="frame">
+    <div class="sheetwrap">
+      <div class="sheetp">
+        <div class="sh"><h3>Read-only research</h3></div>
+        <div class="sb">
+          <div class="dfs">
+            <div class="df"><div class="k">Policy ID</div><div class="v mono">pol-7f3a2c</div></div>
+            <div class="df"><div class="k">Barrier</div><div class="v"><span class="chip neutral">Wall</span></div></div>
+            <div class="df"><div class="k">Created</div><div class="v">3 days ago</div></div>
+            <div class="df"><div class="k">Updated</div><div class="v">2 hours ago</div></div>
+          </div>
+          <p class="resid"><b>Doesn't stop:</b> A flaw in the sandbox software itself (rare); it's still not a fully separate machine.</p>
+          <div class="df"><div class="k">UI apps</div><div class="v">None declared</div></div>
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i class="on"></i>Everyone</span>
+              <span><i></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+            </div>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+            <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+          </div>
+          <div class="rawjson">▸ View raw JSON</div>
+          <div class="sacts"><button class="btn sm" type="button">Edit policy</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel">A super admin's view. For a security admin and for everyone else, see states.html state 8. <b>New policy</b> asks too (decision 4); it is drawn once, on the provider editor below.</div>
+  </div>
+</section>
+
+<!-- ================= 2. MODEL PROVIDER ================= -->
+<section class="state">
+  <div class="tag"><span>2 · Model provider</span><b>Settings → Model providers → a provider: the editor from the model-providers packet (#537). The control goes after Use with, above the footer. Kind <span class="mono">model_provider</span>, value = the provider id (needs #537 and the kind made restrictable).</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Editing</b>: the list writes at once; Save still only saves the provider's own fields</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><h3>Corp gateway</h3><span class="chip neutral">Your own endpoint</span></div>
+        <p class="provides">Each person adds their own token. You set how it is sent.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Corp gateway</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Base URL<span class="req" aria-hidden="true">*</span></label><div class="ctl mono">https://gateway.corp.example</div><div class="hint wide">https only. Wardyn sends this provider's requests here.</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx"><div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Claude Code</span><span class="chev">▸</span></div></div>
+        <div class="hx"><div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Codex CLI</span><span class="chev">▸</span></div></div>
+        <div class="blk">
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i></i>Everyone</span>
+              <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't run with this provider, even from a workspace pinned to it. Runs already going aren't affected.</span></span></span>
+            </div>
+            <div class="aud">
+              <span class="chip info">Developer<button class="x" type="button" aria-label="Remove Developer">×</button></span>
+              <span class="chip info">Portfolio manager<button class="x" type="button" aria-label="Remove Portfolio manager">×</button></span>
+            </div>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+            <p class="hint">Security admins can change this list from the type editor too. The provider itself is edited only by super admins.</p>
+          </div>
+        </div>
+        <div class="foot"><button class="btn" type="button">Remove</button><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Decision 4 · A new provider</b>: the form asks, as design §2.6 says. The choice is held until Save; Save creates the provider, then writes the list, then Only these</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own key.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Bloomberg gateway</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Route through a gateway (optional)</label><div class="ctl mono">https://llm.bbg.corp.example</div><div class="hint wide">Send requests to your gateway instead of <span class="mono">api.anthropic.com</span>. Each person's key goes with them, and they are told where it goes.</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx"><div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Claude Code</span><span class="chev">▸</span></div></div>
+        <div class="hx off"><div class="hh"><span class="box" aria-hidden="true"></span><span class="nm">Codex CLI<span class="why">Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.</span></span></div></div>
+        <div class="blk">
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i></i>Everyone</span>
+              <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't run with this provider, even from a workspace pinned to it. Runs already going aren't affected.</span></span></span>
+            </div>
+            <div class="aud">
+              <span class="chip info">Portfolio manager<button class="x" type="button" aria-label="Remove Portfolio manager">×</button></span>
+            </div>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+            <p class="hint">Security admins can change this list from the type editor too. The provider itself is edited only by super admins.</p>
+          </div>
+        </div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Decision 4 · The provider saved but the list didn't</b>: the editor stays open on the saved provider, and the control shows what the server holds</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><h3>Bloomberg gateway</h3><span class="chip neutral">Anthropic API key</span></div>
+        <p class="provides">Each person adds their own key.</p>
+        <div class="note red" style="max-width:none;margin-top:14px"><b>Saved, but not who it's available to</b><span>The user type "portfolio-mgr" doesn't exist. Create it under User types first.</span><span>It is available to everyone until you set it again below.</span></div>
+        <div class="blk">
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i class="on"></i>Everyone</span>
+              <span><i></i><span>Only these <span class="hint">— people not listed can't run with this provider, even from a workspace pinned to it. Runs already going aren't affected.</span></span></span>
+            </div>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+            <p class="hint">Security admins can change this list from the type editor too. The provider itself is edited only by super admins.</p>
+          </div>
+        </div>
+        <div class="foot"><button class="btn" type="button">Remove</button><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Decision 4, the other option</b>: no control on the new-provider form. A new provider starts as Everyone, and the list is set in the editor once the provider is saved (the Editing view above)</div>
+    <div class="pad"><p class="secsub" style="margin-top:0">Add model provider is drawn exactly as the model-providers packet has it: Name, the kind's fields, Use with, footer.</p></div>
+
+    <div class="varlabel"><b>What someone not listed is told</b>: this doesn't change. The run refusal from #532 is shown as sent</div>
+    <div class="pad"><p class="alert" style="margin-top:0">This run's model provider is Bloomberg gateway, and you are not granted it — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.</p></div>
+  </div>
+</section>
+
+<!-- ================= 3. BASE IMAGE ================= -->
+<section class="state">
+  <div class="tag"><span>3 · Base image</span><b>Decision 1: a new Images tab on Workspace providers, one row per image in the catalog that workspaces already fill (<span class="mono">GET /base-images</span>), plus Add image. Kind <span class="mono">image</span>, value = the image reference.</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:0">
+      <div class="ph"><div><h2>Workspace providers</h2><p class="lead">Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.</p></div></div>
+    </div>
+    <div class="tabs" style="margin-top:14px"><span>Git providers</span><span>Storage</span><span>Agents</span><span class="sel">Images</span></div>
+    <div class="pad" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between">
+      <p class="secsub" style="margin-top:0">Images people may launch by name, with <span class="mono">--image</span> or as their own workspace's image. An image you set on an org workspace needs nothing here.</p>
+      <button class="btn primary" type="button">Add image</button>
+    </div>
+    <div class="irow">
+      <div class="head"><div class="grow"><span class="nm">dev-toolbox</span><span class="ref">ghcr.io/acme/dev-toolbox:1.4</span></div></div>
+      <div class="body">
+        <div class="avail">
+          <label>Available to</label>
+          <div class="radio">
+            <span><i></i>Admins only</span>
+            <span><i class="on"></i>Only these</span>
+          </div>
+          <p class="hint">Images are off for everyone until you list someone here.</p>
+          <div class="aud">
+            <span class="chip info">Developer<button class="x" type="button" disabled aria-label="Remove Developer" title="Choose Admins only before removing the last one.">×</button></span>
+          </div>
+          <p class="hint">Choose Admins only before removing the last one.</p>
+          <div class="adder">
+            <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+            <div class="ctl ph">Add a type, group or person…</div>
+            <button class="btn sm" type="button" disabled>Add</button>
+          </div>
+          <p class="hint">Security admins can change this list from the type editor too. The image list itself is edited only by super admins.</p>
+        </div>
+      </div>
+    </div>
+    <div class="irow">
+      <div class="head"><div class="grow"><span class="nm">python-ml</span><span class="ref">ghcr.io/acme/python-ml:3.12</span></div></div>
+      <div class="body">
+        <div class="avail">
+          <label>Available to</label>
+          <div class="radio">
+            <span><i class="on"></i>Admins only</span>
+            <span><i></i>Only these</span>
+          </div>
+          <p class="hint">Images are off for everyone until you list someone here.</p>
+          <div class="adder">
+            <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+            <div class="ctl ph">Add a type, group or person…</div>
+            <button class="btn sm" type="button" disabled>Add</button>
+          </div>
+          <p class="hint">Security admins can change this list from the type editor too. The image list itself is edited only by super admins.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Empty</b>: no workspace has used an image yet and none was added</div>
+    <div class="empty">
+      <h4>No images listed</h4>
+      <p>Until you add one, only admins can launch an image by name.</p>
+      <p style="margin-top:12px"><button class="btn primary" type="button">Add image</button></p>
+    </div>
+
+    <div class="varlabel"><b>Add image</b>: the reference, and who gets it. It starts at Admins only (design §2.6), and the list writes after the image is added (decision 4)</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add image</h3>
+        <div class="form one">
+          <div class="f"><label>Image<span class="req" aria-hidden="true">*</span></label><div class="ctl mono">ghcr.io/acme/dev-toolbox:1.4</div><div class="hint wide">The exact reference people will type, e.g. ghcr.io/acme/dev-toolbox:1.4.</div></div>
+        </div>
+        <div class="blk">
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i class="on"></i>Admins only</span>
+              <span><i></i>Only these</span>
+            </div>
+            <p class="hint">Images are off for everyone until you list someone here.</p>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+          </div>
+        </div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Add image</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Decision 2, the other option</b>: the same words as every other family. "Everyone" would be selected on an image that only admins can launch</div>
+    <div class="pad">
+      <div class="avail">
+        <label>Available to</label>
+        <div class="radio">
+          <span><i class="on"></i>Everyone</span>
+          <span><i></i>Only these</span>
+        </div>
+        <p class="hint">Images are off for everyone until you list someone here.</p>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Decision 1, the other option</b>: no Images tab. An image is listed for a type only from the type editor (UT-7a), where packet A already draws it</div>
+    <div class="pad">
+      <div class="rv" style="max-width:420px">
+        <h4>Portfolio manager · What this type gets</h4>
+        <div class="grant grey" style="margin-top:6px"><span class="chip neutral">Admins only</span>Images</div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>What someone not listed is told</b>, when they name the image anyway (#736's sentence, shown as sent)</div>
+    <div class="pad"><p class="alert" style="margin-top:0">ghcr.io/acme/python-ml:3.12 isn't available to you as a Portfolio manager. Ask your admin.</p></div>
+  </div>
+</section>
+
+<!-- ================= 4. INTEGRATION ================= -->
+<section class="state">
+  <div class="tag"><span>4 · Integration</span><b>Decision 3: no integration editor of its own. Every integration the console shows is either a model provider or a git provider in 0.8, and each of those already carries the control.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Where each integration's list is set</b> (scaffold: a map, not a screen)</div>
+    <div class="tblwrap">
+      <table class="canon">
+        <thead><tr><th>Integration kind today</th><th>In 0.8 it is</th><th>Its Available to</th></tr></thead>
+        <tbody>
+          <tr><td>Anthropic API key · OpenAI API key · Claude subscription · Amazon Bedrock</td><td>a model provider (multi-provider design; MP-15 removes the AI kinds)</td><td>the provider editor, section 2 above</td></tr>
+          <tr><td>GitHub App · git host</td><td>a git provider row on Workspace providers → Git providers</td><td>the row's control, #919 (kind <span class="mono">workspace_provider</span>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="varlabel"><b>Decision 3, the other option</b>: the control on Settings → Model provider, for the card's integration, until MP-15</div>
+    <div class="pad">
+      <div class="card">
+        <h4 style="font-size:14px">Model provider</h4>
+        <p class="secsub">Agent runs need one. Governed commands don't.</p>
+        <p class="meta" style="font-size:11px;color:var(--muted-foreground);margin-top:10px">[the card's lanes, unchanged]</p>
+        <div class="blk">
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i class="on"></i>Everyone</span>
+              <span><i></i>Only these</span>
+            </div>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

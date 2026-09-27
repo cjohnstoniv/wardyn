@@ -19,9 +19,8 @@ import (
 )
 
 // testRunID is a real run id — a UUID, the ONLY username the SSH gateway
-// accepts (internal/api/sshgateway.go's sshAuth calls uuid.Parse on it). These
-// tests used to pass "run-1", a username no gateway would ever have
-// authenticated.
+// accepts (internal/api/sshgateway.go's sshAuth calls uuid.Parse on it), so a
+// placeholder like "run-1" would exercise a username no gateway authenticates.
 const testRunID = "a1b2c3d4-5566-4788-99aa-bbccddeeff00"
 
 // --------------------------------------------------------------------------

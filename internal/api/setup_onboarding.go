@@ -61,7 +61,7 @@ func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Re
 
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	if cfg.OnboardingCompletedAt != nil {
@@ -71,11 +71,11 @@ func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Re
 	now := time.Now().UTC()
 	cfg.OnboardingCompletedAt = &now
 	if _, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"setup.onboarding.completed", "site_config", "success", mustJSON(map[string]any{
+		"setup.onboarding.complete", "site_config", "success", mustJSON(map[string]any{
 			"completed_at": now,
 		})))
 	writeJSON(w, http.StatusOK, map[string]any{"onboarding_complete": true})

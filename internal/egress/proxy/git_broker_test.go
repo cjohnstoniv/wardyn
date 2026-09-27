@@ -76,13 +76,13 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 // newGitBrokerUpstream mints the PRODUCTION github_token shape — no `username`
 // key at all.
 //
-// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves Minted.Username
-// empty for this kind (internal/broker/broker.go: "Empty for github_token"; the
-// caller authenticates as x-access-token), and internal/api serialises it as an
-// empty string. The fixture used to inject `"username":"x-access-token"`, a
-// shape the broker never emits — which made the mask pin green while the
-// rendering actually on the wire, base64("x-access-token:"+tok), was
-// unregistered (F120): brokeredToken registered base64(":"+tok) instead.
+// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves
+// Minted.Username empty for this kind (internal/broker/broker.go: "Empty for
+// github_token"; the caller authenticates as x-access-token), and
+// internal/api serialises it as an empty string. A fixture that injected
+// `"username":"x-access-token"` — a shape the broker never emits — would make
+// the mask pin green while the rendering actually on the wire,
+// base64("x-access-token:"+tok), went unregistered.
 func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	t.Helper()
 	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
@@ -106,6 +106,7 @@ func newGitBrokerProxyWithSpec(t *testing.T, grants map[string]uuid.UUID, upstre
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		GitGrants:       grants,
 	})
 	return p, buf
@@ -196,6 +197,48 @@ func TestGitBrokerDeniesUngrantedRepo(t *testing.T) {
 	}
 }
 
+// TestGitBrokerReportsH2MismatchNotDialFailed is #382's App-broker case,
+// beside the existing HTTP/2 peer tests (h2peer_test.go): github answering
+// unnegotiated HTTP/2 on a clone must classify as
+// builtin:upstream-protocol-mismatch with a 400, exactly as the LLM and plain
+// lanes already do, not the generic builtin:dial-failed 502 this lane gave
+// before roundTripUpstream's error arm called refuseH2Mismatch.
+func TestGitBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
+	mintUp := newGitBrokerUpstream(t, "gh-inst-token")
+	forgeAddr := startH2MismatchPeer(t)
+	grantID := uuid.New()
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            sink,
+		Resolver:        publicResolver{},
+		Dial:            splitDial(upstreamAddr(mintUp.srv), forgeAddr),
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
+		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": grantID},
+	})
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil)
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := denyBody(rec); !strings.Contains(got, "peer answered HTTP/2") {
+		t.Errorf("body = %q, want the h2-mismatch sentence", got)
+	}
+	d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch)
+	if d.Via != viaDirect {
+		t.Errorf("via = %q, want %q", d.Via, viaDirect)
+	}
+}
+
 // TestGitBrokerRejectsBadRequests: traversal / short / unknown-verb / bad-service
 // requests never reach github, whether they 403 (matched-repo, bad rest) or 404
 // (malformed path that doesn't even parse to a key).
@@ -228,7 +271,7 @@ func TestGitBrokerRejectsBadRequests(t *testing.T) {
 	}
 }
 
-// ── push branch-namespace confinement ────────────────────────────────────────
+// push branch-namespace confinement
 
 // pkt frames one git pkt-line: 4 hex length digits that count themselves.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
@@ -280,6 +323,14 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+prefix+"../../heads/main"+firstCaps) + "0000", "malformed refname"},
 		{"embedded-second-ref",
 			pkt(someOID+" "+otherOID+" "+inNS+" refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		// The ref-name rule is adoscope.CheckRefName, shared with the REST
+		// refs door: every character git's check-ref-format forbids is refused
+		// here too, inside the namespace, where the prefix test cannot help.
+		{"caret-refname", pkt(someOID+" "+otherOID+" "+inNS+"^{}"+firstCaps) + "0000", "malformed refname"},
+		{"tilde-refname", pkt(someOID+" "+otherOID+" "+inNS+"~1"+firstCaps) + "0000", "malformed refname"},
+		{"colon-refname", pkt(someOID+" "+otherOID+" "+inNS+":refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		{"backslash-refname", pkt(someOID+" "+otherOID+" "+inNS+`\x`+firstCaps) + "0000", "malformed refname"},
+		{"glob-refname", pkt(someOID+" "+otherOID+" "+inNS+"*"+firstCaps) + "0000", "malformed refname"},
 		// An embedded LF/CR is the shape that smuggles a second command past a
 		// line-oriented reader. Both stay INSIDE the namespace, so only the
 		// control-character check can refuse them — the prefix test cannot.
@@ -287,6 +338,14 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+inNS+"\nrefs/heads/main"+firstCaps) + "0000", "control character"},
 		{"embedded-cr-refname",
 			pkt(someOID+" "+otherOID+" "+inNS+"\rrefs/heads/main"+firstCaps) + "0000", "control character"},
+		// A NUL rides the FIRST command only: on a later line a forge whose
+		// parser is not git's could read the ref after it instead.
+		{"nul-on-second-command",
+			pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + pkt(someOID+" "+otherOID+" "+prefix+"b\x00refs/heads/main\n") + "0000",
+			"a NUL is allowed only on the first command"},
+		{"nul-on-shallow-line",
+			pkt("shallow "+someOID+"\x00refs/heads/main\n") + pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + "0000",
+			"a NUL is allowed only on the first command"},
 		{"push-cert", pkt("push-cert"+firstCaps) + "0000", "unsupported receive-pack command"},
 		{"malformed-length", "zzzz" + "0000", "malformed pkt-line length"},
 		{"delim-pkt", "0001" + "0000", "unexpected pkt-line length"},
@@ -444,8 +503,8 @@ func TestGitBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
 // TestGitBrokerEnforcesPushByDefault: confinement is DEFAULT-ON — with the env
 // unset an out-of-namespace push is refused before the mint, and nothing reaches
 // github. agent-run puts the agent on `wardyn/<run-id>/work` (name_run_branch), so
-// the compliant push is the one a stock run makes. This is the regression pin for
-// the default posture; TestGitBrokerPushOptOut covers the escape hatch.
+// the compliant push is the one a stock run makes. This pins the default posture;
+// TestGitBrokerPushOptOut covers the escape hatch.
 func TestGitBrokerEnforcesPushByDefault(t *testing.T) {
 	t.Setenv(envEnforceBranchNS, "") // never inherit an operator's setting
 	up := newGitBrokerUpstream(t, "gh-inst-token")
@@ -598,12 +657,12 @@ func TestGitBrokerMintedTokenIsMaskRegistered(t *testing.T) {
 	}
 }
 
-// TestBrokerMintRefusesBrokeredGitGrant is the regression pin for the in-sandbox
-// token bypass. WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint
-// route is unauthenticated, so before this guard a single
+// TestBrokerMintRefusesBrokeredGitGrant closes the in-sandbox token bypass.
+// WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint route is
+// unauthenticated, so without this guard a single
 // `curl -XPOST .../wardyn/v1/credentials/mint -d '{"grant_id":"'$WARDYN_GITHUB_GRANT_ID'"}'`
-// handed the sandbox a live ghs_ installation token — and, because an
-// approval-gated grant is single-use, ALSO burnt the broker's one mint out from
+// would hand the sandbox a live ghs_ installation token — and, because an
+// approval-gated grant is single-use, also burn the broker's one mint out from
 // under the run's own clone/push.
 //
 // The four cases below are the whole contract: refuse the brokered grant, refuse
@@ -715,12 +774,12 @@ func newGitBrokerApprovalUpstream(t *testing.T, token string, approvalID uuid.UU
 	return u
 }
 
-// TestGitBrokerPollsPendingApproval is the regression for W23-S1-1 /
-// W19-W19a-1: the FIRST clone against an approval-gated github_token grant
-// used to 502 outright on the control plane's 409 (no wait, no retry) — the
-// documented quickstart's first clone always failed before a human could
-// possibly have approved it. The broker must now poll the SAME approval
-// server-side and re-mint once it clears, succeeding the original request.
+// TestGitBrokerPollsPendingApproval: the first clone against an
+// approval-gated github_token grant meets the control plane's 409 before a
+// human could possibly have approved it, so the broker must poll the same
+// approval server-side and re-mint once it clears, succeeding the original
+// request — not 502 outright (no wait, no retry), which would fail the
+// documented quickstart's first clone every time.
 func TestGitBrokerPollsPendingApproval(t *testing.T) {
 	orig := gitApprovalPollInterval
 	gitApprovalPollInterval = 5 * time.Millisecond

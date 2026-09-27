@@ -23,7 +23,7 @@ Frozen strings: §7 below. No TS copy module exists yet — this is a mock round
 governance round preceded `ui/src/app/lib/governance-copy.ts`. The implementation stage creates
 `ui/src/app/lib/user-drives-copy.ts` **from §7 verbatim**; it does not retype copy from this
 document, and every string in the mock HTML matches §7 byte-for-byte. Its test,
-`user-drives-copy.test.ts`, clones `governance-copy.test.ts`'s `parseFrozenTables()` over
+`user-drives-copy.test.ts`, clones `governance-copy.test.ts`'s `parseFrozenTables()` (now shared: `ui/src/app/lib/copy-doc-parity.ts`) over
 §7.2–§7.8 of this file — which is why every table from §7.2 on is exactly two columns, `Key`
 and `String`, and why §7.1 (reused canon and server strings) is not.
 
@@ -262,7 +262,7 @@ unchanged.
   a paused allocation shows `GS_DRIVE_CHIP_PAUSED`. One sentence in the **"Add your workspace"**
   card (`GS_DRIVE_BODY`) says a drive is not a workspace — placed there because that card is where
   the two get conflated (`DESIGN.md` §5.4).
-- **Refusals** — the eight server messages in §7.7, rendered verbatim on the launch path.
+- **Refusals** — the nine server messages in §7.7, rendered verbatim on the launch path.
   Backend-unavailable is **post-attempt only**: nothing client-side can know whether the cluster
   will let the runner create a claim.
 
@@ -278,9 +278,12 @@ unchanged.
 - **Editor open** — the allocation form collapses to its disabled `ADD_TITLE` row (one teal at
   a time, the governance shape).
 - **Write refusals** — the 400s post-attempt, the 409 pre-filled and post-attempt (§2.4).
-- **Backend unavailable** — Docker with no roots: the option disabled with its reason.
-  Kubernetes with a cluster that refuses claim creation: a **422 at first run**, nothing earlier
-  (see Adjudication — the preview payload carries no warning field).
+- **Backend unavailable** — Docker with no roots: the option disabled with its reason. A
+  backend/runner mismatch or a `host_path` share whose home is missing answers **422 on the
+  preview itself** (`handlePreviewUserDrive` runs `driveBindFailureHere`, `internal/api/
+  user_drives_preview.go`; see Adjudication). What still cannot be previewed is a Kubernetes
+  cluster refusing the claim CREATE — the preview never creates a PVC, so that one failure mode
+  stays a **422 at first run**, nothing earlier.
 - **Preview answered / no allocation / couldn't preview.**
 - **Member: granted writable · granted read-only · no allocation · paused · denied · refused at
   launch.**
@@ -417,7 +420,7 @@ reflected in these is a broken test, not a free edit:
 - `ui/src/app/components/screens/setup/step-bodies.tsx` (`WorkspacesStep`) and
   `screens/settings/settings-screen.tsx` — the two homes of the shared card.
 - `ui/src/app/components/screens/workspaces.tsx` — the header's `actions` slot.
-- `docs/OPERATIONS.md` known-gaps — quotes `HONESTY` verbatim; `docs/MEMBERS.md` "Your drive".
+- `docs/OPERATIONS.md` known-gaps — quotes `HONESTY` verbatim; `docs/USERS.md` "Your drive".
 
 Implementation is not done when it builds and unit tests pass: the UI e2e suite is daemon-only
 and is **not** part of `make ci` — run `scripts/run-ui-e2e.sh drives` before calling any of it
@@ -708,6 +711,7 @@ With the switch off nothing else on the screen changes.
 | `PREVIEW_RESULT(drive, tier)` | "{drive}" via the {tier} allocation |
 | `PREVIEW_TIER_USER` | user |
 | `PREVIEW_TIER_GROUP` | group |
+| `PREVIEW_TIER_USER_TYPE` | user type |
 | `PREVIEW_TIER_ALL` | everyone |
 | `PREVIEW_OBJECT_LABEL` | Storage object |
 | `PREVIEW_OBJECT_HINT` | What the reclaim command names — copy it when someone leaves. |
@@ -748,8 +752,9 @@ not a person lookup; a truncated snapshot surfaces at the member's launch as
 `<dl>`: `FIELD_HOME` → the directory name (mono), `PREVIEW_OBJECT_LABEL` → the object name
 (mono, with `PREVIEW_OBJECT_HINT` — this is what the offboarding command needs),
 `COL_SIZE` → the size, `COL_MODE` → `MODE_RO` / `MODE_RW`, `PREVIEW_ENFORCEMENT_LABEL` → the
-`ENFORCEMENT_*` gloss. `{tier}` is one of the three `PREVIEW_TIER_*` words, frozen in the table
-rather than in prose (the governance round's `MATCHED_*` addition, learned from).
+`ENFORCEMENT_*` gloss. `{tier}` is one of the four `PREVIEW_TIER_*` words, frozen in the table
+rather than in prose (the governance round's `MATCHED_*` addition, learned from); 0.8 added
+`PREVIEW_TIER_USER_TYPE` for the user type tier (user > group > user type > everyone).
 
 **The `<dl>` above is FIVE ROWS AND THE ENDPOINT ANSWERS SEVEN FIELDS** — this section describes
 what the console renders today, and the two it drops are named here so the gap is a recorded
@@ -767,7 +772,13 @@ object no run will ever mount, so copying it into the reclaim command reclaims n
 also the promise `docs/OPERATIONS.md`'s offboarding step sends an operator here to collect, so
 the caveat belongs on both ends of it. The remedy is the admin's and takes no new copy: paste
 the sign-in subject first and preview again. `PREVIEW_LEAD`'s *"which drive and directory they
-would mount"* is answered for the claims **as typed**, never for the person behind them.
+would mount"* is answered for the claims **as typed**, never for the person behind them — but
+"as typed" bounds MATCHING, not the printed names: `FIELD_HOME` and `PREVIEW_OBJECT_LABEL` are
+**derived**, never echoed. `driveHomeSubject` picks one submitted claim positionally
+(`home_subject` names which), and the template then transforms it — `hash` renders `d-` + 20 hex
+of a digest, `sub`/`email_local` lowercase and validate it — before `types.DriveObjectName`
+(`internal/types/user_drive.go`) folds the drive's slug onto the result. A `hash` drive's object
+name is therefore a digest string that appears nowhere in what was pasted.
 
 **The Overrides column** renders zero or more chips: `OVERRIDE_SIZE`, `MODE_RO` / `MODE_RW`
 (a writable override, in the mode's own chip vocabulary), `OVERRIDE_HOME`, and `PAUSED_CHIP` for
@@ -872,6 +883,7 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 | `REFUSED_PAUSED` | drive: your allocation is paused by an admin |
 | `REFUSED_HOME_INVALID(claim)` | drive: your {claim} cannot name a directory (lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name |
 | `REFUSED_HOME_MISSING(name)` | drive: directory `{name}` does not exist on the share — ask an admin to create it |
+| `REFUSED_HOME_UNREADABLE(name)` | drive: directory `{name}` exists but is not readable by your run — ask an admin to fix its permissions |
 | `REFUSED_WRITABLE` | drive: your allocation is read-only; `read_only:false` cannot widen it |
 | `REFUSED_BACKEND(reason)` | drive: this deployment cannot mount your drive ({reason}) |
 | `REFUSED_TARGET_RESERVED` | workspace_mounts[0]: target `/home/agent/drive` is reserved for the user drive |
@@ -880,7 +892,7 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 feature adds is here. It is complete about **doors**, not about the whole path — a drive that
 passes every door can still be refused by the RUNNER, and those strings are §7.9. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
 reason `governance_profile`, target `runs.drive` — `denyMemberDrive` beside
-`denyMemberRunQuota`); the six `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
+`denyMemberRunQuota`); the seven `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
 create and preflight both). **Nothing here names an unprovisioned `k8s_pvc_static` claim**: no
 door this feature adds can see that condition — the row is valid and the allocation resolves;
 the claim's absence is discovered by the k8s driver at *dispatch* — so a frozen sentence for it
@@ -971,10 +983,10 @@ carries all three with the operator recipe.
   mode sentence, toggle and reason line (§7.6); `wizard-spec.ts` emits `run.drive`.
 - **Member Getting Started** — the chip and the sentence (§7.6); `lib/api/health.ts`'s `/me`
   type gains `user_drive`.
-- **Run create + preflight** — the eight server strings (§7.7) beside the gates that raise them;
+- **Run create + preflight** — the nine server strings (§7.7) beside the gates that raise them;
   `/me.user_drive.denied_by_profile` (Q6).
 - **Run rail** — `RAIL_*` (§7.8), with run-row persistence in 0.7.1.
-- **`docs/OPERATIONS.md` known gaps, `docs/MEMBERS.md` "Your drive"** — `HONESTY` verbatim; the
+- **`docs/OPERATIONS.md` known gaps, `docs/USERS.md` "Your drive"** — `HONESTY` verbatim; the
   member section says where it mounts, read-only default, yours alone, and that the size shown
   is an allocation.
 
@@ -1073,10 +1085,16 @@ Departures from `DESIGN.md` §4.3's draft tables, each with the reason; the mode
    ships the profile name only; the door is knowable client-side only with a `/me` field — a
    sibling `user_drive_denied_by_profile` so `user_drive` stays nil-means-no-allocation (Q6 a′). Drawn pre-filled on that assumption, and post-attempt
    from the 403 regardless.
-4. **Backend-unavailable on Kubernetes is post-attempt only.** `DESIGN.md` §4.2 says "previewed
-   as a warning", but `POST /drives/preview`'s payload (§2.5) has no warning field and the
-   console cannot ask the apiserver. Not drawn on the preview; drawn as the member's
-   `REFUSED_BACKEND` 422 and named here so P2 either adds the field or drops the sentence.
+4. **Backend-unavailable on Kubernetes was post-attempt only when this was written; P2 wired it
+   into the preview instead of adding a field.** `DESIGN.md` §4.2 said "previewed as a
+   warning" — the shipped answer is a **422**, never a warning:
+   `handlePreviewUserDrive` (`internal/api/user_drives_preview.go`) now runs
+   `driveBindFailureHere` and writes its 422 straight from the preview for a backend/runner
+   mismatch or an unreachable `host_path` share (`TestPreviewUserDriveAnswersTheSameRefusalAsLaunch`,
+   `internal/api/user_drives_resolve_test.go`), the launch door's own
+   `REFUSED_BACKEND` bytes, not a paraphrase. What the console still cannot ask is the apiserver
+   itself: a Kubernetes cluster refusing the claim CREATE is still the member's `REFUSED_BACKEND`
+   422 at first run, because the preview never creates a PVC.
 5. **`k8s_pvc` with `size_mib = 0` has no request to make.** `DESIGN.md` allows 0 everywhere;
    a zero PVC request is invalid. Listed as a server 400 in §7.1's second table and raised as
    **Q7** (a new refusal the owner did not accept in `DESIGN.md` §2.6); the editor renders

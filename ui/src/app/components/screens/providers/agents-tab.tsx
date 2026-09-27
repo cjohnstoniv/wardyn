@@ -29,6 +29,8 @@ import { agentProviders as api, type AgentProvider, type AgentProviders } from "
 import { AI_TYPES, IMPOSSIBLE, type AiType } from "../../../lib/integrations";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
+import { readableDiff } from "../../../lib/readable-diff";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
   AGENTS,
@@ -42,10 +44,13 @@ import {
 } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, Switch } from "../../wardyn/form-primitives";
-import { Chip } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
+import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { HarnessLoginPane, isLikelyStartUrl } from "../settings/harness-login-pane";
+import { isLikelyStartUrl } from "../settings/harness-login-pane";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 
 // The two catalog agents whose declared lane folds to a coarse ai-integration
@@ -164,10 +169,16 @@ function normalizeAgentProviders(p: AgentProviders): AgentProviders {
   return p.agents ? { ...p, agents: p.agents.map(normalizeAgentRow) } : p;
 }
 
-const MODEL_ACCESS_TONE: Record<string, "success" | "warning"> = { live: "success" };
+const MODEL_ACCESS_TONE: Record<string, "success" | "warning" | "neutral"> = {
+  live: "success",
+  // #158: not_applicable is neither a success nor a warning — it is the
+  // admin-token principal's own answer ("this caller is a mechanism, not a
+  // person"), never a claim that something needs attention.
+  not_applicable: "neutral",
+};
 
 function ModelAccessNote({ access }: { access: SetupModelAccess }) {
-  // NO CHIP for a state outside the five (MODEL_ACCESS_CHIP_LABEL's own doc
+  // NO CHIP for a state outside the six (MODEL_ACCESS_CHIP_LABEL's own doc
   // comment): the old final `else` painted MODEL_ACCESS_NOT_CONFIGURED over
   // anything unrecognised, so a daemon reporting `expired_renewable` — a live,
   // renewable credential — told the admin they were signed out. The server's own
@@ -188,45 +199,27 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
 
 // The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
 // the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
-// CTA or the open login pane. Shared between the ordinary bottom placement
-// and the prominent per_user banner at the top of the row (Appendix A finding
-// 4) — the content is identical, only the wrapper around it differs.
-function ModelAccessSignIn({
-  access,
-  loginOpen,
-  setLoginOpen,
-  startURLManaged,
-}: {
-  access: SetupModelAccess;
-  loginOpen: boolean;
-  setLoginOpen: (open: boolean) => void;
-  startURLManaged: boolean;
-}) {
+// CTA, which opens the shell's one door (#544 — this tab mounted its own pane
+// before). Shared between the ordinary bottom placement and the prominent
+// per_user banner at the top of the row (Appendix A finding 4) — the content is
+// identical, only the wrapper around it differs.
+function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
+  const door = useModelAccessDoor();
   return (
     <>
       <ModelAccessNote access={access} />
       <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
-      {loginOpen ? (
-        <div className="mt-2">
-          {/* Under a per_user row the server signs in against THAT row's
-              stored sso_start_url and ignores a typed one, so the pane's
-              start-URL field is suppressed for a note (the member's CTA
-              does the same). A shared row has nothing stored, so the
-              ordinary flow still asks. */}
-          <HarnessLoginPane
-            provider="aws"
-            startURLManaged={startURLManaged}
-            onDone={() => setLoginOpen(false)}
-            onCancel={() => setLoginOpen(false)}
-          />
-        </div>
-      ) : (
-        MODEL_ACCESS_ACTIONABLE.has(access.state) && (
-          // outline, never a second teal — Save is the tab's one default.
-          <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLoginOpen(true)}>
-            {AGENTS.SIGN_IN_AWS}
-          </Button>
-        )
+      {MODEL_ACCESS_ACTIONABLE.has(access.state) && (
+        // outline, never a second teal — Save is the tab's one default.
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={() => door.openDoor({ for: { login: "aws" } })}
+        >
+          {AGENTS.SIGN_IN_AWS}
+        </Button>
       )}
     </>
   );
@@ -249,7 +242,6 @@ function Row({
   operator: boolean;
   onUpdate: (next: AgentProvider) => void;
 }) {
-  const [loginOpen, setLoginOpen] = React.useState(false);
   const choices = mechanismChoices(harness);
   const perUserAvailable = row.mechanism === "bedrock_sso";
   const credentialSource = row.credential_source || "shared";
@@ -287,11 +279,13 @@ function Row({
       : onUpdate({ ...row, credential_source: "per_user" }),
   );
 
-  // C4.2 is claude-code only (modelAccess is scoped server-side) and NEVER
-  // renders for not_applicable (finding 5 — the admin-token principal's own
-  // answer; an empty chip with ADMIN_OWN_CHIP_NOTE still under it would be a
-  // claim with nothing behind it).
-  const showModelAccess = harness.id === "claude-code" && !!modelAccess && modelAccess.state !== "not_applicable";
+  // C4.2 is claude-code only (modelAccess is scoped server-side). #158: it now
+  // renders for not_applicable too — MODEL_ACCESS_CHIP_LABEL carries a real,
+  // neutral label for it (finding 5's old exclusion existed only because that
+  // label didn't exist, which made the block an empty chip with
+  // ADMIN_OWN_CHIP_NOTE still under it; a real label makes it an honest claim
+  // instead).
+  const showModelAccess = harness.id === "claude-code" && !!modelAccess;
   // Prominence (finding 4): a per_user row with something actionable to do
   // moves this block to the TOP of the row instead of its usual spot at the
   // bottom — the legacy Settings door stops being the one an admin reaches
@@ -319,6 +313,13 @@ function Row({
         <Chip tone="neutral">{enabled ? PROVIDERS.FIELD_ENABLED : AGENTS.AGENT_ROW_DISABLED_CHIP}</Chip>
       </div>
 
+      {/* UT-7b: kind agent, value = harness.id — present whether the row is
+          on or off, the git-tab.tsx precedent (a disabled agent can still
+          carry a stale audience list). */}
+      <div className="border-b border-border p-3">
+        <AvailabilityControl kind="agent" value={harness.id} />
+      </div>
+
       {!enabled ? (
         <div className="p-3">
           <p className="text-body text-muted-foreground">{AGENTS.AGENT_ROW_DISABLED_HINT}</p>
@@ -337,21 +338,13 @@ function Row({
               data-testid="per-user-sign-in-banner"
             >
               {/* role="status" covers ONLY the title/body pair — NOT
-                  ModelAccessSignIn below, which can open HarnessLoginPane's
-                  own multi-step device-code/poll flow. A live region around
-                  that whole flow would re-announce it wholesale on every
-                  poll tick. */}
+                  ModelAccessSignIn below and the button that opens the door. */}
               <div role="status">
                 <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
                 <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
               </div>
               <div className="mt-2">
-                <ModelAccessSignIn
-                  access={modelAccess!}
-                  loginOpen={loginOpen}
-                  setLoginOpen={setLoginOpen}
-                  startURLManaged={perUserSaved}
-                />
+                <ModelAccessSignIn access={modelAccess!} />
               </div>
             </div>
           )}
@@ -503,12 +496,7 @@ function Row({
               actionable) keeps the block at the bottom, exactly as before. */}
           {showModelAccess && !modelAccessProminent && (
             <div className="border-t border-border pt-3">
-              <ModelAccessSignIn
-                access={modelAccess!}
-                loginOpen={loginOpen}
-                setLoginOpen={setLoginOpen}
-                startURLManaged={perUserSaved}
-              />
+              <ModelAccessSignIn access={modelAccess!} />
             </div>
           )}
         </div>
@@ -523,6 +511,7 @@ export function AgentsTab({
   operator,
   onRetryRoster,
   onStatusRefresh,
+  onDirtyChange,
 }: {
   /** The harness catalog off SetupStatus.harnesses. UNDEFINED is "unknown"
    *  (an older daemon omits the field, or the status read failed) — NEVER an
@@ -548,8 +537,19 @@ export function AgentsTab({
    *  edits), clears `savedElsewhere`, and a transient GET failure flips the
    *  whole screen to FETCH_FAILED right after a successful agent save. */
   onStatusRefresh: () => void;
+  /** #460 — this tab is its own resource with its own draft, so the parent
+   *  screen has no other way to know whether IT is dirty (for the PageHeader
+   *  chip and the Agents Segmented option). Fired whenever the dirty fact
+   *  changes, and once more with `false` on unmount (leaving the tab clears
+   *  it, same as the tab's own draft resets on remount). */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
+  // #217 — the snapshot `draft` started from, same role as providers-screen's
+  // own `original`: what "Copy my changes" and the unsaved-navigation guard
+  // both diff against. This tab is its own resource with its own Save, so it
+  // keeps its own baseline rather than sharing the parent's.
+  const [original, setOriginal] = React.useState<AgentProviders | null>(null);
   const [etag, setEtag] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saving, setSaving] = React.useState(false);
@@ -562,7 +562,9 @@ export function AgentsTab({
     api
       .getAgentProviders()
       .then((snap) => {
-        setDraft(normalizeAgentProviders(snap.providers));
+        const normalized = normalizeAgentProviders(snap.providers);
+        setDraft(normalized);
+        setOriginal(normalized);
         setEtag(snap.etag);
         setStatus("ready");
       })
@@ -574,6 +576,18 @@ export function AgentsTab({
   // F4-F9: any stored row the server is guaranteed to 400 withholds Save —
   // the Git tab's own invalidGitRow precedent.
   const invalidAgentRow = agents.some(agentRowInvalid);
+  // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
+  const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
+  useUnsavedGuard("agents-tab", changedLines.length > 0, () => JSON.stringify(draft, null, 2));
+  // #460 — tells the parent screen this tab's own dirty fact (its PageHeader
+  // chip and Agents Segmented option); `false` on unmount, since leaving this
+  // tab drops the draft too (see AgentsTab's own file-header note).
+  const dirty = changedLines.length > 0;
+  React.useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onDirtyChange is a parent callback; `dirty` is the only real trigger
+  }, [dirty]);
   const roster = harnesses ?? [];
   const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
@@ -610,7 +624,11 @@ export function AgentsTab({
       });
       const next: AgentProviders = { agents: [...catalogRows, ...customRows] };
       const result = await api.putAgentProviders(next, etag);
-      setDraft(normalizeAgentProviders(result.providers));
+      const normalized = normalizeAgentProviders(result.providers);
+      setDraft(normalized);
+      // #217 — the new baseline: a save with nothing left unsaved must not
+      // still read as dirty to the guard above.
+      setOriginal(normalized);
       setEtag(result.etag);
       toast.success(PROVIDERS.SAVED_TOAST);
       // The staleness root cause (Appendix A finding 4): modelAccess is the
@@ -682,17 +700,9 @@ export function AgentsTab({
 
       {/* F4-F3 (Appendix A V8): keep the draft mounted — the banner sits
           above the rows rather than replacing them, so an edit typed
-          moments before the 412 is still readable. One control, "Discard
-          mine and reload" — there is no "Save over theirs" arm. */}
-      {savedElsewhere && (
-        <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
-          <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
-          <p className="text-body text-muted-foreground">{PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
-          <Button variant="outline" size="sm" onClick={load}>
-            {PROVIDERS_DRAFT.DISCARD_AND_RELOAD}
-          </Button>
-        </div>
-      )}
+          moments before the 412 is still readable. #217: Copy my changes
+          before Discard mine and reload — there is no "Save over theirs" arm. */}
+      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
       {saveError && (
         <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
@@ -720,7 +730,14 @@ export function AgentsTab({
           only thing it could write is `{agents: []}`, which nobody asked
           for. A control appears when there is something to save. */}
       {roster.length > 0 && (
-        <div className="flex justify-end border-t border-border pt-4">
+        <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
+          {/* #217 — beside the control, not only in a title tooltip. */}
+          {!operator && <OperatorOnlyHint />}
+          {operator && changedLines.length > 0 && (
+            <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
+              {PROVIDERS_DRAFT.UNSAVED_MARKER}
+            </span>
+          )}
           <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
             {PROVIDERS.SAVE_CTA}
           </Button>

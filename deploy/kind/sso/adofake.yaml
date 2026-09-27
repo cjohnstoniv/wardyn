@@ -1,0 +1,65 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Azure DevOps profile's fake Microsoft (WARDYN_KIND_SSO_PROFILE=ado):
+# test/adofake/cmd — test/entrafake + test/adofake in one process behind a
+# TLS-terminating forward proxy that answers as login.microsoftonline.com and
+# dev.azure.com. Shaped like awsssofake.yaml beside it.
+#
+# Demo-grade and public by design: a picker signs anyone in without a
+# password, the client secret is a fixed demo string, and every credential it
+# mints is a fixture. It belongs only on a throwaway cluster. The image is
+# built and `kind load`ed by deploy/kind/sso/overlay.sh and exists on no
+# registry; the CA Secret it mounts is minted by the same script.
+#
+# REACHED AS A PROXY, NEVER AS A NAME. wardynd dials it as its
+# WARDYN_DAEMON_PROXY_URL (values-ado.yaml) and a run's proxy sidecar as
+# site-config's upstream_proxy_url; both then CONNECT to the real Microsoft
+# names and trust the leaf through WARDYN_TRUSTED_CA_FILE. No Wardyn component
+# learns a test-only address for either name.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wardyn-test-adofake
+  namespace: wardyn
+  labels: {app: wardyn-test-adofake}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: wardyn-test-adofake}
+  template:
+    metadata:
+      labels: {app: wardyn-test-adofake}
+    spec:
+      containers:
+        - name: adofake
+          image: wardyn/test-adofake:local
+          imagePullPolicy: Never
+          args:
+            - -addr=:3128
+            # Must match values-ado.yaml: the console's app registration.
+            - -client-id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+            - -client-secret=wardyn-ado-walk-secret
+            - -redirect-uri=http://localhost:8580/auth/callback
+            # The picker's two people, keyed exactly as WARDYN_OIDC_ROLE_MAP is.
+            - -identities=admin@wardyn.test=entra-sub-admin-0001,member@wardyn.test=entra-sub-member-0001
+            - -org=contoso
+            - -project=proj
+            - -repo=app
+          ports: [{containerPort: 3128}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: 3128}
+          volumeMounts: [{name: ca, mountPath: /etc/adofake, readOnly: true}]
+      volumes:
+        - name: ca
+          secret: {secretName: wardyn-test-adofake-ca}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wardyn-test-adofake
+  namespace: wardyn
+  labels: {app: wardyn-test-adofake}
+spec:
+  selector: {app: wardyn-test-adofake}
+  ports: [{port: 3128, targetPort: 3128}]

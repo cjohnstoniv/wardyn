@@ -34,7 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
-// ebpfHeartbeatTTL is how recent the most recent kernel.sensor.heartbeat must
+// ebpfHeartbeatTTL is how recent the most recent kernel.sensor.ping must
 // be for /healthz to report ebpf_groundtruth=healthy. Past it, the stream is
 // degraded; with no heartbeat ever, it is unavailable. This makes the overclaim
 // structurally impossible: the stream is "healthy" only while events arrive.
@@ -67,7 +67,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// reads /healthz before anyone is authenticated. The capability enumeration
 		// below is NOT "admin-gated on /setup/status" — that endpoint is
 		// classMember, and the class list is member-visible there too; what
-		// redactSetupStatusForMember withholds is the operator DETAIL (driver name,
+		// redactSetupStatusForUser withholds is the operator DETAIL (driver name,
 		// per-class substrates, the ephemeral-disk enforcement word). What keeps
 		// THIS endpoint honest is that it composes its body field by field, so a
 		// field added to the setup status never appears here by accident.
@@ -79,7 +79,23 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (cmd/wardynd: "Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode").
 		// One bit, no configuration detail: it discloses nothing /auth/login's own
 		// presence does not.
-		"sso":               s.cfg.OIDC != nil,
+		"sso": s.cfg.OIDC != nil,
+		// token_login (#378/#379) is whether the sign-in screen should offer the
+		// admin-token form at all: a token is actually configured, and neither
+		// sso_only nor member mode is set. Member mode's admin token is a PROCESS
+		// credential (deploy/desktop/wardyn.env.m-prime.example), not a human
+		// sign-in path, and sso_only's whole point is that the token is not a
+		// second way in — either one makes the form something that cannot work,
+		// which is exactly the disclosure this bit exists to prevent (no store
+		// read, like every other field here).
+		"token_login": s.cfg.AdminToken != "" && !s.cfg.SSOOnly && !s.cfg.MemberMode,
+		// sso_only mirrors WARDYN_SSO_ONLY, enforced at boot by
+		// validateSSOOnlyPosture (cmd/wardynd/boot_posture.go) — true here only
+		// when OIDC is configured and every other way in (admin token, local
+		// mode, member mode, the no-operator-list override) was refused, so the
+		// sign-in screen can safely drop SIGNIN.ROLE_SOURCE's "everyone is an
+		// admin" caveat: that branch of role derivation is unreachable here.
+		"sso_only":          s.cfg.SSOOnly,
 		"identity_provider": idp,
 		"trust_domain":      s.cfg.TrustDomain,
 		"runner":            runnerName,
@@ -96,7 +112,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// what this build's registries actually hold. Runtime facts only.
 		"components": s.cfg.Components,
 		// ebpf_groundtruth is the honest health of the SECOND audit stream. It
-		// is driven by the most recent kernel.sensor.heartbeat: healthy only when
+		// is driven by the most recent kernel.sensor.ping: healthy only when
 		// beats are fresh AND real kernel events have been observed, idle when the
 		// sidecar is alive but blind (no events), degraded if the beat is stale,
 		// unavailable if no sensor has ever beaten. The overclaim ("we have eBPF
@@ -106,7 +122,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// inspection capability is built in. Whether a given run actually scans
 		// (and in which mode) is per-run policy (RunPolicySpec.LLMInspection),
 		// and per-decision coverage is reported on the egress decision/audit
-		// stream (scanned / tunneled-opaque / llm.scan.blind), not here.
+		// stream (scanned / tunneled-opaque / llm.scan.bypass), not here.
 		"llm_egress_inspection": "available",
 		// ssh discloses the gateway's presence + the two facts the run-detail
 		// "Connect via SSH" pane needs to render its command/config block before
@@ -125,6 +141,20 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (JSON null) when the gateway is off, the same "a deployment without
 		// it simply omits the block" shape as ssh above.
 		"ui_sandbox": s.uiSandboxHealthz(),
+		// demo_video_base_url is WARDYN_DEMO_VIDEO_BASE_URL — already validated
+		// at boot by ValidateDemoVideoBaseURL — beside the ui_sandbox advisory
+		// block above: the console's episodeUrl (demo-videos.ts) reads it off
+		// this same /healthz poll to build the Getting Started episode
+		// download URL, instead of the hardcoded github.com it falls back to.
+		// "" (the default, unset) is the honest "no mirror configured" answer,
+		// not an omitted key — unlike ssh/ui_sandbox, there is no second field
+		// this one would need to appear alongside, so there is nothing an
+		// absent key would need to hide.
+		"demo_video_base_url": s.cfg.DemoVideoBaseURL,
+		// proxy_hop_tls: every run's proxy reaches this daemon over TLS pinned to
+		// its internal CA (internal/hoptls). false only on a local install whose
+		// control-plane URL is loopback http. One bit, no address or cert detail.
+		"proxy_hop_tls": s.cfg.ControlPlaneCAPEM != "",
 	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
 	// grade, present ONLY on a k8s substrate — omitted from the map entirely
@@ -133,11 +163,34 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}
+	// org_federation is present ONLY on a hybrid laptop (WARDYN_ORG_URL set),
+	// so every other deployment's body is byte-for-byte what it was
+	// (TestHealthzOrgFederation_GoldenWhenOff). Two facts and no more: this
+	// endpoint is anonymous, so the device id and the org URL never appear.
+	if s.cfg.OrgFederation != nil {
+		st := s.cfg.OrgFederation()
+		body["org_federation"] = map[string]any{"enrolled": !st.Revoked, "lag": st.Lag()}
+	}
+	// sign_in_help_text / sign_in_help_url are the admin's own "what to do
+	// next" for the four sign-in refusals a person cannot clear alone. PUBLIC
+	// by design — the reader has, by definition, not signed in — and written
+	// as such (validateSignInHelp). Each value is re-checked here and dropped
+	// if it no longer passes; an unreadable store omits both, like a store
+	// with none set.
+	if sc, ok := s.siteConfigSnapshot(r.Context()); ok {
+		text, link := signInHelpPublic(sc)
+		if text != "" {
+			body["sign_in_help_text"] = text
+		}
+		if link != "" {
+			body["sign_in_help_url"] = link
+		}
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 
 // ebpfGroundtruthStatus reports the eBPF/Tetragon ground-truth stream's health
-// from the latest kernel.sensor.heartbeat:
+// from the latest kernel.sensor.ping:
 //
 //	unavailable — no heartbeat ever (no sensor configured on this host)
 //	degraded    — last heartbeat older than ebpfHeartbeatTTL (sensor stalled/dead)

@@ -132,10 +132,14 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// `wardyn support-bundle`. A ticker was rejected separately: the primitive
 	// calls ListRuns unpaged and probes every terminal run carrying a ref, so its
 	// cost grows with run history forever and it would need leader election.
-	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
+	//
+	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
+	// reboot stopped is then marked lost (reboot), which says its agent needs
+	// starting again, before the same downtime marks it lost (outage).
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.sweepLapsedRunTokens(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
 }
 
-// auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol_unenforced",
+// auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol.fail",
 // the moment k8sNetpolVerdict grades this runner "unenforced" or "acknowledged" —
 // the two verdicts under which every sandbox runs without a proven default-deny
 // NetworkPolicy. Silent on "enforced" and on every non-k8s driver (empty
@@ -155,7 +159,7 @@ func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) {
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile",
-		"k8s.netpol_unenforced", driver, "failure",
+		"k8s.netpol.fail", driver, "failure",
 		mustJSON(map[string]any{"verdict": verdict, "driver": driver})))
 }
 
@@ -248,7 +252,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 			continue
 		}
 		s.revokeRunCascade(ctx, run.ID)
-		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan_sweep") {
+		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep") {
 			continue // still stuck; audited above, ref stays set for the next boot
 		}
 		if serr := s.cfg.Store.SetSandboxRef(ctx, run.ID, ""); serr != nil {
@@ -436,6 +440,11 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		// attach a watcher that retries and only gives up after a bounded error run.
 		// Only a definitive terminal STATE finalizes here.
 		if serr == nil && isTerminalRunState(st.State) {
+			// An interactive run whose container exited under it (a reboot) is
+			// kept, not finalized (run_lost.go).
+			if s.keepRebootedRun(ctx, run, st) {
+				continue
+			}
 			final := types.RunFailed
 			if st.ExitCode != nil && *st.ExitCode == 0 {
 				final = types.RunCompleted
@@ -518,6 +527,15 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				}
 				if err := s.sweepRunWatchers(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
+				}
+				// The lease rides this cadence too: its warnings are minutes
+				// apart and the end is a minute late at worst.
+				if err := s.sweepRunLeases(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run lease sweep", slog.Any("err", err))
+				}
+				// A run whose token lapsed loses its proxy within a tick.
+				if err := s.sweepLapsedRunTokens(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: lapsed run token sweep", slog.Any("err", err))
 				}
 			}()
 		}
@@ -656,6 +674,9 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
+				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && s.keepRebootedRun(ctx, run, st) {
+					return
+				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {
 					final = types.RunCompleted
@@ -693,6 +714,9 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	}
 	if isTerminalRunState(cur.State) {
 		return // already finalized (e.g. a concurrent kill won)
+	}
+	if runIsKept(cur) {
+		return // stopped on purpose and kept; the lease sweep owns its end
 	}
 	applied, err := s.casRunState(ctx, runID, cur.State, to)
 	if err != nil {

@@ -64,9 +64,9 @@ func pgPool(t *testing.T) *pgxpool.Pool {
 // acquires; while it holds the lock, the other must not; ending the leader's
 // session (not a graceful release()) frees the lock for the standby.
 //
-// Every step runs under a bounded context: a regression that reintroduces the
-// leaked-connection bug this test caught (see package doc) must fail loudly
-// on a timeout instead of wedging `go test` indefinitely.
+// Every step runs under a bounded context: a leaked connection (see package
+// doc) must fail loudly on a timeout instead of wedging `go test`
+// indefinitely.
 func TestGroundtruthRotatorLock_MutualExclusionAndTakeover(t *testing.T) {
 	poolB := pgPool(t) // migrates the DB once; also plays the eventual standby-turned-leader
 

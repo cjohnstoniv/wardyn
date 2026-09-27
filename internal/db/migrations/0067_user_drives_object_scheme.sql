@@ -1,0 +1,44 @@
+-- 0067: a fixed-width id for every NEW drive's minted object name.
+--
+-- THE HOLE (#163). types.DriveObjectName mints `wardyn-drive-<drive-slug>-<home>`
+-- for every backend it names, and both halves either side of the middle "-" are
+-- VARIABLE WIDTH: <drive-slug> is types.DriveSlug(name), a caller-authored string
+-- folded to at most 40 characters, and <home> can itself be a caller-authored
+-- home_override. The boundary between them is therefore not at a fixed offset,
+-- and a crafted home_override can shift it so the string reads as though the
+-- slug ended somewhere it did not -- the same class of ambiguity
+-- docs/OPERATIONS.md already names for two DRIVES colliding ("eng" + "us-bob"
+-- vs "eng-us" + "bob"), now raised by one admin-authored field against itself.
+--
+-- THE FIX IS A NEW SCHEME, NOT A REWRITE. Neither substrate can rename a
+-- storage object -- there is no `docker volume rename` and a PVC's name is
+-- immutable -- and copying bytes between an old object and a new one is exactly
+-- the capability internal/types/user_drive.go refuses everywhere else a rename
+-- is possible. So an EXISTING row's object name cannot be corrected; only what
+-- a NEW row mints can change.
+--
+-- object_scheme records which half of the minted name a row carries: the
+-- original DNS-1123 fold of the drive's NAME (types.DriveSlug, still what
+-- name_slug holds and still what migration 0061's unique index keys on), or
+-- the drive's own UUID with its hyphens stripped (types.DriveObjectID) -- 32
+-- lowercase hex characters, ALWAYS, so <home> starts at a fixed offset no
+-- drive name or home_override can move. DEFAULT 'slug' is the column every
+-- row gets from ADD COLUMN with no backfill needed: a row that predates this
+-- migration was minted under the slug scheme and stays that way permanently,
+-- because store.UpsertUserDrive (internal/store/user_drives.go) writes 'id' on
+-- every INSERT and carries the STORED value through, unconditionally, on every
+-- UPDATE -- the write never reads a caller-supplied scheme off the request, so
+-- there is no path, through this migration or through the API, that moves an
+-- existing row from one scheme to the other. Moving a drive onto the new
+-- scheme is an operator data move plus a direct row edit, not something the
+-- daemon does.
+--
+-- object_scheme JOINS driveIdentityFields (internal/api/user_drives.go): every
+-- allocated person's storage object is derived from it exactly as it is from
+-- backend, home_template and host_root, so a PUT that claims a different value
+-- for an allocated drive raises the same 409-unless-?confirm=rehome door those
+-- three fields already do, rather than being silently accepted and then
+-- silently ignored by the write that can never actually perform it.
+ALTER TABLE user_drives
+    ADD COLUMN IF NOT EXISTS object_scheme TEXT NOT NULL DEFAULT 'slug'
+        CHECK (object_scheme IN ('slug', 'id'));

@@ -54,16 +54,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// mountUserDriveFamily registers the WHOLE /drives family on the super-admin
-// group: the seven routes user_drives.go owns, plus the destroy verb below.
+// mountUserDriveFamily registers the WHOLE /drives family — the seven routes
+// user_drives.go owns (split across both tiers, #168), plus the destroy verb
+// below on the super-admin group.
 //
 // Not a ninth line in mountUserDriveRoutes, because user_drives.go is at its
 // size ceiling (scripts/check-file-size.sh) and the handler lives here, where
 // its registration belongs beside it. Not a second call in routes() either:
 // that function is at its own funlen ceiling, so the family gets one call site
 // and this is where the family's two halves are joined.
-func (s *Server) mountUserDriveFamily(operatorOnly chi.Router) {
-	s.mountUserDriveRoutes(operatorOnly)
+func (s *Server) mountUserDriveFamily(operatorOnly, securityOps chi.Router) {
+	s.mountUserDriveRoutes(operatorOnly, securityOps)
 	operatorOnly.Post("/drives/{id}/reclaim", s.handleReclaimUserDrive)
 }
 

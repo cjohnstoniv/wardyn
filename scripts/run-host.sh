@@ -51,7 +51,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # Windows host, not the WSL distro running wardynd, so the recording upload may still not
 # reach it (enable WSL mirrored networking to fully close that gap). Recording delivery is
 # best-effort, so the run still completes regardless.
-export WARDYN_CONTROL_PLANE_URL="${WARDYN_CONTROL_PLANE_URL:-http://host.docker.internal:8080}"
+# https on wardynd's internal TLS listener (:8443, WARDYN_INTERNAL_LISTEN): the
+# proxy pins wardynd's own CA, and wardynd refuses http:// to any non-loopback host.
+export WARDYN_CONTROL_PLANE_URL="${WARDYN_CONTROL_PLANE_URL:-https://host.docker.internal:8443}"
 
 export WARDYN_PG_DSN="${WARDYN_PG_DSN:-postgres://wardyn:wardyn-dev@127.0.0.1:5432/wardyn?sslmode=disable}"
 export WARDYN_LISTEN="${WARDYN_LISTEN:-:8080}"

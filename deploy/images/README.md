@@ -57,6 +57,16 @@ attach target. `deploy/images/oracle/agent-run` is the minimal reference
 implementation of this branch (idle only — it skips the workspace prep the
 real harness images perform, since oracle brokers neither git nor a model).
 
+**Revive after a reboot (Docker).** When a run lost to a reboot is revived,
+the control plane starts its kept container again, which re-runs `agent-run
+--idle` over the files the run left. An image that calls `booted_before`
+(`common/agent-run-lib.sh`) at the top of `--idle` takes a `--revive` branch
+instead: the same prep, and the run's seed is never started again. Claude
+Code continues its last conversation (`claude --continue`) when the run
+landed the human in the agent; codex-cli starts a fresh session on the first
+attach. An image without it re-runs `--idle` as on the first boot, so a
+seeded run starts its seed over.
+
 When the control plane sets `WARDYN_TASK_MODE=exec` (BYOA/CI lane — see
 `docs/CI.md`), `agent-run` runs the task as a plain shell command
 (`/bin/sh -lc "<task>"`) instead of the agent harness: same MITM-CA/clone/
@@ -107,6 +117,24 @@ cannot repair that at run time — fixing it would mean chowning volume state,
 which the control plane must never do.  `cmd/wardynd`'s
 `TestAgentImagesPreCreateDriveDir` holds every image here to this, tracing
 `FROM wardyn/agent-…` chains so a derived image inherits rather than repeats it.
+
+**Managed files depend on this user and on `/etc`, on Docker.** A run can carry a
+managed file: an operator-authored file the agent must not modify, placed in
+`/etc/claude-code` (where Claude Code reads its managed settings). On the Docker
+substrate the workload runs as the image's `USER` over the image's own `/etc`,
+and an agent that is root, or that can write `/etc`, can rename
+`/etc/claude-code` aside and put its own file there. So Docker refuses such a run
+unless:
+
+- the image's `USER` resolves to a **non-root uid**: a number, or a name the
+  image's own `/etc/passwd` maps to one (no `USER` at all means root); and
+- `/etc` is a **directory owned by root and not writable by group or others**.
+
+Kubernetes has neither requirement: it runs the agent as uid 1000 whatever the
+image says, and mounts `/etc/claude-code` read-only. The two substrates also
+differ on an image that already ships `/etc/claude-code`: Kubernetes mounts
+over it, and Docker refuses the run rather than deliver into a directory it did
+not create.
 
 ### 6. System gitconfig
 
@@ -276,7 +304,7 @@ it and injects it only when forwarding internal API calls.
 | `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
 | `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in; §4/§6 exempt — no git broker) |
 | `full/`         | `wardyn/agent-full:local`    | `claude` (inherited) |
-| `vscode/`       | `wardyn/agent-vscode:local`  | `claude` (inherited); adds `code-server` behind the UI-sandbox relay |
+| `vscode/`       | `wardyn/agent-vscode:local`  | none by default (agent-base); adds `code-server` behind the UI-sandbox relay |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
 `claude-code/` and `codex-cli/` are the two user-facing agent harnesses;
@@ -307,9 +335,13 @@ Record/Verify setup commands need an actual toolchain rather than the
 toolchain-less core image (which dies "command not found").
 
 `vscode/` is likewise a separate, opt-in image (`make agent-image-vscode`)
-built `FROM wardyn/agent-claude-code:local` plus a pinned, sha256-verified
-`code-server` — see "UI-sandbox image (`vscode/`)" below for the launcher
-contract and BYOI table.
+built `FROM wardyn/agent-base:local` (its `BASE_IMAGE` build arg default —
+the launcher only execs `code-server`, never a coding-agent CLI) plus a
+pinned, sha256-verified `code-server` — see "UI-sandbox image (`vscode/`)"
+below for the launcher contract and BYOI table. A developer checkout that
+wants `claude` reachable from the vscode terminal overrides the default:
+`make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local` (build
+the vendor base first with `make agent-images-core`).
 
 ---
 
@@ -356,8 +388,8 @@ will vary with the pinned `code-server` version and base-layer drift:
 
 | Image | Size |
 |---|---|
-| `wardyn/agent-claude-code:local` (base) | 336.6 MiB |
-| `wardyn/agent-vscode:local` | 564.8 MiB |
+| `wardyn/agent-base:local` (base) | 159.2 MiB |
+| `wardyn/agent-vscode:local` | 387.5 MiB |
 | **Delta (code-server + launcher)** | **+228.3 MiB (≈239 MB)** |
 
 ---
@@ -384,7 +416,8 @@ What the wrap does NOT add — your base must still provide:
   `claude-code` task. Interactive/BYOI login boxes don't need it. Wardyn installs
   nothing at runtime.
 - Non-root is recommended (Claude Code refuses `--dangerously-skip-permissions`
-  as root); the wrap does not remap USER/HOME.
+  as root), and **required** on Docker for a run that carries managed files —
+  see §5. The wrap does not remap USER/HOME.
 - **`/home/agent/drive`, owned by your agent uid**, if the deployment allocates
   user drives. The wrap creates no directories, so a base without it gets a
   root-owned mount root from the daemon and a writable drive is unwritable for
@@ -425,12 +458,16 @@ CA-bundle path loses public trust in every **replaces** row once that knob is se
 wrap clears the base's ENTRYPOINT and overwrites its runner tools from the
 trusted host copies, and egress allow-listing, confinement, mounts, and
 capability drops are applied by the runner at container-create — none of it
-depends on image contents, so a hostile base cannot escape the sandbox. Two
+depends on image contents, so a hostile base cannot escape the sandbox. Managed
+files are the exception: on Docker, whether the agent can replace one depends on
+the image's `USER` and `/etc`, so the driver checks both and refuses a run whose
+image fails (§5) rather than deliver a file the agent could replace. Two
 image-controlled surfaces remain, both bounded by the egress allowlist and
 neither an escape: (1) a base with `USER root` runs the workload as
 root-in-container — primary confinement (cap-drop, no-new-privileges, seccomp,
 apparmor, userns-remap) still holds, but the non-root defense-in-depth the
-convention images provide is waived; prefer a non-root base. (2) The combined CA
+convention images provide is waived, and a run carrying managed files is refused
+on Docker; prefer a non-root base. (2) The combined CA
 bundle concatenates the base's own system trust store, so an interactive
 `wardyn attach` shell trusts whatever CAs the base ships — only relevant if you
 attach a shell to an untrusted image on a non-MITM'd allowed host.

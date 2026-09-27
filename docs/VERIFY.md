@@ -17,6 +17,8 @@ Nothing here needs an account, a token, or a GitHub login.
 | `ghcr.io/cjohnstoniv/agent-base` | the agent runner contract, **no coding agent** |
 | `ghcr.io/cjohnstoniv/agent-codex-cli` | agent-base + OpenAI Codex CLI (Apache-2.0) |
 | `ghcr.io/cjohnstoniv/agent-aws-sso` | agent-base + AWS CLI v2, for the SSO login flow |
+| `ghcr.io/cjohnstoniv/agent-vscode` | agent-base + code-server, for the UI-sandbox relay (publishes from the next tagged release) |
+| `ghcr.io/cjohnstoniv/agent-novnc` | agent-base + a minimal X/noVNC desktop, for the UI-sandbox relay (publishes from the next tagged release) |
 | `ghcr.io/cjohnstoniv/charts/wardyn` | the Helm chart, as an OCI artifact |
 
 There is deliberately **no published image containing Anthropic's Claude Code
@@ -201,7 +203,8 @@ reasoning is in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
 ## The continuous lane
 
 Everything above is about **release** images — the five `vX.Y.Z`-tagged images
-`release.yml` publishes. A second lane publishes on every push to `main`:
+`release.yml` publishes. A second lane publishes each push to `main` once CI
+passes on it:
 `.github/workflows/publish-image.yml` builds `wardynd` alone and pushes
 `ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
 

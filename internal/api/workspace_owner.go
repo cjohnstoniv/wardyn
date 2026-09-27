@@ -33,7 +33,7 @@ import (
 // halfway through because one of them was already handled.
 //
 // One consequence worth naming: the row's local_dir sources stop being
-// member-authored the moment ownership moves, so memberMountPosture no longer
+// member-authored the moment ownership moves, so userMountPosture no longer
 // resolves roots for them and the member root/dotfile gate no longer applies —
 // they become ordinary operator mounts, bounded by ValidateMountSource alone.
 // That is the correct reading of "the operator owns this now", and it is not a
@@ -56,7 +56,7 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "reassign workspace: "+err.Error())
+		writeServerError(w, r, "reassign workspace", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

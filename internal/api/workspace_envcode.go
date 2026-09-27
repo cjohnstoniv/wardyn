@@ -56,7 +56,7 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	}
 	skipped, werr := writeEnvAsCode(localDirs[0].Path, files)
 	if werr != nil {
-		writeError(w, http.StatusInternalServerError, "write env-as-code: "+werr.Error())
+		writeServerError(w, r, "write env-as-code", werr)
 		return
 	}
 	// written_files must name only what was actually written — a skipped key
@@ -101,34 +101,24 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	}
 	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, baseRef)
 	if gerr != nil {
-		writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
+		writeServerError(w, r, "generate env-as-code", gerr)
 		return nil, false
 	}
 	return files, true
 }
 
 // handleGetEnvAsCode re-generates the committable env-as-code for a workspace.
-// Finalize hands these files back exactly once, in its response body, and a repo
-// workspace has nowhere on the host to write them — so without this the content
-// the operator is meant to COMMIT dies with the import dialog. Nothing is
-// persisted: the files are deterministic from stored state, so this reflects a
-// later re-scan or setup-command edit rather than a finalize-time snapshot.
+// Finalize hands these files back exactly once, and a repo workspace has nowhere
+// on the host to write them, so this is how the operator gets them to COMMIT.
+// Nothing is persisted: the files are deterministic from stored state.
 //
-// Owner-or-super, not member-readable, and it is the emitted CONTENT that
-// decides it. These files are the operator's authored environment rendered
-// whole: a `FROM <base_image.image>` line naming the internal registry
-// coordinate redactWorkspaceForRead blanks on GET /workspaces{,/{id}}, plus the
-// site-config artifact-registry redirects (artifactBaseURLs) that narrowing
-// GET /site-config to admin-only withholds, plus the scanned profile's setup
-// commands. There is no per-field projection that leaves this route useful —
-// the whole point of the response is that it is committable — so the tier moves
-// instead, joining its own write twin (POST .../env-as-code/write, operatorOnly)
-// and the console, which already treats env-as-code as an operator action.
-//
-// getWorkspaceAuthorized rather than a new predicate: its population is exactly
-// workspaceReadFull (the owner, or a super admin) and its two refusals are
-// already the right ones — 403 "requires admin role" for an operator-owned row,
-// the byte-identical 404 for another member's.
+// Owner-or-super, not member-readable, because of the emitted CONTENT: the
+// `FROM <base_image.image>` registry coordinate redactWorkspaceForRead blanks,
+// the site-config artifact redirects (artifactBaseURLs) GET /site-config
+// withholds from members, and the setup commands. A committable response has no
+// useful projection. getWorkspaceAuthorized's population is exactly
+// workspaceReadFull, with the right refusals (403 for an operator-owned row, the
+// byte-identical 404 for another member's).
 func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -148,34 +138,16 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 
 // writeEnvAsCode writes generated env-as-code files under root, returning the
 // subset of keys it left untouched because they already existed. Paths are
-// the fixed, safe outputs of EmitEnvAsCode (.devcontainer/devcontainer.json,
-// AGENTS.md, plus any artifact-redirect config like .npmrc/.cargo/config.toml).
-//
-// Every write goes through os.Root, which resolves each path component INSIDE
-// the kernel and refuses to traverse or land on a symlink escaping root. A
-// lexical filepath.Join check cannot do this: the tree we write into is exactly
-// the tree the sandbox agent (and any imported repo — git carries symlinks) can
-// write to, so `<root>/AGENTS.md -> ~/.bashrc` would otherwise be FOLLOWED and
-// truncate an operator file, wardynd running as the operator in host mode. The
-// lexical check stays as a cheap first gate against a `..` in a generated key.
-//
-// workspacescan.EnvAsCodeDockerfilePath is special-cased: every OTHER emitted
-// key is Wardyn's own narrow, regenerate-on-demand output (the card's own
-// copy promises "regenerate after a rescan or a requirements change" for
-// devcontainer.json/AGENTS.md, and the artifact-redirect stubs are one-line
-// registry pointers with no plausible hand-authored equivalent) — but
-// .devcontainer/Dockerfile is exactly where an operator using devcontainers
-// already puts their OWN hand-written Dockerfile, unrelated to Wardyn. A
-// pre-existing file there is protected UNLESS its content is byte-identical
-// to what Wardyn would write right now — genAgentToolDockerfile is a pure
-// function of tools, so that can only be Wardyn's own previously-emitted
-// stub, never an operator's coincidence — in which case it is refreshed like
-// every other key, not reported skipped. Keying the guard on existence alone
-// would make the SECOND "Write into the directory" click always find the
-// FIRST click's own stub in the way, permanently closing the regenerate path
-// for this one file and falsifying the card's "won't include the agent CLI
-// unless you add that yourself" copy. Only a Dockerfile whose content
-// actually differs — genuinely the operator's — is left alone and reported.
+// the fixed, safe outputs of EmitEnvAsCode.
+// Every write goes through os.Root, which refuses to traverse or land on a
+// symlink escaping root: the sandbox agent (and any imported repo) can write
+// this tree, so `<root>/AGENTS.md -> ~/.bashrc` would otherwise truncate an
+// operator file. The lexical check is only a cheap first gate against `..`.
+// workspacescan.EnvAsCodeDockerfilePath is special-cased: .devcontainer/Dockerfile
+// is where an operator already keeps their OWN Dockerfile, so an existing one is
+// left alone and reported UNLESS byte-identical to what Wardyn would write now
+// (genAgentToolDockerfile is pure, so that is Wardyn's own stub) — keying on
+// existence alone would permanently block the regenerate path for this file.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
 	root, err := os.OpenRoot(cleanRoot)
