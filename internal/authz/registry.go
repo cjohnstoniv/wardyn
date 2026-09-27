@@ -36,6 +36,7 @@ const (
 	ReasonGroupsSnapshotStale            Reason = "groups_snapshot_stale"
 	ReasonHarnessLoginMechanismPrincipal Reason = "harness_login_mechanism_principal"
 	ReasonHarnessLoginNotPerUser         Reason = "harness_login_not_per_user"
+	ReasonRunKept                        Reason = "run_kept"
 	ReasonRunNotFound                    Reason = "run_not_found"
 	ReasonRunTerminal                    Reason = "run_terminal"
 	ReasonSecondHumanRequired            Reason = "second_human_required"
@@ -89,6 +90,7 @@ var refusals = map[Reason]Refusal{
 	ReasonGroupsSnapshotStale:            {Effect: EffectDeny, Audit: true},
 	ReasonHarnessLoginMechanismPrincipal: {Effect: EffectUnprocessable, Audit: true},
 	ReasonHarnessLoginNotPerUser:         {Effect: EffectDeny, Audit: true},
+	ReasonRunKept:                        {Effect: EffectDeny, Audit: true},
 	ReasonRunNotFound:                    {Effect: EffectDeny, Audit: true},
 	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
 	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},

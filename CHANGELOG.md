@@ -1662,6 +1662,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   non-HttpOnly cookies matter — host mode on a registrable domain of its own is the answer. See
   docs/UI-SANDBOXES.md, "Header hygiene".
 
+- **A kept run's token is refused at every `/internal` door the moment the run is kept (#1176).**
+  A run its lease ended, or one lost to a reboot or an outage, stays `RUNNING` with its identity
+  unrevoked (a run-wide revoke would also refuse the fresh token a revive mints), so the token
+  its stopped proxy still holds used to pass `internalAuth`'s liveness gate: the credential-mint,
+  injection, approval and decision doors kept answering it until it lapsed, up to an hour after
+  its last renewal. The gate now refuses a kept run with `403 run is lost` and audits
+  `authz.denied` with the new reason `run_kept` (the kept reason rides beside it as
+  `lost_reason`), as token renew already did. The three tail-upload doors keep their five-minute
+  grace, counted from when the run was kept. Revive is unchanged: it still mints a fresh token for
+  the new proxy and retires the old one by its jti. The run token, MITM CA key and upstream-proxy
+  URL still sit in the stopped proxy container's Docker env for the grace window; that part of
+  #1176 is still open.
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
   (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
   kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env
