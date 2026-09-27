@@ -15,6 +15,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 fn="$(sed -n '/^recording_step()/,/^}/p' "$ROOT/test/e2e/e2e.sh")"
 [ -n "$fn" ] || { echo "FAIL: could not extract recording_step() from test/e2e/e2e.sh" >&2; exit 1; }
+# The call itself must stay: exactly one bare `recording_step` line, BEFORE the
+# real-agent run is created (that run's held clone is what (ii) needs open).
+call_line="$(grep -n '^recording_step$' "$ROOT/test/e2e/e2e.sh" | cut -d: -f1)"
+create_line="$(grep -n '^CC_CREATE="\$(' "$ROOT/test/e2e/e2e.sh" | head -1 | cut -d: -f1)"
+[ "$(printf '%s\n' "$call_line" | grep -c .)" = 1 ] || { echo "FAIL: test/e2e/e2e.sh must call recording_step exactly once (found: ${call_line:-none})" >&2; exit 1; }
+[ -n "$create_line" ] && [ "$call_line" -lt "$create_line" ] || { echo "FAIL: recording_step (line $call_line) must run before the real-agent create (line ${create_line:-missing})" >&2; exit 1; }
 eval "$fn"
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
