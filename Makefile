@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -255,16 +255,28 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # -tags k8s), not the tagless subset alone — measuring only the tagless build
 # reported a number for code that is not what ships. Pulling the excluded
 # packages in moved the honest total from 67.1% (tagless-only) to 66.1%
-# (docker union); the floor sits just under that with a small margin for
-# routine churn. Raise it as coverage climbs.
+# (docker union); the floor sits under that measurement with a margin for
+# routine churn, per the RE-SET RULE below.
 # scripts/cover-union.sh documents exactly what is and is not counted.
-# RATCHET (W6-01, v0.7.4 blind-verify lane): the coordinator's W5 final-tree
-# `make ci` measured the union at 78.3% at tree 532ca5d4 — 3.3 points above the old 75
-# floor, slack wide enough that a real coverage regression could land and
-# still pass. Raised to 78, a margin below that measurement rather than the
-# measurement itself. Never lower it without a coverage regression forcing
-# the call; re-measure at the next release.
-COVER_MIN ?= 78
+#
+# RE-SET RULE (#174): a floor set AT the fresh measurement fails on noise —
+# routine churn (a test reordered, a build-tag combination that shifts a few
+# statements) trips CI for no real regression. A floor set far below it gates
+# nothing — a real regression has room to land and still pass. The rule: run
+# `make cover-check`, read the union total, and set COVER_MIN to the GREATEST
+# INTEGER AT LEAST 1.0 BELOW that measurement (e.g. a 78.5% measurement sets
+# COVER_MIN=77, never 78). Re-run this at every future re-set — do not
+# rediscover the rule, and do not just bump the number up as coverage climbs;
+# recompute it from the fresh measurement, which can also lower the floor when
+# the old one had drifted to too thin a margin (that drift — 78 against a
+# 78.3% measurement, 0.3 points of margin — is what made #174 necessary).
+#
+# HISTORY: W6-01 (v0.7.4 blind-verify lane) set 78 against a 78.3% measurement
+# at tree 532ca5d4 — 3.3 points above the old 75 floor. #174 re-measured the
+# union freshly after merging main (post-merge `make cover-check`: 80.4% —
+# unit 80.7%, docker 80.3%, k8s 80.8%) and re-set the floor to 79 per the rule
+# above.
+COVER_MIN ?= 79
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@$(MAKE) --no-print-directory cover-union
 
@@ -318,6 +330,12 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 20m ./test/conformance/...
+	@echo "Running docker L0 structural-egress negatives (#707: PR-time, not nightly-only)..."
+	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil (internal/runner/docker/network_test.go)"
+	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
+	@echo "surface until the next nightly run. Scoped to just these three by -run: the rest of"
+	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
+	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
 
 # 30m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
@@ -472,6 +490,16 @@ test-e2e-ui-sandbox: ## Live UI-sandbox relay e2e: handoff/audit/403s/header str
 	@echo "Running live UI-sandbox gateway e2e (dedicated compose stack; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ui-sandbox.sh
 
+# The model-providers seeding path a rebuilt kind-sso-walk.sh would need: PUT
+# /model-providers + PUT /agent-providers wiring a roster default, UID-backed
+# (not id-backed) per-person credential capture, no legacy WARDYN_BEDROCK_*
+# env reaching the daemon, and failure propagation on a bad roster/provider
+# write. Headless (WARDYN_RUNNER=none — no kind, no docker sandbox); needs
+# Docker only for a throwaway Postgres. Self-skips without WARDYN_TEST_DOCKER=1.
+test-provider-seed: ## Model-providers seeding path: UID-keyed credential capture (needs Docker)
+	@echo "Running model-providers seeding path test (headless; requires Docker for Postgres)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/test-kind-sso-provider-seed.sh
+
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
@@ -536,6 +564,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-e2e-lane-kill-tree.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-image-pins.sh
@@ -666,7 +695,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q '^kind: ClusterRole$$' || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'resources: \["persistentvolumeclaims"\]')" = "1" ] || { echo "the render grants persistentvolumeclaims in more than one rule (or none) — a SECOND rule adding delete/deletecollection/list is invisible to a grep that only proves the FIRST rule still says [get, create]"; exit 1; }; \
 	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -q 'resources: \["persistentvolumeclaims"\]' || { echo "the persistentvolumeclaims rule is NOT in the namespaced Role — moving it to the cluster-scoped ClusterRole keeps every verb assertion green while granting those verbs in EVERY namespace"; exit 1; }; \
-	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "drives.enabled did not render EXACTLY persistentvolumeclaims verbs [get, create] — a missing rule fails every k8s_pvc drive on a 403, and an extra verb (delete above all) is a verb wardynd must never hold"; exit 1; }; \
+	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "drives.enabled with drives.reclaim.enabled OFF did not render EXACTLY persistentvolumeclaims verbs [get, create] — a missing rule fails every k8s_pvc drive on a 403, and an extra verb (delete above all) would hand a DEFAULT install the one verb that destroys a member's stored bytes. This is the assertion that protects the default: a render test that only proves the Role exists passes whether or not delete is in the list"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
@@ -791,6 +820,17 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set drives=null >/dev/null 2>&1 || { echo "a values map carrying drives as an explicit null no longer renders — `--set drives=null` is the null-robustness case (an operator clearing the block), not the --reuse-values one; see docs/OPERATIONS.md's upgrade section"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set userDrives.enabled=true 2>&1 | grep -q "userDrives was renamed to drives" || { echo "chart no longer refuses the pre-0.8 userDrives.enabled=true — nothing reads that key, so the render would succeed with drives RBAC off and every drive run would fail at dispatch (#658)"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set userDrives.enabled=false >/dev/null 2>&1 || { echo "userDrives.enabled=false no longer renders — every pre-0.8 --reuse-values map carries that old default, and it is the one way past the userDrives.enabled=true refusal under --reuse-values (--set userDrives=null cannot clear a key the old release set)"; exit 1; }
+	@# The OTHER half of the verb-list assertion above: drives.reclaim.enabled
+	@# ON must render EXACTLY [get, create, delete] — no deletecollection, no
+	@# list — and still in the namespaced Role. Asserting the LIST, both ways, is
+	@# the only form of this test that can fail: "the Role renders" is true
+	@# whether or not delete is in it (#166).
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set drives.enabled=true --set drives.reclaim.enabled=true) || { echo "drives.reclaim.enabled=true no longer renders at all — the verb-list assertions below would pass on empty input"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'resources: \["persistentvolumeclaims"\]')" = "1" ] || { echo "the reclaim render grants persistentvolumeclaims in more than one rule (or none) — a SECOND rule is invisible to a grep that only checks the first"; exit 1; }; \
+	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create", "delete"\]$$' || { echo "drives.reclaim.enabled=true did not render EXACTLY persistentvolumeclaims verbs [get, create, delete] in the namespaced Role — an absent delete makes POST /drives/{id}/reclaim 403 forever, and deletecollection or list appearing here widens one-object-at-a-time reclaim into a sweep"; exit 1; }
+	@# And the value defaults OFF even when drives itself is on: a reclaim
+	@# block that is absent, or explicitly null, must not grant delete.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set drives.enabled=true --set drives.reclaim=null | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "drives.reclaim present-but-null (an operator clearing the block, or --reuse-values from a release that predates it) did not render the DEFAULT verb list — an unguarded .Values.drives.reclaim.enabled either kills the render on a nil pointer or, worse, reads as on"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false 2>&1 | grep -q "would bind the k8s-runner privileges" || { echo "chart no longer refuses k8s.enabled with serviceAccount.create=false and no serviceAccount.name — the RBAC binding would silently fall to the namespace default ServiceAccount"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set serviceAccount.create=false --set serviceAccount.name=my-existing-sa >/dev/null 2>&1 || { echo "serviceAccount.create=false with an explicit serviceAccount.name no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
@@ -1175,7 +1215,7 @@ npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned
 # green `make ci` != CI is green. This runs the merge-gating checks
 # that need NO Docker daemon and NO live service — it deliberately EXCLUDES
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
-# (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
+# (test-pg), and the Playwright UI e2e (ui-e2e). CI
 # remains the authority; use this locally to catch most failures before pushing.
 #
 # Each target runs in its own sub-make so its elapsed time can be printed, and
@@ -1202,23 +1242,28 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
-	@echo "  Postgres suite (test-pg), the Playwright UI e2e (ui-e2e), and the"
-	@echo "  push-only SBOM stub — confirm CI is green before merging."
+	@echo "  Postgres suite (test-pg), and the Playwright UI e2e (ui-e2e) —"
+	@echo "  confirm CI is green before merging."
 
 ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
 	cd ui && pnpm install --frozen-lockfile && pnpm build
 
-ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live walk's spec files LOAD
+ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/screenshots spec files LOAD
 	@echo "Typechecking web UI (tsc --noEmit)..."
 	cd ui && pnpm install --frozen-lockfile && pnpm typecheck
 	@# tsc never evaluates an import, so a live spec that imports a constant from a
 	@# module reaching a stylesheet (AttachTerminal -> xterm.css) typechecks green and
 	@# then dies under Playwright's Node loader with "No tests found" — on a cluster
 	@# somebody spent ten minutes standing up (0.7.5's first walk). --list loads every
-	@# live spec file without a browser, a cluster or WARDYN_TEST_K8S, in seconds.
+	@# spec file without a browser, a live cluster, WARDYN_TEST_K8S or WARDYN_DEMO, in
+	@# seconds — cheap enough to do it for all three off-chromium projects.
 	@echo "Loading the live walk's spec files (playwright --list)..."
 	cd ui && pnpm exec playwright test --project=live --list >/dev/null
+	@echo "Loading the demo recording's spec files (playwright --list)..."
+	cd ui && pnpm exec playwright test --project=demo --list >/dev/null
+	@echo "Loading the screenshots' spec files (playwright --list)..."
+	cd ui && pnpm exec playwright test --project=screenshots --list >/dev/null
 
 ui-test: ## Web UI vitest unit/component tests + coverage
 	@echo "Running web UI unit/component tests (vitest + coverage)..."

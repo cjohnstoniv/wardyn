@@ -56,7 +56,9 @@ canary,driver}.go. In particular:
     this substrate lists them.
   - persistentvolumeclaims: get + create, and ONLY when drives.enabled —
     drives.go's ensureDrivePVC. Absent from a stock install: a deployment that
-    allocates no drive never touches a claim.
+    allocates no drive never touches a claim. `delete` is a THIRD switch
+    (drives.reclaim.enabled, default false) and nothing else on this Role
+    is switched twice; see the rule itself for why.
 
 Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
 per-sandbox object the substrate creates/tears down (pods, ephemeral
@@ -123,6 +125,16 @@ layer it back in.
 {{- fail "wardyn: userDrives was renamed to drives in 0.8 (#658) and the old key is no longer read. Set drives.enabled=true instead, and set userDrives.enabled=false (or delete the userDrives block from your values file)." -}}
 {{- end -}}
 {{- $drives := .Values.drives | default dict -}}
+{{/*
+The nested reclaim block, off by default: `--reuse-values` from a release that
+predates it, or a values file carrying `drives.reclaim` as an explicit null,
+both hand the template a drives map with no usable reclaim key. `| default
+dict` makes either read as OFF — the only direction this default may ever fail
+in. No old-key refusal here (unlike drives.enabled above): drives.reclaim was
+never released under the userDrives name, so there is no prior install to
+break.
+*/}}
+{{- $driveReclaim := $drives.reclaim | default dict -}}
 {{- if or (not (hasKey $rbac "create")) $rbac.create -}}
 {{- if not .Values.k8s.runsNamespace }}
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,14 +182,41 @@ rules:
   #            being invented as an empty volume.
   #   create — a k8s_pvc (managed) drive provisions one claim per person, once,
   #            on the first run that mounts it.
-  # NOT granted, deliberately:
-  #   delete/deletecollection — a drive outlives every run that mounts it.
-  #            Reclaiming a departed person's claim is an operator command (see
-  #            this chart's README), never something wardynd can do on its own.
+  #
+  # WHAT CHANGED, AND WHY. This block used to refuse `delete` outright, by the
+  # argument that a drive outlives every run that mounts it, so reclaiming a
+  # departed person's claim is an operator's `kubectl delete pvc` and never
+  # something wardynd can do on its own. The first half of that argument still
+  # holds and is still enforced — no run path, no teardown and no sweep may
+  # reach a claim (lifecycle.go's SweepOrphanedSandboxes reaps by wardyn.run-id,
+  # which a drive object deliberately never carries).
+  #
+  # What was wrong with the second half is that it left the storage with NO
+  # reclaim path inside the product at all: deleting a drive removed its row and
+  # left the claim behind, and once the row was gone nothing could even name the
+  # object. So the capability exists now, and every part of it is opt-in:
+  #   * the verb is granted only under drives.reclaim.enabled, DEFAULT FALSE
+  #     — leave it off and this Role is byte-for-byte the one it always was, and
+  #     the apiserver's own 403 is the backstop under everything above it;
+  #   * its only caller is the operator's explicit POST /drives/{id}/reclaim
+  #     (internal/api/user_drives_reclaim.go), super-admin only, refused 409
+  #     while a pod still mounts the claim, and audited as drive.reclaim on
+  #     every attempt that reaches the substrate, 409 refusals included;
+  #   * the driver re-reads the claim and re-checks its wardyn.drive /
+  #     wardyn.home / wardyn.subject labels before issuing the delete
+  #     (drives_reclaim.go), so a colliding minted name cannot destroy another
+  #     member's storage.
+  # Turn it on when your offboarding runbook calls the API; leave it off and
+  # keep reclaiming by hand. Both are supported; only one is the default.
+  #
+  # STILL NOT granted, deliberately:
+  #   deletecollection — a label-scoped collection delete would reclaim EVERY
+  #            claim matching a selector in one call. Reclaim is one person's
+  #            object at a time, by name, or it is not reviewable.
   #   list/watch — nothing enumerates claims; the name is derived, not searched.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "create"]
+    verbs: [{{ if $driveReclaim.enabled }}"get", "create", "delete"{{ else }}"get", "create"{{ end }}]
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

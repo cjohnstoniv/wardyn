@@ -49,19 +49,19 @@ func TestBuildSecretStore_StoreModeBootsUnderFIPSOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("store-mode boot under fips140=only: %v", err)
 		}
-		if _, err := loadOrCreateSigningKey(ctx, s); err != nil {
+		if _, err := loadOrCreateSigningKey(ctx, unlocked(s)); err != nil {
 			t.Fatalf("signing key: %v", err)
 		}
-		if _, err := loadOrCreateSessionKey(ctx, s); err != nil {
+		if _, err := loadOrCreateSessionKey(ctx, unlocked(s)); err != nil {
 			t.Fatalf("session key: %v", err)
 		}
-		if _, err := loadOrCreateUISessionKey(ctx, s); err != nil {
+		if _, err := loadOrCreateUISessionKey(ctx, unlocked(s)); err != nil {
 			t.Fatalf("ui session key: %v", err)
 		}
-		if _, err := loadOrCreateSSHHostKey(ctx, s); err != nil {
+		if _, err := loadOrCreateSSHHostKey(ctx, unlocked(s)); err != nil {
 			t.Fatalf("ssh host key: %v", err)
 		}
-		if _, err := loadHopTLS(ctx, s, "https://wardynd.example:8443"); err != nil {
+		if _, err := loadHopTLS(ctx, unlocked(s), "https://wardynd.example:8443"); err != nil {
 			t.Fatalf("internal CA: %v", err)
 		}
 		var raw [][]byte

@@ -275,12 +275,12 @@ export const AGENTS = {
   // New Run rail's preflight block — one key so the two can't drift into two
   // spellings of the same sentence.
   EFFECTIVE_NONE: "No adjustments.",
-  // The 201's advisory `warnings[]`, inline in the New Run rail. The run
-  // LAUNCHED; these are advisories, so the screen holds rather than navigating,
-  // and OPEN_RUN_CTA becomes its primary button until the member is done
-  // reading (no timer ever moves them).
+  // The 201's advisory `warnings[]`. #125: launch always navigates straight to
+  // the run, in the same tick, so this title no longer lives in the New Run
+  // rail — it is REUSED verbatim on the run page's own advisory block
+  // (RUN_DETAIL in wardyn/copy/run-cockpit.ts), one string so the two can't
+  // spell "launched with a warning" two different ways.
   LAUNCH_WARNING_TITLE: "Run launched with a warning",
-  OPEN_RUN_CTA: "Open run",
   // The off row's neutral chip. Its own key rather than AGENT_ROW_DISABLED_HINT
   // sliced at its colon — a reworded hint must not silently reword a chip.
   AGENT_ROW_DISABLED_CHIP: "Off",

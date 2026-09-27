@@ -344,8 +344,6 @@ export function NewRunScreen() {
     errorSeq,
     credentialRefused,
     refusedProvider,
-    launchWarnings,
-    launchedRunId,
     launch,
     preflighting,
     preflightResult,
@@ -721,10 +719,6 @@ export function NewRunScreen() {
             errorSeq,
             credentialRefused,
             refusedProvider,
-            warnings: launchWarnings,
-            onOpenRun: launchedRunId
-              ? () => navigate(`/runs/${encodeURIComponent(launchedRunId)}`)
-              : null,
           }}
           preflight={
             preflightIsCurrent

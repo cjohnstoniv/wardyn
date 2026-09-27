@@ -42,8 +42,6 @@ function railTree(props: AlertProps) {
           error: props.launchError ?? null,
           errorSeq: props.launchErrorSeq ?? 0,
           credentialRefused: false,
-          warnings: [],
-          onOpenRun: null,
         }}
         preflight={{ error: props.preflightError ?? null, errorSeq: props.preflightErrorSeq ?? 0, result: null }}
         adoDialog={{

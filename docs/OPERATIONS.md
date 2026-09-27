@@ -967,6 +967,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
+| `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach/ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
@@ -975,6 +976,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
 | the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
 | allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: none of the three names a host path — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
+| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate (`internal/api/user_drives_reclaim.go`) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `drives.reclaim.enabled` is set. There is no console button — API and CLI only |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session. Answers only while there is no model-provider block (0.8); once one exists it is 409 and every sign-in goes through the row below | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
@@ -1119,10 +1121,10 @@ migration `0050`)** are the second and third owned nouns after runs.
   departed member's objects stay findable after the row is gone — that is the
   recovery path if you skipped the preview; a share's subdirectory and a static
   claim carry **nothing**, so for those the preview is the only thing that names
-  the object at all. Reclaiming it is a deliberate operator command, one per
-  substrate, and Wardyn holds no `delete` verb that could do it by accident: the
-  recipes are "User drives on Docker" and "User drives on Kubernetes" in this
-  document, and are not repeated here. Deleting the **drive row** itself
+  the object at all. Reclaiming it is a deliberate command — `POST
+  /drives/{id}/reclaim` (`wardyn drive reclaim`), or the substrate command by
+  hand; both stay supported, and "Reclaiming a departed person's storage" below
+  is the runbook for both. Deleting the **drive row** itself
   is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
   the deallocation is always its own audited event and offboarding can never
   silently widen anything.
@@ -1355,6 +1357,67 @@ the sandbox except `wardyn-proxy`, and the session is still recorded. A governan
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 
+### Reclaiming a departed person's storage
+
+Deleting a drive removes its row and deleting an allocation stops the mount;
+neither deletes a byte. The storage object one person's allocation resolved to
+— a Docker named volume, a PersistentVolumeClaim, or a directory on a share —
+outlives both. **Reclaiming it destroys data and nothing undoes it.** On
+Kubernetes, Wardyn deletes the claim; what happens to the bytes then follows the
+StorageClass's `reclaimPolicy`: `Delete` (the usual default) destroys them,
+`Retain` leaves them on the released PersistentVolume until an operator removes it.
+
+There are two supported ways, and both stay supported: the substrate command by
+hand (the recipes in "User drives on Docker" and "User drives on Kubernetes"
+below), or the product's own verb.
+
+**The verb.** `POST /api/v1/drives/{id}/reclaim`, body
+`{"subject_type":"user","subject":"<the person's sign-in subject>"}`, or from
+the CLI:
+
+```sh
+wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
+```
+
+It answers `deleted` (this call destroyed the storage) or `already_absent`
+(nothing answered to the name). **There is no console button**: a destructive
+confirmation is a screen, and this one has no approved mock, so the API and the
+CLI are the whole surface in 0.8.
+
+**Do it in this order.** Reclaim the storage **first**, then delete the
+allocation. A home directory an admin pinned (`home_override`) lives on the
+allocation, so once that row is gone the pinned name cannot be recovered from
+the database and the object name this verb derives is the drive template's
+instead — a different directory. Check the name it reports against
+`POST /drives/preview`, which prints the object name for a principal.
+
+**What refuses it, and why each one is there:**
+
+| Refusal | What it means |
+| --- | --- |
+| `403` | Not a super-admin. Same tier as the rest of `/drives`, for a sharper reason: this one is irreversible |
+| `400` | The `subject_type` is `group` or `all`. Those give **every** person they match their own object, so they name no single thing to destroy — reclaim the people one at a time |
+| `422` | The drive is a share (`host_path`, `k8s_pvc_static`). Wardyn did not create that object and never deletes it; reclaiming it is a change on the share itself. There is no recursive delete in this product, at any privilege, for any backend |
+| `409` | A run still holds the object, a reclaim is already in flight (a claim already `Terminating`), or the object answering to that name is **not this drive's** (the driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete, and on Kubernetes binds the delete to the claim it checked: a claim deleted and re-created under the same name in between is refused, never deleted — Docker's volume remove takes no such precondition) |
+| `501` | This deployment's runner cannot reclaim at all — use the substrate command |
+
+**On Kubernetes the daemon does not even hold the verb by default.** The chart's
+Role carries `persistentvolumeclaims: [get, create]` and adds `delete` only
+under `drives.reclaim.enabled` (default `false`, see
+[the chart's values](../deploy/helm/wardyn/values.yaml)). Leave it off and every
+attempt ends in the apiserver's own `403`, recorded as a failed `drive.reclaim`
+row; turn it on only when your offboarding runbook calls the API instead of
+running `kubectl delete pvc` by hand. Nothing else changes either way: no run
+path, no teardown and no sweep can reach a claim on either setting.
+
+**Every attempt that reaches the substrate is audited**, `409` refusals and
+failures included, as `drive.reclaim` — naming the drive, the person, the backend, the object and what became of it
+([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). That row is deliberately the only
+durable record: the drive row and the allocation can both be gone by the time
+anyone reads the trail. The `400`, `422` and `501` answers above, and a daemon
+that cannot read the allocation, are refused before any object is addressed and
+write no `drive.reclaim` row.
+
 ### User drives on Docker
 
 A **user drive** is persistent storage an admin registers once and allocates to
@@ -1374,7 +1437,8 @@ label is the only key that still finds a drive's volumes across one, which is
 what the reclaim recipes below select on); `wardyn.home` = that person's directory name; and
 `wardyn.subject` = a **digest** of the person
 themselves (never their claim — see the restore note below). Reclaim is a
-command, not a button:
+command, never a button — either `wardyn drive reclaim` ("Reclaiming a departed
+person's storage" above) or, by hand:
 
 - one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview`
   prints the object name for a principal — paste the sign-in subject FIRST: on a
@@ -2096,35 +2160,40 @@ its own.
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
-revokes every unrevoked token that principal holds — a token is their session in
-another form. The `all` arm is deployment-wide for tokens too: EVERY live token
-goes, the calling admin's own included — plan to re-mint after a global revoke.
+revokes their API tokens and removes their registered SSH keys. The `all` arm
+applies all three actions deployment-wide, including the calling admin's own
+credentials. Plan to re-mint tokens and register SSH keys again after a global
+revoke.
 
 **No `role` parameter on `POST /me/tokens`.** A token always mints at the
 caller's own current role; there is no deliberately-downgraded mint. Still
 open at 0.8.
 
-**Registered SSH keys are separate.** An API token can register one through
-`wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
-removes that key, and key deletion does not disconnect an established SSH
-connection. For incident response or offboarding, also follow
-[SSH access revocation](SSH.md#revoking-access-during-an-incident): remove the
-key registrations and terminate affected runs when existing access must end.
+**Deleting one API token leaves its registered SSH keys in place.** Use session
+revocation to remove the person's tokens and keys together, or
+`DELETE /api/v1/people/{principal}/ssh-keys` (admin or `security_admin`) to remove
+only their keys and receive `{"count": N}`. A deleted key cannot authenticate
+again or open a new channel on an established SSH connection. Existing channels
+continue until they close or their run is torn down. Follow
+[SSH access revocation](SSH.md#revoking-access-during-an-incident) for the full
+offboarding sequence, including stored credentials and affected-run teardown.
 
-**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
-and both halves of the revoke honour both — the session cutoff and the token
-sweep — so you do not have to know which one your IdP made authoritative. This
-matters on Entra, where the `sub` is an opaque per-app identifier that appears
-nowhere a responder would naturally read it; the email is matched
-case-insensitively, the `sub` exactly. It is the same rule a
-`subject_type=user` capability grant already follows.
+**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email.
+The session cutoff and token sweep match an exact subject or a case-insensitive
+email. SSH-key removal resolves the stored principal, giving an exact known
+subject precedence over an email alias; an ambiguous name or unresolved email cannot
+be reported as completed key removal. Session revocation also stamps the resolved
+subject's cutoff, because SSH keys carry a subject without an email. SSH registration
+and access check the cutoff so a registration in flight cannot outlive the revoke.
 
-What the API cannot tell you is whether the name matched anybody. Sessions are
-stateless signed cookies with no row to count, so a target that names nobody is
-indistinguishable from one whose sessions have already expired, and both answer
-`204`. The `session.revoke` audit row carries `tokens_revoked` for the half that
-*is* countable — a zero there, against a human you believe holds tokens, is the
-signal that the identifier was wrong.
+A complete revoke answers `204`. A `500` may follow a successful session cutoff
+if token revocation, SSH-principal resolution, canonical-subject cutoff or key
+deletion then fails. Both
+credential operations are attempted, and the `session.revoke` audit records
+`tokens_revoked`, `ssh_keys_deleted` and outcome `failure` for partial work.
+Resolve the reported failure and retry; each count describes that call only.
+Sessions remain stateless signed cookies, so the audit cannot count active
+browser sessions or prove that a person has no already-open SSH channels.
 
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the
@@ -2561,6 +2630,12 @@ mode, or the admin token with no identity provider) it only changes the URL:
 that is one shared credential with no per-person role to pause, so nothing is
 clamped or POSTed, and `POST /me/view` answers those callers `400` if
 called directly.
+
+**Runs start in the User view.** A signed-in SSO admin or security admin in the
+**Admin view** cannot start or preview a run: `POST /runs` and `POST /runs/preflight`
+answer `409` with reason `admin_view`. Switch to the User view to launch. The
+refusal keys on the browser session only — the admin token, a `wdn_` token and a
+single-operator install launch as before.
 
 **Viewing as a user type (0.8).** `POST /me/view` with `{"view": "user",
 "user_type": "<id>"}` enters the user view looking through that type: its
@@ -3415,8 +3490,10 @@ it.
   ends the daemon. The console listener (`WARDYN_LISTEN`) is unchanged.
 - **The proxy's end.** Dispatch puts the CA's public certificate in each run's
   sealed proxy config (`control_plane_ca_pem`: the docker driver's
-  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret — where the per-run
-  MITM CA already travels). The proxy trusts that certificate and nothing else
+  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret, staged by a
+  nonroot init container into an owner-only file the sidecar reads via
+  `-config` — where the per-run MITM CA already travels). The proxy trusts
+  that certificate and nothing else
   for every control-plane call: the resolve, mints, token renewal, decisions,
   approvals and uploads. Not the system roots, and not `WARDYN_TRUSTED_CA_FILE`:
   that bundle is for egress, because a TLS-inspecting box sits between the proxy
@@ -6256,8 +6333,9 @@ external-DSN install wiring neither would get **no** stable identity: wardynd
 mints an ephemeral one per boot. That install works perfectly once; its second
 boot cannot decrypt what its first wrote, and because the control plane readies
 its stored secrets during startup, before it loads its own keys
-(`convertSecretStore`, `cmd/wardynd/secret_store.go`), it fails closed there,
-before serving — a `CrashLoopBackOff`, not a degraded pod. Hence the
+(`convertSecretStore`, `cmd/wardynd/secret_store.go`, then `loadOrCreateSecret`,
+`cmd/wardynd/boot_keys.go`), it fails closed there, before serving — a
+`CrashLoopBackOff`, not a degraded pod. Hence the
 fourth row: the chart stops the install at render.
 
 ```console
@@ -6338,7 +6416,7 @@ rollback, since the Secret, not `<key-file>.bak`, is what the chart reads.
 The SSH gateway (`ssh.enabled`) carries no host key in the chart or in a volume.
 wardynd generates an ed25519 key on first boot and persists it into the secret
 store under `wardyn-ssh-host-key` (`loadOrCreateSSHHostKey`,
-`cmd/wardynd/main.go`), through the same `loadOrCreateSecret` path as the signing
+`cmd/wardynd/boot_keys.go`), through the same `loadOrCreateSecret` path as the signing
 key. So the fingerprint a client pins is stable across pod churn with no operator
 action — the same value survived a rolling `helm upgrade` and a full
 scale-to-zero-and-back on the quickstart cluster:
@@ -6444,8 +6522,9 @@ the name every FUTURE claim is
 created under. The claims already provisioned keep their old names, keep the
 member data in them, and are never looked up again — the next run for each
 person provisions a fresh, empty claim under the new name. Nothing deletes the
-old ones, on purpose: Wardyn holds no `delete` verb, and a rename must never be
-able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
+old ones, on purpose: no run path, teardown or sweep can reach a claim — the
+only delete in the product is the operator's explicit reclaim — and a rename
+must never be able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
 rather than its name precisely so the orphans stay findable:
 
 ```sh
@@ -6505,8 +6584,8 @@ next run onward — so the claim now asks for more than the drive says, and that
 disagreement is reported by the same warning as any other: *"disagrees with the
 drive"*, naming the claim and `request is 10Gi, the drive's allocation is 2048
 MiB`. Nothing shrinks and nothing is refused. **A PVC request cannot be reduced
-in place**, Wardyn holds no `delete` verb for a claim, and refusing the run would
-mean an admin editing a ceiling breaks every existing member's runs — so the
+in place**, no run path may delete a claim (the only delete is the operator's
+explicit reclaim), and refusing the run would mean an admin editing a ceiling breaks every existing member's runs — so the
 product's answer to a lowered ceiling is a smaller number on the next
 allocation, plus this warning on the claims that predate it. To actually reclaim
 the space, plan the data move (the `kubectl cp` / snapshot recipes above) and
@@ -6608,12 +6687,18 @@ share is backed up by whoever owns the export, not by Wardyn.
 
 **Offboarding — the reclaim command.** Deleting the allocation in the console is
 the product-side half and it deletes no data. Reclaiming the storage is one
-deliberate operator command, and Wardyn holds no `delete` verb that could do it
-by accident:
+deliberate command, by hand:
 
 ```sh
 kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
+
+or, when `drives.reclaim.enabled` is set, through the product's own verb
+(`wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes`, super-admin
+only, audited, refused while a pod still mounts the claim) — see "Reclaiming a
+departed person's storage" above. **With that value left at its default `false`
+wardynd holds no `delete` verb on claims at all**, so the by-hand command is the
+only path and nothing in the deployment can destroy a claim by accident.
 
 The drive's `when a person leaves` column records the intent (`retain` or
 `delete`) so the log says what the operator was told to do; the console's drive

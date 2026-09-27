@@ -227,13 +227,13 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 
 	t.Run("member without their own bearer", func(t *testing.T) {
 		s := bearerScopedServer(t, perUserOperatorBearer, "")
-		if b := s.setupBedrock(context.Background(), operatorPresent, memberScope()); b.BearerPresent {
+		if b := s.setupBedrock(context.Background(), operatorPresent, types.SiteConfig{}, memberScope()); b.BearerPresent {
 			t.Fatalf("BearerPresent=true off the OPERATOR's key — setup would grade ready for a member who has none")
 		}
 	})
 	t.Run("member with their own bearer", func(t *testing.T) {
 		s := bearerScopedServer(t, "", perUserMemberBearer)
-		b := s.setupBedrock(context.Background(), map[string]bool{}, memberScope())
+		b := s.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, memberScope())
 		if !b.BearerPresent {
 			t.Fatalf("BearerPresent=false over a bearer this member's runs really authenticate with")
 		}
@@ -243,7 +243,7 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 	})
 	t.Run("the operator's own shared read is unchanged", func(t *testing.T) {
 		s := bearerScopedServer(t, perUserOperatorBearer, "")
-		if b := s.setupBedrock(context.Background(), operatorPresent, awsSSOScope{}); !b.BearerPresent {
+		if b := s.setupBedrock(context.Background(), operatorPresent, types.SiteConfig{}, awsSSOScope{}); !b.BearerPresent {
 			t.Fatalf("BearerPresent=false for the operator under a shared scope — pre-#153 behaviour changed")
 		}
 	})
@@ -294,7 +294,7 @@ func TestSetupBedrock_PerUserReportsOnlyTheDeclaredLane(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			scope := awsSSOScopeFor(agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: tc.row,
 				CredentialSource: types.CredentialSourcePerUser}), "claude-code", "member-sub")
-			b := s.setupBedrock(context.Background(), map[string]bool{}, scope)
+			b := s.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, scope)
 			if b.SSOPresent != tc.wantSSO || b.BearerPresent != tc.wantBearr {
 				t.Fatalf("SSOPresent=%v BearerPresent=%v, want %v/%v — setup reports a lane dispatch does not select",
 					b.SSOPresent, b.BearerPresent, tc.wantSSO, tc.wantBearr)

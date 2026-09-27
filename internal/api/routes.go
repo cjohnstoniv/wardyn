@@ -96,8 +96,9 @@ func (s *Server) routes() chi.Router {
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
-			//   mountUserDriveRoutes   (user_drives.go) split: 4 operatorOnly,
-			//       3 securityOps (issue #168)
+			//   mountUserDriveFamily   (user_drives_reclaim.go) — wraps
+			//       mountUserDriveRoutes (user_drives.go) split: 4 operatorOnly,
+			//       3 securityOps (issue #168) + the destroy verb, operatorOnly
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -591,7 +592,9 @@ func (s *Server) routes() chi.Router {
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
 			// nothing to arrange.
-			s.mountUserDriveRoutes(operatorOnly, securityOps)
+			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
+			// (user_drives_reclaim.go) joins the family's two halves.
+			s.mountUserDriveFamily(operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule
@@ -731,6 +734,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys

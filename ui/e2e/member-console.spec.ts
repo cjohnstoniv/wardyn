@@ -4,18 +4,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute, sidebarLink, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, mockMemberRole, navToRoute, sidebarLink, sql } from "./fixtures";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
-// This spec proves the RENDER behavior a member role drives (nav filtering,
-// the chip, empty/count copy) on top of mockMemberRole's mocked-/me splice —
-// see fixtures.ts for why the role is mocked and shared from there rather
-// than declared per-spec (Playwright refuses a spec file that imports
-// another spec file).
-
-test.describe("member console — nav absence (mocked /me role)", () => {
+test.describe("member console — real member navigation", () => {
   test("member nav is Runs · Approvals · Workspaces only — no admin-only items", async ({ page }) => {
-    await mockMemberRole(page);
+    await asRealMember(page);
     await gotoConsole(page);
 
     // Workspaces joined the member set (mock M6): a member launches runs
@@ -35,7 +29,7 @@ test.describe("member console — nav absence (mocked /me role)", () => {
   });
 
   test("the account menu shows a quiet 'user' chip", async ({ page }) => {
-    await mockMemberRole(page);
+    await asRealMember(page);
     await gotoConsole(page);
 
     // The account-menu trigger is the LAST button in the header (after "New
@@ -53,6 +47,38 @@ test.describe("member console — nav absence (mocked /me role)", () => {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
   });
+});
+
+test("real member cannot access another person's run", async ({ page }) => {
+  await asRealSecurityAdmin(page);
+  const foreignCreated = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task: "another person's run" });
+  expect(foreignCreated.status, foreignCreated.text).toBe(201);
+  const foreignId = JSON.parse(foreignCreated.text).id as string;
+  const adminRead = await page.request.get(`/api/v1/runs/${foreignId}`, {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  });
+  expect(adminRead.status()).toBe(200);
+
+  await asRealMember(page);
+  const created = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task: "member-owned run" });
+  expect(created.status, created.text).toBe(201);
+  const ownId = JSON.parse(created.text).id as string;
+  const own = await consoleAPI(page, "GET", `/api/v1/runs/${ownId}`);
+  expect(own.status, own.text).toBe(200);
+  expect(JSON.parse(own.text)).toMatchObject({ id: ownId, created_by: MEMBER_PRINCIPAL });
+  const listed = await consoleAPI(page, "GET", "/api/v1/runs");
+  expect(listed.status).toBe(200);
+  expect(JSON.parse(listed.text).map((run: { id: string }) => run.id)).toEqual([ownId]);
+
+  const missing = await consoleAPI(page, "GET", `/api/v1/runs/${randomUUID()}`);
+  const foreign = await consoleAPI(page, "GET", `/api/v1/runs/${foreignId}`);
+  expect(missing.status).toBe(404);
+  expect(foreign).toEqual(missing);
+  expect((await consoleAPI(page, "POST", `/api/v1/runs/${foreignId}/kill`, {})).status).toBe(404);
+
+  await page.goto(`/runs/${foreignId}`);
+  await expect(page.getByText("Run not found")).toBeVisible();
+  await expect(page.getByText(/denied|forbidden|no permission|not authorized/i)).toHaveCount(0);
 });
 
 test.describe("foreign/unknown run — standard not-found (absence, not refusal)", () => {
@@ -80,16 +106,8 @@ test.describe("foreign/unknown run — standard not-found (absence, not refusal)
 
 
 // ---------------------------------------------------------------------------
-// 0.6 pillar 2 — the member why-denied moments. Same mocked-/me technique as
-// above: the seeded backend authenticates with a bare admin bearer, so the
-// SERVER always answers as an admin; what these tests prove is the RENDER a
-// member role drives on top of a real, enforced capability state (the
-// enforcement switches below are written through the real PUT, and
-// GET /me/capabilities answers from the real tables).
-//
-// A bearer caller has no OIDC human identity, so /me/capabilities honestly
-// reports zero grants and a NIL group snapshot — which is exactly the
-// ungranted, stale-session member this surface is written for.
+// Render-only stale-group cases: the operator token has no human group
+// snapshot. Keep that deliberately incomplete shape separate from real actors.
 test.describe.configure({ mode: "serial" });
 
 test.describe("member why-denied (mocked /me role, real enforcement)", () => {
@@ -144,8 +162,8 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
 
 // ---------------------------------------------------------------------------
 // X3-F1 / X3-F4 — the console used to read a member's REDACTED body as facts
-// about the deployment. The harness backend always answers as an admin (see
-// fixtures.ts), so the member-shaped body is spliced the same way the role is:
+// about the deployment. This render-only case supplies barrier classes the
+// none-runner backend cannot advertise:
 // redactSetupStatusForUser zeroes the runner struct (Driver "" — the Go zero
 // value, not the "none" sentinel), empties checks, and now says so with
 // checks_redacted.
@@ -186,7 +204,7 @@ test.describe("member console — a redacted body is not a deployment fact", () 
   });
 
   test("an empty board offers the member's own next move, not the operator funnel", async ({ page }) => {
-    await mockMemberRole(page);
+    await asRealMember(page);
     await page.route(/\/api\/v1\/runs(\?|$)/, (route) =>
       route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.continue(),
     );

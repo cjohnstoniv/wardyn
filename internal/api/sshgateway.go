@@ -276,36 +276,21 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "stored key mismatch")
 		return nil, errors.New("ssh: unknown key")
 	}
+	if reason := s.sshKeyRevocationRefusal(ctx, rec); reason != "" {
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
+		return nil, errors.New("ssh: key is no longer authorized")
+	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unknown run")
 		return nil, errors.New("ssh: unknown run")
 	}
 	override := run.CreatedBy != rec.Principal
-	if override && rec.Capped {
-		// Registered in the user view (migration 0070): a member key for good,
-		// whatever its role column says. Checked before the role so the trail
-		// names the cap rather than a plain "not the run owner".
-		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "capped key (registered in the user view): no admin override")
-		return nil, errors.New("ssh: not authorized for this run")
-	}
-	if override && rec.Role != oidc.RoleAdmin {
-		// The key itself is genuine (owned by rec.Principal) — just not
-		// authorized for THIS run, and not an admin key either — so, unlike
-		// the other failures above, a real principal is known here and worth
-		// recording instead of "unknown".
-		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "not the run owner")
-		return nil, errors.New("ssh: not authorized for this run")
-	}
-	if override && !sshRoleFresh(rec.RoleCheckedAt, s.cfg.Now(), s.cfg.SSHRoleTTL) {
-		// role==admin, but the stamp backing that is older than SSHRoleTTL (or
-		// was never checked at all — nil, a pre-0.6-upgrade key). This is the
-		// bounded-stale re-check (migration 0046): unlike the "not the run
-		// owner" branch above, the key genuinely IS admin-tier — the refusal
-		// is purely about how long ago that was last confirmed, so it gets its
-		// own reason string rather than reusing "not the run owner".
-		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "admin override stale (role not re-checked within WARDYN_SSH_ROLE_TTL)")
-		return nil, errors.New("ssh: not authorized for this run")
+	if override {
+		if reason := s.sshOverrideRefusal(rec); reason != "" {
+			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
+			return nil, errors.New("ssh: not authorized for this run")
+		}
 	}
 
 	// Provisional approval ONLY — no success audit here, see the function doc:
@@ -316,13 +301,29 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// and run_id do: it was resolved from store state HERE, and the verified
 	// callback that writes the audit must not re-derive it.
 	ext := map[string]string{
-		"principal": rec.Principal,
-		"run_id":    runID.String(),
+		"principal":       rec.Principal,
+		"run_id":          runID.String(),
+		"key_fingerprint": fp,
+		"key_created_at":  rec.CreatedAt.Format(time.RFC3339Nano),
 	}
 	if override {
 		ext["override"] = "true"
 	}
 	return &ssh.Permissions{Extensions: ext}, nil
+}
+
+func (s *Server) sshOverrideRefusal(key types.SSHPublicKey) string {
+	// Check the permanent user-view cap before role, so both doors explain it.
+	if key.Capped {
+		return "capped key (registered in the user view): no admin override"
+	}
+	if key.Role != oidc.RoleAdmin {
+		return "not the run owner"
+	}
+	if !sshRoleFresh(key.RoleCheckedAt, s.cfg.Now(), s.cfg.SSHRoleTTL) {
+		return "admin override stale (role not re-checked within WARDYN_SSH_ROLE_TTL)"
+	}
+	return ""
 }
 
 // sshRoleFresh reports whether checkedAt is within ttl of now — the
@@ -419,6 +420,16 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	defer cancel()
 
 	for newCh := range chans {
+		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {
+			if reason := s.sshCurrentKey(connCtx, sconn.Permissions); reason != "" {
+				s.recordAudit(connCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
+					sconn.Permissions.Extensions["key_fingerprint"], "failure", mustJSON(map[string]any{
+						"channel_type": newCh.ChannelType(), "reason": reason,
+					})))
+				_ = newCh.Reject(ssh.Prohibited, "SSH key is no longer authorized")
+				continue
+			}
+		}
 		switch newCh.ChannelType() {
 		// "session" (shell/exec/sftp) and "direct-tcpip" (-L forwards) share
 		// ONE per-run cap (sshAcquireSession/maxSSHSessionsPerRun) — a single
@@ -458,6 +469,48 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 			_ = newCh.Reject(ssh.UnknownChannelType, "unsupported channel type "+newCh.ChannelType())
 		}
 	}
+}
+
+func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions) string {
+	ctx, cancel := context.WithTimeout(ctx, sshAuthTimeout)
+	defer cancel()
+	fp := permissions.Extensions["key_fingerprint"]
+	key, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
+	if err != nil {
+		return "SSH key lookup failed"
+	}
+	// Bind this connection to the original registration as well as its key:
+	// deleting and registering the same public key must not revive an old connection.
+	if fp == "" || key.Fingerprint != fp || key.Principal != permissions.Extensions["principal"] ||
+		key.CreatedAt.Format(time.RFC3339Nano) != permissions.Extensions["key_created_at"] {
+		return "SSH key registration changed"
+	}
+	public, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key.PublicKey))
+	if err != nil || public == nil || ssh.FingerprintSHA256(public) != fp {
+		return "SSH key material changed"
+	}
+	if reason := s.sshKeyRevocationRefusal(ctx, key); reason != "" {
+		return reason
+	}
+	if permissions.Extensions["override"] == "true" {
+		return s.sshOverrideRefusal(key)
+	}
+	return ""
+}
+
+func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPublicKey) string {
+	if s.cfg.SessionRevocations == nil {
+		return ""
+	}
+	// SSH rows carry the subject, so email revocation also stamps its resolved subject.
+	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, key.Principal, "", key.CreatedAt)
+	if err != nil {
+		return "SSH session cutoff lookup failed"
+	}
+	if revoked {
+		return "SSH key predates session revocation"
+	}
+	return ""
 }
 
 // sshAuditChannelRejected records a per-run channel-cap refusal.

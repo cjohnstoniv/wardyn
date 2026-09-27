@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -150,12 +151,12 @@ func (s *hybridStore) AuditHeadSeq(context.Context) (int64, error) {
 	defer s.mu.Unlock()
 	return s.head, nil
 }
-func (s *hybridStore) GetFederationCursor(context.Context) (int64, error) {
+func (s *hybridStore) GetFederationCursor(context.Context) (int64, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cursor, nil
+	return s.cursor, "", nil
 }
-func (s *hybridStore) SetFederationCursor(_ context.Context, seq int64) error {
+func (s *hybridStore) SetFederationCursor(_ context.Context, seq int64, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cursor = seq
@@ -210,7 +211,7 @@ func (o *hybridOrg) serve(t *testing.T) *httptest.Server {
 
 func TestBootHybrid_NoOrgURLDoesNothing(t *testing.T) {
 	secrets := hybridSecrets{}
-	status, err := bootHybrid(context.Background(), t.Context(), "", "", secrets, &hybridStore{}, &hybridRecorder{})
+	status, err := bootHybrid(context.Background(), t.Context(), "", "", unlocked(secrets), &hybridStore{}, &hybridRecorder{})
 	if err != nil || status != nil || len(secrets) != 0 {
 		t.Fatalf("status=%v err=%v secrets=%v", status != nil, err, secrets)
 	}
@@ -218,7 +219,7 @@ func TestBootHybrid_NoOrgURLDoesNothing(t *testing.T) {
 
 func TestBootHybrid_NoCredentialNoTokenRefuses(t *testing.T) {
 	org := &hybridOrg{}
-	_, err := bootHybrid(context.Background(), t.Context(), org.serve(t).URL, "", hybridSecrets{}, &hybridStore{}, &hybridRecorder{})
+	_, err := bootHybrid(context.Background(), t.Context(), org.serve(t).URL, "", unlocked(hybridSecrets{}), &hybridStore{}, &hybridRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "WARDYN_ORG_ENROLMENT_TOKEN") {
 		t.Fatalf("err = %v, want a refusal naming the token", err)
 	}
@@ -231,7 +232,7 @@ func TestBootHybrid_UnreachableOrgRefuses(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	srv.Close()
 	secrets := hybridSecrets{}
-	_, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_x", secrets, &hybridStore{}, &hybridRecorder{})
+	_, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_x", unlocked(secrets), &hybridStore{}, &hybridRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "enrolment at WARDYN_ORG_URL failed") {
 		t.Fatalf("err = %v", err)
 	}
@@ -247,7 +248,7 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	status, err := bootHybrid(context.Background(), ctx, url, "wde_first", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), ctx, url, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +275,11 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	}
 
 	// A restart with the spent token still in secret.env keeps the credential.
-	if _, err := bootHybrid(context.Background(), ctx, url, "wde_first", secrets, st, rec); err != nil {
+	if _, err := bootHybrid(context.Background(), ctx, url, "wde_first", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
 	}
 	// And with no token at all.
-	if _, err := bootHybrid(context.Background(), ctx, url, "", secrets, st, rec); err != nil {
+	if _, err := bootHybrid(context.Background(), ctx, url, "", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
 	}
 	enrols, _ = org.seen()
@@ -287,7 +288,7 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	}
 
 	// A fresh token re-enrols as a new device and resets the cursor.
-	if _, err := bootHybrid(context.Background(), ctx, url, "wde_second", secrets, st, rec); err != nil {
+	if _, err := bootHybrid(context.Background(), ctx, url, "wde_second", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
 	}
 	_ = json.Unmarshal(secrets[secretOrgDeviceCredential], &cred)
@@ -307,7 +308,7 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	secrets, st, rec := hybridSecrets{}, &hybridStore{}, &hybridRecorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", secrets, st, rec); err != nil {
+	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
 	}
 	st.mu.Lock()
@@ -315,14 +316,14 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	st.mu.Unlock()
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close()
-	status, err := bootHybrid(context.Background(), ctx, down.URL, "wde_first", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), ctx, down.URL, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !status().Revoked {
 		t.Fatal("a revoked laptop came back up enrolled")
 	}
-	status, err = bootHybrid(context.Background(), ctx, srv.URL, "wde_second", secrets, st, rec)
+	status, err = bootHybrid(context.Background(), ctx, srv.URL, "wde_second", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +344,7 @@ func TestBootHybrid_FailedPutLeavesTheRevokedMarkSet(t *testing.T) {
 	secrets := newFailingPutSecrets()
 	secrets.failPut = true
 	st, rec := &hybridStore{revoked: true}, &hybridRecorder{}
-	if _, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec); err == nil {
+	if _, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec); err == nil {
 		t.Fatal("a failed Put must refuse the boot")
 	}
 	st.mu.Lock()
@@ -402,7 +403,7 @@ func TestReviewRev08ReenrolRecoversAfterResetFailure(t *testing.T) {
 	secrets := hybridSecrets{secretOrgDeviceCredential: raw}
 	st := &reviewRev08ResetStore{hybridStore: &hybridStore{cursor: 7, head: 7, revoked: true}, failReset: true}
 	rec := &hybridRecorder{}
-	_, err = bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", secrets, st, rec)
+	_, err = bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", unlocked(secrets), st, rec)
 	if err == nil || !strings.Contains(err.Error(), "reset federation state") {
 		t.Fatalf("first boot should fail after durable credential write: %v", err)
 	}
@@ -411,7 +412,7 @@ func TestReviewRev08ReenrolRecoversAfterResetFailure(t *testing.T) {
 		t.Fatal("precondition: new credential was not durably stored before reset failed")
 	}
 	st.failReset = false
-	status, err := bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +441,7 @@ func TestBootHybrid_ResumesResetAfterCrashBeforeReset(t *testing.T) {
 	secrets := hybridSecrets{secretOrgDeviceCredential: raw}
 	st := &hybridStore{cursor: 7, head: 7, revoked: true}
 	rec := &hybridRecorder{}
-	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +470,7 @@ func TestBootHybrid_ResumesResetAfterFlakyLocalRecord(t *testing.T) {
 	secrets := hybridSecrets{}
 	st := &hybridStore{}
 	rec := &reviewRev08FlakyRecorder{hybridRecorder: &hybridRecorder{}, failNext: true}
-	_, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	_, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err == nil || !strings.Contains(err.Error(), "device.local.enrol") {
 		t.Fatalf("first boot should refuse after a failed local audit record: %v", err)
 	}
@@ -477,7 +478,7 @@ func TestBootHybrid_ResumesResetAfterFlakyLocalRecord(t *testing.T) {
 	if !ok || !cred.ResetPending {
 		t.Fatal("precondition: ResetPending should still be true after a failed Record")
 	}
-	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,14 +503,14 @@ func TestBootHybrid_RevokedAfterCompletionStaysRevokedOnRestart(t *testing.T) {
 	secrets, st, rec := hybridSecrets{}, &hybridStore{}, &hybridRecorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", secrets, st, rec); err != nil {
+	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
 	}
 	// The organisation revokes this freshly-enrolled, reset-complete identity.
 	st.mu.Lock()
 	st.revoked = true
 	st.mu.Unlock()
-	status, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +542,7 @@ func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
 	rec := &hybridRecorder{}
 
 	// Boot 1: the clearing Put fails.
-	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err == nil || !strings.Contains(err.Error(), "persist reset completion") {
 		t.Fatalf("boot 1 err = %v, want a refusal naming persist reset completion", err)
 	}
@@ -554,7 +555,7 @@ func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
 	}
 
 	// Boot 2: the same (already-spent) token resumes and completes.
-	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,11 +583,48 @@ func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
 	st.mu.Lock()
 	st.revoked = true
 	st.mu.Unlock()
-	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !status().Revoked {
 		t.Fatal("boot 3: a genuine revocation was cleared by a restart")
+	}
+}
+
+// #754 (stacking with #103): the org device credential is a boot key like the
+// other four, so its first create must run under the SAME cross-replica
+// create lock, not a bypass. Proven two ways: (1) the lock is actually taken
+// during a real create, and (2) a lock error fails the boot closed instead of
+// generating unlocked — which is what would happen if bootHybrid's
+// loadOrCreateSecret call were ever routed around bootKeyStore.lockCreate
+// (e.g. reverted to take a bare secretKeyStore).
+func TestBootHybrid_FirstEnrolmentTakesTheCreateLock(t *testing.T) {
+	org := &hybridOrg{}
+	var lockCalls int32
+	secrets := bootKeyStore{hybridSecrets{}, func(context.Context) (func(), error) {
+		atomic.AddInt32(&lockCalls, 1)
+		return func() {}, nil
+	}}
+	_, err := bootHybrid(context.Background(), t.Context(), org.serve(t).URL, "wde_first", secrets, &hybridStore{}, &hybridRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&lockCalls); n != 1 {
+		t.Fatalf("lockCreate calls = %d, want 1: the org device credential's first create must run under the cross-replica lock", n)
+	}
+}
+
+func TestBootHybrid_CreateLockErrorFailsClosed(t *testing.T) {
+	org := &hybridOrg{}
+	secrets := bootKeyStore{hybridSecrets{}, func(context.Context) (func(), error) {
+		return nil, errors.New("lock wait: context deadline exceeded")
+	}}
+	_, err := bootHybrid(context.Background(), t.Context(), org.serve(t).URL, "wde_first", secrets, &hybridStore{}, &hybridRecorder{})
+	if err == nil || !strings.Contains(err.Error(), "lock wait") {
+		t.Fatalf("err = %v, want a refusal naming the lock failure", err)
+	}
+	if enrols, _ := org.seen(); len(enrols) != 0 {
+		t.Fatalf("must not generate (spend the enrolment token) without the create lock: %d enrolments", len(enrols))
 	}
 }

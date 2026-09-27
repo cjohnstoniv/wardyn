@@ -166,3 +166,26 @@ func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, 
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
+
+// RunAuditMatcher answers "does this run have ANY audit row matching f?" as an
+// EXISTS, so the answer does not depend on how many other rows the run has or
+// where the match sits in its trail — which a bounded, oldest-first
+// QueryAuditEvents window cannot promise. A capability interface for the
+// reason Pager gives.
+type RunAuditMatcher interface {
+	HasRunAuditEvent(ctx context.Context, runID uuid.UUID, f AuditFilter) (bool, error)
+}
+
+var _ RunAuditMatcher = PG{}
+
+// HasRunAuditEvent reports whether runID has an audit row matching f.
+func (s PG) HasRunAuditEvent(ctx context.Context, runID uuid.UUID, f AuditFilter) (bool, error) {
+	clauses, args := f.where([]any{runID})
+	q := `SELECT EXISTS (SELECT 1 FROM audit_events WHERE ` +
+		strings.Join(append([]string{"run_id = $1"}, clauses...), " AND ") + `)`
+	var found bool
+	if err := s.Pool.QueryRow(ctx, q, args...).Scan(&found); err != nil {
+		return false, fmt.Errorf("store: probe audit events: %w", err)
+	}
+	return found, nil
+}

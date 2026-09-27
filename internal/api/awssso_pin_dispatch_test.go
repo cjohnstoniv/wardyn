@@ -669,7 +669,7 @@ func TestBedrockProviderCheck_StoredCaptureContradictingThePinWarns(t *testing.T
 				BedrockRegion: "us-east-1", BedrockModel: c.model,
 				Secrets: &memSecrets{m: map[string][]byte{}},
 			})
-			bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
+			bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, awsSSOScope{})
 			// This caller HAS captured — and the pair they captured is the one the
 			// roster no longer allows. setupBedrock reads it off the blob in
 			// production; there is no blob in this fixture, so it is set here.
