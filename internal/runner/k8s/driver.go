@@ -142,11 +142,33 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	cs, err := newClientset(restCfg)
+	if err != nil {
+		return nil, err
+	}
+	return newWithClient(context.Background(), cs, restCfg, cfg)
+}
+
+// clientQPS and clientBurst replace client-go's 5/10 default, which one
+// readiness poll (k8sPollInterval) consumes on its own: two overlapping starts
+// then starve every other pod and Secret call. Setting QPS also makes the
+// clientset build ONE shared limiter instead of a 5/10 bucket per API group.
+// Fixed, not configurable: nothing would set a knob.
+// ponytail: a shared pod informer replaces the Get polls if ~45 concurrent
+// task runs per replica ever saturate this.
+const (
+	clientQPS   = 50
+	clientBurst = 100
+)
+
+// newClientset builds the clientset New uses, with the rate limit above.
+func newClientset(restCfg *rest.Config) (*kubernetes.Clientset, error) {
+	restCfg.QPS, restCfg.Burst = clientQPS, clientBurst
 	cs, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: build clientset: %w", err)
 	}
-	return newWithClient(context.Background(), cs, restCfg, cfg)
+	return cs, nil
 }
 
 // newWithClient is the seam unit tests use to inject a fake clientset (and a

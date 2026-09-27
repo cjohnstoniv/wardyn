@@ -485,6 +485,7 @@ export async function signInThroughPane(page: Page, openPane: (p: Page) => Promi
   const before = (await ownAWSRow(page)).source_run_id ?? "";
   await openPane(page);
   const screen = page.locator(".xterm-screen").first();
+  const pane = page.getByTestId("harness-login-pane");
 
   // Bounded read; see awaitCapture() for why the bound is the whole fix.
   const paneText = async (): Promise<string> => {
@@ -492,6 +493,14 @@ export async function signInThroughPane(page: Page, openPane: (p: Page) => Promi
     if (text.includes(FAIL_MARKER)) {
       const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
       throw new Error(`the login helper refused this capture: ${line.trim()}`);
+    }
+    // The pane's error arm before any terminal attached ("the sandbox could not
+    // be created: …", a stuck or refused start): nothing will ever capture, so
+    // fail now with the pane's own sentence instead of running out both budgets.
+    const alert = pane.getByRole("alert");
+    if ((await screen.count()) === 0 && (await alert.count()) > 0) {
+      const said = (await alert.first().innerText({ timeout: 1_000 }).catch(() => "")).trim();
+      if (said) throw new Error(`the sign-in pane showed its error before a terminal attached: ${said}`);
     }
     return text;
   };

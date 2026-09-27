@@ -731,6 +731,10 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 	if !applied {
 		return false, nil
 	}
+	// A STARTING run has no sandbox_ref yet, so the teardown tail cannot reach
+	// its half-built sandbox: stop the create instead, and its own rollback
+	// removes what it made. A no-op for a run that is not creating.
+	s.creates.cancel(run.ID)
 	// Approvals: the transition is unambiguously ours, so the run's outstanding
 	// questions are cancelled here — BEFORE teardown, because a PENDING approval
 	// is the one piece of this cascade a human is looking at, and after the CAS

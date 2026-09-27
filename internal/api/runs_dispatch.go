@@ -181,6 +181,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// provision → CAS → compensate sequence always completes. The completion watcher
 	// already runs on BaseCtx, not ctx.
 	ctx = context.WithoutCancel(ctx)
+	createCtx, endCreate := s.creates.track(ctx, run.ID) // a kill cancels only the create, below
+	defer endCreate()
 
 	// KILL-RACE GUARD (entry): claim PENDING->STARTING conditionally. A
 	// POST /runs/{id}/kill landing in the pre-dispatch window (grant writes, the
@@ -577,7 +579,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// it runs on the failure path too (runStatusDetailWriter has the contract).
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = onWaiting
-	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
+	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the

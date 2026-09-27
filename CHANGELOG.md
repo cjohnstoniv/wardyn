@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Cancelling a sign-in or run that is still starting now stops its sandbox create (#1182).** A kill
+  of a STARTING run left its in-flight sandbox create running until its own readiness wait expired
+  (up to about 3 minutes on Kubernetes), holding its pods and the node's room, so a retry could sit
+  "Waiting for a machine with room" and time out. The kill now cancels the create, and the
+  substrate's rollback removes what it had made. On Kubernetes the client rate limit is raised from
+  client-go's 5/10 per API group to one shared 50 QPS / burst 100 limiter, and a readiness wait that
+  times out under client-side throttling now names the pod's reason (for example
+  "Unschedulable … Insufficient cpu") instead of "client rate limiter Wait returned an error".
+
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
