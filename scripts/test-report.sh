@@ -38,10 +38,10 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # inside the CI job's own timeout.
 if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
   rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
+  go test -json "${PKGS[@]}" > "$OUT/test-output.json"
 else
-  PKGS=(-covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}")
+  go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" > "$OUT/test-output.json"
 fi
-go test -json "${PKGS[@]}" > "$OUT/test-output.json"
 GO_EXIT=$?
 
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
