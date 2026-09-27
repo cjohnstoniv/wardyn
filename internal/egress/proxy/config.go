@@ -26,8 +26,14 @@ import (
 // via the -config flag. The run token authenticates the sidecar to the
 // control plane's internal endpoints (verified via identity.Provider.Verify
 // with audience "wardyn-internal"); it is NOT a secret usable outside the
-// platform. No third-party secrets ever appear here — injected credentials
-// are minted at startup from the broker and held only in proxy memory.
+// platform. No third-party secrets ever appear here — an injected credential
+// VALUE is minted at startup from the broker and held only in proxy memory
+// (InjectionConfig below carries a grant_id, never a value). RunToken and
+// MITMCAKeyPEM, in contrast, ARE part of this struct, so they persist
+// wherever the sidecar's own rendered config does — its container's env on
+// Docker — for as long as that container exists, which under the long-holds
+// design can outlive the run itself (an ended or lost run's proxy is stopped,
+// not removed, so a revive can read this config back).
 type Config struct {
 	// RunID is the governed run this sidecar serves.
 	RunID uuid.UUID `json:"run_id"`

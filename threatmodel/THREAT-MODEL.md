@@ -2075,6 +2075,109 @@ hiding them would repeat the failure mode we are designed to avoid.
     cannot edit, and the residual is bounded per row to the time before that
     row is acknowledged: an acknowledged row is witnessed.
 
+53. **Freeze pauses the agent's processes, not its access — "paused" is an
+    availability lever, not an added confinement boundary.** `Freezer`'s
+    docker implementation (`FreezeSandbox`/`ThawSandbox` in
+    `internal/runner/docker/driver_network.go`, long-holds RL-6) is
+    `ContainerPause`/`ContainerUnpause` on the AGENT container only: every
+    process in its cgroup gets the freezer-cgroup equivalent of SIGSTOP.
+    Nothing about its filesystem, network namespace, established connections,
+    or anything already resident in its environment changes — a frozen agent
+    sits exactly where a running one would, reachable to anyone who already
+    had host or daemon access. The proxy sidecar is deliberately never frozen
+    (so it keeps renewing its token and answering egress decisions), so a
+    frozen run is not "off the network" either. Verified only on runc/cgroup
+    v2 today (`runsc`/Kata report unsupported rather than assume an unproven
+    control); nothing yet calls Freeze from a real pause-and-resume feature
+    (residual #55 covers reach once something does) — this residual is about
+    the primitive itself, which any future caller inherits unchanged.
+54. **A control-plane outage leaves a window of egress with no durable
+    audit.** The proxy's token renewer gives up asking for a fresh token after
+    an hour of failures and keeps running "on a dead identity, visibly"
+    (`runTokenRenewerTuned` in `internal/egress/proxy/renew.go`) rather than
+    stopping, deliberately, so a brief blip never kills a run over one missed
+    heartbeat. Every egress decision the proxy makes in that window is still
+    evaluated against its last-loaded policy — nothing here widens what the
+    proxy would forward — but the row that would normally land in wardynd's
+    append-only audit log cannot: wardynd is the thing that is down. Once the
+    control plane returns, the lapsed-token sweep marks the run lost as
+    `outage` and stops its proxy (`stopLostSandbox` in
+    `internal/api/run_lost.go`), which closes the window going forward, but
+    nothing backfills what the sandbox reached while it was open. Bounded to
+    at most the outage's own duration — but for that bounded window, "every
+    decision is audited" is not true.
+55. **Revive re-asserts the run's OWNER's authority, not the caller's — which
+    means any admin, not a scoped operational role, can act on every run in
+    the deployment.** Reviving a run, restarting it in bulk, and extending its
+    end are each gated owner-or-super-admin, and the handler re-derives the
+    OWNER's own current governance-profile denies before touching anything
+    (`reviveCeiling` in `internal/api/run_revive.go`) — an admin's click never
+    grants a member's run more than that member already holds. What is not
+    scoped is REACH: keeping a fleet's runs alive, or tearing them down early,
+    is available to every super admin over every user's run, with no separate
+    "operational continuity" capability a deployment could hand to a narrower
+    role — a security admin cannot use it at all. The action is fully audited
+    with both the actor and the owner as `subject` (`run.revive`,
+    `docs/AUDIT-ACTIONS.md`), so misuse is visible after the fact; nothing
+    today narrows who holds the button in advance.
+56. **A revived or restarted run keeps its ORIGINAL agent image — revive
+    never re-pulls or rebuilds it.** A proxy-only revive (a control-plane
+    outage) touches only the proxy sidecar; a revive after a reboot restarts
+    the SAME, already-created agent container rather than recreating it from
+    the current agent image. A run that started on an image later found to
+    carry a vulnerability, or superseded by a patched build, stays on the old
+    one through any number of revives — the only way off it is to end the run
+    and start a new one. This is a property of what revive is FOR (continuing
+    the same agent process or conversation across an outage or reboot), not
+    an oversight, but it means "the deployment is on the current release"
+    does not extend to a long-kept run's agent container.
+57. **A kept run's writable-layer disk footprint is not reclaimed until its
+    grace expires, and nothing surfaces how much that is.** An ended or lost
+    run is deliberately kept — its agent and proxy containers stopped, not
+    removed — for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days). Every byte
+    that run's agent wrote to its container's own writable layer sits on the
+    host disk for the whole grace window, and nothing on the run's page or in
+    the admin runs list reports it today — an operator sizing host disk for
+    "however many runs are live" can be surprised by however many are merely
+    kept. A fleet of long-running, frequently-ended runs under a generous
+    grace is the case this compounds; surfacing disk used on the run page is
+    a tracked follow-up, not yet shipped.
+58. **Kubernetes cannot keep, revive, restart, or (once it ships) pause a
+    run — each is an optional `Runner` capability the k8s substrate does not
+    implement**, so a k8s run's end and limits still fire on schedule but
+    every other long-holds behavior degrades to an immediate, non-resumable
+    teardown: `SandboxEnder`, `ProxyReviver`, `SandboxStarter` and `Freezer`
+    (all in `internal/runner/runner.go`) each document the same shape — a
+    router in front of a substrate without the interface returns that
+    interface's own `Err*Unsupported` sentinel, and the control plane's
+    fallback for an end is to stop the run outright rather than keep it. This
+    is a substrate gap, not a policy choice: a k8s deployment gets none of
+    "kept for a grace window," "revived after an outage," "resumed after a
+    reboot," or (when it ships) "paused when idle" — every one of those needs
+    a durable, re-attachable unit of storage and identity that a stopped or
+    evicted pod does not provide, which is also why user-drive persistence is
+    the prerequisite direction for closing this rather than a k8s-specific
+    reimplementation of each behavior individually. See
+    [Kubernetes: known gaps](../docs/OPERATIONS.md#kubernetes-known-gaps).
+59. **A kept run's proxy container holds its own run token and per-run MITM
+    CA private key for the whole grace window, not just "in proxy memory."**
+    `Config` (`internal/egress/proxy/config.go`) — the sidecar's own rendered
+    configuration, `RunToken` and `MITMCAKeyPEM` included — is delivered to
+    the container as its own env on Docker (`proxyConfigEnv` in
+    `internal/runner/docker/driver_proxy_revive.go`), so that revive can read
+    it back later. That is a real, on-disk persistence of the container's own
+    state (Docker's container config), not merely process memory, for as long
+    as the container exists — and under the long-holds design an ended or
+    lost run's proxy is stopped rather than removed for exactly that reason,
+    for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days). This is distinct from
+    §5.1a's resident-secret exception list, which is about what the SANDBOX
+    (the agent container) can read: the agent never sees this config, and no
+    injected credential VALUE is in it (only a `grant_id` reference,
+    re-minted fresh at each proxy start). The exposure here is scoped to
+    whoever already has host or Docker-daemon access — the same actor every
+    other proxy-state residual in this section already assumes — and it is
+    bounded to one run's own token and CA, never the fleet's.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised
