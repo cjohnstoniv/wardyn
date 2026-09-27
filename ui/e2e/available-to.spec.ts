@@ -9,7 +9,7 @@
 // list refused), and on a model provider (the editor asking). Each write is
 // read back from the wire, not only from the screen.
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
@@ -133,6 +133,11 @@ test.describe("Available to — base images (#923)", () => {
 // mint stores one: an api_tokens row keyed by the token's sha256, with the
 // role and user type the request then carries (apitokens.go, apiTokenAuth).
 function seedUserToken(userType: string): { Authorization: string } {
+  return { Authorization: `Bearer ${seedUserTokenRaw(userType)}` };
+}
+
+// The raw token, for a console session signed in as that person.
+function seedUserTokenRaw(userType: string): string {
   const raw = `wdn_${randomBytes(32).toString("hex")}`;
   const hash = createHash("sha256").update(raw).digest("hex");
   const who = `${userType}-${hash.slice(0, 8)}@e2e.test`;
@@ -140,7 +145,7 @@ function seedUserToken(userType: string): { Authorization: string } {
     `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at)
      VALUES (gen_random_uuid(), '${who}', '${who}', 'user', '${userType}', '[]'::jsonb, false, 'e2e', '${hash}', now())`,
   );
-  return { Authorization: `Bearer ${raw}` };
+  return raw;
 }
 
 const POLICY_NAME = "Read-only research";
@@ -266,5 +271,66 @@ test.describe("Available to — a model provider (#923)", () => {
     await expect(edit.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
     await expect(edit.getByRole("button", { name: AVAILABILITY.REMOVE_ARIA("Standard user") })).toBeDisabled();
     await expect(edit.getByText(AVAILABILITY.MODEL_PROVIDER_NOTE)).toBeVisible();
+  });
+});
+
+// Authorization-kernel design G7, the picker half: a value restricted away from
+// a person is ABSENT from the console's picker — not disabled, not labelled —
+// because the server's list carrier (GET /setup/status's harnesses, capVisible)
+// never sends it. Each console is a genuine session of that tier: the token in
+// the browser is the person's own, so the filtering under test is the server's.
+test.describe("Available to — the person's New Run picker (G7)", () => {
+  test.describe.configure({ mode: "serial" });
+  const AGENT = "codex-cli";
+  const TYPE = "e2e-picker";
+  let grantId = "";
+
+  test.beforeAll(async ({ request }) => {
+    const made = await request.post("/api/v1/user-types", { headers: auth, data: { id: TYPE, name: "E2E picker" } });
+    expect([201, 409], await made.text()).toContain(made.status());
+    const granted = await request.post("/api/v1/permissions/grants", {
+      headers: auth,
+      data: { subject_type: "user_type", subject: TYPE, capability: "agent", value: AGENT, effect: "allow" },
+    });
+    expect(granted.status(), await granted.text()).toBe(201);
+    grantId = (await granted.json()).id;
+    const restricted = await request.put(`/api/v1/permissions/availability/agent/${AGENT}`, {
+      headers: auth,
+      data: { restricted: true },
+    });
+    expect(restricted.status(), await restricted.text()).toBe(200);
+  });
+
+  // Nothing else in the suite may meet a restricted agent.
+  test.afterAll(async ({ request }) => {
+    await request.put(`/api/v1/permissions/availability/agent/${AGENT}`, { headers: auth, data: { restricted: false } });
+    if (grantId) await request.delete(`/api/v1/permissions/grants/${grantId}`, { headers: auth });
+  });
+
+  // The New Run agent picker's options, as the holder of token sees them.
+  async function agentOptions(page: Page, token: string): Promise<string[]> {
+    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, token]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("combobox", { name: "Agent" }).click();
+    const options = page.getByRole("option");
+    await expect(options.first()).toBeVisible();
+    const names = await options.allInnerTexts();
+    await page.keyboard.press("Escape");
+    return names;
+  }
+
+  test("a person outside the list never sees the agent; the rest of the roster is still offered", async ({ page }) => {
+    const names = await agentOptions(page, seedUserTokenRaw("standard"));
+    expect(names.some((n) => n.startsWith("Claude Code")), names.join(" | ")).toBe(true);
+    expect(names.some((n) => n.startsWith("Codex CLI")), names.join(" | ")).toBe(false);
+  });
+
+  test("a person on the list sees it", async ({ page }) => {
+    expect((await agentOptions(page, seedUserTokenRaw(TYPE))).some((n) => n.startsWith("Codex CLI"))).toBe(true);
+  });
+
+  test("an admin sees it", async ({ page }) => {
+    expect((await agentOptions(page, ADMIN_TOKEN)).some((n) => n.startsWith("Codex CLI"))).toBe(true);
   });
 });
