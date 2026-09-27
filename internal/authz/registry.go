@@ -42,6 +42,11 @@ const (
 	ReasonRunQuota                       Reason = "run_quota"
 	ReasonUserTypeUnknown                Reason = "user_type_unknown"
 	ReasonUserViewTypeDeleted            Reason = "user_view_type_deleted"
+	// ReasonModelProviderUnavailable: a run's model provider cannot credential
+	// it — none by that name, off, not serving the agent, none chosen among
+	// several, no usable credential of the caller's for it, or a policy grant
+	// that would set a model credential beside it (#987).
+	ReasonModelProviderUnavailable Reason = "model_provider_unavailable"
 	// ReasonAdminView: an admin in the user view launched a run after the type
 	// the view looks through was deleted. Not audited on its own — the cause
 	// row is ReasonUserViewTypeDeleted, which the launch response answered.
@@ -88,6 +93,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
 	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                       {Effect: EffectUnprocessable},
+	ReasonModelProviderUnavailable:       {Effect: EffectUnprocessable, Audit: true},
 	ReasonUserTypeUnknown:                {Effect: EffectDeny, Audit: true},
 	ReasonUserViewTypeDeleted:            {Effect: EffectDeny, Audit: true},
 	ReasonAdminView:                      {Effect: EffectConflict},
