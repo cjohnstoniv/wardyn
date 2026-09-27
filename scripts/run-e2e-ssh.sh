@@ -77,7 +77,7 @@ UI_SANDBOX_PORT="${WARDYN_UI_SANDBOX_PORT:-$(pick_free_port)}"
 # — the one gap docs/ENV.md's WARDYN_REGISTRY_PORT row explicitly warns about.
 REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-$(pick_free_port)}"
 
-# Dedicated agent image tag/repo (NOT the shared wardyn/agent-*:local
+# Project-unique agent image tag/repo (NOT the shared wardyn/agent-*:local
 # convention every other e2e script trusts): on a box where wardyn_pick_docker_host
 # routes to a native dockerd shared with concurrent agents/jobs, that shared,
 # mutable tag can be re-pointed by someone else's build between "docker image
@@ -85,17 +85,17 @@ REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-$(pick_free_port)}"
 # script: the shared tag briefly resolved to a pre-SSH-gateway image with
 # neither socat nor sftp-server, failing every sftp/-L check with a clean but
 # confusing "executable file not found in $PATH"). A repository name nobody
-# else has any reason to write to removes the collision entirely -- it does
-# not need to be per-run too: unlike wardynd/wardyn-proxy below, nothing here
-# depends on a fresh binary, so a STABLE tag lets the "docker image inspect"
-# short-circuit hit on the next invocation instead of rebuilding every time
-# (teardown below deliberately never removes it). wardynd and wardyn-proxy get
-# the per-run treatment: reusing the shared :local tag meant this lane graded
-# whatever another job last built (observed live: 12 checks passed against a
-# pre-0043 binary, then the override assertions died on a missing `role`
-# column). docker-compose.yaml takes WARDYN_WARDYND_IMAGE / WARDYN_PROXY_IMAGE
-# overrides; both default to the :local names, so no other caller changes.
-AGENT_IMAGE="wardyn/agent-claude-code:ssh-e2e-pinned"
+# else has any reason to write to removes the collision entirely. It stays
+# per-run rather than stable: a stable tag behind the inspect short-circuit
+# below would silently reuse an image built from an older Dockerfile, the
+# same stale-image failure this comment opens with; the layer cache keeps the
+# rebuild cheap. wardynd and wardyn-proxy get the same treatment: reusing the
+# shared :local tag meant this lane graded whatever another job last built
+# (observed live: 12 checks passed against a pre-0043 binary, then the
+# override assertions died on a missing `role` column). docker-compose.yaml
+# takes WARDYN_WARDYND_IMAGE / WARDYN_PROXY_IMAGE overrides; both default to
+# the :local names, so no other caller changes.
+AGENT_IMAGE="${PROJECT}/agent-claude-code:pinned"
 WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
 PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 
@@ -145,10 +145,9 @@ teardown() {
   log "owned compose container IDs at teardown: $(compose ps -aq | tr '\n' ' ')"
   log "tearing down ${PROJECT} (compose down --volumes; this project only)"
   compose down --volumes >/dev/null 2>&1 || true
-  # WARDYND_IMAGE/PROXY_IMAGE are this run's own per-project tags -- named by
-  # variable, never a pattern sweep, and never AGENT_IMAGE (its stable tag is
-  # meant to outlive this run; see its definition above).
-  docker rmi -f "${WARDYND_IMAGE}" "${PROXY_IMAGE}" >/dev/null 2>&1 || true
+  # All three are this run's own per-project tags -- named by variable, never
+  # a pattern sweep. Removing a tag leaves the build cache, so reruns stay cheap.
+  docker rmi -f "${AGENT_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}" >/dev/null 2>&1 || true
   rm -rf "${TMPDIR}"
 }
 # An explicit namespace may name an earlier invocation. Never adopt or clean it.
@@ -166,9 +165,8 @@ trap teardown EXIT
 # another job last built. The layer cache makes the rebuild near-free.
 compose build wardynd >/dev/null || die "build ${WARDYND_IMAGE} failed"
 compose --profile build-only build proxy-image >/dev/null || die "build ${PROXY_IMAGE} failed"
-# agent-claude-code: build straight to AGENT_IMAGE's dedicated, stable repo
-# (see its definition above) instead of make agent-images-core's shared
-# :local tag, so a repeat invocation's inspect below actually short-circuits.
+# agent-claude-code: build straight to AGENT_IMAGE's project-unique repo (see
+# its definition above) instead of make agent-images-core's shared :local tag.
 docker image inspect "${AGENT_IMAGE}" >/dev/null 2>&1 || \
   docker build -f deploy/images/claude-code/Dockerfile -t "${AGENT_IMAGE}" "${ROOT}"
 
