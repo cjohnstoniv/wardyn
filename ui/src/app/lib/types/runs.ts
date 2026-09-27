@@ -190,6 +190,12 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // internal/types/types.go's AgentRun.EndedAt (#1197 L1a, migration 0092):
+  // stamped by the three state writers on a terminal transition; nil for a
+  // live run and for a legacy row the backfill could not date exactly. A
+  // lease-ended run (lost_reason "ended") stays RUNNING until the ended-run
+  // grace makes it terminal, so ITS end time is lost_at, not ended_at.
+  ended_at?: string;
   // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
   // lease sweep retries every pass and clears both once the stop lands.
@@ -208,6 +214,22 @@ export interface AgentRun {
   // sent as an explicit spec.
   preset?: string;
   preset_version?: number;
+  // internal/types/attention.go's RunAttention (#1197 L1b) — what this LIVE
+  // run is waiting on and who (in the caller's own console view) can clear
+  // it, projected only when the caller's GET /runs (or GET /me/attention)
+  // request opted into the `view` contract. Absent on every other read, and
+  // on a terminal or lease-ended run even under `view`. A SEPARATE named
+  // interface (not inline), not just style: runs.wire.fields.test.ts's
+  // tsInterfaceKeys scrapes an interface body LINE BY LINE with no brace
+  // tracking, so an inline nested object's own keys (kind/by/pending) would
+  // misread as top-level AgentRun keys and fail that parity test.
+  attention?: RunAttention;
+}
+
+export interface RunAttention {
+  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  by: "you" | "owner" | "admin";
+  pending: number;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

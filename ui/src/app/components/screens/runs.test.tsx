@@ -670,6 +670,7 @@ describe("RunsScreen board — the pinned Needs-you lane", () => {
     requested_scope: { host: "held.example", mode: "wait_for_review" },
     state: "PENDING" as const,
     requested_at: new Date().toISOString(),
+    held: true, // #1197 L1b: held is now a server field, not derived client-side
   });
 
   it("pins a run whose sandbox is held — the run state alone never says so", async () => {

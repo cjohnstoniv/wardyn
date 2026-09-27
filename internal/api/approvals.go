@@ -110,9 +110,9 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			principal := principalFromRequest(r)
-			servePage(w, r, page, func(p store.Page) ([]types.ApprovalRequest, error) {
+			servePage(w, r, page, s.withHoldProjection(func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pager.ListApprovalsPageByRunCreator(r.Context(), principal, state, p)
-			}, nil)
+			}), nil)
 			return
 		}
 		// ?run_id= given: prove ownership up front. Once proven, the fetch-all +
@@ -130,18 +130,18 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		// without the capability falls through to the fetch-all closure below,
 		// which returns the identical rows. Ownership was already proven above.
 		if pager, capable := s.cfg.Approvals.(store.ApprovalsByRunPager); capable {
-			pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+			pageFn = s.withHoldProjection(func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pager.ListApprovalsPageByRun(r.Context(), runID, state, p)
-			}
+			})
 		}
 	default:
 		if pl, ok := s.cfg.Approvals.(approvalPageLister); ok {
-			pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+			pageFn = s.withHoldProjection(func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pl.ListApprovalsPage(r.Context(), state, p)
-			}
+			})
 		}
 	}
-	servePage(w, r, page, pageFn, func() ([]types.ApprovalRequest, error) {
+	servePage(w, r, page, pageFn, s.withHoldProjectionAll(func() ([]types.ApprovalRequest, error) {
 		all, err := s.cfg.Approvals.List(r.Context(), state)
 		if err != nil || runID == uuid.Nil {
 			return all, err
@@ -153,7 +153,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return out, nil
-	})
+	}))
 }
 
 // approvalPageLister is the optional DB-paged read surface an ApprovalService

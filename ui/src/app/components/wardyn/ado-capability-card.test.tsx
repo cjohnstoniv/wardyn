@@ -10,12 +10,16 @@ import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
+import { heldFieldsFor } from "../../lib/test-hold-fixture";
 
 const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 const ENDED_RUN: AdoCardRun = { created_by: "dana@acme.example", state: "COMPLETED" };
 
+// #1197 L1b: held/held_until are now server fields — heldFieldsFor mirrors
+// internal/approval.Hold so this fixture keeps constructing rows by
+// kind/requested_at/state/grant_id exactly as it always has.
 function escalation(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  const base: ApprovalRequest = {
     id: "apr_1",
     run_id: "run_1",
     grant_id: "grant_1",
@@ -35,6 +39,7 @@ function escalation(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
     requested_at: new Date().toISOString(),
     ...overrides,
   };
+  return { ...base, ...heldFieldsFor(base) };
 }
 
 function consent(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {

@@ -157,7 +157,7 @@ var queryParamNotAnID = map[string]string{
 	// only narrows what ?owner=/?view= (queryIDMatrix's own "GET
 	// /api/v1/runs?owner" row) already scoped the listing to.
 	"view":           "run/approval list scope switch (user|admin); the owner it resolves to is scoped separately (queryIDMatrix's ?owner row)",
-	"status":         "run list state filter (active|ended|failed|killed), a closed enum; narrows an already-scoped listing",
+	"status":         "run list state filter (active|ended|failed|killed|needs), a closed enum; narrows an already-scoped listing",
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
 	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",

@@ -30,7 +30,7 @@
 import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest } from "../../lib/types";
-import { isHeld, isTerminalRunState, PUSH_HOLD_CEILING_MS, type PushContentScope } from "../../lib/types";
+import { isHeld, isTerminalRunState, type PushContentScope } from "../../lib/types";
 import { relativeTime } from "../../lib/format";
 import { PUSH } from "./copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
@@ -164,23 +164,20 @@ export function PushContentCard({
   // push_content doc, lib/types/approvals.ts): HELD_NOTE ("lets it through
   // now") is only true while it is, so the card has to flip to HELD_EXPIRED
   // on its own once the window passes, the same live-timer shape
-  // ado-capability-card.tsx's stillHeld/REQ_HELD_EXPIRED takes — a poll tick
+  // ado-capability-card.tsx's held-state timer takes — a poll tick
   // eventually catches it too, but a member sitting on this card between
   // ticks must not keep reading a promise that already lapsed.
   //
-  // No caller hands this card the run's own push_rules.hold_seconds (no
-  // client surface reads a resolved policy — same gap isHeld's own doc
-  // names), so the timer schedules off PUSH_HOLD_CEILING_MS, the same
-  // conservative 600s default isHeld(item) falls back to absent one.
+  // #1197 L1b: the window itself is now item.held_until (the server's own
+  // projection, internal/approval.Hold), not a client-guessed ceiling.
   const [, forceRerenderAtWindowEnd] = React.useReducer((n: number) => n + 1, 0);
   React.useEffect(() => {
-    const requestedAt = Date.parse(item.requested_at);
-    if (Number.isNaN(requestedAt)) return; // isHeld already fails toward "held" — nothing to flip to
-    const msLeft = PUSH_HOLD_CEILING_MS - (Date.now() - requestedAt);
-    if (msLeft <= 0) return; // already past the window
+    if (!item.held_until) return;
+    const msLeft = Date.parse(item.held_until) - Date.now();
+    if (!(msLeft > 0)) return; // already past the window (or unparseable)
     const id = setTimeout(forceRerenderAtWindowEnd, msLeft);
     return () => clearTimeout(id);
-  }, [item.requested_at]);
+  }, [item.held_until]);
   const held = isHeld(item);
 
   return (

@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, ApprovalRequest, RunState } from "../../../lib/types";
 import { TitleGroup } from "./title-group";
 import { approvalSignals, type RunSignals } from "./board-groups";
+import { heldFieldsFor } from "../../../lib/test-hold-fixture";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run-1",
@@ -30,15 +31,21 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   ...over,
 });
 
-const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
-  id: "a1",
-  run_id: "run-1",
-  kind: "tool_call",
-  requested_scope: {},
-  state: "PENDING",
-  requested_at: new Date().toISOString(),
-  ...over,
-});
+// #1197 L1b: held/held_until are now server fields — heldFieldsFor mirrors
+// internal/approval.Hold so this fixture keeps constructing rows by
+// kind/requested_at/state exactly as it always has.
+const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => {
+  const base = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "tool_call" as const,
+    requested_scope: {},
+    state: "PENDING" as const,
+    requested_at: new Date().toISOString(),
+    ...over,
+  };
+  return { ...base, ...heldFieldsFor(base) };
+};
 
 function renderGroup(runs: AgentRun[], signals: RunSignals = new Map(), signalsResolved = true) {
   return render(

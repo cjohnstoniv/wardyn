@@ -19,9 +19,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   scoped). Two new response headers, `X-Wardyn-Hidden-Older` and `X-Wardyn-Hidden-Killed`, report how
   many rows the `ended_within` window and the 24h killed-run default hid. `GET /approvals` gains the
   same opt-in `?view=user`, which scopes the queue to the caller's own runs' approvals for every
-  caller. Every `AgentRun` now carries `ended_at` (migration `0091_agent_runs_ended_at`), stamped by
+  caller. Every `AgentRun` now carries `ended_at` (migration `0092_agent_runs_ended_at`), stamped by
   the run's terminal state transition; a lease-ended run's end time is still its lease end
   (`lost_at`), not this column.
+
+- **One server-side hold/attention rule replaces the console's own client-side copy (#1197 L1b).**
+  A PENDING row on `GET /approvals` now carries `held` and, for a bounded hold, `held_until`
+  (`internal/approval.Hold` — a verbatim port of the console's former `isHeld`, same three windows).
+  Each live run returned from `GET /runs?view=` (and from the new `GET /me/attention`) now carries
+  `attention: {kind, by, pending}` — what it is waiting on, and who, in the caller's own console
+  view, can clear it: `by:"you"` only when the caller's own real decide-path verdict (`mayDecide`,
+  mirroring `decide()`'s own gates) would actually let them act, else `by:"admin"` for a member who
+  cannot, or `by:"owner"` for a `credential_reauth`/lost-run revive outside the User view. New
+  `GET /me/attention?view=user|admin` returns `{needs_you, pending_approvals}` — the shell's two nav
+  badges in one small object, replacing two unscoped ~1000-row reads. The console's `isHeld` is now a
+  one-line reader of the wire fields; every client-side hold window constant is gone.
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"

@@ -11,6 +11,7 @@ package api
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -40,11 +41,20 @@ var endedWithinDurations = map[string]time.Duration{
 	"30d": 30 * 24 * time.Hour,
 }
 
-// runsListStatuses is the L1a status enum. "needs" (active runs whose
-// attention.by=="you") is #1197 L1b's — it reads the attention projection
-// this lane does not compute — and is refused here rather than silently
-// ignored, so a caller cannot mistake an empty result for "no rows need you".
-var runsListStatuses = map[string]bool{"active": true, "ended": true, "failed": true, "killed": true}
+// runsListStatuses is the run-list status enum. "needs" (#1197 L1b) is
+// active runs whose attention.by=="you" — the ONE status that reads the
+// attention projection rather than a bare SQL predicate, and therefore the
+// one that must fetch the live set unpaged and filter/window in Go (F8) —
+// see handleListRunsFiltered's own "needs" branch.
+var runsListStatuses = map[string]bool{"active": true, "ended": true, "failed": true, "killed": true, "needs": true}
+
+// isNeedsStatus reports whether the caller asked for status=needs — always
+// alone (never combined with another status value, which "needs" already
+// narrows past), and always with a view (attention.by has no meaning
+// without one).
+func isNeedsStatus(statuses []string) bool {
+	return len(statuses) == 1 && statuses[0] == "needs"
+}
 
 // parsedRunsListParams is handleListRuns's filtered-branch input: view only
 // resolves ownership defaults/forcing (H-4) at this lane — attention/ordering
@@ -113,6 +123,16 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		}
 		statuses = append(statuses, st)
 	}
+	if slices.Contains(statuses, "needs") {
+		if !isNeedsStatus(statuses) {
+			writeError(w, http.StatusBadRequest, "status=needs cannot be combined with another status value")
+			return parsedRunsListParams{}, false
+		}
+		if view == "" {
+			writeError(w, http.StatusBadRequest, "status=needs requires view=user or view=admin")
+			return parsedRunsListParams{}, false
+		}
+	}
 
 	endedWithin, ok := endedWithinDurations[q.Get("ended_within")]
 	if !ok {
@@ -165,6 +185,44 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, "run listing is not scoped for this request on this store backend")
 		return
 	}
+	adminView := params.view == "admin"
+
+	// #1197 L1b: status=needs reads the attention projection, which no SQL
+	// predicate can express — the live set (bounded by state,
+	// agent_runs_state_idx) is fetched UNPAGED, projected, filtered to
+	// attention.by=="you", and THEN windowed to the caller's own page (F8).
+	// "needs" implies live-only by construction, so neither hidden-count
+	// header ever hides anything under it — both are always 0.
+	if isNeedsStatus(params.filter.Statuses) {
+		liveFilter := params.filter
+		liveFilter.Statuses = []string{"active"}
+		live, err := pager.ListRunsFiltered(r.Context(), liveFilter, store.Page{})
+		if err != nil {
+			writeServerError(w, r, "list", err)
+			return
+		}
+		if err := s.projectAttention(r, live, adminView); err != nil {
+			writeServerError(w, r, "list", err)
+			return
+		}
+		needs := make([]types.AgentRun, 0, len(live))
+		for _, run := range live {
+			if run.Attention != nil && run.Attention.By == types.AttentionYou {
+				needs = append(needs, run)
+			}
+		}
+		s.projectRecordingMeta(r, needs)
+		projectStatusDetail(needs)
+		w.Header().Set("X-Wardyn-Hidden-Older", "0")
+		w.Header().Set("X-Wardyn-Hidden-Killed", "0")
+		windowed, truncated := pageWindow(needs, page.Offset, page.Limit)
+		if truncated {
+			w.Header().Set("X-Wardyn-Truncated", "true")
+		}
+		writeJSON(w, http.StatusOK, windowed)
+		return
+	}
+
 	olderHidden, killedHidden, err := pager.CountHiddenRuns(r.Context(), params.filter)
 	if err != nil {
 		writeServerError(w, r, "list", err)
@@ -176,6 +234,17 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		runs, err := pager.ListRunsFiltered(r.Context(), params.filter, p)
 		if err != nil {
 			return nil, err
+		}
+		// #1197 L1b: attention is projected only when the caller opted into
+		// the `view` contract — see this function's own doc for why
+		// order/headers are unconditional on this branch but attention is
+		// not: no legacy caller reaches this branch with a filter but no
+		// view, yet `view` is specifically what the API shape documents as
+		// opting into attention.
+		if params.view != "" {
+			if err := s.projectAttention(r, runs, adminView); err != nil {
+				return nil, err
+			}
 		}
 		s.projectRecordingMeta(r, runs)
 		projectStatusDetail(runs)

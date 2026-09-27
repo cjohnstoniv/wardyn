@@ -258,7 +258,7 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
 `&limit=&offset=` (#1197 L1a): `view` (`user`/`admin`; absent leaves the endpoint's
 behaviour exactly as above), `owner` (`me`/`all`; `view=user` forces `me` for
 every caller, admin tokens included), repeatable `status`
-(`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`),
+(`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
 `include_killed=1` (a KILLED run older than 24h is hidden by default), `workspace`
 (exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
 substring search over title/task/repo/created_by). With any of them present the
@@ -267,6 +267,20 @@ response is ordered live runs first, then ended runs by end time, and two header
 `ended_within` window and the killed-run default hid. `GET /api/v1/approvals`
 accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs'
 approvals for every caller.
+
+`view=user`/`view=admin` on `GET /api/v1/runs` also projects `attention:
+{kind, by, pending}` onto each LIVE run (#1197 L1b) — what it is waiting on
+(`approval`/`reauth`/`ado_consent`/`lost`) and who, in the caller's own view,
+can clear it (`you`/`owner`/`admin`); `status=needs` (requires `view=`) narrows
+the list to runs where `attention.by=="you"`. Every PENDING row on
+`GET /api/v1/approvals` now also carries `held` (bool) and, for a hold with a
+known end, `held_until` (RFC 3339) — the server-side port of the console's
+former client-side hold rule. `GET /api/v1/me/attention?view=user|admin`
+returns `{needs_you, pending_approvals}`: `needs_you` is the count of live
+runs in that view's own default scope whose `attention.by=="you"`;
+`pending_approvals` is the same scoped PENDING count `GET /approvals` gives
+today. Absent `?view=`, it defaults to `user`; `view=admin` from a
+non-security-operator is coerced to `user`.
 
 Beyond `run_id`, the audit query accepts server-side predicates:
 `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),

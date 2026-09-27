@@ -350,6 +350,17 @@ func (s *approvalService) ListApprovalsPageByRun(ctx context.Context, runID uuid
 
 var _ store.ApprovalsByRunPager = (*approvalService)(nil)
 
+// ListPendingApprovalsForRuns is #1197 L1b's attention-projection read: the
+// api handler type-asserts for it on s.cfg.Approvals (not s.cfg.Store — see
+// that lane's own finding on where this capability belongs), the same
+// optional-capability pattern as the two pagers above. Pure delegation,
+// promoted from the embedded store.PG.
+func (s *approvalService) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	return s.st.ListPendingApprovalsForRuns(ctx, runIDs)
+}
+
+var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
+
 // Audit fanout
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts

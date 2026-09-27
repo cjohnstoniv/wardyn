@@ -452,6 +452,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
+	// #1197 L1b: the shell's nav-badge counts, scoped to the caller's own
+	// view exactly as GET /runs?view=/GET /approvals are (handleMeAttention's
+	// own doc) — classMember, not classOwner: there is no foreign-id path to
+	// distinguish.
+	"GET /api/v1/me/attention": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
 	// self-service registry scoped to the caller's OWN principal AT THE
 	// STORE (sshkeys.go's package doc), same shape as GET/POST /secrets
@@ -2108,6 +2113,28 @@ func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, e
 	}
 	return n, nil
 }
+
+// ListPendingApprovalsForRuns is #1197 L1b's attention-projection read
+// (store.ApprovalsForRunsPager) — every PENDING row whose run_id is in
+// runIDs, the same in-memory shape ListApprovalsPageByRunCreator already
+// uses for its own optional-capability twin.
+func (a *authzApprovals) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	want := map[uuid.UUID]bool{}
+	for _, id := range runIDs {
+		want[id] = true
+	}
+	out := []types.ApprovalRequest{}
+	for _, ap := range a.byID {
+		if ap.State == types.ApprovalPending && want[ap.RunID] {
+			out = append(out, ap)
+		}
+	}
+	return out, nil
+}
+
+var _ store.ApprovalsForRunsPager = (*authzApprovals)(nil)
 
 // ListApprovalsPageByRunCreator: item 2's optional scoped-list interface.
 func (a *authzApprovals) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, _ store.Page) ([]types.ApprovalRequest, error) {
