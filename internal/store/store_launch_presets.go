@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Launch presets (migration 0086_launch_presets). Round-trips rows; the
+// Launch presets (migration 0087_launch_presets). Round-trips rows; the
 // request body is validated at the API boundary (internal/api/presets.go).
 package store
 

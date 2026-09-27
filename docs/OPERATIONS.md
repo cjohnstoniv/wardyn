@@ -6091,7 +6091,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
-`0086` adds `agent_runs.preset` and `agent_runs.preset_version` beside its new
+`0087` adds `agent_runs.preset` and `agent_runs.preset_version` beside its new
 `launch_presets` table.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The

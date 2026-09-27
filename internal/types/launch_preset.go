@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// LaunchPreset is one row of launch_presets (migration 0086): an
+// LaunchPreset is one row of launch_presets (migration 0087): an
 // admin-managed, named bundle of existing POST /runs fields. Request is the
 // stored create-run body, kept raw here because its Go type lives in the
 // public SDK (pkg/client.CreateRunRequest), which imports this package.

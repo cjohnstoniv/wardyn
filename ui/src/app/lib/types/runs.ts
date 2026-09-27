@@ -198,7 +198,7 @@ export interface AgentRun {
   // block serving no provider for the agent, or a run created before this
   // field existed.
   model_provider_id?: string;
-  // AgentRun.Preset / PresetVersion (migration 0086, #1143): the launch
+  // AgentRun.Preset / PresetVersion (migration 0087, #1143): the launch
   // preset this run was expanded from, and which version. Absent for a run
   // sent as an explicit spec.
   preset?: string;

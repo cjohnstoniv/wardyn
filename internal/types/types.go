@@ -302,7 +302,7 @@ type AgentRun struct {
 	UserType string `json:"user_type,omitempty"`
 	// Preset and PresetVersion name the launch preset (and the version of it)
 	// this run was expanded from. Empty / 0 for a run sent as an explicit spec
-	// and for every run created before migration 0086.
+	// and for every run created before migration 0087.
 	Preset        string `json:"preset,omitempty"`
 	PresetVersion int    `json:"preset_version,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are

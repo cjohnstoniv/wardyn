@@ -1871,7 +1871,7 @@ func (s *authzStore) UserTypeReferences(context.Context, string) (int, error)  {
 func (s *authzStore) UserTypeTokenStamps(context.Context, string) (int, error) { return 0, nil }
 func (s *authzStore) DeleteUserType(context.Context, string) error             { return store.ErrNotFound }
 
-// launch presets (migration 0086): the same honest empty state.
+// launch presets (migration 0087): the same honest empty state.
 func (s *authzStore) ListLaunchPresets(context.Context) ([]types.LaunchPreset, error) {
 	return nil, nil
 }

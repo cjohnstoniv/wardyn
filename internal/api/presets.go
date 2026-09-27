@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Launch presets (#1143, migration 0086): an admin-managed, named, versioned
+// Launch presets (#1143, migration 0087): an admin-managed, named, versioned
 // bundle of existing POST /runs fields that a launcher names instead of
 // sending the whole spec. The server expands a preset into the equivalent
 // explicit request BEFORE any create-path gate runs, so a preset carries no

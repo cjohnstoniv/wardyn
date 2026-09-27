@@ -297,7 +297,7 @@ type Store interface {
 	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
 	DeleteUserType(ctx context.Context, id string) error
 
-	// Launch presets (migration 0086, store_launch_presets.go). PutLaunchPreset
+	// Launch presets (migration 0087, store_launch_presets.go). PutLaunchPreset
 	// is an upsert by name that moves the version only when the row changes.
 	ListLaunchPresets(ctx context.Context) ([]types.LaunchPreset, error)
 	GetLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error)

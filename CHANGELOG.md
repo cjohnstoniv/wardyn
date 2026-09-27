@@ -795,7 +795,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   would to the explicit request; only `title`, `task` and an optional `preset_version` pin may accompany `preset`; any other field is refused. Presets are
   versioned, every write is audited (`preset.create`/`update`/`delete`), the run records
   `preset` and `preset_version`, and `wardyn preset get/apply` round-trips them. Migration
-  `0086_launch_presets`.
+  `0087_launch_presets`.
 
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
