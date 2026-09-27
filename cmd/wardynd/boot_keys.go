@@ -210,6 +210,36 @@ func loadOrCreateUISessionKey(ctx context.Context, secrets bootKeyStore) ([]byte
 	)
 }
 
+// loadProxyKeys loads the two boot keys every run's proxy config depends on:
+// the control-plane hop TLS CA (loadHopTLS) and the run config key.
+func loadProxyKeys(ctx context.Context, secrets bootKeyStore, controlURL string) (*hopTLS, []byte, error) {
+	hop, err := loadHopTLS(ctx, secrets, controlURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := loadOrCreateRunConfigKey(ctx, secrets)
+	return hop, key, err
+}
+
+// loadOrCreateRunConfigKey returns the 32-byte AES key that seals each run's
+// stored proxy config (#1176, api.Config.RunConfigKey). It is the data key of
+// those rows: kept in the secret store like every boot key, so the secret
+// store's own key-encryption key (local, Transit or the organisation's store)
+// is what protects it, and a rewrap or rekey moves it with the rest.
+func loadOrCreateRunConfigKey(ctx context.Context, secrets bootKeyStore) ([]byte, error) {
+	return loadOrCreateSecret(ctx, secrets, secretRunConfigKey,
+		func(b []byte) bool { return len(b) == 32 },
+		func() ([]byte, error) {
+			key := make([]byte, 32)
+			if _, gerr := rand.Read(key); gerr != nil {
+				return nil, fmt.Errorf("generate run config key: %w", gerr)
+			}
+			slog.Info("wardynd: generated and persisted the run proxy config key")
+			return key, nil
+		},
+	)
+}
+
 // loadOrCreateSSHHostKey returns the SSH gateway's ed25519 host key,
 // persisting a freshly-generated one into the secret store on first boot —
 // the same loadOrCreateSecret pattern as the signing/session keys above,

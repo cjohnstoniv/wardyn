@@ -541,9 +541,7 @@ type revivingSubstrate struct {
 	replaced, started []string
 }
 
-func (r *revivingSubstrate) ProxyConfig(context.Context, string) ([]byte, error) {
-	return []byte(`{"run_token":"t"}`), nil
-}
+func (r *revivingSubstrate) CanReplaceProxy(context.Context, string) error { return nil }
 
 func (r *revivingSubstrate) EnsureProxyImage(context.Context) error { return nil }
 
@@ -564,8 +562,8 @@ func TestOrchestrator_ProxyReviver(t *testing.T) {
 	ctx := context.Background()
 	oci := &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
 	o := New(oci)
-	if cfg, err := o.ProxyConfig(ctx, "wardyn-agent-x"); err != nil || string(cfg) != `{"run_token":"t"}` {
-		t.Fatalf("ProxyConfig = %s, %v", cfg, err)
+	if err := o.CanReplaceProxy(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("CanReplaceProxy = %v, want nil", err)
 	}
 	if err := o.ReplaceProxy(ctx, "wardyn-agent-x", nil); err != nil || len(oci.replaced) != 1 {
 		t.Fatalf("ReplaceProxy: %v, replaced %v", err, oci.replaced)
@@ -578,8 +576,8 @@ func TestOrchestrator_ProxyReviver(t *testing.T) {
 	if err := k8s.EnsureProxyImage(ctx); err != nil {
 		t.Errorf("EnsureProxyImage on a substrate that cannot revive: %v, want nil (nothing to ensure)", err)
 	}
-	if _, err := k8s.ProxyConfig(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
-		t.Errorf("ProxyConfig on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	if err := k8s.CanReplaceProxy(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("CanReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
 	}
 	if err := k8s.ReplaceProxy(ctx, "wardyn-agent-y", nil); !errors.Is(err, runner.ErrReviveUnsupported) {
 		t.Errorf("ReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
