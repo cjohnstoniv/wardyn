@@ -14,7 +14,8 @@
 #   scripts/test-report.sh unit ./...
 #   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
-# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER (passed through to go test).
+# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
+# WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
@@ -32,8 +33,15 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # from any package in the module, not just calls from within the same
 # package as the covered code (module-wide instrumentation regardless of
 # which PKGS are under test). Capture the JSON stream to a file.
-go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" \
-  > "$OUT/test-output.json"
+# The live-substrate suites (conformance, envbuild) turn coverage off: nobody
+# reads their profile, and instrumenting the whole module is compile time spent
+# inside the CI job's own timeout.
+if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
+  rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
+  go test -json "${PKGS[@]}" > "$OUT/test-output.json"
+else
+  go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" > "$OUT/test-output.json"
+fi
 GO_EXIT=$?
 
 # ── name the failure ─────────────────────────────────────────────────────────
@@ -155,6 +163,80 @@ fi
 if [ -n "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   DECLARE_FLOOR=0
 fi
+# conformance-docker, conformance-k8s and envbuild have no testfloor.Mark
+# probes of their own (see the REQUIRE_ALL floor right below, which is their
+# equivalent) — the testfloor.Mark floor further down must not run for them,
+# or it would read "no package suite tested calls testfloor.Mark" as a red
+# floor instead of a floor that simply lives elsewhere.
+case "$SUITE" in
+  conformance-docker | conformance-k8s | envbuild) DECLARE_FLOOR=0 ;;
+esac
+
+# T-08 (G9): conformance and envbuild have no must-pass floor at all today —
+# their Makefile targets call `go test` directly, never through this script —
+# and their falsifiable cases are exactly the ones a capability flip or an
+# unset probe silently turns into a SKIP that never reddens the job (see
+# conformance.go's DefaultRouteProbe/RecordingProbe skip sites). Named by
+# subtest so a rename cannot quietly empty the set, same law as the
+# testfloor.Mark floor below — these three suites' must-pass cases are
+# specific subtests of a single shared Test func (TestConformanceDocker,
+# TestConformanceK8s), not distinct top-level funcs a source scan can find,
+# so they get their own name-list floor instead of a Mark call.
+# WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran at all —
+# a lane without them declared has no substrate, same as the pg floor's
+# default-off shape. WARDYN_TEST_REPORT_SKIP_FLOOR silences this floor too.
+# Exact names, not a pattern: EVERY one must pass (checked below), so dropping
+# or renaming one case reddens the job even while the others still match.
+REQUIRE_ALL=""
+if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
+  if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestBootEgress_NoFirstUseApproval'
+  fi
+  if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode'
+  fi
+  if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
+  fi
+fi
+if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then
+  REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"
+  # go test -json emits one event per line. REQUIRE_ALL here always names a
+  # subtest (e.g. "TestConformanceDocker/CreateStatusStop"), so the extraction
+  # keeps the full Test field ("/" and all) — unlike the testfloor.Mark floor
+  # below, which only ever inspects top-level (bare-name) test outcomes.
+  names() {
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"]*\"" "$OUT/test-output.json" \
+      | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
+  }
+  PASSED="$(names pass)"
+  SKIPPED="$(names skip)"
+  FAILED="$(names fail)"
+  MISSING=""
+  for n in $REQUIRE_ALL; do
+    grep -qxF "$n" <<<"$PASSED" || MISSING="$MISSING $n"
+  done
+  if [ -z "$PASSED$SKIPPED$FAILED" ]; then
+    echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
+    echo ">> Those probes are the falsifiable proof of the real invariant; a set that matches nothing" >&2
+    echo ">> is a rename that silently removed the floor, not a suite with nothing to check." >&2
+    GO_EXIT=1
+  elif [ -n "$SKIPPED" ]; then
+    echo ">> SKIP FLOOR: these probes SKIPPED:" >&2
+    echo "$SKIPPED" | sed 's/^/>>   /' >&2
+    echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These cases are falsifiable ONLY" >&2
+    echo ">> against the real driver (a capability flip, a missing probe, or an unpullable image all read" >&2
+    echo ">> as this same skip) — see conformance.go's skip sites for the specific cause." >&2
+    GO_EXIT=1
+  elif [ -n "$MISSING" ]; then
+    echo ">> SKIP FLOOR: these must-pass cases did not pass (failed, or never ran: renamed, removed or -run filtered):" >&2
+    printf '>>   %s\n' $MISSING >&2
+    GO_EXIT=1
+  else
+    echo ">> skip floor: $(echo "$REQUIRE_ALL" | wc -w | tr -d ' ') probe(s) required by name, all passed"
+  fi
+fi
+
 if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
   # Suite-scoped: a probe declares which suite it gates
   # (testfloor.Mark(t, "pg")), because files with no build tag — internal/api's,
