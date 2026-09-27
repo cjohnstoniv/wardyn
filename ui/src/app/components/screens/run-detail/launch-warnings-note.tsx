@@ -43,7 +43,7 @@ function useLaunchWarnings(): { warnings: string[]; dismiss: () => void } {
     if (cleared.current) return;
     cleared.current = true;
     if (!(location.state as { launchWarnings?: string[] } | null)?.launchWarnings) return;
-    navigate(location.pathname + location.search, { replace: true, state: null });
+    void navigate(location.pathname + location.search, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once, on mount, by design (see cleared.current above)
   }, []);
   return { warnings, dismiss: () => setWarnings([]) };

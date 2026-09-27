@@ -118,7 +118,7 @@ describe("RunDetailScreen — the launch advisory from router state (#125)", () 
     function Launcher({ warnings }: { warnings: string[] }) {
       const navigate = useNavigate();
       React.useEffect(() => {
-        navigate("/runs/run-1", { replace: true, state: { launchWarnings: warnings } });
+        void navigate("/runs/run-1", { replace: true, state: { launchWarnings: warnings } });
         // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once, on mount
       }, []);
       return null;
