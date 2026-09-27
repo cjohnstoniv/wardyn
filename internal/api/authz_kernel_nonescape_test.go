@@ -291,7 +291,8 @@ type kernelTier struct {
 	name, oracle string
 	// adminView: an SSO session in the Admin view. The S1 launch door (#639)
 	// answers it 409 admin_view before any capability decision, so such a row
-	// pins that door instead of the capability gate behind it.
+	// pins that door instead of the capability gate behind it, and fails on
+	// any other answer.
 	adminView bool
 	auth      func(t *testing.T, st *govEscapeStore, groups []string, r *http.Request)
 }
@@ -359,20 +360,6 @@ func kernelLaunch(t *testing.T, srv *Server, st *govEscapeStore, tier kernelTier
 	return w
 }
 
-// kernelS1Door reports whether the S1 launch door (#639) is in the source.
-// ponytail: #639 is not on main yet; once it is, drop this and pin 409 always.
-func kernelS1Door(t *testing.T) bool {
-	t.Helper()
-	for _, f := range parseAPISources(t) {
-		for _, d := range f.file.Decls {
-			if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "refuseAdminViewLaunch" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // TestKernelNonescape is design G2 at the launch door: every kind run.create
 // decides x every way a launch reaches it x every grant state, through the
 // real router, against the resolver's seven-step oracle (resolverCase.want).
@@ -381,7 +368,6 @@ func kernelS1Door(t *testing.T) bool {
 // fail here. Every row must reach the door: a 401 or a 409 is a row that
 // tested nothing, except the Admin-view rows, whose answer IS the S1 409.
 func TestKernelNonescape(t *testing.T) {
-	s1 := kernelS1Door(t)
 	for _, f := range kernelLaunchFields {
 		for _, tier := range kernelTiers {
 			t.Run(f.kind+"/"+tier.name, func(t *testing.T) {
@@ -418,7 +404,7 @@ func TestKernelNonescape(t *testing.T) {
 						Reason string `json:"reason"`
 					}
 					_ = json.Unmarshal(w.Body.Bytes(), &answer)
-					if tier.adminView && s1 {
+					if tier.adminView {
 						if w.Code != http.StatusConflict || answer.Reason != "admin_view" || refused {
 							t.Errorf("%v: status %d reason %q, refused on %s = %v; want 409 admin_view before any capability decision\n%s",
 								c, w.Code, answer.Reason, f.target, refused, w.Body.String())
