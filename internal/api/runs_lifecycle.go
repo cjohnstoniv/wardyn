@@ -408,6 +408,10 @@ func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 // on top absorbs scheduling/clock slack rather than racing the bound exactly.
 const killTailRecoveryGrace = killCascadeTimeout + 30*time.Second
 
+// killTailRecoveryTimeout bounds one recovered kill tail: the killCascadeTimeout
+// the normal kill path gives it. A var only so a test can shrink it.
+var killTailRecoveryTimeout = killCascadeTimeout
+
 // killTailSettled lists the audit rows that each prove a KILLED run needs no
 // kill-tail recovery. Matched with an EXISTS over the run's whole trail, never
 // a bounded read: a settled run.kill behind more rows than the window was
@@ -459,7 +463,12 @@ func (s *Server) recoverAbandonedKillTail(ctx context.Context, run types.AgentRu
 			return false // settled, or unprobeable this pass (the next pass tries again)
 		}
 	}
-	s.killTeardownTail(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "sweep_recovered_kill_tail"})
+	// Bounded like every other killTeardownTail caller, so a hung runner costs
+	// the operator's request at most one budget per run. A tail cut short
+	// audits run.kill as a failure and is retried by the next pass.
+	tailCtx, cancel := context.WithTimeout(ctx, killTailRecoveryTimeout)
+	defer cancel()
+	s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "sweep_recovered_kill_tail"})
 	return true
 }
 

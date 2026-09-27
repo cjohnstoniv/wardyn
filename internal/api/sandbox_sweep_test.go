@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -383,5 +384,66 @@ func TestSweepTerminalSandboxes_ProbeReclaimedRunIsNotRecovered(t *testing.T) {
 	}
 	if rows := killAuditRows(h.audit.snapshot(), killed.ID); len(rows) != 0 {
 		t.Errorf("must not write a run.kill row for a probe-reclaimed run; rows=%+v", rows)
+	}
+}
+
+// hungKillRunner's KillSandbox never answers on its own: it returns only when
+// its context ends, so only the caller's bound can free the sweep.
+type hungKillRunner struct {
+	*fakeRunner
+	kills atomic.Int32
+}
+
+func (r *hungKillRunner) KillSandbox(ctx context.Context, _ string) error {
+	r.kills.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestSweepTerminalSandboxes_BoundsAHungRecovery: a recovered kill tail whose
+// runner hangs must be cut off at killTailRecoveryTimeout, audited as a
+// run.kill failure, and retried by the next pass — never stall the operator's
+// sweep request indefinitely.
+func TestSweepTerminalSandboxes_BoundsAHungRecovery(t *testing.T) {
+	prev := killTailRecoveryTimeout
+	killTailRecoveryTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { killTailRecoveryTimeout = prev })
+
+	h := newHarness(t)
+	killed := sweepRunAt(types.RunKilled, "sbx-hung", staleKilledAt())
+	fake := &sweepStore{runs: []types.AgentRun{killed}, written: h.audit}
+	cfg := baseTestConfig(h, fake)
+	rr := &hungKillRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	// The backstop, so a missing bound fails the test instead of hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for pass := 1; pass <= 2; pass++ {
+		start := time.Now()
+		swept, err := srv.SweepTerminalSandboxes(ctx)
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("pass %d took %s: the recovered kill tail was not bounded", pass, elapsed)
+		}
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if swept != 1 {
+			t.Fatalf("pass %d: swept = %d, want 1 (the unsettled run is retried)", pass, swept)
+		}
+	}
+	if got := rr.kills.Load(); got != 2 {
+		t.Errorf("KillSandbox calls = %d, want 2 (one per pass)", got)
+	}
+	rows := killAuditRows(h.audit.snapshot(), killed.ID)
+	if len(rows) != 2 {
+		t.Fatalf("run.kill rows = %d, want 2 (both attempts audited)", len(rows))
+	}
+	for _, r := range rows {
+		if r.Outcome != "failure" {
+			t.Errorf("run.kill outcome = %q, want failure (the tail was cut short)", r.Outcome)
+		}
 	}
 }
