@@ -66,9 +66,6 @@ const (
 	// Same reserved range and same rule as redirectProbeBypassCode: reached
 	// only via an explicit `exit`, never a passed-through curl code.
 	proxyProbeInterceptedCode = 251
-	// waitForRunTerminalPollInterval is how often waitForRunTerminal polls the
-	// run row.
-	waitForRunTerminalPollInterval = 500 * time.Millisecond
 )
 
 // waitForRunTerminal polls the run row until it reaches a terminal state,
@@ -634,6 +631,9 @@ func (s *Server) probeAgentStatusAtDeadline(ctx context.Context, runID uuid.UUID
 var (
 	probeTrailSettleTries    = 10
 	probeTrailSettleInterval = 200 * time.Millisecond
+	// waitForRunTerminalPollInterval is how often waitForRunTerminal polls the
+	// run row. All three are vars so tests can shrink them (TestProbePollCadence_ProductionValuesUnchanged).
+	waitForRunTerminalPollInterval = 500 * time.Millisecond
 )
 
 // hasRunComplete reports whether events already carry the run.complete event

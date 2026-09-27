@@ -96,6 +96,7 @@ func TestPushHoldOnTheEntraLane(t *testing.T) {
 		}
 	})
 	t.Run("timeout refuses", func(t *testing.T) {
+		shortPushHolds(t)
 		p, _, up, _, _ := newEntraLane(t, review, types.ApprovalPending, write)
 		rec := postEntraPush(t, p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush))
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "nobody decided") || up.gitHits != 0 {
