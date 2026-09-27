@@ -24,6 +24,28 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// eraseUnresolvedMsg and eraseAmbiguousMsg (design F-5 finding, packet F
+// canon) are resolveSecretOwner's ?owner= refusals (secretOwnerUnresolvedMsg,
+// secretOwnerAmbiguousMsg), reworded for THIS route: those two both open
+// "?owner= names…", but the erase route takes no ?owner= — it names the
+// person in the path. eraseRefusalMsg is the one place that reworks a
+// refusal, mirroring resolveSSHKeyOwner's own translation (sshkeys_admin.go)
+// for the same underlying resolvePrincipal answers.
+const (
+	eraseUnresolvedMsg = "That email address doesn't match anyone this deployment knows, so nothing was erased. " +
+		"Use the person's subject, as the Audit log shows it."
+	eraseAmbiguousMsg = "That matches more than one person, so nothing was erased. Use the person's subject exactly."
+)
+
+// eraseRefusalMsg reworks one of resolveSecretOwner's ?owner= refusals into
+// this route's own wording (see the constants' comment).
+func eraseRefusalMsg(refusal string) string {
+	if refusal == secretOwnerAmbiguousMsg {
+		return eraseAmbiguousMsg
+	}
+	return eraseUnresolvedMsg
+}
+
 // handleErasePersonCredentials deletes every credential in one person's
 // namespace: DELETE /people/{principal}/credentials, on the security tier.
 // Removing reach is the tier's job, and it returns no credential material.
@@ -40,7 +62,7 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
 	if refusal != "" {
 		s.auditOwnerRefusal(r, "credential.erase", raw, ownerRefusalReason(refusal))
-		writeError(w, http.StatusUnprocessableEntity, refusal)
+		writeError(w, http.StatusUnprocessableEntity, eraseRefusalMsg(refusal))
 		return
 	}
 	rep, err := secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)

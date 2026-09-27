@@ -90,7 +90,9 @@ test.describe("Settings — Model providers list", () => {
   test("the account page (User view) has no list", async ({ page }) => {
     await stub(page, {});
     await gotoSettings(page, "/account");
-    await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
+    // Your account is its own page since the Settings split (#636): no Host
+    // card, and no model-providers list.
+    await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
     await expect(list(page)).toHaveCount(0);
   });
 });

@@ -3,20 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Settings — five cards, reached from the account menu (not the nav). This is
-// the single home for "what is connected and how is this host set up", and it
-// replaces /integrations entirely: the old page shipped an operator-
-// extensibility framework (seven closed kinds plus a generic escape hatch, a
-// probe system, an adopt/derive lifecycle) as the answer to two questions most
-// operators answer once.
+// Admin view Settings (M-5, #636 — the settings split, §4.3): this
+// deployment, never a person. Reached at /admin/settings, super admins only
+// (S-5) — a security admin who types or bookmarks the URL gets a refusal,
+// nothing fetched, rather than the tier-appropriate leftovers this page used
+// to render for them.
 //
-// Host · Model provider · Providers · Your SSH keys · Drives (last, §6's "fifth card").
-// Providers replaced Git host (workspace-providers-prompt.md §6): the git
-// credential lanes moved into a provider row on /providers.
+// Host · Model providers · Model provider · Providers · User drives · Admin
+// SSH keys. The personal cards (a person's own model connection, Azure
+// DevOps, Your SSH keys) moved to Your account (your-account-screen.tsx) —
+// nothing on this page belongs to the admin as a person.
 //
-// Two of them are components shared verbatim with the Getting Started
-// funnel (connection-cards.tsx) and one is the barrier picker shared with its
-// Environment step (EnvironmentStep) — so Settings and the tour cannot drift.
+// This file used to be settings-screen.tsx, mounted unchanged at BOTH
+// /admin/settings and /account until M-5 split it (admin-member-modes-design.md
+// §4.3). HostCard moved here with it; ModelProviderCard/ProvidersCard/
+// UserDrivesCard/BrandingCard/ModelProvidersList are unchanged, shared
+// components.
 //
 // ponytail: the Corporate proxy & egress disclosure SUMMARIZES and links to the
 // funnel's Corporate network step rather than re-mounting HostProxyTab here.
@@ -38,14 +40,15 @@ import { TierPicker } from "../../wardyn/tier-picker";
 import { K8sEnvironmentRows, NoRunnerCard, runnerAvailability } from "../setup/environment-step";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
-import { SshKeysPane } from "../ssh-keys";
 import { ModelProviderCard } from "./connection-cards";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
-import { AdoConnectionCard } from "./ado-connection";
 import { ModelProvidersList } from "./model-providers-list";
 import { BrandingCard } from "./branding-card";
-import { useConsoleMode } from "../../wardyn/console-view";
+import { AdminSshKeysCard } from "./admin-ssh-keys-card";
+import { ViewNotice } from "../../wardyn/console-view";
+import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
+import { Button } from "../../ui/button";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -99,12 +102,13 @@ function HostCard({
   const operator = useOperator();
   // R4/F069 — the operator's own FAILED read is the case the reasoning above
   // misses, and the operator is the person the statement is addressed to.
-  // SettingsScreen.load swallows every site-config failure into null and still
-  // resolves state="ready", so a 500 or a dead network rendered "Internet:
-  // Direct" and "Not configured — sandboxes go direct" — two POSITIVE claims
-  // about a deployment nothing had read. Same rule, one state further: absence
-  // is honest, a statement is not, so a failed read shows neither claim. The
-  // funnel link itself STAYS — it is how the operator goes and finds out.
+  // AdminSettingsScreen.load swallows every site-config failure into null and
+  // still resolves state="ready", so a 500 or a dead network rendered
+  // "Internet: Direct" and "Not configured — sandboxes go direct" — two
+  // POSITIVE claims about a deployment nothing had read. Same rule, one state
+  // further: absence is honest, a statement is not, so a failed read shows
+  // neither claim. The funnel link itself STAYS — it is how the operator goes
+  // and finds out.
   const configUnknown = siteConfig === "error";
   const cfg: SiteConfig | null = configUnknown ? null : siteConfig;
   const proxied = !configUnknown && isProxyConfigured(cfg);
@@ -223,7 +227,24 @@ function HostCard({
   );
 }
 
-export function SettingsScreen() {
+export function AdminSettingsScreen() {
+  const navigate = useNavigate();
+  // S-5 (#636) — the SUPER tier, not the security one: this whole page is
+  // "this deployment, never a person", and a security admin has no door onto
+  // it (app-shell.tsx's navItemsForView already gives that tier `lower: []`).
+  // A stale link or a typed URL still reaches the route, so the page itself
+  // refuses rather than rendering the tier-appropriate leftovers it used to.
+  const operator = useOperator();
+  const operatorResolved = useOperatorResolved();
+  const refused = operatorResolved && !operator;
+  // Same fail-open rationale as the site-config read always had (R4/F069,
+  // HostCard's own comment): during the cold-load window before /me
+  // resolves, `operator` reads the fail-open default TRUE, so `adminReads`
+  // (unlike `refused`) stays gated on `operatorResolved` too — a component
+  // mounted before the real role is known must not fire this admin-only read
+  // on the strength of a default that might still flip to "refused".
+  const adminReads = operatorResolved && operator;
+
   const [state, setState] = React.useState<"loading" | "error" | "ready">(
     "loading",
   );
@@ -235,15 +256,6 @@ export function SettingsScreen() {
   // the two-state prop they already reason about; HostCard is the one that
   // makes POSITIVE claims from it, so it is the one that is told.
   const [configFailed, setConfigFailed] = React.useState(false);
-
-  // GET /site-config is operatorOnly (HostCard's comment above has the full
-  // reasoning). During the cold-load window `operator` reads the fail-open
-  // default, so `operatorResolved` is the half that closes it — a member's
-  // mount must not fire the admin-only read at all, not just swallow its 403.
-  const operator = useOperator();
-  const operatorResolved = useOperatorResolved();
-  const adminReads = operatorResolved && operator;
-  const adminView = useConsoleMode() === "admin";
 
   const load = React.useCallback(() => {
     let failed = false;
@@ -264,7 +276,22 @@ export function SettingsScreen() {
       })
       .catch(() => setState("error"));
   }, [adminReads]);
-  React.useEffect(load, [load]);
+  // S-5: nothing is fetched for a refused caller — the effect below never
+  // fires `load()` for one, not merely a page that fetches then hides itself.
+  React.useEffect(() => {
+    if (refused) return;
+    load();
+  }, [load, refused]);
+
+  if (refused) {
+    return (
+      <ViewNotice title={VIEW_REFUSAL.TITLE} body={SETTINGS_SUPER_ONLY.BODY}>
+        <Button size="sm" onClick={() => navigate("/admin/runs")}>
+          {SETTINGS_SUPER_ONLY.CTA}
+        </Button>
+      </ViewNotice>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-[900px] px-6 py-8">
@@ -281,20 +308,22 @@ export function SettingsScreen() {
             siteConfig={configFailed ? "error" : siteConfig}
             onRecheck={load}
           />
-          {/* #536: the Admin view only. The card below stays until the old
-              model is retired (MP-15), since it still backs runs today.
+          {/* #1125 (B-1): beside Host and Model providers, super admin only —
+              the server refuses anyone else's save regardless. Unconditional
+              on role now: this whole screen is super-admin-only (S-5). */}
+          <BrandingCard />
+          {/* #536: the Admin view only, and it stays there — admin
+              configuration, never a person's own connection.
               #538: the Claude subscription kind is disabled on the editor's
               kind step until the sign-in image resolves — undefined status
               (an older daemon with no such check) reads as available. */}
-          {/* #1125 (B-1): beside Host and Model providers, super admin only —
-              the server refuses anyone else's save regardless. */}
-          {adminView && adminReads && <BrandingCard />}
-          {adminView && adminReads && (
-            <ModelProvidersList
-              harnesses={status.harnesses}
-              subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
-            />
-          )}
+          <ModelProvidersList
+            harnesses={status.harnesses}
+            subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
+          />
+          {/* The shared credential lanes, as built — until MP-18 replaces this
+              card (design §4.3). S-4 (#636): Your account mounts the SAME
+              component for a person's own connection; this is the org one. */}
           <ModelProviderCard
             status={status}
             siteConfig={siteConfig}
@@ -305,11 +334,6 @@ export function SettingsScreen() {
               the same shared component the funnel's `providers` step body
               renders (setup/providers-card.tsx). */}
           <ProvidersCard harnesses={status?.harnesses} />
-          {/* #386, Q9: the connected panel's Settings home — "between Model
-              provider and SSH keys". Renders nothing with no Azure DevOps
-              row configured. */}
-          <AdoConnectionCard status={status} onChanged={load} />
-          <SshKeysPane heading="h3" />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,
               summarising and linking exactly as the Corporate proxy disclosure
@@ -317,6 +341,10 @@ export function SettingsScreen() {
               is why the position is pinned in the suite rather than left to
               read off the source. */}
           <UserDrivesCard />
+          {/* M-5 (#636, packet S-1): the sixth and last card — where an admin
+              adds an SSH key that reaches other people's runs, now that Your
+              account is the only door left for a personal one. */}
+          <AdminSshKeysCard />
         </div>
       )}
     </div>
