@@ -97,8 +97,12 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	scopeToOwner, ok := s.approvalsViewScope(w, r) // #1197 L1a F5: opt-in ?view=user forces this for every caller
+	if !ok {
+		return
+	}
 
-	if !s.isSecurityOperator(r.Context()) { // security tier sees the org-wide queue (http.go's isSecurityOperator)
+	if scopeToOwner { // security tier sees the org-wide queue (http.go's isSecurityOperator), unless view=user forced it
 		if runID == uuid.Nil {
 			pager, capable := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
 			if !capable {

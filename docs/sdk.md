@@ -254,6 +254,20 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
   'http://localhost:8080/api/v1/audit?run_id=<id>'   # run.complete -> .data.exit_code
 ```
 
+`GET /api/v1/runs` accepts an opt-in, server-side scoping/filtering surface beyond
+`&limit=&offset=` (#1197 L1a): `view` (`user`/`admin`; absent leaves the endpoint's
+behaviour exactly as above), `owner` (`me`/`all`; `view=user` forces `me` for
+every caller, admin tokens included), repeatable `status`
+(`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`),
+`include_killed=1` (a KILLED run older than 24h is hidden by default), `workspace`
+(exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
+substring search over title/task/repo/created_by). With any of them present the
+response is ordered live runs first, then ended runs by end time, and two headers
+— `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
+`ended_within` window and the killed-run default hid. `GET /api/v1/approvals`
+accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs'
+approvals for every caller.
+
 Beyond `run_id`, the audit query accepts server-side predicates:
 `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
 `actor` (exact), `actor_type` (`human|agent|system`), `outcome`
