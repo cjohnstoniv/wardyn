@@ -216,9 +216,13 @@ func TestOrchestrator_SweepOrphanedSandboxes_SumsOnlyImplementingSubstrates(t *t
 // one substrate's sweep error does not swallow another's count nor abort the
 // fan-out.
 func TestOrchestrator_SweepOrphanedSandboxes_JoinsErrorsButKeepsSumming(t *testing.T) {
-	ok := &sweepingSubstrate{fakeSubstrate: &fakeSubstrate{name: "ok"}, n: 2}
+	// failing goes FIRST: a fan-out that aborts on the first error would stop
+	// here and never reach ok, so this ordering is what makes "keeps summing"
+	// (and "doesn't abort the fan-out") an actual assertion instead of a
+	// tautology that only the last substrate ran.
 	failing := &sweepingSubstrate{fakeSubstrate: &fakeSubstrate{name: "failing"}, n: 1, err: errors.New("boom")}
-	o := New(ok, failing)
+	ok := &sweepingSubstrate{fakeSubstrate: &fakeSubstrate{name: "ok"}, n: 2}
+	o := New(failing, ok)
 
 	total, err := o.SweepOrphanedSandboxes(context.Background(), time.Minute, func(uuid.UUID) bool { return false })
 	if total != 3 {
@@ -226,5 +230,8 @@ func TestOrchestrator_SweepOrphanedSandboxes_JoinsErrorsButKeepsSumming(t *testi
 	}
 	if err == nil {
 		t.Fatal("expected the failing substrate's error to be joined and returned")
+	}
+	if len(ok.sweptRefs) != 1 {
+		t.Errorf("ok must still be swept after failing's error (fan-out must not abort); sweptRefs=%v", ok.sweptRefs)
 	}
 }

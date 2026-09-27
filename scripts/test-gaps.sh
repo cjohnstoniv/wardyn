@@ -81,12 +81,12 @@ K8S_RE='^(internal/runner/k8s)(/|$)'
 # One "<file>\t<func>\t<ordinal>" per line: ordinal is the func's 1-based
 # position among SAME-NAMED functions in that file (matching classify()'s own
 # PG-lane cross-check below) — NOT a line number, which goes stale the moment
-# anything above it moves. A name here that stops being a trivial forward
-# (someone adds real branching/logic to it) simply stops matching once the
-# line drifts past a refactor that changes its neighbors' order, at which
-# point it falls back to "Untested" and gets re-triaged rather than silently
-# staying hidden — re-verify a name here still just forwards before trusting
-# the label again.
+# anything above it moves. An entry here does NOT self-expire: adding real
+# branching/logic to a function leaves its ordinal among same-named funcs
+# unchanged, so it keeps matching and stays hidden as PASSTHROUGH even after
+# it stops being a trivial forward. Every entry must be re-verified by hand
+# against the source at each regeneration — do not trust a name here just
+# because it is still in the list.
 PASSTHROUGH_LIST='
 cmd/wardyn-toolgate/main.go	Error	1
 cmd/wardynd/adapters.go	Request	1
@@ -120,7 +120,6 @@ internal/egress/evaluatortest/conformance.go	MethodAllowed	1
 internal/egress/proxy/policy.go	Name	1
 internal/egress/proxy/server.go	Addr	1
 internal/egress/proxy/mitm.go	Addr	1
-internal/egress/proxy/upstream.go	Read	1
 internal/secretstore/pg/pg.go	Name	1
 '
 
