@@ -48,14 +48,13 @@
 # every exit path, success or failure — never touches any other stack.
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "run-e2e-ssh: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent SSH e2e (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
+  skip_lane "run-e2e-ssh: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent SSH e2e (skipping)."
+fi
 wardyn_pick_docker_host
 
 command -v docker >/dev/null 2>&1 || die "docker not found"

@@ -55,6 +55,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every replica ends on the one stored value; a replica that cannot take the lock fails its
   boot instead of creating a key unlocked. A single-instance daemon is unchanged — its
   instance lock already excludes any other replica.
+- **An opt-in live test lane could no longer print `ok` and exit 0 while proving nothing.**
+  `internal/testlive`'s `Require` used to skip on a missing credential or an expired AWS SSO
+  token even after its own gate variable was set to `1`; it now fails loudly (`Fatalf`) once
+  the operator has opted in, and only an unset gate still skips. The 9 opt-in lane scripts
+  (`kind-sso-walk.sh`, `compose-sso-roles.sh`, the `run-e2e-*` family, `test/e2e/e2e.sh`) now
+  exit 77 on a self-skip via `scripts/lib/common.sh`'s new `skip_lane`, never 0, and nightly's
+  kind-SSO-walk job asserts on that exit code instead of grepping the skip sentence. The
+  install.sh compose-fetch integrity test no longer skips permanently behind an unset,
+  ticket-named variable — it now pins today's accepted-risk state by default and flips to
+  enforcing the fix once `WARDYN_EXPECT_COMPOSE_DIGEST=1` says a digest exists (#463).
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
