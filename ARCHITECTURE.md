@@ -187,9 +187,10 @@ issues AK-1..AK-9 (`#735`-`#741`, two 0.9 issues not yet filed).
   production, a panic in this package's own tests (`internal/api/
   refusal_test.go`'s `strictRefusals`) — the only way to ship a new reason is
   to register it.
-- **Guardrails** (`internal/api/authz_kernel_guardrails_test.go`, `refusal_test.go`,
-  `authz_test.go`, `preflight_launch_gate_parity_test.go`) keep the kernel from
-  regressing:
+- **Guardrails** (`internal/api/authz_kernel_guardrails_test.go`,
+  `authz_kernel_nonescape_test.go`, `refusal_test.go`, `authz_test.go`,
+  `preflight_launch_gate_parity_test.go`, `preflight_launch_decisions_test.go`,
+  `capabilities_filter_test.go`) keep the kernel from regressing:
   - `TestNoAdHocAuthz` — no code outside `refuse`/`recordRefusal` writes an
     `authz.denied` row, a registered reason, or a stamped-role comparison by
     hand. The `authz.denied` literal is checked in every non-test file under
@@ -209,13 +210,28 @@ issues AK-1..AK-9 (`#735`-`#741`, two 0.9 issues not yet filed).
     probes. Its exception map may only shrink (asserted by length).
   - `TestPreflightMirrorsLaunchGates` — a gate added to launch is either
     reproduced by preflight or named in an exception map with why; that map
-    may only shrink (asserted by length).
+    may only shrink (asserted by length). `TestPreflightDecisionsEqualLaunch`
+    is its behavioural half: both doors answer the same requests over one
+    store, and their refusals (the `authz.denied` rows, status and body) and
+    inline-policy drops must match.
   - `TestCapResolverNonescapeTable` / `TestCapabilityResolutionIsMonotone` —
     the capability resolver (`capBatch.decide`, `internal/api/capabilities.go`)
     is exhaustively checked kind x tier x grant-state x store against a
     seven-step oracle, and (property-tested) is monotone: adding an ALLOW
     grant never turns an ALLOW into a DENY, adding a DENY never turns a DENY
     into an ALLOW.
+  - `TestKernelDoorsAreDeclared` / `TestKernelNonescape` /
+    `TestKernelNonescapeDevice` — every function that asks the resolver for a
+    decision is declared with the kinds it asks about (a new door, or a door
+    asking about another kind, fails until the table is updated), and the
+    launch door is driven through the real router for each kind it gates x
+    admin, security admin, user and an admin in the user view x every grant
+    state, against the same seven-step oracle. A device context is checked at
+    the resolver: never the exempt operator, only an everyone-allow lists it.
+  - `TestCapFilterEqualsAllowedPerID` — the list half (`capFilter`) keeps
+    exactly the ids the door would allow, restricted values included; the
+    console's New Run agent picker is pinned end to end against a real user
+    session (`ui/e2e/available-to.spec.ts`, "the person's New Run picker").
   - `TestConsoleCapabilityKindsMatchGoTable` — the console's capability-kind
     mirror (`ui/src/app/lib/permissions-copy.ts`) cannot silently drift from
     the Go kind table.
