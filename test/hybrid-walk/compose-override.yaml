@@ -1,0 +1,29 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# scripts/hybrid-walk.sh's laptop leg needs exactly one thing the base compose
+# file does not declare: a route from the laptop's wardynd CONTAINER back to
+# the host, so WARDYN_ORG_URL can name the relay scripts/hybrid-walk.sh runs on
+# the host (127.0.0.1-bound, forwarding to the kind cluster's own
+# loopback-only NodePort — deploy/kind/quickstart-kind-config.yaml's
+# `listenAddress: "127.0.0.1"` means nothing but a HOST process can reach it,
+# and the relay is exactly that).
+#
+# host-gateway, not a literal IP: this is the same documented mechanism
+# scripts/run-host.sh's WARDYN_CONTROL_PLANE_URL and the proxy sidecar's own
+# ExtraHosts already rely on, and scripts/test-podman.sh's own probe pins that
+# it resolves. It is NOT the host.docker.internal hop
+# scripts/survival-walk.sh's header found unreliable — that finding was a
+# Docker-Desktop/WSL2 NAT hang on a bare outbound curl from wardynd to a HOST
+# PROCESS; this is the ExtraHosts host-gateway route, which resolves to the
+# bridge's own gateway address rather than going through that NAT path, and it
+# is what this repo's own working precedents (above) already use for this
+# exact shape (a container reaching a host-bound listener). This walk's own
+# header names the caveat this override does not remove: it has not been
+# proven end to end here (no docker/kind execution in this environment), and a
+# WSL2 laptop running it by hand should watch for the same NAT flakiness
+# survival-walk documented rather than assume this note rules it out.
+services:
+  wardynd:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

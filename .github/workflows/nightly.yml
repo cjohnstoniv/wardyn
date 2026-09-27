@@ -800,6 +800,179 @@ jobs:
             local/evidence/compose-sso-roles/**
           if-no-files-found: error
 
+  # T-40 (#700), kind leg: scripts/kind-survival-walk.sh against the SAME
+  # `make kind-quickstart` cluster kind-sso-walk reuses. NEVER RUN BEFORE — see
+  # NOTIFY_EXEMPT in scripts/test-repo-guards.sh — kept out of
+  # notify-new-lanes' needs and release.yml's watched= until it has gone green
+  # here at least once, the same posture PR #1245 gave daemon-proxy-secret-kind.
+  kind-survival-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: Bring up the kind quickstart cluster
+        run: make kind-quickstart
+      - name: kind survival walk (control-plane pod delete; cordoned-node run-pod eviction)
+        env:
+          WARDYN_TEST_K8S: "1"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/kind-survival-walk.sh 2>&1 | tee test/reports/e2e/kind-survival-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-survival-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-survival-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-survival-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^kind-survival-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-survival-walk-results
+          path: test/reports/e2e/kind-survival-walk.log
+          if-no-files-found: error
+
+  # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
+  # `make kind-quickstart` cluster as the job above; the laptop is its own
+  # dedicated compose project this job builds fresh (nightly runners share
+  # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
+  # kind-survival-walk above.
+  hybrid-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: Bring up the kind quickstart cluster (the "org")
+        run: make kind-quickstart
+      - name: Hybrid federation walk (laptop compose <-> org kind)
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/hybrid-walk.sh 2>&1 | tee test/reports/e2e/hybrid-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/hybrid-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::hybrid-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S/WARDYN_TEST_DOCKER did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::hybrid-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^hybrid-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence (log + relay/wardynd logs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: hybrid-walk-results
+          path: |
+            test/reports/e2e/hybrid-walk.log
+            local/evidence/hybrid-walk/**
+          if-no-files-found: error
+
+  # T-30 (#690): scripts/kind-upgrade-walk.sh — the PUBLISHED v0.7.11 chart,
+  # upgraded in place to this tree's own tip, then a rollback that must fail.
+  # Owns a THROWAWAY kind cluster end to end (create/delete), never
+  # `make kind-quickstart`'s shared one — see that script's own header for
+  # what is and is not built. Needs read access to this repo's own published
+  # ghcr.io packages (the chart + wardynd images), hence packages: read below.
+  # NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as the two jobs above.
+  kind-upgrade-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Log in to ghcr.io (read access to this repo's own published chart/images)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Log in helm's own registry client (OCI chart pull)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: kind upgrade/rollback walk
+        env:
+          WARDYN_TEST_K8S: "1"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/kind-upgrade-walk.sh 2>&1 | tee test/reports/e2e/kind-upgrade-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-upgrade-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-upgrade-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-upgrade-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^kind-upgrade-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-upgrade-walk-results
+          path: test/reports/e2e/kind-upgrade-walk.log
+          if-no-files-found: error
+
   # ── Key services: Vault + OpenBao dev servers, and Vault on kind (T-33) ─────
   # The docker leg is the PR `conformance` job's step, run again here against
   # the same pins; the kind leg installs Vault from its Helm chart and logs in

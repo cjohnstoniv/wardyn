@@ -15,6 +15,22 @@
 -- Text, not ::bigint: an index expression that can raise would make an audit
 -- insert fail on a row it cannot cast. Partial, so the organisation's own rows
 -- cost it nothing. Additive: nothing rewrites audit_events.
+--
+-- NOT CONCURRENTLY, and it cannot be (T-41 / #701): every migration runs
+-- inside a transaction (db.applyMigration, internal/db/db.go — BEGIN, the
+-- migration's own SQL, the schema_migrations INSERT, COMMIT, one atomic unit
+-- so a crash mid-migration never leaves a row recorded applied that is not),
+-- and PostgreSQL refuses CREATE INDEX CONCURRENTLY inside a transaction block
+-- outright ("cannot run inside a transaction block"). So this build takes
+-- audit_events' ordinary (non-CONCURRENTLY) share lock for the duration of the
+-- build: writers to OTHER tables are unaffected, and writers to audit_events
+-- itself (every audited action) block until it completes. Acceptable here
+-- because the index is partial (WHERE data ? 'device_origin') and additive: on
+-- every deployment that predates hybrid enrolment the predicate matches zero
+-- rows, so the build is a near-instant emptyset scan, not a full-table
+-- rewrite. An operator with a LARGE existing audit_events table and hybrid
+-- rows already in it before upgrading should expect a brief write-lock window
+-- sized to that predicate's row count, not the whole table.
 CREATE INDEX IF NOT EXISTS audit_events_device_origin_idx
     ON audit_events ((data->'device_origin'->>'device_id'), (data->'device_origin'->>'seq'), seq)
     WHERE data ? 'device_origin';
