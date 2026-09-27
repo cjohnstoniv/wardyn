@@ -987,3 +987,112 @@ func TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow(t *testing.T) {
 		t.Errorf("provider row AccessToken = %q, want the original — a roster-scoped delete touched it", provider.AccessToken)
 	}
 }
+
+// #1100: the sign-in sandbox gets its own small default, an operator-configured
+// override, and stays clamped to the acting principal's governance ceiling.
+
+// TestHarnessLoginResources_Default: no config, no ceiling cap — the compiled-in
+// small default (500m/512Mi), never runner.DefaultCPUMillis/DefaultMemoryMiB
+// (2000/4096, sized for an agent run).
+func TestHarnessLoginResources_Default(t *testing.T) {
+	got := harnessLoginResources(Config{}, governanceCeiling{})
+	if got.CPUMillis != defaultHarnessLoginCPUMillis || got.MemoryMiB != defaultHarnessLoginMemoryMiB {
+		t.Errorf("harnessLoginResources(zero cfg, zero ceiling) = %+v, want {CPUMillis:%d MemoryMiB:%d}",
+			got, defaultHarnessLoginCPUMillis, defaultHarnessLoginMemoryMiB)
+	}
+}
+
+// TestHarnessLoginResources_ConfiguredOverride: a non-zero Config field wins
+// over the compiled-in default, under a ceiling that sets no Resources cap.
+func TestHarnessLoginResources_ConfiguredOverride(t *testing.T) {
+	cfg := Config{HarnessLoginCPUMillis: 750, HarnessLoginMemoryMiB: 1024}
+	got := harnessLoginResources(cfg, governanceCeiling{})
+	if got.CPUMillis != 750 || got.MemoryMiB != 1024 {
+		t.Errorf("harnessLoginResources(configured override) = %+v, want {CPUMillis:750 MemoryMiB:1024}", got)
+	}
+}
+
+// TestHarnessLoginResources_ClampedToCeiling: the admin-set governance ceiling
+// still applies — an operator override (or the default) above the ceiling's own
+// Resources cap is clamped DOWN, never bypassed.
+func TestHarnessLoginResources_ClampedToCeiling(t *testing.T) {
+	cfg := Config{HarnessLoginCPUMillis: 750, HarnessLoginMemoryMiB: 1024}
+	ceiling := governanceCeiling{Spec: types.RunPolicySpec{
+		Resources: &types.ResourceLimits{CPUMillis: 300, MemoryMiB: 256},
+	}}
+	got := harnessLoginResources(cfg, ceiling)
+	if got.CPUMillis != 300 || got.MemoryMiB != 256 {
+		t.Errorf("harnessLoginResources under a 300m/256Mi ceiling = %+v, want {CPUMillis:300 MemoryMiB:256} — "+
+			"the sign-in run must not bypass governance", got)
+	}
+}
+
+// TestHarnessLoginResources_CeilingNeverRaises: a ceiling ABOVE the requested
+// size never raises the request — clamping is a ceiling, not a floor.
+func TestHarnessLoginResources_CeilingNeverRaises(t *testing.T) {
+	ceiling := governanceCeiling{Spec: types.RunPolicySpec{
+		Resources: &types.ResourceLimits{CPUMillis: 4000, MemoryMiB: 8192},
+	}}
+	got := harnessLoginResources(Config{}, ceiling)
+	if got.CPUMillis != defaultHarnessLoginCPUMillis || got.MemoryMiB != defaultHarnessLoginMemoryMiB {
+		t.Errorf("harnessLoginResources under a wide-open ceiling = %+v, want the small default {CPUMillis:%d MemoryMiB:%d} unchanged",
+			got, defaultHarnessLoginCPUMillis, defaultHarnessLoginMemoryMiB)
+	}
+}
+
+// TestLaunchHarnessLoginRun_DefaultResources: end to end through the real
+// /setup/harness-login POST — the composed SandboxSpec carries the small
+// default rather than runner.DefaultCPUMillis/DefaultMemoryMiB.
+func TestLaunchHarnessLoginRun_DefaultResources(t *testing.T) {
+	runner := &fakeRunner{}
+	srv, _ := perUserLoginSrvWithRunner(t, runner, types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+	})
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	runner.waitForSandbox(t)
+	res := runner.lastSpec.Resources
+	if res.CPUMillis != defaultHarnessLoginCPUMillis || res.MemoryMiB != defaultHarnessLoginMemoryMiB {
+		t.Errorf("sign-in SandboxSpec.Resources = %+v, want {CPUMillis:%d MemoryMiB:%d}",
+			res, defaultHarnessLoginCPUMillis, defaultHarnessLoginMemoryMiB)
+	}
+}
+
+// TestLaunchHarnessLoginRun_ConfiguredResources: the WARDYN_HARNESS_LOGIN_*
+// override (here simulated the way boot wires it: a non-zero Config field)
+// reaches the composed SandboxSpec.
+func TestLaunchHarnessLoginRun_ConfiguredResources(t *testing.T) {
+	h := newHarness(t)
+	audit := &memAudit{}
+	rnr := &fakeRunner{}
+	st := &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+	})}
+	cfg := baseTestConfig(h, st)
+	cfg.Audit = audit
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Runner = rnr
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	cfg.BedrockRegion = "us-east-1"
+	cfg.DefaultPolicy = govDeployment()
+	cfg.HarnessLoginCPUMillis = 750
+	cfg.HarnessLoginMemoryMiB = 1024
+	srv := New(cfg)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	rnr.waitForSandbox(t)
+	res := rnr.lastSpec.Resources
+	if res.CPUMillis != 750 || res.MemoryMiB != 1024 {
+		t.Errorf("sign-in SandboxSpec.Resources = %+v, want {CPUMillis:750 MemoryMiB:1024} (the configured override)", res)
+	}
+}

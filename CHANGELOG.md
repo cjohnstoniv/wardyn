@@ -187,6 +187,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   from `runtime/debug.ReadBuildInfo()`. A release build (release.yml's binaries job and its
   Dockerfile.wardynd image, both stamped with `-ldflags -X` at build time) still reports the bare
   release string byte-exact.
+- **The sign-in (harness-login) sandbox now gets its own small resource default (#1100).** It
+  launched with no `Resources` of its own, so it fell back to `runner.DefaultCPUMillis`/
+  `DefaultMemoryMiB` (2 vCPU / 4 GiB) — sized for an agent run, not a CLI device-code flow — and a
+  namespace `LimitRange` sized for a small node could refuse the pod outright, stranding a
+  member's own sign-in. `WARDYN_HARNESS_LOGIN_CPU_MILLIS`/`WARDYN_HARNESS_LOGIN_MEMORY_MIB` now
+  default the sign-in run to 500m/512Mi, configurable, and still capped by the acting principal's
+  governance ceiling like every run.
+
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

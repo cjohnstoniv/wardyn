@@ -448,6 +448,8 @@ func run() error {
 		AWSSSOEndpointOverride:    awsSSOEndpointOverride,
 		AllowTestEndpoints:        *f.allowTestEndpoints,
 		AWSSSOProxyInject:         api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
+		HarnessLoginCPUMillis:     *f.harnessLoginCPUMillis,
+		HarnessLoginMemoryMiB:     *f.harnessLoginMemoryMiB,
 		BedrockAWSConfigDir:       *f.bedrockAWSDir,
 		BedrockAWSProfile:         *f.bedrockAWSProfile,
 		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,
