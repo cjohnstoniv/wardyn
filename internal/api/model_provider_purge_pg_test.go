@@ -45,7 +45,7 @@ func TestPG_ProviderPurgeTriggers(t *testing.T) {
 			}
 		}},
 		{"MDM apply", "site_config.write", func(t *testing.T, srv *Server, block *types.ModelProviders) {
-			ts := httptest.NewServer(srv.Handler())
+			ts := httptest.NewServer(panicFails(t, srv.Handler()))
 			defer ts.Close()
 			if _, _, _, err := client.New(ts.URL, adminToken).PutSiteConfig(t.Context(), types.SiteConfig{ModelProviders: block}); err != nil {
 				t.Fatalf("site-config apply: %v", err)
