@@ -30,9 +30,8 @@ import { useOperatorResolved, useRole, useRoleResolved } from "./components/ward
 import { attention as attentionApi } from "./lib/api/attention";
 import { PollPauseContext, usePoll } from "./lib/use-poll";
 import { ReauthContext, useReauthController } from "./lib/reauth";
-import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
 import { ModelAccessProvider } from "./components/wardyn/model-access-context";
-import { ViewGate, screenPath, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
+import { ViewGate, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
 import { appURL } from "./lib/base-path";
 import type { SetupStatus } from "./lib/types";
 
@@ -444,23 +443,13 @@ export default function App() {
   // Keep both nav badges live across the whole console, not just while the
   // operator is on the Runs/Approvals screen (a decision made in RunDetail must
   // still tick the pending badge down).
-  // X3-F13: EXCEPT on /runs itself — the board still runs its own listRuns +
-  // listApprovals poll (runs.tsx, 3s; L3 folds this into the same
-  // GET /me/attention read), so this tick would be a redundant second read of
-  // the same facts while parked there — cheap now (#1197), but still
-  // pure duplication. R-1: that only holds because the board PUBLISHES its
-  // counts back up through publishAttention below — pausing this tick with
-  // nothing feeding the badges from the other side would freeze both of them
-  // for as long as the operator sat on /runs.
-  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || lapsed || screenPath(location.pathname) === "/runs");
-  // R-1: the setter side of the publish — RunsScreen calls this (via
-  // usePublishAttention) every time its own fetch resolves, driving the SAME
-  // state the paused poll above would have updated. Stable identity so it is
-  // never itself a reason for the board to re-fetch.
-  const publishAttention = React.useCallback(({ pendingApprovals: p, attentionCount: a }: AttentionCounts) => {
-    setPendingApprovals(p);
-    setAttentionCount(a);
-  }, []);
+  // #1197 L3: the old X3-F13 pause (EXCEPT on /runs, because the board ran its
+  // own listRuns + listApprovals poll there and PUBLISHED counts back up
+  // through publishAttention) is gone along with that client-side join —
+  // RunsScreen now reads the same server `attention` GET /me/attention already
+  // projects, off its own GET /runs?view= fetch, so this poll runs everywhere,
+  // /runs included, with no publish side-channel needed to keep the badge fed.
+  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || lapsed);
 
   // Setup status feeds the first-run landing decision ("/" → tour or Runs).
   // Fetched ONCE per session: it is the expensive endpoint, and nothing in the
@@ -596,7 +585,6 @@ export default function App() {
     <ThemeProvider>
       <ReauthContext.Provider value={reauth}>
       <PollPauseContext.Provider value={lapsed}>
-      <AttentionPublisherProvider value={publishAttention}>
       {/* The door: one model-access answer and one sign-in dialog for the strip
           in the shell, the New Run rail, a credential-failed run's failure
           block and a held run's approval row — none of which can be reached by
@@ -775,7 +763,6 @@ export default function App() {
         </Route>
       </Routes>
       </ModelAccessProvider>
-      </AttentionPublisherProvider>
       </PollPauseContext.Provider>
       </ReauthContext.Provider>
       <Toaster />

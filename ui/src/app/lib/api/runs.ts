@@ -20,7 +20,18 @@ import type {
   RunPolicySpec,
   RunResources,
 } from "../types";
-import { asJson, ccRank, errText, HttpError, LAUNCH_DEADLINE_MS, str, unwrapList, wfetch, withLimit } from "./core";
+import {
+  asJson,
+  ccRank,
+  errText,
+  HttpError,
+  LAUNCH_DEADLINE_MS,
+  LIST_LIMIT,
+  str,
+  unwrapList,
+  wfetch,
+  withLimit,
+} from "./core";
 
 // Map a backend credential-grant eligibility record (the GET /runs/{id}/grants
 // shape: { id, run_id, created_at, spec: { kind, scope, ttl_seconds,
@@ -176,6 +187,63 @@ async function listRuns(
   return paging ? { runs: rows, truncated: res.headers.get("X-Wardyn-Truncated") === "true" } : rows;
 }
 
+// The Runs landing page's own query surface (#1197 L3), riding L1's opt-in
+// GET /runs params (internal/api/runs_list_filter.go's parseRunsListParams):
+// view/owner/status/ended_within/include_killed/workspace/q, plus the two
+// hidden-count response headers the ageing note reads. A separate function
+// from listRuns above rather than a third overload — that one's callers (the
+// wizard's preflight reads, the Recordings pager, the CLI/SDK) want the plain
+// full-page shape, and folding a five-header-reading return type onto it
+// would touch every one of them for a page only this screen renders.
+export type RunsListStatus = "active" | "ended" | "failed" | "killed" | "needs";
+export type RunsEndedWithin = "24h" | "7d" | "30d" | "all";
+
+export interface RunsListFilter {
+  view: "user" | "admin";
+  // Omitted lets the server resolve its own default (H-4: "me" for a member
+  // or view=user; "all" for an operator's Admin view) — never send "me"/"all"
+  // speculatively, since that would short-circuit the server's own fail-closed
+  // owner force (runs_list_filter.go's parseRunsListParams).
+  owner?: "me" | "all";
+  status?: RunsListStatus;
+  endedWithin?: RunsEndedWithin;
+  includeKilled?: boolean;
+  workspace?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface RunsListFilteredResult {
+  runs: AgentRun[];
+  truncated: boolean;
+  // The ageing note's own counts (design.md §2.1 AGED) — 0 on the status=needs
+  // branch by construction (server-side; that branch never hides anything).
+  hiddenOlder: number;
+  hiddenKilled: number;
+}
+
+async function listRunsFiltered(filter: RunsListFilter): Promise<RunsListFilteredResult> {
+  const q = new URLSearchParams();
+  q.set("view", filter.view);
+  if (filter.owner) q.set("owner", filter.owner);
+  if (filter.status) q.set("status", filter.status);
+  if (filter.endedWithin) q.set("ended_within", filter.endedWithin);
+  if (filter.includeKilled) q.set("include_killed", "1");
+  if (filter.workspace) q.set("workspace", filter.workspace);
+  if (filter.q) q.set("q", filter.q);
+  q.set("limit", String(filter.limit ?? LIST_LIMIT));
+  q.set("offset", String(filter.offset ?? 0));
+  const res = await wfetch(`/runs?${q.toString()}`, { method: "GET" });
+  const rows = unwrapList<AgentRun>(await asJson<unknown>(res));
+  return {
+    runs: rows,
+    truncated: res.headers.get("X-Wardyn-Truncated") === "true",
+    hiddenOlder: Number(res.headers.get("X-Wardyn-Hidden-Older") ?? "0") || 0,
+    hiddenKilled: Number(res.headers.get("X-Wardyn-Hidden-Killed") ?? "0") || 0,
+  };
+}
+
 export const runs = {
   // GET /api/v1/runs
   //
@@ -190,6 +258,10 @@ export const runs = {
   // limit/offset (#159): explicit server-side paging — see the PagedRuns
   // overload above.
   listRuns,
+
+  // GET /api/v1/runs — the Runs landing page's own filtered read (#1197 L3).
+  // See RunsListFilter's own doc.
+  listRunsFiltered,
 
   // GET /api/v1/runs/{id} — the ONE endpoint that sends ui_apps (RunDetail).
   async getRun(id: string): Promise<RunDetail | undefined> {
