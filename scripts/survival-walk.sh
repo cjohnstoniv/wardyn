@@ -332,12 +332,18 @@ pass "agent standard declared"
 # internal/api/harnesscred.go's struct) on stdout, from a REAL RegisterClient +
 # StartDeviceAuthorization + CreateToken(device_code) round trip against the
 # fake, run directly from the host (see this file's header for why the
-# sandbox never does this dance itself). Also sets LAST_REFRESH_TOKEN, so the
-# caller can compute the SAME fingerprint wardynd's own spent-token table is
-# keyed by (awsSSOTokenFingerprint, awssso_refresh.go) and read it back
-# directly after the restart, rather than trusting a dispatch refusal alone.
+# sandbox never does this dance itself). Every caller invokes this via a
+# command substitution (`blob="$(fake_device_login)"`), which forks a
+# subshell — so a plain assignment made IN HERE never reaches the caller,
+# only what this function prints to stdout does. The refresh token is
+# therefore only ever carried out through the printed JSON's own
+# `refresh_token` field; a caller that needs it back (to compute the SAME
+# fingerprint wardynd's own spent-token table is keyed by —
+# awsSSOTokenFingerprint, awssso_refresh.go) reads it back out of that JSON
+# itself, in its OWN (non-subshell) scope, rather than trusting a variable
+# this function might set.
 fake_device_login() {
-  local reg cid csec da dc tok access expires now
+  local reg cid csec da dc tok access refresh expires now
   reg="$(curl -sS --max-time "${CURL_MAX_TIME}" -X POST "http://127.0.0.1:${FAKE_PORT}/client/register" \
     -H 'Content-Type: application/json' -d '{"clientName":"survival-walk","clientType":"public"}')"
   cid="$(jq -r '.clientId' <<<"${reg}")"; csec="$(jq -r '.clientSecret' <<<"${reg}")"
@@ -351,11 +357,11 @@ fake_device_login() {
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg c "${cid}" --arg s "${csec}" --arg d "${dc}" \
       '{clientId:$c,clientSecret:$s,grantType:"urn:ietf:params:oauth:grant-type:device_code",deviceCode:$d}')")"
-  access="$(jq -r '.accessToken' <<<"${tok}")"; LAST_REFRESH_TOKEN="$(jq -r '.refreshToken' <<<"${tok}")"
+  access="$(jq -r '.accessToken' <<<"${tok}")"; refresh="$(jq -r '.refreshToken' <<<"${tok}")"
   [[ -n "${access}" && "${access}" != "null" ]] || { echo "fake_device_login: CreateToken(device_code) failed: ${tok}" >&2; return 1; }
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   expires="$(date -u -d "+$(jq -r '.expiresIn' <<<"${tok}") seconds" +%Y-%m-%dT%H:%M:%SZ)"
-  jq -nc --arg at "${access}" --arg rt "${LAST_REFRESH_TOKEN}" --arg cid "${cid}" --arg cs "${csec}" \
+  jq -nc --arg at "${access}" --arg rt "${refresh}" --arg cid "${cid}" --arg cs "${csec}" \
     --arg u "${SSO_START_URL}" --arg r "${SSO_REGION}" --arg a "${PIN_ACCOUNT}" --arg role "${PIN_ROLE}" \
     --arg exp "${expires}" --arg now "${now}" \
     '{access_token:$at,refresh_token:$rt,client_id:$cid,client_secret:$cs,start_url:$u,region:$r,
@@ -367,9 +373,10 @@ fake_device_login() {
 # sandbox via the same brokered route cmd/wardyn-aws-sso uses
 # (PUT ${WARDYN_PROXY_URL}/wardyn/v1/sso-token/${WARDYN_RUN_ID}, read out of
 # the container's own env — never a bearer token this script holds). Sets
-# LOGIN_RUN_ID (teardown's own safety net) and, via fake_device_login,
-# LAST_REFRESH_TOKEN. Called again by the resolve step once the credential is
-# spent.
+# LOGIN_RUN_ID (teardown's own safety net) and LAST_REFRESH_TOKEN (read back
+# out of the blob's own refresh_token field — see fake_device_login's
+# comment for why it must be extracted HERE, not inside that function).
+# Called again by the resolve step once the credential is spent.
 capture_aws_credential() {
   code=$(api POST /api/v1/setup/harness-login "$(jq -nc --arg u "${SSO_START_URL}" '{provider:"aws",sso_start_url:$u}')")
   [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /setup/harness-login answered ${code}"; }
@@ -382,6 +389,12 @@ capture_aws_credential() {
   done
   [[ -n "${up}" ]] || die "login sandbox ${sandbox} never started"
   local blob; blob="$(fake_device_login)" || die "fake_device_login failed (see ${EVIDENCE_DIR}/awsssofake.log)"
+  # fake_device_login runs inside THIS command substitution's own subshell, so
+  # any plain (non-local) assignment it makes (its own LAST_REFRESH_TOKEN
+  # attempt) never reaches this shell — only its stdout does. Extract the
+  # refresh token back out of the blob it printed, here, in the caller's own
+  # (non-subshell) execution context, so the global actually sticks.
+  LAST_REFRESH_TOKEN="$(jq -r '.refresh_token' <<<"${blob}")"
   local http_code
   http_code="$(docker exec "${sandbox}" sh -c "curl -sS --max-time ${CURL_MAX_TIME} -o /dev/null -w '%{http_code}' -X PUT \"\${WARDYN_PROXY_URL}/wardyn/v1/sso-token/\${WARDYN_RUN_ID}\" -H 'Content-Type: application/json' -d '${blob}'" 2>&1)"
   [[ "${http_code}" == "204" ]] || die "sso-token upload into ${sandbox} answered ${http_code}"
