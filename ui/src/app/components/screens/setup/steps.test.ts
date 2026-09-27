@@ -322,9 +322,22 @@ describe("walkableDemos — conditional demos are offered only once their precon
   // #850: a member's redacted SetupStatus carries empty providers no matter
   // what real model access exists (an API key, a host CLI login) — the
   // server's llm_ready verdict, computed before redaction and kept on the
-  // wire for exactly this reason, must still unlock the demo.
+  // wire for exactly this reason, must still unlock the demo. Only for the
+  // redacted (checks_redacted) view — #1155 review F1 — never for an admin.
   it("restores the harness demo for a member via llm_ready, with providers empty", () => {
-    expect(ids(baseStatus({ providers: [], llm_ready: true }))).toContain("agent-in-the-box");
+    expect(ids(baseStatus({ checks_redacted: true, providers: [], llm_ready: true }))).toContain("agent-in-the-box");
+  });
+
+  it("does NOT restore the harness demo via llm_ready for a non-redacted (admin) status", () => {
+    expect(ids(baseStatus({ providers: [], llm_ready: true }))).not.toContain("agent-in-the-box");
+  });
+
+  // #1155 review F2: a per-user row that is not signed in must keep the demo
+  // gated, even though the deployment-wide llm_ready reads true.
+  it("keeps the harness demo gated for a member on a per-user row that is not signed in", () => {
+    expect(
+      ids(baseStatus({ checks_redacted: true, providers: [], llm_ready: true, model_access: { state: "not_configured" } })),
+    ).not.toContain("agent-in-the-box");
   });
 });
 

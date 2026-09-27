@@ -51,18 +51,53 @@ function agentCapableRows(rows: IntegrationRow[]): IntegrationRow[] {
   );
 }
 
+// The redacted-view fallback (#850, tightened by #1155 review F1/F2). The
+// rows above read Providers/Secrets.Present, which a member's redacted
+// SetupStatus empties out (an API key or a host CLI login both vanish), so
+// without a fallback a member whose real access is either is wrongly told
+// there is none.
+//
+// The server's llm_ready is NOT a safe blanket substitute, though: it is a
+// DEPLOYMENT-wide fact (internal/api/setup.go's computeLLMReady/
+// llmProvenance) that can be true for reasons this caller cannot act on —
+// so this fallback:
+//   - applies ONLY to the redacted view (status.checks_redacted) — an admin
+//     already sees the real rows, which must never be second-guessed by a
+//     coarser deployment-wide bit;
+//   - defers to THIS caller's own model_access first, when it has anything
+//     to say: `live`/`expiring` is real per-person access even where
+//     agentRows can't see it, and — the F2 fix — `not_configured`/
+//     `expired_signin` (a per-person row that exists but is not signed in)
+//     is NOT access no matter what llm_ready claims, mirroring
+//     member-getting-started.tsx's own `llmReady && !isPerUserModelAccess`
+//     rule for exactly this reason;
+//   - only stands in on llm_ready when model_access has nothing
+//     per-principal to say at all (absent, or the admin-token-on-a-
+//     per_user-row `not_applicable` case) — the #850 case proper: an API
+//     key or a host CLI login, neither of which model_access represents.
+//
+// KNOWN LIMITATION (follow-up, not fixed here): llmProvenance's own secret-
+// name heuristic over-matches on substring ("api", "anthropic", "openai"),
+// so an unrelated secret shaped like `azure-openai-key` or
+// `github-api-token` can make the server's llm_ready itself read true. This
+// fallback cannot distinguish that from a real Anthropic/OpenAI key once
+// Secrets.Present is redacted away — no client-visible signal can. Tightening
+// llmProvenance is a separate, server-side fix.
+function serverModelPathFallback(status: SetupStatus): boolean {
+  if (status.checks_redacted !== true) return false;
+  const state = status.model_access?.state;
+  if (state === "live" || state === "expiring") return true;
+  if (state === "not_configured" || state === "expired_signin") return false;
+  return status.llm_ready === true;
+}
+
 // Whether a coding agent (Claude Code / Codex CLI) has somewhere to call —
 // ≥1 integration with an agent-tool capability ON and a resolved credential,
-// OR'd with the server's own llm_ready verdict (#850). The client-derived
-// rows above read Providers/Secrets.Present, which a member's redacted
-// SetupStatus empties out (an API key or a host CLI login both vanish); the
-// server computes llm_ready from the SAME unredacted facts before redaction
-// strips them, and keeps it on the wire for exactly this reason (see
-// internal/api/setup.go's SetupStatus.LLMReady doc). Used directly by
+// OR'd with serverModelPathFallback (see its own comment). Used directly by
 // callers that only need the boolean (workspace-detail.tsx, feeding
 // record-pane.tsx's model-readiness warning) without the rest of Readiness.
 export function hasLlmPath(status: SetupStatus): boolean {
-  return agentCapableRows(aiIntegrationRows(status)).length > 0 || status.llm_ready === true;
+  return agentCapableRows(aiIntegrationRows(status)).length > 0 || serverModelPathFallback(status);
 }
 
 export interface Readiness {
@@ -94,10 +129,8 @@ export function deriveReadiness(status: SetupStatus): Readiness {
     ready: status.ready,
     barrierReady: barrierCount > 0,
     barrierCount,
-    // See hasLlmPath's own comment: the OR is the server's llm_ready
-    // fallback for a member whose real model access (an API key, a host CLI
-    // login) the redacted Providers/Secrets.Present can no longer show.
-    llmReady: agentRows.length > 0 || status.llm_ready === true,
+    // See serverModelPathFallback's own comment (#850 / #1155 review F1-F2).
+    llmReady: agentRows.length > 0 || serverModelPathFallback(status),
     llmLabel: defaultAgentRow?.name ?? "",
     composerReady,
   };
