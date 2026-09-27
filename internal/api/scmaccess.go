@@ -41,14 +41,12 @@ const (
 	scmAccessSourceSeparate = "separate"
 )
 
-// scmAccessCauseRowIsNewer is the one `not_configured` cause this deployment
-// can actually tell today: the person has never captured a session for this
-// row. §0.1 names three more (consent declined, the connection ended, a
-// different sign-in directory) — each needs a signal nothing upstream of this
-// issue persists yet (a failed redemption, a login-time consent-decline
-// record), so this file reports the one cause it can stand behind rather than
-// guessing at the other three.
-const scmAccessCauseRowIsNewer = "row_is_newer"
+// `not_configured` carries no cause. The one it used to carry, row_is_newer
+// ("the person has never captured a session for this row"), stopped being
+// something this file can stand behind once a dead or erased sign-in is
+// deleted rather than kept (credential-storage design §2.7): no stored
+// sign-in now also means one that was taken away. §0.1's other three causes
+// need signals nothing persists either.
 
 // The two `expired_signin` causes. scmAccessCauseEnded: a renewal found the
 // stored sign-in dead or blocked by Conditional Access (adoEntraBlob.DeadAt).
@@ -74,8 +72,8 @@ type SCMAccess struct {
 	// Source is "org" or "separate" — set for a per-user connection that is
 	// live or expired_signin (which door to go back through).
 	Source string `json:"source,omitempty"`
-	// Cause narrows `not_configured` (scmAccessCauseRowIsNewer) and
-	// `expired_signin` (scmAccessCauseEnded, scmAccessCauseConsentNeeded).
+	// Cause narrows `expired_signin` (scmAccessCauseEnded,
+	// scmAccessCauseConsentNeeded).
 	Cause string `json:"cause,omitempty"`
 	// Org is the Azure DevOps address this row clones from (the row's first
 	// base URL) — the {org} the connect and launch dialogs name.
@@ -221,8 +219,6 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	}
 	out := SCMAccess{State: adoAccessState(isMechanism, found), Org: adoOrgDisplay(row), Kind: string(row.Kind)}
 	switch {
-	case out.State == modelAccessNotConfigured:
-		out.Cause = scmAccessCauseRowIsNewer
 	case out.State != modelAccessLive:
 	case blob.signInEnded():
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded

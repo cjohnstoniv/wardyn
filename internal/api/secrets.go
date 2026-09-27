@@ -382,10 +382,30 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 	}
 	resolved, known, refusal := s.resolveSecretOwner(r.Context(), q)
 	if refusal != "" {
+		if r.Method == http.MethodDelete { // the name list is a read, and unaudited
+			s.auditOwnerRefusal(r, "secret.delete", chi.URLParam(r, "name"), ownerRefusalReason(refusal))
+		}
 		writeError(w, http.StatusUnprocessableEntity, refusal)
 		return "", false, false
 	}
 	return resolved, known, true
+}
+
+// auditOwnerRefusal records an admin's request refused before it reached any
+// namespace — a blank principal, or one naming nobody or several people — as
+// outcome denied with its reason. The answer's status is the caller's.
+func (s *Server) auditOwnerRefusal(r *http.Request, action, target, reason string) {
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		action, target, "denied", mustJSON(map[string]any{"reason": reason})))
+}
+
+// ownerRefusalReason is the audit reason for one of resolveSecretOwner's
+// refusals.
+func ownerRefusalReason(refusal string) string {
+	if refusal == secretOwnerAmbiguousMsg {
+		return "owner_ambiguous"
+	}
+	return "owner_unresolved"
 }
 
 // denyMemberOwnerParam answers a non-operator naming ?owner=: a constant 403,

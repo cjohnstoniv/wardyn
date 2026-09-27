@@ -1187,14 +1187,43 @@ migration `0050`)** are the second and third owned nouns after runs.
   so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
   **Wardyn cannot revoke anything upstream**: revoke the person's AWS, Anthropic
   and Azure DevOps sessions, and any gateway token, where they were issued, and
-  disable them in the identity provider.
+  disable them in the identity provider. A refused erase (a blank principal
+  `400`, or one naming nobody or several people `422`) is audited
+  `credential.erase` `denied`.
+- **Offboarding a person, in full.** The erase removes stored credentials and
+  nothing else. In order:
+  1. Disable the person in the identity provider, so no new sign-in succeeds.
+  2. `POST /sessions/revoke` with their subject or email: ends their console
+     sessions and revokes every `wdn_` API token they hold (its
+     `tokens_revoked` count is the receipt; see "Per-user API tokens: stop
+     sharing the admin token").
+  3. Remove their registered SSH keys and end established SSH connections:
+     [SSH access revocation](SSH.md#revoking-access-during-an-incident).
+  4. Kill their running runs (`POST /runs/{id}/kill`). A run keeps a static
+     key it was handed (an `api_key` injection is cached for the run) until it
+     ends, whatever the erase does.
+  5. Erase their credentials: `DELETE /people/{principal}/credentials`.
+  6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their
+     user drives (the two-halves order above).
+  7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps
+     sessions and any gateway token.
+
+  One copy outlives all of this in memory: wardynd keeps an Azure DevOps
+  sign-in's refresh token in its process-wide masking set, so output quoting it
+  is still masked. It is never served or injected from there; it is let go a
+  grace period after the credential is replaced, or when wardynd restarts. A
+  run's own masking copies go the same grace after the run ends.
 - **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
   refresh token the provider refuses for good (`invalid_grant`) is deleted at
   that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
   no longer be used or renewed (its row's `expires_at`); both audit
-  `credential.expired.delete`. The person is then shown as not connected and
-  signs in again. A Conditional Access refusal does not delete anything — the
-  sign-in still works once the person is present.
+  `credential.expired.delete`. A row the sweep cannot delete is kept, audited
+  `failure`, and retried the next day. The person is then shown as not
+  connected and signs in again. A Conditional Access refusal does not delete
+  anything — the sign-in still works once the person is present. An Azure
+  DevOps sign-in records no expiry, because Entra publishes none for its
+  refresh token: an unused one is kept until the provider refuses it or it is
+  erased.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
   workspace stays the ADMIN in the audit actor (no impersonation) with
   `workspace_owner` naming the member; `secret.write`/`secret.delete` carry

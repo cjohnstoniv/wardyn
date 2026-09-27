@@ -186,12 +186,12 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		}
 	})
 
-	t.Run("per-user row, never signed in: one row, not_configured, row-is-newer cause", func(t *testing.T) {
+	t.Run("per-user row, never signed in: one row, not_configured, no cause", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
 		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
-		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != scmAccessCauseRowIsNewer || rows[0].Kind != string(types.GitProviderAzureDevOps) {
-			t.Fatalf("got %+v, want one row state=not_configured cause=row_is_newer kind=azure_devops", rows)
+		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != "" || rows[0].Kind != string(types.GitProviderAzureDevOps) {
+			t.Fatalf("got %+v, want one row state=not_configured, no cause, kind=azure_devops", rows)
 		}
 	})
 
