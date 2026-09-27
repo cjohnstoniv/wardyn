@@ -84,6 +84,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { question } from "./display";
 import { GovernanceScreen } from "./governance-screen";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const SPEC: RunPolicySpec = {
   allowed_domains: ["api.anthropic.com"],
@@ -97,8 +98,8 @@ function profile(over: Partial<GovernanceProfile> = {}): GovernanceProfile {
     name: "Greenfield contractors",
     ceiling: SPEC,
     limits: {},
-    created_at: "2026-08-28T00:00:00Z",
-    updated_at: "2026-08-28T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     ...over,
   };
 }
@@ -116,7 +117,7 @@ function snapshot(over: Partial<GovernanceSnapshot> = {}): GovernanceSnapshot {
         subject: "wardyn.platform",
         profile_id: PLATFORM.id,
         priority: 10,
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
     ...over,
@@ -388,7 +389,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
             subject: "alice@corp.example",
             profile_id: GREENFIELD.id,
             priority: 7,
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -670,7 +671,7 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
 
   // R4/F032: the cell must not test the three BOOLEAN doors only, or a
   // profile whose one limit is a run quota reads "None" — while
-  // denyMemberRunQuota (internal/api/runs_create_validate.go) still refuses
+  // denyUserRunQuota (internal/api/runs_create_validate.go) still refuses
   // that member's next run with a 422. "None" is a claim about every field
   // of GovernanceLimits.
   it("a quota-only profile names its cap and never reads 'None'", async () => {

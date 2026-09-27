@@ -189,13 +189,14 @@ type Store interface {
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
-	// RefreshAPITokenIdentity re-stamps role AND the group snapshot (plus its
-	// completeness bit) on every unrevoked api_tokens row a principal holds.
+	// RefreshAPITokenIdentity re-stamps role, user type AND the group snapshot
+	// (plus its completeness bit) on every unrevoked api_tokens row a principal
+	// holds.
 	// Fired from the SAME OnLogin hook as RefreshSSHKeyRoles, because both
 	// credentials freeze an identity at issue time and neither had any way to
 	// learn about a demotion or a group change. See the implementation for the
 	// ceiling it does NOT remove.
-	RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error
+	RefreshAPITokenIdentity(ctx context.Context, principal, role, userType string, groups []string, truncated bool) error
 
 	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
@@ -253,7 +254,7 @@ type Store interface {
 	// omits loses its row) and returns the stored result.
 	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
 	// ListCapabilityRestrictions returns the restricted values ("Available to:
-	// Only...", migration 0073) as kind -> set of values; an absent value is
+	// Only...", migration 0081) as kind -> set of values; an absent value is
 	// not restricted. Never nil.
 	ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error)
 	// SetCapabilityRestriction turns one value's restriction on or off
@@ -281,7 +282,7 @@ type Store interface {
 	// screen and the OIDC login-time merge's whole data need.
 	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
 
-	// User types (migration 0069_user_types). CreateUserType and
+	// User types (migration 0071_user_types). CreateUserType and
 	// UpdateUserType return ErrConflict on a taken id or name; DeleteUserType
 	// returns ErrConflict while the type is built in or still named by a
 	// subject row (UserTypeReferences counts those).
@@ -290,6 +291,8 @@ type Store interface {
 	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UserTypeReferences(ctx context.Context, id string) (int, error)
+	// UserTypeTokenStamps counts the unrevoked API tokens stamped with the type.
+	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
 	DeleteUserType(ctx context.Context, id string) error
 
 	// Governance profiles and their subject assignments (migration 0052,

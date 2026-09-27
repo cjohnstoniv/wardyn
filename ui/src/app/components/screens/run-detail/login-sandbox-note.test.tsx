@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { AgentRun } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import {
   AWS_SSO_LOGIN_AGENT,
   HARNESS_LOGIN_TASK,
@@ -13,8 +13,7 @@ import {
   LoginSandboxNote,
 } from "./login-sandbox-note";
 
-const run = (task: string, agent = AWS_SSO_LOGIN_AGENT) =>
-  ({ id: "run-1", task, agent, state: "RUNNING" }) as AgentRun;
+const run = (task: string, agent = AWS_SSO_LOGIN_AGENT) => makeRun({ id: "run-1", task, agent, state: "RUNNING" });
 
 describe("LoginSandboxNote", () => {
   it("names the box on an AWS harness login run", () => {
@@ -45,7 +44,7 @@ describe("LoginSandboxNote", () => {
     "renders nothing for a %s harness-login run — the box is not up",
     (state) => {
       const { container } = render(
-        <LoginSandboxNote run={{ ...run(HARNESS_LOGIN_TASK), state } as AgentRun} />,
+        <LoginSandboxNote run={{ ...run(HARNESS_LOGIN_TASK), state }} />,
       );
       expect(container).toBeEmptyDOMElement();
     },

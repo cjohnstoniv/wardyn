@@ -21,7 +21,7 @@ import (
 // real behavior off specific ids — most notably `wardyn subscription` (see
 // cmd/wardyn/subscription.go), which decodes the raw JSON and looks for
 // "harness_credential" rather than sharing a Go type with internal/api — so a
-// check silently renamed or dropped is a real regression a full-content diff
+// check silently renamed or dropped is a real break that a full-content diff
 // would bury among prose/detail wording changes. TestSetupCheckIds_Golden exists
 // to make an id rename/drop loud; TestSetupCheckIds_HarnessCredentialContract
 // below is the named assertion for that one CLI-load-bearing id.

@@ -78,7 +78,7 @@ func TestCastWriter_HeaderAndEvents(t *testing.T) {
 	}
 }
 
-// TestCastWriter_SplitRuneAcrossWrites is the regression test for a
+// TestCastWriter_SplitRuneAcrossWrites covers a
 // multi-byte UTF-8 rune whose bytes straddle two adjacent PTY reads. Naively
 // converting each write's bytes to a string independently mangles the rune:
 // json.Marshal silently replaces each invalid fragment with U+FFFD, so

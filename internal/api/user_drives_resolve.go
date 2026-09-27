@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -40,7 +41,7 @@ import (
 // different answers to the caller: the stale one is "we cannot tell whether you
 // have a drive" (403, sign in again), this one is "you are authorized and there
 // is simply nothing mountable" (422, no audit) — the split
-// denyMemberRunQuota already draws between a refusal and an unmet precondition.
+// denyUserRunQuota already draws between a refusal and an unmet precondition.
 // The wrapped cause names the field an admin has to fix.
 var errDriveUnmountable = errors.New("drive_unmountable")
 
@@ -165,7 +166,7 @@ const (
 	driveUnavailableGovernance = "governance_unavailable"
 )
 
-func writeDriveError(w http.ResponseWriter, err error) {
+func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errDrivesDisabled):
 		// The same bytes the launch door refuses with (seedRequestDrive composes
@@ -186,7 +187,7 @@ func writeDriveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity,
 			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:
-		writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve user drive", err))
+		writeServerError(w, r, "resolve user drive", err)
 	}
 }
 
@@ -298,19 +299,13 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, us
 		// context, and auditing at the write sites would mean one emit per seam.
 		// This is the only place the drive refusal is DECIDED.
 		//
-		// runs.drive is the target, matching denyMemberDrive — the other refusal
+		// runs.drive is the target, matching denyUserDrive — the other refusal
 		// this seam writes — rather than governance.ceiling. The two rows say
 		// different things: one is "your profile shuts the drive door", the
 		// other "nobody can tell whether it is shut", and an operator filtering
 		// by target is asking about the drive either way.
-		//
-		// Guarded on the SINK for the reason the twin states: auditEvent is
-		// evaluated as recordAudit's ARGUMENT, so a Server assembled without
-		// New() would still build the row and stamp it from a nil cfg.Now.
-		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "runs.drive", "denied",
-				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		if !isDisplayRead(ctx) {
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "runs.drive", ""))
 		}
 		return nil, errGroupsSnapshotStale
 	}

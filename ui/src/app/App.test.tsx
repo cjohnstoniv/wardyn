@@ -140,7 +140,8 @@ function renderApp(initialPath = "/") {
   );
 }
 
-describe("App — a 401 only carries a reason when the console WAS authed (H1)", () => {
+describe("App — a 401 only carries a reason when the console WAS authed", () => {
+  // ticket: H1
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
@@ -178,7 +179,8 @@ describe("App — a 401 only carries a reason when the console WAS authed (H1)",
 // (the SECOND /me request, deferred here) is still pending, nothing that
 // only fires once `auth === "authed"` (the badge poll's `limit=1000` reads)
 // may have gone out yet.
-describe("App — identity resolves before auth flips on re-auth (L4)", () => {
+describe("App — identity resolves before auth flips on re-auth", () => {
+  // ticket: L4
   afterEach(() => {
     vi.unstubAllGlobals();
     window.history.pushState({}, "", "/");
@@ -192,7 +194,7 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
     // to boot at, safeReturnPath rewrites THAT to "/runs", and onSignIn's
     // `path === "/runs"` short-circuit skips whoami() entirely (a real path
     // is required to exercise the branch this pin is about).
-    window.history.pushState({}, "", "/drives");
+    window.history.pushState({}, "", "/admin/drives");
 
     const midSession401 = deferred<Response>();
     const reAuthWhoami = deferred<Response>();
@@ -242,7 +244,7 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
     expect(badgeCallsAfterClick).toBe(0);
     expect(screen.getByLabelText("Admin token")).toBeInTheDocument(); // still on the gate
 
-    // Resolved as a MEMBER (fails roleCanReach("/drives", "user")) so the
+    // Resolved as a MEMBER (fails roleCanReach("/admin/drives", "user")) so the
     // fallback lands on the stubbed Runs screen rather than a real,
     // unmocked DrivesScreen — this test is about ORDER, not destination
     // (M2/M3 already cover the destination).
@@ -260,15 +262,26 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
 // path, not the capture/restore wiring). The pure `safeReturnPath`/
 // `roleCanReach` functions are unit-pinned directly instead.
 
-describe("roleCanReach — pure (M2)", () => {
+describe("roleCanReach — pure", () => {
+  // ticket: M2
   it("a member cannot reach an operator-only route", () => {
-    expect(roleCanReach("/drives", "user")).toBe(false);
-    expect(roleCanReach("/providers", "user")).toBe(false);
+    expect(roleCanReach("/admin/drives", "user")).toBe(false);
+    expect(roleCanReach("/admin/providers", "user")).toBe(false);
   });
 
   it("an admin can reach an operator-only route; a security admin cannot", () => {
-    expect(roleCanReach("/drives", "admin")).toBe(true);
-    expect(roleCanReach("/drives", "security_admin")).toBe(false);
+    expect(roleCanReach("/admin/providers", "admin")).toBe(true);
+    expect(roleCanReach("/admin/providers", "security_admin")).toBe(false);
+  });
+
+  it("a security admin's return path to Drives is honoured (its grants are theirs)", () => {
+    expect(roleCanReach("/admin/drives", "security_admin")).toBe(true);
+  });
+
+  it("a user reaches their own account page but nothing in the Admin view", () => {
+    expect(roleCanReach("/account", "user")).toBe(true);
+    expect(roleCanReach("/admin/audit", "user")).toBe(false);
+    expect(roleCanReach("/admin/runs", "user")).toBe(false);
   });
 
   it("a member reaches their own three-screen surface, including sub-routes", () => {
@@ -278,21 +291,22 @@ describe("roleCanReach — pure (M2)", () => {
 
   // M3: MEMBER_REACHABLE_PREFIXES must be the member REACHABLE set, not
   // merely the member NAV set — /secrets (self-service WRITE/DELETE since
-  // migration 0050) and /settings + /ssh-keys (rendered in the account menu
+  // migration 0050) and /account + /ssh-keys (rendered in the account menu
   // for every role) have no sidebar entry but ARE reachable, or a member's
   // own mid-session 401 on any of the three would bounce to /runs instead of
-  // restoring.
-  it("M3: a member reaches the three self-service routes with no sidebar entry", () => {
+  // restoring. M-1b: /settings is deleted; /account is its member-side twin.
+  it("a member reaches the three self-service routes with no sidebar entry", () => {
+    // ticket: M3
     expect(roleCanReach("/secrets", "user")).toBe(true);
-    expect(roleCanReach("/settings", "user")).toBe(true);
+    expect(roleCanReach("/account", "user")).toBe(true);
     expect(roleCanReach("/ssh-keys", "user")).toBe(true);
   });
 
   // Negative control: a route with no special tier (neither member-scoped
   // nor operator-only) is reachable by any non-member role.
   it("neg: an ungated route is reachable by admin and security_admin alike", () => {
-    expect(roleCanReach("/policies", "admin")).toBe(true);
-    expect(roleCanReach("/policies", "security_admin")).toBe(true);
+    expect(roleCanReach("/admin/policies", "admin")).toBe(true);
+    expect(roleCanReach("/admin/policies", "security_admin")).toBe(true);
   });
 });
 

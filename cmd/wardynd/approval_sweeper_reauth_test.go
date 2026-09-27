@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE SWEEPER IS WHERE A credential_reauth REQUEST ACTUALLY EXPIRES, and this
+// The sweeper is where a credential_reauth request actually expires, and this
 // drives that loop rather than the counter behind it (round-2 F2).
 //
 // The first shape called RecordCredentialReauthExpired directly, so deleting

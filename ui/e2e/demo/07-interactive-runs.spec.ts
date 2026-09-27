@@ -107,7 +107,7 @@ const RUN_TITLE = process.env.WARDYN_DEMO_V07_TITLE || "Drive it yourself — in
 const SENTINEL = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token";
 
 /** The injection event beat 5 reads (audit.tsx gives it a verb now). */
-const INJECT_ACTION = "run.llm.subscription_inject";
+const INJECT_ACTION = "run.subscription.inject";
 
 /** The owner's staccato lines read fast; PACE.read after one is dead air. */
 const BEAT_SHORT = 1400;
@@ -478,7 +478,7 @@ test("V07 beat 5 — on the record", async () => {
   // The GLOBAL audit page, not the run's own Audit tab: the run tab prints
   // raw action strings, while /audit renders the event through its
   // ACTION_VERB map — and the verb row is the frame this beat is about.
-  await page.goto("/audit");
+  await page.goto("/admin/audit");
   await caption(page, "And the credential use is recorded.");
   await beat(page, PACE.read);
   await caption(page, "The secret value itself isn't.");
@@ -489,7 +489,7 @@ test("V07 beat 5 — on the record", async () => {
   await expect(search).toBeVisible({ timeout: 30_000 });
   // S5: the query is the teaching — type it visibly rather than filling silently.
   await search.click();
-  await page.keyboard.type("subscription_inject", { delay: 45 });
+  await page.keyboard.type(INJECT_ACTION.slice("run.".length), { delay: 45 });
   // audit.tsx's ACTION_VERB row for the event — the credential story, named.
   await expect(page.getByText("Injected the subscription credential at the proxy").first()).toBeVisible({
     timeout: 30_000,

@@ -93,9 +93,13 @@ type Config struct {
 	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
 	// confinement the credential does not have. Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
-	// ADOGrants is the run's per-person Azure DevOps grant, which drives the
-	// REST gate (ado_gate.go, ado_grants.go). Empty == the gate is off.
-	ADOGrants []ADOGrantConfig `json:"ado_grants,omitempty"`
+	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
+	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
+	// per sidecar: the gate is keyed by host, and every organisation shares
+	// dev.azure.com, so a second grant could only overwrite the first one's
+	// organisation pin. LoadConfigBytes still reads the older ado_grants list,
+	// and refuses one with more than one entry.
+	ADOGrant *ADOGrantConfig `json:"ado_grant,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -175,6 +179,12 @@ type Config struct {
 	// route's own generic detail, plus the below-policy clause either way
 	// (proxyLLMRequest).
 	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
+	// Unattended marks a run nobody is driving (a non-interactive task run).
+	// A push that touches a push_rules.require_review_paths entry is then
+	// refused outright rather than held for a decision nobody is waiting to
+	// make (push_hold.go). Control-plane-authored at dispatch; false (the
+	// default) holds.
+	Unattended bool `json:"unattended,omitempty"`
 }
 
 const (
@@ -212,11 +222,25 @@ func LoadConfig(path string) (*Config, error) {
 // handshake anywhere. A key this binary cannot honour must fail the sidecar's
 // startup loudly instead of being dropped on the floor.
 func LoadConfigBytes(b []byte) (*Config, error) {
-	var c Config
+	// LegacyADOGrants is the ado_grants list an older control plane writes in
+	// place of ado_grant. It is read here and nowhere else.
+	var raw struct {
+		Config
+		LegacyADOGrants []ADOGrantConfig `json:"ado_grants"`
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	c := raw.Config
+	switch {
+	case len(raw.LegacyADOGrants) > 1:
+		return nil, fmt.Errorf("config: ado_grants carries %d grants; a sidecar holds one Azure DevOps grant", len(raw.LegacyADOGrants))
+	case len(raw.LegacyADOGrants) == 1 && c.ADOGrant != nil:
+		return nil, fmt.Errorf("config: ado_grants and ado_grant are both set; a sidecar holds one Azure DevOps grant")
+	case len(raw.LegacyADOGrants) == 1:
+		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
@@ -340,9 +364,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
 	// connection the proxy terminates. Without the MITM CA nothing terminates,
 	// and the covered hosts would degrade to a credential-less tunnel no gate
-	// sees — so a config carrying ado_grants without the CA is refused at boot.
-	if len(c.ADOGrants) > 0 && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
-		return fmt.Errorf("config: ado_grants requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	// sees — so a config carrying ado_grant without the CA is refused at boot.
+	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these

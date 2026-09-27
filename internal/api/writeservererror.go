@@ -35,6 +35,13 @@ import (
 // caller, raised through the same (bool, error) seams a store failure takes, so
 // it is answered 403 with its sentence here rather than at every seam.
 func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	// A revoked hybrid laptop's run refusal (createRun) is not a fault: it is
+	// the one 5xx whose sentence is the remedy, whichever launcher reached it,
+	// and the forwarder already logged the revocation once.
+	if errors.Is(err, errOrgRevoked) {
+		writeError(w, http.StatusServiceUnavailable, orgRevokedMsg)
+		return
+	}
 	if errors.Is(err, errUserTypeUnknown) {
 		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
 		return

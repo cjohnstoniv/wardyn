@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -35,7 +36,7 @@ func typeRequest(role, userType string) *http.Request {
 }
 
 // TestAvailability_RestrictedAtEveryLaunchField: the four capability fields
-// denyMemberRequest gates (POST /runs and /runs/preflight share it). The
+// denyUserRequest gates (POST /runs and /runs/preflight share it). The
 // owner's example: a value listed for Developers only.
 func TestAvailability_RestrictedAtEveryLaunchField(t *testing.T) {
 	ws := uuid.New()
@@ -47,7 +48,7 @@ func TestAvailability_RestrictedAtEveryLaunchField(t *testing.T) {
 		{capWorkspace, ws.String(), "capability_workspace", createRunRequest{Agent: "claude-code", WorkspaceID: &ws}},
 		{capAgent, "codex", "capability_agent", createRunRequest{Agent: "codex"}},
 		{capIntegration, "corp-openai", "capability_integration", createRunRequest{Agent: "claude-code", IntegrationID: "corp-openai"}},
-		{capImage, img, "byoi_member", createRunRequest{Image: img}},
+		{capImage, img, "byoi_user", createRunRequest{Image: img}},
 	}
 	for _, f := range fields {
 		devAllow := grant(types.CapabilitySubjectUserType, utDev, f.kind, f.value, types.CapabilityAllow)
@@ -88,7 +89,7 @@ func TestAvailability_RestrictedAtEveryLaunchField(t *testing.T) {
 				}
 				h.srv.cfg.Store = cs
 				w := httptest.NewRecorder()
-				_, denied := h.srv.denyMemberRequest(w, typeRequest(leg.role, leg.typ), f.req)
+				_, denied := h.srv.denyUserRequest(w, typeRequest(leg.role, leg.typ), f.req)
 				if denied != leg.wantDenied {
 					t.Fatalf("denied = %v, want %v (status %d: %s)", denied, leg.wantDenied, w.Code, w.Body.String())
 				}
@@ -199,6 +200,39 @@ func TestAvailability_RestrictedAgentRefusesHarnessLogin(t *testing.T) {
 				t.Fatalf("status = %d, want 403", w.Code)
 			}
 		})
+	}
+}
+
+// TestAvailability_RestrictedReadFailureNeverAllows: capRead.enforced folds a
+// failed capability_restrictions read into r.err, and decide discards
+// whatever its steps computed once r.err is set — so a store outage on a
+// NARROWING, unenforced kind (the leg that would otherwise fall through to
+// "not restricted, so allowed" at step 6) can never resolve to an allow.
+// Pinned at both the resolver (decide's own error) and the door
+// (denyUserRequest, which must answer 403 or 500, never launch).
+func TestAvailability_RestrictedReadFailureNeverAllows(t *testing.T) {
+	ws := uuid.New()
+	cs := &capStore{
+		restricted:  restrictedOne(capWorkspace, ws.String()),
+		restrictErr: errors.New("boom"),
+		userTypes:   utKnown,
+	}
+	h := newHarness(t)
+	h.srv.cfg.Store = cs
+
+	ctx := withCapBatch(typeRequest(oidc.RoleUser, utPM).Context())
+	if _, err := h.srv.capSeamAllowed(ctx, capWorkspace, ws.String()); err == nil {
+		t.Fatal("capSeamAllowed = nil error, want the restriction read's failure to propagate")
+	}
+
+	w := httptest.NewRecorder()
+	req := typeRequest(oidc.RoleUser, utPM)
+	_, denied := h.srv.denyUserRequest(w, req, createRunRequest{Agent: "claude-code", WorkspaceID: &ws})
+	if !denied {
+		t.Fatalf("denyUserRequest allowed the launch on a failed restriction read (status %d: %s)", w.Code, w.Body.String())
+	}
+	if w.Code != http.StatusForbidden && w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 403 or 500", w.Code)
 	}
 }
 

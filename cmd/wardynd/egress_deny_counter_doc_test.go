@@ -11,23 +11,22 @@ import (
 
 // TestEgressDenyCounterDocClosesTheGatewayVetResidual pins the truth of the
 // comment that justifies isPolicyDeny's (internal/api/metrics.go) exclusion
-// from wardyn_egress_denies_total, now that F065-gatewayvet's accepted
-// residual is CLOSED rather than open.
+// from wardyn_egress_denies_total: the gateway-vet refusal is counted, not an
+// accepted residual.
 //
-// It used to be open: internal/egress/proxy/llm_routes.go reused
-// builtin:dial-failed when gatewayTarget returned errGatewayVet —
-// vetTrustedHost's GUARD refusal of the configured model gateway — which
-// dropped that refusal out of the counter alongside the three genuine dial
-// failures the exclusion exists for. The fix is the relabel this test pins:
-// errGatewayVet now gets its own rule_source (ruleSourceGatewayVetFailed,
-// egress_target.go) and is deliberately NOT in isPolicyDeny's exclusion list,
-// so it counts as a denial like any other guard refusal.
+// When gatewayTarget returns errGatewayVet — vetTrustedHost's guard refusal
+// of the configured model gateway — internal/egress/proxy/llm_routes.go
+// labels it with its own rule_source (ruleSourceGatewayVetFailed,
+// egress_target.go), not builtin:dial-failed. That label is deliberately not
+// in isPolicyDeny's exclusion list, so it counts as a denial like any other
+// guard refusal; reusing builtin:dial-failed would drop it out of the counter
+// alongside the three genuine dial failures the exclusion exists for.
 //
 // Both halves are asserted, in both directions:
-//   - if llm_routes.go ever goes back to mapping errGatewayVet onto
-//     builtin:dial-failed, the first half fails and the comment must be
-//     re-derived against what the tree does at that point;
-//   - if the metrics.go comment drifts back to describing this as an open,
+//   - if llm_routes.go ever maps errGatewayVet onto builtin:dial-failed, the
+//     first half fails and the comment must be re-derived against what the
+//     tree does at that point;
+//   - if the metrics.go comment drifts to describing this as an open,
 //     accepted residual, the second half fails.
 func TestEgressDenyCounterDocClosesTheGatewayVetResidual(t *testing.T) {
 	root := repoRoot(t)

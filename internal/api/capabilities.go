@@ -11,18 +11,19 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // the closed kind set
 //
-// Seven kinds, and this slice is the ONLY place the set is written down —
+// Ten kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// an eighth kind is a constant here plus its enforcement call site, with no DDL.
+// an eleventh kind is a constant here plus its enforcement call site, with no DDL.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Six of the seven NARROW what a member may already do; capImage WIDENS (a
+// Nine of the ten NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the one resolver below (capBatch.decide) — the difference is the
 // kind's row in capKinds.
@@ -45,7 +46,7 @@ const (
 	// not a thing to hand out one row at a time.
 	capImage = "image"
 	// capAgent NARROWS: it bounds which agent/harness a member may launch —
-	// req.Agent, the member's own free-text choice, gated at denyMemberRequest.
+	// req.Agent, the member's own free-text choice, gated at denyUserRequest.
 	// Values are the exact `--agent` string plus `*`.
 	//
 	// DELIBERATELY narrowing rather than widening, and the direction is decided
@@ -70,7 +71,7 @@ const (
 	// appears on ("a capability bounds what a member chose, never what an admin
 	// pre-authorized", permissions-copy.ts PERM.DOCTRINE) and would let one `all`
 	// deny row strip the site's model access deployment-wide. So the gate lives
-	// at denyMemberRequest, on the one member-authored input, and never inside
+	// at denyUserRequest, on the one member-authored input, and never inside
 	// resolveRunIntegration — which operator callers reach too.
 	capIntegration = "integration"
 	// capWorkspaceProvider NARROWS: it bounds which git provider row a member's
@@ -100,16 +101,73 @@ const (
 	// be an ACL this feature does not have (admission is URL-prefix), and the
 	// row is the unit an admin actually writes down.
 	capWorkspaceProvider = "workspace_provider"
+	// capModelProvider NARROWS: it bounds which model provider a person's run
+	// may use (SiteConfig.ModelProviders, by id, plus `*`) — the one a request
+	// names, a workspace pins, or an agent's default reaches them by. Narrowing
+	// on capAgent's rule: every member could already reach every provider.
+	//
+	// Unlike capIntegration it gates the workspace PIN too. Every model
+	// credential is the person's own, so a pin is no longer an admin handing a
+	// member access they could not otherwise get; a pin naming an ungranted
+	// provider is refused, never exempt (enforceRunModelProvider).
+	capModelProvider = "model_provider"
+	// capFeature NARROWS: it bounds whether a person may MINT a personal
+	// credential at all. Two values, a closed set (featureValues), plus `*`:
+	// featureSSHKey gates POST /me/ssh-keys and featureAPIToken gates POST
+	// /me/tokens, one check at each mint door (the token door also keeps
+	// member mode's 409; the SSH door stores a capped key instead, #564).
+	//
+	// Narrowing, on capAgent's rule: every signed-in person could already add a
+	// key and mint a token, so the unenforced default stays ALLOWED and an
+	// upgraded deployment is unchanged. A DENY row bites at once, which is how
+	// one user type is turned off ("SSH keys: Blocked" for a Portfolio manager).
+	//
+	// Mint only. A key or token that already exists keeps working until it is
+	// removed or revoked; the kind decides what may be ADDED, never re-checks
+	// what is there.
+	capFeature = "feature"
+	// capPolicy NARROWS: it bounds which stored policy a person may select for
+	// their own run — req.PolicyID, and nothing else. Values are the policy
+	// row's uuid (canonical string), plus `*`.
+	//
+	// Narrowing, on capAgent's rule: any signed-in person could already select
+	// any stored row, so the unenforced default stays ALLOWED and a deployment
+	// that never writes a policy row is unchanged. A DENY row bites at once.
+	//
+	// It gates the CHOICE, never the content: the selected row is still bounded
+	// by the caller's ceiling in resolveRunPolicy, and a run that names no
+	// policy is not gated at all (its spec is the caller's own ceiling). Checked
+	// before resolvePolicy reads the row, so an ungranted id is refused the same
+	// way whether or not the row exists. Re-checked for the owner at revive and
+	// extension (run_owner_authority.go), so a withdrawn selection also ends the
+	// run's lease.
+	capPolicy = "policy"
 )
 
-// capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
+// The closed value set of capFeature. canonicalGrantValue refuses any other
+// value, so a misspelt row can never sit in the table protecting nothing.
+const (
+	featureSSHKey   = "ssh_key"
+	featureAPIToken = "api_token"
+)
 
-// validCapabilityKind reports whether kind is one of the seven. The API write
+var featureValues = []string{featureSSHKey, featureAPIToken}
+
+// capabilityKinds is the closed set, in the order the admin surface shows them.
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature, capPolicy}
+
+// capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
+// a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
+// its copy is stale. Monotonic: a change to capKinds — a kind added, or a row's
+// direction changed — bumps it by one and it never goes down.
+// TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
+const capKindsVersion = 3
+
+// validCapabilityKind reports whether kind is one of the ten. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all seven so
+// capWildcard matches every value of its kind. Spelled the same for all ten so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -223,21 +281,30 @@ type capKind struct {
 	// offered). Read by capBatch.decide's step 3 and the availability write.
 	restrictable bool
 	// gatesAdminPins: the kind also bounds a value an ADMIN pinned, not only the
-	// member's own choice. False for all seven — "a capability bounds what a
-	// member chose, never what an admin pre-authorized" (capIntegration).
+	// member's own choice. False for every kind but capModelProvider — "a
+	// capability bounds what a member chose, never what an admin pre-authorized"
+	// (capIntegration); true for capModelProvider, whose workspace pin
+	// enforceRunModelProvider checks.
 	gatesAdminPins bool
+	// reason is the authz.denied reason a refusal of this kind carries. The
+	// widening kind's refusal is the BYOI one: image is refused as a member
+	// bringing their own image, whichever door asked.
+	reason authz.Reason
 }
 
 // capKinds is the table, keyed by exactly the names in capabilityKinds
 // (TestCapKindTableIsTheClosedSet).
 var capKinds = map[string]capKind{
-	capEgressHost:        {direction: capNarrowing, hostSet: true},
-	capSecret:            {direction: capNarrowing},
-	capWorkspace:         {direction: capNarrowing, restrictable: true},
-	capImage:             {direction: capWidening, restrictable: true},
-	capAgent:             {direction: capNarrowing, restrictable: true},
-	capIntegration:       {direction: capNarrowing, restrictable: true},
-	capWorkspaceProvider: {direction: capNarrowing, restrictable: true},
+	capEgressHost:        {direction: capNarrowing, hostSet: true, reason: authz.ReasonCapabilityEgressHost},
+	capSecret:            {direction: capNarrowing, reason: authz.ReasonCapabilitySecret},
+	capWorkspace:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspace},
+	capImage:             {direction: capWidening, restrictable: true, reason: authz.ReasonBYOIUser},
+	capAgent:             {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityAgent},
+	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
+	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
+	capModelProvider:     {direction: capNarrowing, restrictable: true, gatesAdminPins: true, reason: authz.ReasonCapabilityModelProvider},
+	capFeature:           {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityFeature},
+	capPolicy:            {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityPolicy},
 }
 
 // the wrappers
@@ -760,7 +827,7 @@ type ownedSecretMemoKey struct{}
 // maxAllowedDomainsPerSpec capped that list — but the member pipeline's OTHER
 // caller-sized list, spec.eligible_grants, has no count cap at all and bought an
 // unmemoized For(owner).List per grant at THREE sites in one request:
-// filterMemberGrants' 6c own-key arm, narrowMemberInlinePolicy's ownership
+// filterUserGrants' 6c own-key arm, narrowUserInlinePolicy's ownership
 // exemption (twice per grant, secret_ref and known_hosts_ref) and
 // validateInlineSecretRefs' unknown-name arm. Measured on this tree with a
 // counting store double: 3N+1 owner-scoped reads for N grants, N chosen entirely

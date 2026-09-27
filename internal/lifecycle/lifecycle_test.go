@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── Fakes ───────────────────────────────────────────────────────────────────
+// Fakes
 
 // fakeStore holds RunSummary rows; satisfies lifecycle.Store.
 type fakeStore struct {
@@ -160,7 +160,7 @@ func (f *fakeTickLock) releaseCount() int {
 	return f.releases
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Helpers
 
 // makeReaper creates a Reaper wired to the provided fakes with a deliberately
 // short interval (never fires during unit tests — we call tick directly).
@@ -171,7 +171,7 @@ func makeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, now t
 	})
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// Tests
 
 // TestIdleRunIsStopped: a run whose updated_at is older than the default
 // threshold must be stopped and an audit event emitted.
@@ -612,11 +612,10 @@ func TestSnapshotUpdatedAtThreadedToStopper(t *testing.T) {
 	}
 }
 
-// TestTickLockHeldElsewhereSkipsReap covers S4 case 1: when Config.TickLock
-// reports the lock is held elsewhere, the tick must skip the reap body
-// entirely — an idle run that would otherwise be stopped is left untouched
-// and no audit event is emitted. This is the seam Config.TickLock's own doc
-// comment admits tests previously drove nil (ungated) only.
+// TestTickLockHeldElsewhereSkipsReap: when Config.TickLock reports the lock
+// is held elsewhere, the tick must skip the reap body entirely — an idle run
+// that would otherwise be stopped is left untouched and no audit event is
+// emitted. This drives the gated seam, not only a nil (ungated) TickLock.
 func TestTickLockHeldElsewhereSkipsReap(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	store := &fakeStore{}

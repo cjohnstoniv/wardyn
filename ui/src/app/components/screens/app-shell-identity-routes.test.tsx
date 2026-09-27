@@ -36,10 +36,10 @@ import { SHELL } from "../wardyn/copy";
 // which is the rationale B1 recorded.
 
 const ADMIN_ROUTES = [
-  "/settings",
-  "/governance",
-  "/permissions",
-  "/audit",
+  "/admin/settings",
+  "/admin/governance",
+  "/admin/permissions",
+  "/admin/audit",
 ] as const;
 
 function stubMe(me: Record<string, unknown> | null) {
@@ -106,7 +106,8 @@ function accountTrigger() {
   return buttons[buttons.length - 1];
 }
 
-describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", () => {
+describe("AppShell — a settled-but-unknown identity gets no route", () => {
+  // ticket: V1-D3
   afterEach(() => vi.unstubAllGlobals());
 
   for (const path of ADMIN_ROUTES) {
@@ -159,7 +160,7 @@ describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", ()
     expect(screen.queryByRole("link", { name: /^Audit/ })).toBeNull();
   });
 
-  it("a RESOLVED operator is unchanged: admin nav, admin route, Settings link", async () => {
+  it("a RESOLVED operator is unchanged: admin nav, admin route, Settings in the rail", async () => {
     stubMe({
       principal: "root@wardyn.local",
       method: "token",
@@ -167,20 +168,17 @@ describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", ()
       operator: true,
       security_operator: true,
     });
-    renderAt("/audit");
+    renderAt("/admin/audit");
     await waitFor(() =>
-      expect(screen.getByTestId("screen")).toHaveTextContent("screen /audit"),
+      expect(screen.getByTestId("screen")).toHaveTextContent("screen /admin/audit"),
     );
     expect(screen.queryByText(SHELL.UNKNOWN_BODY)).toBeNull();
     expect(
       screen.getAllByRole("link", { name: /^Audit/ }).length,
     ).toBeGreaterThan(0);
 
-    await userEvent.setup().click(accountTrigger());
-    const menu = screen.getByRole("menu");
-    expect(
-      within(menu).getByRole("menuitem", { name: /Settings/ }),
-    ).toBeInTheDocument();
+    // M-2: Settings left the avatar menu for the rail's lower slot.
+    expect(screen.getAllByRole("link", { name: /^Settings/ }).length).toBeGreaterThan(0);
   });
 });
 
@@ -282,7 +280,8 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     expect(screen.queryByTestId("probe")).toBeNull();
   });
 
-  it("paints no route at all when /me never answers — the fail-open tier reaches nothing (V1-D3)", async () => {
+  it("paints no route at all when /me never answers — the fail-open tier reaches nothing", async () => {
+    // ticket: V1-D3
     // This pins the tier a failed /me leaves behind: useMeta seeds
     // operator/securityOperator/role with `?? true` / `?? "admin"`, and the
     // direction is load-bearing ("Never harden this default to false either") —

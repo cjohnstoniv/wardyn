@@ -4,8 +4,16 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // TestValidateLLMGateways exercises the seven boot-time rejection rules a
@@ -337,6 +345,86 @@ func TestValidateBedrockBaseURL_PlainHTTPOnlyWithTestEndpoints(t *testing.T) {
 	} {
 		if g, e := ValidateBedrockBaseURL(raw, region, true); e == nil {
 			t.Errorf("ValidateBedrockBaseURL(%q, allow=true) = %q, nil — the acknowledgement must relax rule 1 only", raw, g)
+		}
+	}
+}
+
+// TestValidateModelProviders_BedrockHTTPNeedsTestHatch is T-13 (MP-9): a model
+// provider's bedrock.base_url takes the boot knob's relaxation and no more.
+// Plain http:// is refused at every door that writes one unless
+// WARDYN_ALLOW_TEST_ENDPOINTS acknowledges a test deployment, and stored as
+// written when it does — the kind SSO walk's fake bedrock-runtime serves no TLS.
+// The MDM door is `wardyn site-config apply`: the file decoded strictly, as the
+// CLI does, and sent through the SDK's PutSiteConfig.
+func TestValidateModelProviders_BedrockHTTPNeedsTestHatch(t *testing.T) {
+	const fakeURL = "http://wardyn-awsssofake.wardyn.svc.cluster.local:8090"
+	p := ssoProvider()
+	p.Bedrock.BaseURL = fakeURL
+	block, err := json.Marshal(types.ModelProviders{Providers: []types.ModelProvider{p}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mdmFile := `{"model_providers":` + string(block) + `}`
+	httpPut := func(path, body string) func(*Server) error {
+		return func(srv *Server) error {
+			if w := do(t, srv, http.MethodPut, path, adminToken, body); w.Code != http.StatusOK {
+				return fmt.Errorf("PUT %s = %d: %s", path, w.Code, w.Body.String())
+			}
+			return nil
+		}
+	}
+	doors := []struct {
+		name string
+		put  func(*Server) error
+	}{
+		{"PUT /site-config", httpPut("/api/v1/site-config", mdmFile)},
+		{"PUT /model-providers", httpPut("/api/v1/model-providers", string(block))},
+		{"MDM apply", func(srv *Server) error {
+			var cfg types.SiteConfig
+			dec := json.NewDecoder(strings.NewReader(mdmFile))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&cfg); err != nil {
+				t.Fatal(err)
+			}
+			ts := httptest.NewServer(srv.Handler())
+			defer ts.Close()
+			_, _, _, err := client.New(ts.URL, adminToken).PutSiteConfig(context.Background(), cfg)
+			return err
+		}},
+	}
+	for _, door := range doors {
+		for _, allow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/allow_test_endpoints=%v", door.name, allow), func(t *testing.T) {
+				store := &fakeSiteConfigStore{}
+				cfg := baseTestConfig(newHarness(t), store)
+				cfg.AllowTestEndpoints = allow
+				err := door.put(New(cfg))
+				if !allow {
+					if err == nil || !strings.Contains(err.Error(), `bedrock.base_url: must be https://`) {
+						t.Fatalf("plain http:// without the test hatch: err = %v, want the bedrock.base_url https refusal", err)
+					}
+					if store.putSeen != nil {
+						t.Fatalf("a refused write stored %+v", store.putSeen.ModelProviders)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("plain http:// under WARDYN_ALLOW_TEST_ENDPOINTS refused: %v", err)
+				}
+				if store.putSeen == nil || store.putSeen.ModelProviders == nil ||
+					store.putSeen.ModelProviders.Providers[0].Bedrock.BaseURL != fakeURL {
+					t.Fatalf("stored = %+v, want the provider with base_url %s", store.putSeen, fakeURL)
+				}
+			})
+		}
+	}
+
+	// The hatch relaxes the scheme alone, here as at boot.
+	for _, raw := range []string{"http://u:p@host:8090", "http://169.254.169.254", "http://host:8090?x=1"} {
+		q := ssoProvider()
+		q.Bedrock.BaseURL = raw
+		if err := validateModelProviders(providerBlock(q), true); err == nil {
+			t.Errorf("bedrock.base_url %q accepted under the test hatch — it must relax the scheme only", raw)
 		}
 	}
 }

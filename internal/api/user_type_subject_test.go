@@ -451,3 +451,40 @@ func TestDriveGrantWriteRefusesAUserTypeThatDoesNotExist(t *testing.T) {
 }
 
 var _ store.Store = utDriveCRUDStore{}
+
+// TestUnknownUserTypeRefusalRecordsTheTypeID is C's proof: now that
+// callerSubjects no longer stamps the row itself ("user_type" is a reserved
+// Datum key; Principal.UserType alone fills it, from refusal.go's
+// oidc.UserTypeFromContext), a real SSO request whose stamped type has been
+// deleted still names it on the authz.denied row. Unlike utCtx's synthetic
+// context, this drives a signed session cookie through the real oidc
+// middleware, so oidc.UserTypeFromContext is the one Middleware itself sets.
+func TestUnknownUserTypeRefusalRecordsTheTypeID(t *testing.T) {
+	h := newHarness(t)
+	st := &capStore{userTypes: utKnown, enf: map[string]bool{capAgent: true}}
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	srv := New(cfg)
+
+	const gone = "contractor" // utKnown holds utPM/utDev only
+	member := ssoSessionOfType(t, "sub-utid-gone", "utid-gone@corp.example", oidc.RoleUser, gone)
+	doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, `{"agent":"claude-code","task":"t"}`)
+
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != "authz.denied" {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("unmarshal audit data: %v", err)
+		}
+		if data["reason"] == "user_type_unknown" {
+			if data["user_type"] != gone {
+				t.Errorf("user_type_unknown row user_type = %v, want %q", data["user_type"], gone)
+			}
+			return
+		}
+	}
+	t.Fatal("no authz.denied user_type_unknown row was recorded")
+}

@@ -159,6 +159,13 @@ type SiteConfig struct {
 	// key carries the stored value forward, an explicit {} clears it — which is
 	// what makes the agent roster MDM-deliverable to a laptop.
 	AgentProviders *AgentProviders `json:"agent_providers,omitempty"`
+	// ModelProviders is the org's model-provider configuration — see
+	// ModelProviders (a POINTER for the byte-identical-GET reason the two blocks
+	// above are). Nil (the default) is today: create and dispatch keep the
+	// existing lane-resolution path. Written through PUT /site-config on the
+	// sibling blocks' terms: an absent key carries the stored value forward and
+	// an explicit {} clears it.
+	ModelProviders *ModelProviders `json:"model_providers,omitempty"`
 	// SignInHelpText and SignInHelpURL are the admin's own "what to do next",
 	// shown on the sign-in page under the four refusals a person cannot clear
 	// alone (no role, a disallowed email domain, too many groups, a missing

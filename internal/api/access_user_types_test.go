@@ -159,10 +159,56 @@ func TestAccessRolePosture_DefaultTypeIsAChange(t *testing.T) {
 		{types.UserTypeStandard, oidc.RoleUser, false},
 		{oidc.RoleUser, oidc.RoleUser, false},
 	} {
-		before, after, changes := accessRolePosture(newAccessAuth(t, nil, c.def, emails, nil))
+		before, after, changes := accessRolePosture(newAccessAuth(t, nil, c.def, emails, nil), accessOrgTypes)
 		if before != oidc.RoleUser || after != c.after || changes != c.changes {
 			t.Errorf("default %q: posture = (%q, %q, %v), want (user, %q, %v)", c.def, before, after, changes, c.after, c.changes)
 		}
+	}
+}
+
+// TestAccessRolePosture_DefaultTypeMissingFromStore: a default naming a user
+// type the store does not hold must report the SAME outcome a real sign-in
+// would (accessUnmatchedOutcome's user_type_unknown -> denied), never the
+// bare type id — the admin tier is exempt (falls to standard), the user tier
+// is not.
+func TestAccessRolePosture_DefaultTypeMissingFromStore(t *testing.T) {
+	emails := []string{"ops@corp.example"}
+	for _, c := range []struct {
+		name, def, wantBefore, wantAfter string
+	}{
+		{"user tier, unknown type -> denied", "contractor", oidc.RoleUser, accessDeniedRole},
+		{"admin tier -> admin (no type in the value)", oidc.RoleAdmin, oidc.RoleUser, oidc.RoleAdmin},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// accessOrgTypes has "portfolio-manager" and "analyst" — "contractor"
+			// is deliberately absent.
+			before, after, _ := accessRolePosture(newAccessAuth(t, nil, c.def, emails, nil), accessOrgTypes)
+			if before != c.wantBefore || after != c.wantAfter {
+				t.Errorf("default %q: posture = (%q, %q), want (%q, %q)", c.def, before, after, c.wantBefore, c.wantAfter)
+			}
+		})
+	}
+}
+
+// TestAccess_GetPostureAfterAgreesWithWriteGuardOnMissingType: end to end
+// through GET /access — the display must not claim a target
+// POST /access/mappings' own write guard (accessUnmatchedOutcome) would
+// refuse for the identical unmatched-sign-in question.
+func TestAccess_GetPostureAfterAgreesWithWriteGuardOnMissingType(t *testing.T) {
+	st := &roleMapStore{userTypes: accessOrgTypes}
+	auth := newAccessAuth(t, nil, "contractor", []string{"ops@corp.example"}, st)
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Posture.After != accessDeniedRole {
+		t.Errorf("posture.after = %q, want %q (default names a type the store does not hold)", resp.Posture.After, accessDeniedRole)
 	}
 }
 
@@ -325,7 +371,7 @@ func (meTypeStore) GetUserType(_ context.Context, id string) (types.UserType, er
 	return types.UserType{}, store.ErrNotFound
 }
 
-// TestAuditSignInDenied: the two user-type refusals are auth.failed rows from
+// TestAuditSignInDenied: the two user-type refusals are auth.fail rows from
 // the callback's own boundary; any other reason writes nothing.
 func TestAuditSignInDenied(t *testing.T) {
 	h := newHarness(t)
@@ -335,7 +381,7 @@ func TestAuditSignInDenied(t *testing.T) {
 	}
 	var got []string
 	for _, ev := range h.audit.snapshot() {
-		if ev.Action != "auth.failed" {
+		if ev.Action != "auth.fail" {
 			continue
 		}
 		if ev.Actor != oidcCallbackActor {
@@ -348,7 +394,7 @@ func TestAuditSignInDenied(t *testing.T) {
 		got = append(got, data.Reason)
 	}
 	if !slices.Equal(got, []string{authFailedUserTypeAmbiguous, authFailedUserTypeUnknown}) {
-		t.Errorf("auth.failed reasons = %v, want the two user-type refusals only", got)
+		t.Errorf("auth.fail reasons = %v, want the two user-type refusals only", got)
 	}
 	if authFailedUserTypeAmbiguous != oidc.DenialUserTypeAmbiguous || authFailedUserTypeUnknown != oidc.DenialUserTypeUnknown {
 		t.Error("the audit reasons drifted from the sign-in denial codes")

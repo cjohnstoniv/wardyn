@@ -13,16 +13,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
-// TestUploadSSOToken_MaskPatternsAreRunScoped is the F007 regression. The
-// upload registered the blob's access_token/refresh_token with
-// MaskRegistry.AddGlobal, and those bytes are pure sandbox input — the handler
-// binds WHOSE IdP and WHICH run may write, never what the token itself
-// contains. secretmask's global corpus is unioned into EVERY run's masker and,
-// via cmd/wardynd's maskingRecorder, applied to the Data/Target of every
-// persisted audit event including run-less rows (Snapshot(uuid.Nil)); Evict
-// clears per-run entries only. So a process inside the vendor login image could
-// pick arbitrary >=MinLen strings and have them replaced with the placeholder
-// in every operator's logs for the life of the daemon.
+// TestUploadSSOToken_MaskPatternsAreRunScoped. The upload must not register the
+// blob's access_token/refresh_token with MaskRegistry.AddGlobal: those bytes
+// are pure sandbox input — the handler binds whose IdP and which run may write,
+// never what the token itself contains. secretmask's global corpus is unioned
+// into every run's masker and, via cmd/wardynd's maskingRecorder, applied to
+// the Data/Target of every persisted audit event including run-less rows
+// (Snapshot(uuid.Nil)); Evict clears per-run entries only. So a process inside
+// the vendor login image could otherwise pick arbitrary >=MinLen strings and
+// have them replaced with the placeholder in every operator's logs for the life
+// of the daemon.
 //
 // The credential loses no coverage: resolveBedrockAuth AddGlobals the STORED
 // blob on every dispatch that actually selects this credential

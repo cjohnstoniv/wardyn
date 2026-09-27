@@ -181,7 +181,7 @@ func TestAttachWS_TicketRoleAuthorization(t *testing.T) {
 // TestAttachWS_TicketDenialsAreAudited: the ?ticket= lane is the only route to a
 // live PTY that never runs humanOrAdminAuth, and it audited NONE of its own
 // refusals — so probing it left no trace at all, where the sibling SSH gateway
-// records every rejection under ssh.auth. Both refusals in the lane (a ticket
+// records every rejection under ssh.authenticate. Both refusals in the lane (a ticket
 // that does not resolve, and a ticket that resolves but does not authorize the
 // run it names) must now land in the trail, with the principal named only when
 // the ticket actually proved one.
@@ -239,5 +239,36 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	}
 	if !strings.Contains(string(got[1].Data), "does not authorize this run") {
 		t.Errorf("denial data = %s, want the refusal reason", got[1].Data)
+	}
+}
+
+// TestAttach_RefusesAKeptRun: a run the lease ended is RUNNING with its agent
+// stopped, so both attach gates refuse it with a plain 409, rather than minting
+// a ticket or upgrading a WebSocket that dies on its first exec.
+func TestAttach_RefusesAKeptRun(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+
+	run, endedAt := uuid.New(), time.Now()
+	ast.mu.Lock()
+	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+		LostAt: &endedAt, LostReason: types.LostEnded}
+	ast.mu.Unlock()
+
+	const refused = "run has ended; cannot attach"
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.String()+"/attach-ticket", adminToken, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), refused) {
+		t.Errorf("ticket mint: code=%d body=%q, want 409 %q", w.Code, w.Body.String(), refused)
+	}
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	w = do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket="+tok, "", "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), refused) {
+		t.Errorf("attach: code=%d body=%q, want 409 %q", w.Code, w.Body.String(), refused)
 	}
 }

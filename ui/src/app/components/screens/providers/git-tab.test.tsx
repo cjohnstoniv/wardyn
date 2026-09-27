@@ -8,7 +8,7 @@
 // re-typed here).
 import * as React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -278,7 +278,8 @@ describe("GitTab", () => {
   // F4-F13 (Appendix A V8): the credential-lane group needs roving tabindex
   // and arrow keys, and the selected lane's form must render OUTSIDE the
   // radiogroup — nesting a Save button inside it is an ARIA violation.
-  describe("the credential-lane group has roving tabindex and arrow keys, and its body sits outside it (F4-F13)", () => {
+  describe("the credential-lane group has roving tabindex and arrow keys, and its body sits outside it", () => {
+    // ticket: F4-F13
     it("only the checked lane is a Tab stop; ArrowRight moves selection and focus", async () => {
       render(<Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
       const row = screen.getByTestId("provider-row-github");
@@ -608,7 +609,8 @@ describe("GitTab", () => {
   // The fix threads a setup-status-only refresh through GitTab -> Row ->
   // SecretLane (four sites); an unsaved base-URL edit on a SIBLING field must
   // survive a credential save, so the fix must never become `load()`.
-  describe("a credential save fires the setup-status-only refresh (F4-F2)", () => {
+  describe("a credential save fires the setup-status-only refresh", () => {
+    // ticket: F4-F2
     it("saving a PAT fires onStatusRefresh", async () => {
       setSecretMock.mockReset().mockResolvedValue(undefined);
       const onStatusRefresh = vi.fn();
@@ -623,7 +625,12 @@ describe("GitTab", () => {
       const row = screen.getByTestId("provider-row-github");
       await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-      await screen.findByText(/Stored as/);
+      // #355: this harness's `present` never flips (it's the fixed prop the
+      // test passed in, not a real reload), so the field goes back to its
+      // unstored form after save — waiting on "Stored as" (fixed to only
+      // render once actually stored) would never resolve here. The save
+      // cycle's own completion signal is the cleared, no-longer-busy field.
+      await waitFor(() => expect(within(row).getByLabelText("Access token")).toHaveValue(""));
       expect(onStatusRefresh).toHaveBeenCalledTimes(1);
     });
 
@@ -640,7 +647,9 @@ describe("GitTab", () => {
       await userEvent.type(urls, "{Enter}https://git.corp.example/team");
       await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-      await screen.findByText(/Stored as/);
+      // #355: same non-reloading harness as above — wait on the credential
+      // field itself, not "Stored as" (which no longer renders unstored).
+      await waitFor(() => expect(within(row).getByLabelText("Access token")).toHaveValue(""));
       expect(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveValue(
         "https://github.com/acme\nhttps://git.corp.example/team",
       );

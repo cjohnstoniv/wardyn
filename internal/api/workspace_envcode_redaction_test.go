@@ -58,7 +58,7 @@ func newEnvcodeRedirectServer(t *testing.T, ownedBy string) (*Server, string) {
 // EgressRedirects at all — so the artifact-registry half of the reason the tier
 // moved was pinned by nothing.
 func TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders(t *testing.T) {
-	// THE POSITIVE CONTROL FIRST, and it is load-bearing twice over: it proves
+	// The positive control first, and it is load-bearing twice over: it proves
 	// the fixture really does emit the corporate base (so the refusals below are
 	// refusing something that exists), and it proves the tier move did not close
 	// the leak by breaking the feature. An env-as-code that emitted no artifact

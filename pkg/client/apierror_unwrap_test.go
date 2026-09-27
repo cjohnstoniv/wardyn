@@ -9,11 +9,9 @@ import (
 	client "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// These pin the server-envelope unwrap that the CLI's old dedicated transport
-// used to provide. Group C deleted that transport in favour of this SDK; the
-// unwrap moved into APIError.Error(). Reverting Error() to print the raw body
-// fails these (the message would carry the literal JSON `{`), which is exactly
-// a user-visible regression in error unwrapping.
+// These pin the server-envelope unwrap in APIError.Error(). An Error() that
+// printed the raw body fails these (the message would carry the literal JSON
+// `{`) — a user-visible break in error unwrapping.
 
 func TestAPIError_UnwrapsErrorField(t *testing.T) {
 	e := &client.APIError{Status: 400, Body: `{"error":"invalid state filter"}`}

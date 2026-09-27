@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
@@ -127,6 +128,10 @@ type awsSSOScopeSnapshot struct {
 	SSOAccountID     string `json:"sso_account_id"`
 	SSORoleName      string `json:"sso_role_name"`
 	Region           string `json:"region"`
+	// ProviderUID is the model provider whose session this is ("" on the
+	// roster's lanes): the sink then re-derives the scope from that provider
+	// record rather than the roster (providerSSOScopeAt).
+	ProviderUID string `json:"provider_uid,omitempty"`
 }
 
 // ssoPortalMITMEntry is the ONE spelling of a Phase-B TLS-MITM entry, and the
@@ -192,6 +197,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 			SSOAccountID:     t.bedrock.ssoAccountID,
 			SSORoleName:      t.bedrock.ssoRoleName,
 			Region:           t.bedrock.ssoRegion,
+			ProviderUID:      sso.provider,
 		},
 		// Production is TLS-only. The single exception is the deployment that
 		// already refused to boot without WARDYN_ALLOW_TEST_ENDPOINTS: the
@@ -242,7 +248,10 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 	}); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the AWS SSO credential injection: "+gerr.Error())
+		// The hint is member-visible: a fixed sentence, never the store's text.
+		slog.ErrorContext(ctx, "wardynd: could not record the AWS SSO credential grant",
+			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the AWS SSO credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "aws sso inject grant: " + gerr.Error()})))
 		return injections, nil, false

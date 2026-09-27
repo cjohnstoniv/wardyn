@@ -36,6 +36,7 @@ import { FocusMode } from "./focus-mode";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { MOD, chordLabel } from "../../wardyn/kbd";
 import type { WidgetContext } from "./widget-registry";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const RUN = {
   id: "run-1a2b3c4d5e",
@@ -60,6 +61,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     // suite never has to stand up the health / ssh-key fetches.
     principal: null,
     operator: false,
+    view: "user",
     grants: [],
     egress: [],
     heldCount: 0,
@@ -182,7 +184,8 @@ describe("Focus mode — the edge dock", () => {
   // finishes), its rail button vanished but the panel kept the glass panel
   // open over a widget that can no longer place a tile (ConnectSSHCard
   // returns null).
-  it("F1-F6: clamps a stale dock selection once its widget stops being dockable", async () => {
+  it("clamps a stale dock selection once its widget stops being dockable", async () => {
+    // ticket: F1-F6
     const user = userEvent.setup();
     const running = { ...RUN, state: "RUNNING" } as WidgetContext["run"];
     const { rerender } = render(
@@ -206,10 +209,10 @@ describe("Focus mode — the edge dock", () => {
 
 describe("Focus mode — the bottom strip states the facts", () => {
   const egress = [
-    { id: "e1", time: "2026-01-01T00:00:00Z", domain: "api.anthropic.com", decision: "allow" },
-    { id: "e2", time: "2026-01-01T00:01:00Z", domain: "proxy.golang.org", decision: "allow" },
-    { id: "e3", time: "2026-01-01T00:02:00Z", domain: "api.github.com", decision: "pending" },
-    { id: "e4", time: "2026-01-01T00:03:00Z", domain: "telemetry.vendor.io", decision: "deny" },
+    { id: "e1", time: aheadByHours(-4), domain: "api.anthropic.com", decision: "allow" },
+    { id: "e2", time: aheadByHours(-3), domain: "proxy.golang.org", decision: "allow" },
+    { id: "e3", time: aheadByHours(-2), domain: "api.github.com", decision: "pending" },
+    { id: "e4", time: aheadByHours(-1), domain: "telemetry.vendor.io", decision: "deny" },
   ] as unknown as WidgetContext["egress"];
 
   // Scoped to the strip on purpose: the dock's Egress widget states "1 held"
@@ -222,7 +225,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
       <FocusMode
         ctx={ctx({
           egress,
-          // B3: one of the four rows above is an egress.pending EVENT, and one
+          // B3: one of the four rows above is an egress.hold EVENT, and one
           // approval is held right now. They agree here so the other
           // assertions stay readable; the case where they DISAGREE — which is
           // the bug — is the next test.
@@ -231,7 +234,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
           audit: [
             {
               id: "a1",
-              time: "2026-01-01T00:04:00Z",
+              time: aheadByHours(-0.5),
               actor_type: "agent",
               actor: "agent",
               action: "credential.mint",
@@ -256,11 +259,11 @@ describe("Focus mode — the bottom strip states the facts", () => {
   });
 
   // B3 — the SECOND copy of the lying count (the first is the Egress widget's
-  // own chip). The audit trail is append-only, so the egress.pending row for a
+  // own chip). The audit trail is append-only, so the egress.hold row for a
   // hold that was approved an hour ago is still there and always will be:
   // deriving "held" from it made the strip claim a hold on a run holding
   // nothing. allow/deny still come from the rows, because those ARE settled.
-  it("states the LIVE held count, not the egress.pending rows in the trail", () => {
+  it("states the LIVE held count, not the egress.hold rows in the trail", () => {
     render(<FocusMode ctx={ctx({ egress, heldCount: 0 })} onExit={() => {}} />);
 
     expect(strip().getByText(RUN_COCKPIT.held(0))).toBeInTheDocument();
@@ -278,7 +281,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
           audit: [
             {
               id: "a1",
-              time: "2026-01-01T00:04:00Z",
+              time: aheadByHours(-0.5),
               actor_type: "agent",
               actor: "agent",
               // The broker audits DENIED mint attempts under this same action;

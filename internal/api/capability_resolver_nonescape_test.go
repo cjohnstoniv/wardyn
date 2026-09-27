@@ -367,7 +367,7 @@ func TestCapResolverReadsStayLazy(t *testing.T) {
 }
 
 // TestCapKindTableIsTheClosedSet: the kind table is keyed by exactly the closed
-// set, image is the one widening kind, and no kind gates an admin pin yet.
+// set, image is the one widening kind, and model_provider is the one kind that gates an admin pin.
 func TestCapKindTableIsTheClosedSet(t *testing.T) {
 	if len(capKinds) != len(capabilityKinds) {
 		t.Fatalf("capKinds has %d rows, capabilityKinds %d", len(capKinds), len(capabilityKinds))
@@ -386,14 +386,14 @@ func TestCapKindTableIsTheClosedSet(t *testing.T) {
 		if k.restrictable != (kind != capEgressHost && kind != capSecret) {
 			t.Errorf("kind %q restrictable = %v; every offered resource is, egress_host and secret are not", kind, k.restrictable)
 		}
-		if k.gatesAdminPins {
-			t.Errorf("kind %q gates admin pins; no shipped kind does", kind)
+		if k.gatesAdminPins != (kind == capModelProvider) {
+			t.Errorf("kind %q gatesAdminPins = %v; model_provider is the only kind that gates an admin pin", kind, k.gatesAdminPins)
 		}
 	}
 }
 
 // denyReadCountStore counts the two per-resolution reads over capStore, which
-// answers every other read denyMemberRequest makes (the governance ceiling).
+// answers every other read denyUserRequest makes (the governance ceiling).
 type denyReadCountStore struct {
 	*capStore
 	grantsReads, enfReads int
@@ -411,7 +411,7 @@ func (s *denyReadCountStore) GetCapabilityEnforcement(ctx context.Context) (map[
 
 // TestDenyMemberRequest_OneSnapshotForEveryField: a member request naming an
 // image, a workspace, an agent and an integration is decided on ONE capability
-// snapshot — denyMemberRequest installs the ctx memo. Without it each field
+// snapshot — denyUserRequest installs the ctx memo. Without it each field
 // re-reads grants (4) and the switch (3).
 func TestDenyMemberRequest_OneSnapshotForEveryField(t *testing.T) {
 	const ref = "ghcr.io/acme/agent:1.4.2"

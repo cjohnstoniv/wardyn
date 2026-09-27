@@ -3,15 +3,14 @@
 
 package main
 
-// The guard tests in this package used to carry three different function-body
-// extractors (two textual, one go/parser-based) and four near-identical "read
-// a repo file" helpers. A textual extractor that runs to the next top-level
-// `func` folds that function's own doc comment into the "body" a guard
-// searches — a false-positive risk a parser does not have. This file is the
-// one correct version of each: readRepo for reading a file, citedSymbolBodies
-// for resolving a symbol's own source span. The package's other guard files
-// keep their old helper names as thin wrappers over these two, so neither this
-// move nor a rewrite of the wrapped logic touches every call site.
+// This file holds the package's one function-body extractor and one "read a
+// repo file" helper: readRepo for reading a file, citedSymbolBodies for
+// resolving a symbol's own source span. The extractor is go/parser-based
+// because a textual one that runs to the next top-level `func` folds that
+// function's own doc comment into the "body" a guard searches — a
+// false-positive risk a parser does not have. The package's other guard files
+// keep their own helper names as thin wrappers over these two, so a rewrite of
+// the wrapped logic does not touch every call site.
 
 import (
 	"go/ast"

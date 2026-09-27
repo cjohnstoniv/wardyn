@@ -13,15 +13,17 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// oidcUserTypeCtxKey carries the user type id stamped on the verified OIDC
-// session (oidc.UserTypeFromContext), published by withHumanIdentity beside
-// the role so the auth middleware stays the single place that trusts the oidc
-// package. "" for a caller with no stamp: the admin token, local mode, and
-// (until tokens carry a type) an API token.
+// oidcUserTypeCtxKey carries the user type of the same verified human: the
+// session's stamp on the SSO branch, the token row's on the api-token branch
+// (#611), published by withHumanIdentity beside the role so the auth
+// middleware stays the single place that trusts the oidc package. Read it
+// here, never through oidc.UserTypeFromContext, which the token lane does not
+// publish. "" for a caller with no stamp: the admin token and local mode.
 type oidcUserTypeCtxKey struct{}
 
 func withOIDCUserType(ctx context.Context, userType string) context.Context {
@@ -48,6 +50,8 @@ type callerSubjects struct {
 // that names a type refuses rather than resolving without it — dropping the
 // type would silently lift a type-tier deny and hand the person the `all`
 // tier's answer instead of their type's.
+//
+//lint:ignore ST1005 the text is the sentence the refused person reads, as errGroupsSnapshotStale's is
 var errUserTypeUnknown = errors.New(userTypeUnknownMsg)
 
 const userTypeUnknownMsg = "Your user type no longer exists, so Wardyn can't tell what you may use. " +
@@ -102,9 +106,7 @@ func (s *Server) callerSubjects(ctx context.Context) (callerSubjects, error) {
 	_, err := s.cfg.Store.GetUserType(ctx, c.userType)
 	if errors.Is(err, store.ErrNotFound) {
 		if s.cfg.Audit != nil && !isDisplayRead(ctx) && firstUserTypeRefusal(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "user_type", "denied",
-				mustJSON(map[string]any{"reason": "user_type_unknown", "user_type": c.userType})))
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonUserTypeUnknown, "user_type", userTypeUnknownMsg))
 		}
 		return callerSubjects{}, errUserTypeUnknown
 	}

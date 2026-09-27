@@ -88,7 +88,7 @@ continuing on a tenant device-code sign-in will still fail against. Writes
 ## Step 2 — app, people, values
 
 ```sh
-deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret
+deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret, Azure DevOps permissions
 deploy/azure-entra-sso/03-people.sh  # 3 users, 2 groups, role assignments
 deploy/azure-entra-sso/04-values.sh  # renders values-entra.yaml from .env.local
 ```
@@ -114,14 +114,16 @@ State first: this quickstart targets the **default Docker daemon** (no
 `DOCKER_HOST` override), not the `wardyn-docker.sock` daemon other Wardyn dev
 flows use — check **both** daemons before you start, so a stray SSO
 validation cluster never lands where a live demo/e2e run expects the other
-one. If `TRY-IT.md`'s guidance already left `DOCKER_HOST` exported in this
-shell, `unset` it first — this quickstart must hit the default daemon, not
-whatever `DOCKER_HOST` last pointed at:
+one. Point `DOCKER_HOST` at the default daemon explicitly — **unsetting it is
+not enough**: with `DOCKER_HOST` unset, `quickstart.sh` picks the
+`wardyn-docker.sock` daemon when that socket exists
+(`wardyn_pick_docker_host`, `scripts/lib/common.sh`), and then tries to create
+a second `wardyn-entra` on the same host ports:
 
 ```sh
 docker ps                                                  # default daemon
 DOCKER_HOST=unix:///var/run/wardyn-docker.sock docker ps   # the other one
-unset DOCKER_HOST
+export DOCKER_HOST=unix:///var/run/docker.sock
 ```
 
 ```sh
@@ -212,6 +214,24 @@ rendering, and the next `helm upgrade` deletes the Secret the Deployment's
 own `secretKeyRef` still points at. Not a clean switch to an external
 Secret that was never created — `CreateContainerConfigError`, and no way
 back to admin.
+
+## Keeping the cluster on main
+
+After Steps 3 and 4 have run once, `05-kind-deploy.sh <ref>` redeploys one
+commit: it builds every image from `git archive` of that ref under a
+per-commit tag, loads them, and makes one `helm upgrade --reuse-values` with
+the Entra overlay plus the Bedrock region and model. It does not re-run
+`quickstart.sh`, whose own upgrade carries no overlay. `06-kind-follow-main.sh`
+runs it for the newest `main` commit whose CI passed and that descends from
+the commit the cluster is running (read off its `c-<sha>` image tag), one run
+at a time, and does nothing when that commit is already deployed — run it on a
+schedule. Both need `TENANT_ID`
+and `CLIENT_ID` in the environment; the client secret stays in the cluster's
+`wardyn-entra-oidc` Secret.
+
+```sh
+TENANT_ID=<tenant> CLIENT_ID=<app> deploy/azure-entra-sso/06-kind-follow-main.sh
+```
 
 ## The walk
 

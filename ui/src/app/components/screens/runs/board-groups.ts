@@ -15,7 +15,7 @@ import type { AgentRun, ApprovalRequest } from "../../../lib/types";
 // Import the predicate, not the strip: importing it from live-approvals.tsx
 // would hoist that whole module (and everything it imports) into the eager
 // entry chunk — see isHeld's own doc in lib/types/approvals.ts.
-import { isAdoConsentRequest, isHeld, isStaleHold } from "../../../lib/types";
+import { isAdoConsentRequest, isHeld } from "../../../lib/types";
 import {
   attentionFor,
   attentionRank,
@@ -33,14 +33,8 @@ interface RunApprovalSignals extends AttentionSignals {
   pending: number;
   /** At least one pending row is a mid-run AWS sign-in request — the board and
    *  the cockpit header then say "Waiting for your AWS sign-in" instead of
-   *  "sandbox held", because this hold is the person's own to clear. Only set
-   *  while that row is still fresh — see `staleHeld`. */
+   *  "sandbox held", because this hold is the person's own to clear. */
   reauth?: boolean;
-  /** #160 — at least one PENDING tool_call/credential_reauth row crossed
-   *  isHeld's stale-hold ceiling. `held` is false for it (isHeld no longer
-   *  counts it live), but the group/card still owe a sentence for what
-   *  happened here rather than going silent about it. */
-  staleHeld?: boolean;
   /** At least one pending row is an Azure DevOps Entra-consent request (S10
    *  round 2, F13) — a DIFFERENT provider than `reauth` above, so the board
    *  and cockpit header say "Azure DevOps sign-in", never "AWS sign-in",
@@ -76,23 +70,22 @@ export function approvalSignals(pending: readonly ApprovalRequest[]): RunSignals
     cur.pending += 1;
     // A held request blocks; a passive deny_with_review pending does not. Once
     // anything on the run is held, the run is held — a passive sibling can
-    // never downgrade that. A row isHeld no longer counts (#160's stale-hold
-    // ceiling) is neither: `staleHeld` says what happened without claiming
-    // it is still live.
+    // never downgrade that. #509 — every row that reaches this loop is
+    // already PENDING (the guard above), and isHeld now counts PENDING alone
+    // as live for tool_call/credential_reauth (no client-side ceiling), so
+    // there is no longer a "stale but still pending" bucket to fall to — the
+    // server has no such state.
     if (isHeld(a)) {
       cur.held = true;
       // A mid-run AWS sign-in request is the ONE hold a person can act on
       // directly, and the board and the cockpit header say so instead of the
       // generic "sandbox held" — which would send them looking for an
-      // Approve button that does not exist for this kind. Only while fresh:
-      // once stale, `staleHeld` carries the fact instead. An Azure DevOps
+      // Approve button that does not exist for this kind. An Azure DevOps
       // consent request is the SAME shape (kind credential_reauth) but a
       // DIFFERENT provider — checked first and separately so it never falls
       // into the AWS-named `reauth` bucket (F13).
       if (isAdoConsentRequest(a)) cur.adoConsent = true;
       else if (a.kind === "credential_reauth") cur.reauth = true;
-    } else if (isStaleHold(a)) {
-      cur.staleHeld = true;
     } else {
       cur.passiveHold = true;
     }
@@ -133,22 +126,19 @@ export interface GroupWaitBreakdown {
   held: number;
   reauth: number;
   starting: number;
-  staleHeld: number;
 }
 
 export function groupWaitBreakdown(runs: readonly AgentRun[], signals: RunSignals): GroupWaitBreakdown {
   let held = 0;
   let reauth = 0;
   let starting = 0;
-  let staleHeld = 0;
   for (const run of runs) {
     const s = signalsFor(run, signals);
     if (s.reauth) reauth++;
     else if (s.held) held++;
-    else if (s.staleHeld) staleHeld++;
     else if (run.state === "STARTING") starting++;
   }
-  return { held, reauth, starting, staleHeld };
+  return { held, reauth, starting };
 }
 
 // Title grouping

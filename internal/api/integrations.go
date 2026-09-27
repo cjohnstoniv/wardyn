@@ -164,18 +164,12 @@ const reasonNoDeliveryLane = "Wardyn can open the path to these hosts. Deliverin
 // kind this file switches on. Two honest cells, both derived from the stored
 // row:
 //
-//   - egress_host — the hosts become reachable for a run granted this row.
-//     needs_setup while the row names none: an integration with no hosts opens
-//     nothing, and saying "available" there would be the lie this whole file
-//     exists to avoid.
+//   - egress_host — the hosts become reachable for a run granted this row;
+//     needs_setup while the row names none (no hosts opens nothing).
 //   - credential — proxy-injected when a header names a stored secret;
-//     otherwise the stated "egress only" fact, which is what the two groups
-//     that authenticate outside HTTP (cloud providers, data stores) get. A
-//     header names a delivery MECHANISM, not a destination: with no hosts
-//     there is nothing for the runtime fold to present it AT, so this cell
-//     needs_setup with the SAME no-hosts reason as egress_host rather than
-//     the header-alone "available" — the identical lie egress_host above
-//     already refuses to tell.
+//     otherwise the stated "egress only" fact (cloud providers, data stores).
+//     With no hosts there is nothing to present a header AT, so this cell is
+//     needs_setup with the SAME no-hosts reason as egress_host.
 func genericCaps(in types.Integration, env capEnv) []Capability {
 	noHosts := len(in.Egress) == 0
 	reach := Capability{ID: "egress_host", State: CapAvailable}
@@ -276,11 +270,8 @@ func residentHostReason(env capEnv) string {
 //
 // Region/model are read from the integration first, with the boot flags
 // (env.Bedrock*Set) as the fallback — the same precedence resolveBedrockAuth
-// applies at dispatch (`cmp.Or(ws.Region, s.cfg.BedrockRegion)`, runs_bedrock.go:
-// "a selection wins only the fields it sets"). Reading the boot flags alone is
-// what made a wizard-completed Bedrock integration report needs_setup forever on
-// a deployment that never set WARDYN_BEDROCK_* — while its runs authenticated
-// fine.
+// applies at dispatch; reading the boot flags alone reports a wizard-completed
+// integration as needs_setup forever on a deployment without WARDYN_BEDROCK_*.
 func bedrockCaps(in types.Integration, env capEnv) []Capability {
 	lane, _ := in.Config["auth_lane"].(string)
 	residency := "resident_env"
@@ -444,17 +435,14 @@ func (r *integrationRow) UnmarshalJSON(b []byte) error {
 
 // effectiveIntegrations returns the operator's stored integrations union rows
 // derived from state that already exists, deterministically ordered
-// (category, then id) so the API response and any test are stable regardless
-// of map/store iteration order upstream. A nil/erroring Store degrades to
-// "no stored rows, no SiteConfig-derived legacy rows" rather than failing —
-// this is a read surface, never a gate.
+// (category, then id) so the API response and any test are stable. A
+// nil/erroring Store degrades to "no stored rows, no SiteConfig-derived legacy
+// rows" rather than failing — this is a read surface, never a gate.
 //
 // present/bedrock are legacyIntegrations' two live signals, taken as
-// parameters rather than recomputed here: a caller resolving
-// several refs in one request (resolveIntegrationRef, launchRecordRun)
-// computes each ONCE and reuses it, instead of paying a full secret listing +
-// Bedrock age-decrypt probe per call — the cost /setup/status, the endpoint
-// the wizard polls, would otherwise pay 2-3x per request.
+// parameters so a caller resolving several refs in one request
+// (resolveIntegrationRef, launchRecordRun) computes each ONCE instead of paying
+// a secret listing + Bedrock age-decrypt probe per call.
 func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]bool, bedrock SetupBedrock) []integrationRow {
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
@@ -657,17 +645,11 @@ func hostFromSecretSlug(name, prefix string) string {
 // gets a row (egress_host only; clone:pat/clone:ssh read needs_setup), and a
 // host that also has a credential carries it.
 //
-// Host recovery is FORWARD, not reversed (ports ui/src/app/lib/scm-provider.ts's
-// deriveProviders — see its doc comment for the full rationale): for each
-// ScmHosts entry we compute slugHost(host) ONCE and match secrets against
-// THAT, so a hyphenated hostname ("ghe-prod.corp.com") merges onto its OWN
-// row instead of ALSO spawning a second, wrongly-named one from
-// hostFromSecretSlug's naive hyphens-to-dots reverse. That reverse survives
-// only as the fallback for an ORPHAN secret — one whose slug matches no
-// registered ScmHosts entry — where a best-guess dotted host beats dropping
-// the credential entirely. slugHost is also many-to-one (two registered hosts
-// can share a slug), so a matching secret's lane is added to EVERY host that
-// slug matches.
+// Host recovery is FORWARD (ports ui/src/app/lib/scm-provider.ts's
+// deriveProviders): each ScmHosts entry's slugHost(host) is matched against the
+// secrets, so "ghe-prod.corp.com" merges onto its OWN row. hostFromSecretSlug's
+// naive reverse is only the fallback for an ORPHAN secret. slugHost is
+// many-to-one, so a matching secret's lane is added to EVERY host it matches.
 func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[string]bool) []integrationRow {
 	byHost := map[string]gitHostCreds{}
 	slugToHosts := map[string][]string{}

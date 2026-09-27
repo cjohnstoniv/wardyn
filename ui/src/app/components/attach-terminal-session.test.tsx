@@ -104,6 +104,7 @@ class FakeWebSocket {
 
 import { AttachTerminal } from "./attach-terminal";
 import { RUN_COCKPIT } from "./wardyn/copy";
+import { aheadByHours } from "../lib/test-clock";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on every
 // connect (internal/api/attach_holder.go).
@@ -111,7 +112,7 @@ function attachModeFrame(readOnly: boolean, principal: string) {
   return JSON.stringify({
     type: "attach-mode",
     read_only: readOnly,
-    holder: { held: true, principal, since: "2026-08-16T12:00:00Z", cols: 132, rows: 50, source: "web" },
+    holder: { held: true, principal, since: aheadByHours(-1), cols: 132, rows: 50, source: "web" },
   });
 }
 

@@ -27,7 +27,7 @@ import (
 //     DefaultRole is configured.
 //  6. Creates a signed Wardyn session cookie.
 //
-// W31-S1-5: the USER-actionable denials (5's role-denied, 4's domain/
+// The USER-actionable denials (5's role-denied, 4's domain/
 // unverified-email) redirect to "/?auth_error=<code>" (302) instead of a
 // bare http.Error text page — a login failure otherwise dead-ended the
 // browser on plain text with no way back to the console, and no chance for
@@ -149,7 +149,7 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	// since each has its own struct.
 	//
 	// TOLERATING THE SHAPE AND REPORTING THE LOSS ARE DIFFERENT JOBS, and the
-	// decode error used to be discarded, which collapsed them. A claim the IdP
+	// decode error must not be discarded, or the two collapse. A claim the IdP
 	// DID send in a shape this build cannot read then arrived at derivation as
 	// nil — byte-for-byte "asked, there were none". The group the human really
 	// holds vanished from the snapshot with the PF-26 partial bit CLEAR, so
@@ -210,7 +210,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 
 // CallbackHandlerWithDenials is CallbackHandler that also reports each sign-in
 // refused over a user type (DenialUserTypeAmbiguous, DenialUserTypeUnknown) to
-// onDenied, so internal/api can audit it as auth.failed. This package stays
+// onDenied, so internal/api can audit it as auth.fail. This package stays
 // store- and audit-agnostic, as it is for OnLogin.
 func (a *Authenticator) CallbackHandlerWithDenials(onDenied func(r *http.Request, reason string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, onDenied) }
@@ -255,7 +255,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
-	// D12: a transient IdP hiccup on the token endpoint (5xx, timeout) used to
+	// A transient IdP hiccup on the token endpoint (5xx, timeout) must not
 	// hard-fail the whole login on the FIRST blip — retryExchange gives it
 	// tokenExchangeRetries short-backoff attempts before giving up. A
 	// PERMANENT rejection (bad client secret, expired/replayed code —
@@ -398,7 +398,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	// Config.OnLogin doc). groups/groupsTruncated are the SAME values the
 	// session below carries, never re-derived.
 	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), idToken.Subject, role, groups, groupsTruncated)
+		a.cfg.OnLogin(r.Context(), idToken.Subject, role, d.UserType, groups, groupsTruncated)
 	}
 	// The login-grant sink, for the same reason and in the same place as
 	// OnLogin: the login is APPROVED here and not before, so a refused login

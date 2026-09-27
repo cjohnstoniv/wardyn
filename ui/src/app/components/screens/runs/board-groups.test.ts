@@ -115,26 +115,68 @@ describe("approvalSignals — held vs passive", () => {
     expect(s.get("run-1")?.adoConsent).toBeUndefined();
   });
 
-  // #160 — isHeld's 60-minute stale-hold ceiling on tool_call/credential_reauth.
-  it("a tool_call past the 60-minute ceiling is staleHeld, not held — and NOT reauth", () => {
-    const old = new Date(Date.now() - 61 * 60_000).toISOString();
+  // #509 — a PENDING tool_call/credential_reauth row is live until the
+  // SERVER says otherwise; approvalSignals only ever joins PENDING rows (the
+  // `state !== "PENDING"` guard above), so there is no client elapsed-time
+  // ceiling left to cross here — both stay held at any age.
+  it("a tool_call 2 hours old — well past the old 60-minute ceiling — is still held, not staleHeld", () => {
+    const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
     const s = approvalSignals([
       approval({ kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" }, requested_at: old }),
     ]);
-    expect(s.get("run-1")).toEqual({ pending: 1, staleHeld: true });
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true });
   });
 
-  it("a credential_reauth past the 60-minute ceiling is staleHeld, not held, and drops the reauth flag", () => {
-    const old = new Date(Date.now() - 90 * 60_000).toISOString();
+  it("a credential_reauth 25 hours old — past the server's own 24h default — is still held AND reauth", () => {
+    const old = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
     const s = approvalSignals([
       approval({ kind: "credential_reauth", requested_scope: {}, requested_at: old }),
     ]);
-    expect(s.get("run-1")).toEqual({ pending: 1, staleHeld: true });
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true, reauth: true });
   });
 
   it("a credential_reauth well inside the ceiling is both held AND reauth", () => {
     const s = approvalSignals([approval({ kind: "credential_reauth", requested_scope: {} })]);
     expect(s.get("run-1")).toEqual({ pending: 1, held: true, reauth: true });
+  });
+
+  // #725/F1 — an Azure DevOps capability escalation (tool_call with grant_id +
+  // requested_scope.lane "azure_devops") releases its OWN hold after 4
+  // minutes (isHeld's ADO_HOLD_WINDOW_MS arm), while a plain tool_call stays
+  // held for as long as it is PENDING (#509). At 5 minutes it must be a passive
+  // pending — never held — so the board card
+  // renders RUN_WAIT.waiting(n) rather than waitingHeld(n), matching what
+  // the ADO card itself already says at that age.
+  it("an Azure DevOps capability tool_call at 5 minutes is a passive pending, not held", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    const s = approvalSignals([
+      approval({
+        kind: "tool_call",
+        grant_id: "grant-1",
+        requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
+        requested_at: fiveMinutesAgo,
+      }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
+  });
+
+  it("an Azure DevOps capability tool_call still inside its own 4-minute window is held", () => {
+    const s = approvalSignals([
+      approval({
+        kind: "tool_call",
+        grant_id: "grant-1",
+        requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
+      }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true });
+  });
+
+  // A row the server has actually moved off PENDING (decided or expired) is
+  // filtered before isHeld even runs — it produces no signal at
+  // all, the same as any other decided approval.
+  it("an EXPIRED tool_call produces no signal for its run", () => {
+    const s = approvalSignals([approval({ kind: "tool_call", state: "EXPIRED" })]);
+    expect(s.get("run-1")).toBeUndefined();
   });
 });
 
@@ -154,11 +196,13 @@ describe("groupWaitBreakdown", () => {
       run({ id: "r4", state: "STARTING" }),
       run({ id: "r5", state: "RUNNING" }), // clean — counted nowhere
     ];
-    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 2, reauth: 1, starting: 1, staleHeld: 0 });
+    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 2, reauth: 1, starting: 1 });
   });
 
-  it("a stale hold moves from held to staleHeld — the header's counted claim shrinks by one", () => {
-    const old = new Date(Date.now() - 90 * 60_000).toISOString();
+  // #509 — a PENDING tool_call stays held at any age (no client ceiling), so
+  // a group's counted claim no longer shrinks as its holds age.
+  it("a tool_call held for hours still counts as held in the header's breakdown", () => {
+    const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
     const signals = approvalSignals([
       approval({ id: "a1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
       approval({ id: "a2", run_id: "r2", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" }, requested_at: old }),
@@ -167,12 +211,12 @@ describe("groupWaitBreakdown", () => {
       run({ id: "r1", state: "WAITING_FOR_CONFIRMATION" }),
       run({ id: "r2", state: "WAITING_FOR_CONFIRMATION" }),
     ];
-    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 1, reauth: 0, starting: 0, staleHeld: 1 });
+    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 2, reauth: 0, starting: 0 });
   });
 
   it("no signals and no STARTING runs counts nothing — the caller renders the uncounted 'Nothing waiting' chip itself", () => {
     const runs = [run({ id: "r1", state: "RUNNING" }), run({ id: "r2", state: "COMPLETED" })];
-    expect(groupWaitBreakdown(runs, new Map())).toEqual({ held: 0, reauth: 0, starting: 0, staleHeld: 0 });
+    expect(groupWaitBreakdown(runs, new Map())).toEqual({ held: 0, reauth: 0, starting: 0 });
   });
 });
 

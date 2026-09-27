@@ -157,6 +157,9 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // "everything alice@corp did in Q3", the vendor/compliance question — is ONE
 // request no matter how many events it spans. handleQueryAudit
 // stays the capped, paginated, UI-facing read; this is the bulk export beside it.
+// It is also where a held push's complete path list joins its
+// approval.push_paths.record row (withPushPaths): the chained row carries only
+// the list's digest.
 //
 // A member is scoped exactly as in handleQueryAudit: only ?run_id= of a run they
 // created, and an unowned/absent run_id yields an empty (200, zero-line) export —
@@ -196,7 +199,11 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i := range page {
-			if err := enc.Encode(page[i]); err != nil {
+			ev := page[i]
+			if ev.Action == pushPathsAuditAction {
+				ev = s.withPushPaths(r.Context(), ev)
+			}
+			if err := enc.Encode(ev); err != nil {
 				return // client hung up
 			}
 		}
@@ -271,9 +278,10 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 }
 
 // parseAuditFilter reads the optional narrowing predicates off the query string
-// (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=), writing a
-// 400 and returning ok=false on a malformed value. ?actor= is the exact
-// principal ("everything developer X did"). All are additive and optional; none
+// (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=&origin=),
+// writing a 400 and returning ok=false on a malformed value. ?actor= is the exact
+// principal ("everything developer X did"); ?origin= separates the rows enrolled
+// devices forwarded (device) from the organisation's own (organisation). All are additive and optional; none
 // set is the zero filter, which changes nothing about the query taken.
 // Timestamps are RFC3339, the same encoding the audit rows are served in.
 func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter, bool) {
@@ -284,6 +292,7 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		Actor:        q.Get("actor"),
 		ActorType:    types.ActorType(q.Get("actor_type")),
 		Outcome:      q.Get("outcome"),
+		Origin:       q.Get("origin"),
 	}
 	for _, p := range []struct {
 		name string
@@ -304,6 +313,12 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem:
 	default:
 		writeError(w, http.StatusBadRequest, "invalid actor_type (want human, agent, or system)")
+		return store.AuditFilter{}, false
+	}
+	switch f.Origin {
+	case "", store.AuditOriginDevice, store.AuditOriginOrganisation:
+	default:
+		writeError(w, http.StatusBadRequest, "invalid origin (want device or organisation)")
 		return store.AuditFilter{}, false
 	}
 	return f, true

@@ -9,20 +9,18 @@ import (
 	"testing"
 )
 
-// D4: WARDYN_REQUIRE_OPERATOR_SET_EGRESS defaults ON as of 0.7.
+// WARDYN_REQUIRE_OPERATOR_SET_EGRESS defaults on.
 //
-// The gate itself shipped in 0.6 — built, wired, documented, tested — and OFF,
-// because flipping it narrows egress for existing workspaces on upgrade. 0.7
-// flips it, because the asymmetry was the anomaly: the SECRET side of the very
-// same switch statement has always applied this provenance check
-// unconditionally, and calls the boundary "security-critical — do not relax".
-// The reason is identical for egress — a hostile, or simply never-reviewed,
-// repo could widen a run's allowlist just by naming a host in a committed file,
-// with no operator ever acting.
+// The secret side of the very same switch statement applies this provenance
+// check unconditionally, and calls the boundary "security-critical — do not
+// relax". The reason is identical for egress — a hostile, or simply
+// never-reviewed, repo could widen a run's allowlist just by naming a host in a
+// committed file, with no operator ever acting. Turning it on narrows egress
+// for existing workspaces on upgrade, which is the price of closing that door.
 //
 // This pins the DEFAULT, which no internal/api test can: those construct
 // api.Config directly and set the field explicitly, so every one of them would
-// stay green if the flag default silently reverted.
+// stay green if the flag default silently flipped.
 func TestRequireOperatorSetEgress_DefaultsOn(t *testing.T) {
 	// The flag declaration is the single source of the default; read it there
 	// rather than booting a daemon.

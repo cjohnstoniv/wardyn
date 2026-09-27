@@ -122,7 +122,7 @@ export const GOVERNANCE = {
   ASSIGNED_COUNT: (n: number) => `${n} subject${n === 1 ? "" : "s"}`,
   // ADDITION to §7.2 (R4/F032): the Limits cell must also account for a run
   // quota, not just the three BOOLEAN doors — otherwise a profile whose one
-  // limit is a run quota reads "None" while denyMemberRunQuota (internal/api/
+  // limit is a run quota reads "None" while denyUserRunQuota (internal/api/
   // runs_create_validate.go) still refuses that member's fourth run with a
   // 422. Same inline pluralisation as ASSIGNED_COUNT; the wording tracks the
   // server's own "too many runs at once".
@@ -281,6 +281,8 @@ export const GOVERNANCE = {
 //     when a redeploy removes a pairing from WARDYN_DEFAULT_POLICY that a
 //     stored profile still names: the grant is dropped rather than the run
 //     failed, and the member is told.
+//     WARN_PUSH_RULES_DROPPED is its push_rules mirror (droppedPushRulesWarning,
+//     same file), fired at the same resolve seam (#272).
 // DENIED_CODEX_HOLD sits BESIDE, never replaces, runs_create_validate.go's
 // existing explicit-hold refusal (§7.1) — one refuses a hold the caller asked
 // for, the other a hold their profile derived. WARN_STORED_CLAMPED is the
@@ -308,13 +310,15 @@ export const MEMBER = {
     `workspace host "${host}" is denied by your governance profile "${name}" — the run launches, but that host is refused at the proxy`,
   WARN_GRANT_DROPPED: (name: string, kind: string, reason: string) =>
     `governance profile "${name}": dropped ${kind} grant no longer within the deployment's eligible grants (${reason})`,
+  WARN_PUSH_RULES_DROPPED: (name: string) =>
+    `governance profile "${name}": push_rules dropped — this profile's ceiling sets none, so the deployment default's content rules do not apply to members of it`,
   DENIED_STALE_GROUPS:
     "groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved",
 
   // The two CAPABILITY refusals, which is why — alone in this group — they name
   // no profile: they fire whether or not the caller has one. Both close a door a
   // member could otherwise walk through AFTER the explicit check had already run
-  // (denyMemberSeededImage, runs_create_validate.go; handleCreateWorkspace,
+  // (denyUserSeededImage, runs_create_validate.go; handleCreateWorkspace,
   // workspaces.go). The `{id}` below is a literal route segment, not a parameter.
   DENIED_SEEDED_IMAGE: (image: string) =>
     `image ${image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image`,

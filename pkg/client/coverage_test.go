@@ -38,6 +38,12 @@ var (
 	_ client.SiteConfig
 	_ map[string]client.ArtifactOverride
 	_ []client.EgressRedirect
+	_ client.ModelProviders
+	_ client.ModelProvider
+	_ client.ModelProviderKind
+	_ client.ProviderAuth
+	_ client.BedrockSettings
+	_ client.ProviderHarness
 	_ client.ApprovalScope
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
@@ -60,22 +66,22 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
-		"secrets":     {"ListSecrets", "SetSecret", "DeleteSecret"},
+		"secrets":     {"ListSecrets", "ListSecretsPage", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
-		"ssh-keys":    {"ListSSHKeys", "AddSSHKey"},
-		"devices":     {"MintDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
+		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
+		"devices":     {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}
 }
 

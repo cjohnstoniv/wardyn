@@ -57,8 +57,8 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 // The pin holds the property, not the current input list: if the control-plane
 // gate ever re-widens (or the sidecar tightens), one of these fires.
 func TestUpstreamProxyGateMatchesSidecar(t *testing.T) {
-	// Values a corporate operator can plausibly type, each one previously
-	// accepted by the scheme-only gate and refused by the sidecar. wantReason is
+	// Values a corporate operator can plausibly type that a scheme-only gate
+	// would accept and the sidecar refuses. wantReason is
 	// the audited `reason` on the run.upstream_proxy.resolve failure ("" = the
 	// value must resolve).
 	for _, c := range []struct{ raw, wantReason string }{

@@ -248,7 +248,7 @@ export function GovernanceScreen() {
                                   nothing, so it is derived from every chip
                                   limitChips can draw — not from the boolean
                                   doors alone. max_concurrent_runs is enforced
-                                  (denyMemberRunQuota's 422), and a quota-only
+                                  (denyUserRunQuota's 422), and a quota-only
                                   profile used to read "None". autonomy_rubric
                                   joined the same rule the day its chip did. */}
                               {chips.length > 0 ? chips : GOV.LIMITS_NONE}
@@ -362,7 +362,7 @@ export function GovernanceScreen() {
               disabled={deleteCount > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();
-                if (toDelete) del(toDelete);
+                if (toDelete) void del(toDelete);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

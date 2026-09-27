@@ -22,8 +22,12 @@ import (
 // RunConformance exercises the secretstore.Store contract. newStore must return
 // a usable store on each call (it need not be empty; the suite uses unique names).
 func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store) {
-	ctx := context.Background()
-	uniq := func(p string) string { return "conformance/" + p + "/" + uuid.NewString() }
+	// Marked, as every read must be: the Audited decorator refuses a Get whose
+	// context says no purpose.
+	ctx := secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus)
+	// Names keep to the API's secretNameRE: a store may refuse anything else
+	// (vaultkv refuses a "/", which would change the Vault path's shape).
+	uniq := func(p string) string { return "conformance-" + p + "-" + uuid.NewString() }
 
 	t.Run("put_get_roundtrip_binary", func(t *testing.T) {
 		s := newStore(t)
@@ -126,6 +130,15 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store)
 	})
 	t.Run("delete_owner_row_leaves_operator_row", func(t *testing.T) {
 		testDeleteOwnerRowLeavesOperatorRow(t, ctx, newStore, uniq)
+	})
+	t.Run("erase_owner_removes_own_rows_only", func(t *testing.T) {
+		testEraseOwnerRemovesOwnRowsOnly(t, ctx, newStore, uniq)
+	})
+	t.Run("delete_everywhere_reaches_every_owner_and_only_its_names", func(t *testing.T) {
+		testDeleteEverywhere(t, ctx, newStore, uniq)
+	})
+	t.Run("holders_names_every_owner_and_only_its_names", func(t *testing.T) {
+		testHolders(t, ctx, newStore, uniq)
 	})
 }
 
@@ -238,4 +251,105 @@ func testDeleteOwnerRowLeavesOperatorRow(t *testing.T, ctx context.Context, newS
 	if err != nil || string(gotA) != "operator-value" {
 		t.Fatalf("For(a).Get after deleting A's own row = (%q, %v), want the fallback to operator-value", gotA, err)
 	}
+}
+
+// testEraseOwnerRemovesOwnRowsOnly: secretstore.EraseOwner over this store
+// removes every row of one owner and nothing of another owner's or the
+// operator's, and refuses the operator namespace outright.
+func testEraseOwnerRemovesOwnRowsOnly(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	a, b, name := uniq("owner-a"), uniq("owner-b"), uniq("erase")
+	t.Cleanup(func() { _ = op.Delete(ctx, name); _ = op.For(b).Delete(ctx, name) })
+	for _, w := range []struct{ owner, name string }{{"", name}, {a, name}, {a, name + "-2"}, {b, name}} {
+		if err := op.For(w.owner).Put(ctx, w.name, []byte("v-"+w.owner)); err != nil {
+			t.Fatalf("seed %q/%q: %v", w.owner, w.name, err)
+		}
+	}
+
+	rep, err := secretstore.EraseOwner(ctx, op, a)
+	if err != nil || rep.Count != 2 {
+		t.Fatalf("EraseOwner(a) = (%+v, %v), want 2 erased", rep, err)
+	}
+	if left, _ := op.For(a).List(ctx); len(left) != 0 {
+		t.Fatalf("A still holds %v after the erase", left)
+	}
+	if got, err := op.For(b).Get(ctx, name); err != nil || string(got) != "v-"+b {
+		t.Fatalf("B's row after erasing A = (%q, %v), want it untouched", got, err)
+	}
+	if got, err := op.Get(ctx, name); err != nil || string(got) != "v-" {
+		t.Fatalf("operator row after erasing A = (%q, %v), want it untouched", got, err)
+	}
+	if _, err := secretstore.EraseOwner(ctx, op, ""); !errors.Is(err, secretstore.ErrOperatorNamespace) {
+		t.Fatalf(`EraseOwner("") = %v, want ErrOperatorNamespace`, err)
+	}
+	if got, err := op.Get(ctx, name); err != nil || string(got) != "v-" {
+		t.Fatalf("operator row after a refused operator erase = (%q, %v), want it untouched", got, err)
+	}
+}
+
+// testDeleteEverywhere: called on ONE owner's view, it still removes the
+// operator's row and every other owner's row of the named name, counts them,
+// and leaves a different name — in the same namespaces — alone.
+func testDeleteEverywhere(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	name, other := uniq("purge"), uniq("purge-keep")
+	a, b := uniq("owner-a"), uniq("owner-b")
+	t.Cleanup(func() {
+		_, _ = op.DeleteEverywhere(ctx, []string{name, other})
+	})
+	for _, owner := range []string{"", a, b} {
+		if err := op.For(owner).Put(ctx, name, []byte("v")); err != nil {
+			t.Fatalf("For(%q).Put: %v", owner, err)
+		}
+	}
+	_ = op.For(a).Put(ctx, other, []byte("kept"))
+
+	n, err := op.For(b).DeleteEverywhere(ctx, []string{name})
+	if err != nil || n != 3 {
+		t.Fatalf("For(b).DeleteEverywhere = (%d, %v), want 3 rows removed", n, err)
+	}
+	for _, owner := range []string{"", a, b} {
+		if _, err := op.For(owner).Get(ctx, name); !errors.Is(err, secretstore.ErrNotFound) {
+			t.Fatalf("For(%q).Get after DeleteEverywhere err = %v, want ErrNotFound", owner, err)
+		}
+	}
+	if got, err := op.For(a).Get(ctx, other); err != nil || string(got) != "kept" {
+		t.Fatalf("a name DeleteEverywhere was not given = (%q, %v), want kept", got, err)
+	}
+}
+
+// testHolders: called on ONE owner's view, Holders still names the operator
+// and every owner holding each given name; a name nobody holds is absent, a
+// name not given is not read, and a deleted row drops out.
+func testHolders(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	name, other, nobody := uniq("held"), uniq("held-other"), uniq("held-nobody")
+	a, b := uniq("owner-a"), uniq("owner-b")
+	t.Cleanup(func() { _, _ = op.DeleteEverywhere(ctx, []string{name, other}) })
+	for _, owner := range []string{"", a, b} {
+		if err := op.For(owner).Put(ctx, name, []byte("v")); err != nil {
+			t.Fatalf("For(%q).Put: %v", owner, err)
+		}
+	}
+	if err := op.For(a).Put(ctx, other, []byte("v")); err != nil {
+		t.Fatalf("For(a).Put: %v", err)
+	}
+
+	got, err := op.For(b).Holders(ctx, []string{name, nobody})
+	if want := sortedOf("", a, b); err != nil || len(got) != 1 || !slices.Equal(sortedOf(got[name]...), want) {
+		t.Fatalf("For(b).Holders = (%v, %v), want only %q, held by %q", got, err, name, want)
+	}
+	if err := op.For(a).Delete(ctx, name); err != nil {
+		t.Fatalf("For(a).Delete: %v", err)
+	}
+	got, err = op.Holders(ctx, []string{name, other})
+	if want := sortedOf("", b); err != nil || !slices.Equal(sortedOf(got[name]...), want) || !slices.Equal(got[other], []string{a}) {
+		t.Fatalf("Holders after a's delete = (%v, %v), want %q held by %q and %q by %q", got, err, name, want, other, a)
+	}
+}
+
+func sortedOf(s ...string) []string {
+	s = slices.Clone(s)
+	slices.Sort(s)
+	return s
 }

@@ -41,7 +41,7 @@ const ephemeralBudgetSuiteMargin = 5 * time.Minute
 // target reds here too rather than silently spending a fourth eviction budget
 // the Makefile never made room for.
 //
-// THE MARGIN IS PART OF THE ASSERTION, not decoration. `budget < timeout` is the
+// The margin is part of the assertion, not decoration. `budget < timeout` is the
 // arithmetic of a suite with exactly one case in it: this case is the FIRST thing
 // the package runs, and a green k8s run spends a further 457 s on everything
 // after it (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log). A

@@ -65,7 +65,7 @@ type Source struct {
 	// (json.RawMessage(fresh.Profile)).
 	Profile json.RawMessage `json:"profile,omitempty"`
 	// Status is the source's scan lifecycle — the same one-word states the
-	// workspace used to own: pending_scan | scanning | scanned | error.
+	// workspace owns: pending_scan | scanning | scanned | error.
 	Status WorkspaceStatus `json:"status"`
 	// ActiveRunID fences this source's in-flight scan run, exactly as the
 	// workspace's own field fenced whole-workspace scans before the retarget.

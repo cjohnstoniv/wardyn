@@ -192,3 +192,24 @@ rejected object — so say it at render, like every other guard in this chart.
 {{- fail (printf "wardyn: uiSandbox.port and service.port are both %d — wardynd refuses to boot when they are equal, because the sandbox's own pages must land on a DIFFERENT browser origin than the console. Give uiSandbox.port its own number." $http) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+wardyn.vaultProjectedToken: "true" when the pod needs the dedicated Vault
+service-account token volume (a Vault address with Kubernetes auth). Nil-safe
+for a values map that predates secretStore (--reuse-values).
+*/}}
+{{- define "wardyn.vaultProjectedToken" -}}
+{{- $vault := (.Values.secretStore | default dict).vault | default dict -}}
+{{- if and $vault.addr (eq $vault.auth "kubernetes") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+wardyn.azureWorkloadIdentity: "true" when wardynd gets its Key Vault token
+through AKS workload identity (a Key Vault URL with auth workload-identity):
+the pod label and service-account annotation the webhook keys on. Nil-safe
+for a values map that predates secretStore.azure (--reuse-values).
+*/}}
+{{- define "wardyn.azureWorkloadIdentity" -}}
+{{- $azure := (.Values.secretStore | default dict).azure | default dict -}}
+{{- if and $azure.vaultUrl (eq ($azure.auth | default "workload-identity") "workload-identity") -}}true{{- end -}}
+{{- end -}}

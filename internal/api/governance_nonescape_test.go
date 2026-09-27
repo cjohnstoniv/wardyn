@@ -28,7 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the escape harness ───────────────────────────────────────────────────────
+// the escape harness
 
 // govEscapeStore is the store surface ONE member create-and-dispatch drives:
 // capStore's grants + governance answers, plus the run/policy/token rows the
@@ -74,6 +74,16 @@ func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.workspaces, nil
+}
+func (s *govEscapeStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ws := range s.workspaces {
+		if ws.ID == id {
+			return ws, nil
+		}
+	}
+	return types.Workspace{}, store.ErrNotFound
 }
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()
@@ -149,7 +159,7 @@ func (s *govEscapeStore) GetAPITokenByRaw(_ context.Context, raw string) (types.
 func (s *govEscapeStore) TouchAPIToken(context.Context, uuid.UUID, time.Time) error { return nil }
 
 // govEscapeFixture wires a Server that really creates AND dispatches a run, so
-// the assertions below can read the run.policy.effective envelope — dispatch's
+// the assertions below can read the run.policy.resolve envelope — dispatch's
 // post-widening authorization snapshot, and the only durable record of what a
 // run was actually allowed to do (agent_runs carries no spec, run_policies.spec
 // is overwritten in place, and an inline/default policy has no row at all).
@@ -194,7 +204,7 @@ func govSession(t *testing.T, sub string, groups []string, truncated bool) *http
 }
 
 // govCreateAndDispatch POSTs a run as the given member and returns the decoded
-// run.policy.effective envelope. It fails the test unless the create really
+// run.policy.resolve envelope. It fails the test unless the create really
 // reached dispatch — an escape row that 500s early would otherwise "pass" by
 // never producing an envelope to contradict it.
 func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *recRecorder, cookie *http.Cookie, body string) types.RunPolicySpec {
@@ -210,7 +220,7 @@ func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *
 	}
 	st.mu.Unlock()
 	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
-	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
+	ev := waitForRecAudit(t, audit, runID, "run.policy.resolve", "success")
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {
 		t.Fatalf("envelope is not a RunPolicySpec: %v (%s)", err, ev.Data)
@@ -225,10 +235,10 @@ const (
 	govWorkspaceRepo = "https://github.com/octocat/Hello-World.git"
 )
 
-// ─── the escape table ─────────────────────────────────────────────────────────
+// the escape table
 
 // TestGovernanceProfileNonEscape is the escape table's create-time half (rows
-// 1-10) plus row 16, asserted on the decoded run.policy.effective envelope —
+// 1-10) plus row 16, asserted on the decoded run.policy.resolve envelope —
 // the DEFINED post-widening truth, not the spec the handler happened to hold at
 // some intermediate step. Asserting anywhere earlier would prove nothing: the
 // artifact-redirect phase inside dispatch adds hosts and injections AFTER
@@ -358,7 +368,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 	//	7a: a KIND the profile does not carry at all — composer.Clamp's job.
 	//	7b: a kind the profile DOES carry, paired with a DIFFERENT operator
 	//	    secret. Clamp keeps same-kind grants, so this one reaches
-	//	    filterMemberGrants — the seam that had to be re-pointed from
+	//	    filterUserGrants — the seam that had to be re-pointed from
 	//	    Config.DefaultPolicy to the caller's own ceiling. The deployment
 	//	    eligible-lists the pairing, so nothing but the profile can drop it.
 	t.Run("row 7a: a grant KIND the profile does not carry", func(t *testing.T) {
@@ -383,7 +393,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			govProfile: blessed, govTier: types.CapabilitySubjectGroup, govHasGroupTier: true,
 		})
 		// The deployment blesses BOTH pairings, so composer.Clamp keeps the kind
-		// and the ONLY gate left is filterMemberGrants reading the right list.
+		// and the ONLY gate left is filterUserGrants reading the right list.
 		srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{
 			{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, "api.anthropic.com", "profile-blessed-key"), TTLSeconds: 300},
 			{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, "api.anthropic.com", govCorpSecret), TTLSeconds: 300},
@@ -501,7 +511,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
-	// ─── row 16, BOTH legs ────────────────────────────────────────────────────
+	// row 16, both legs
 	//
 	// The group tier can EVAPORATE. sessionGroups truncates the snapshot at the
 	// cookie byte cap, so the group whose assignment walls a member can simply
@@ -564,7 +574,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
-	// ─── rows 19-21, the AUTONOMY doors (0.8 #97) ─────────────────────────────
+	// rows 19-21, the autonomy doors (0.8 #97)
 	//
 	// A rubric bounds what a run may do UNATTENDED, so its escapes are neither
 	// egress nor grants and none of them appears in the envelope the rows above
@@ -845,7 +855,7 @@ func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
 	})
 }
 
-// ─── the stored-policy clamp, red then green ──────────────────────────────────
+// the stored-policy clamp, red then green
 
 // TestStoredPolicyClampCounterfactual is PF-1's before/after in one test: the
 // SAME member selects the SAME wide stored policy, and the only thing that
@@ -894,7 +904,7 @@ func TestStoredPolicyClampCounterfactual(t *testing.T) {
 		profile := govProfile("walled")
 		// The profile carries the api_key KIND but a DIFFERENT pairing, so
 		// composer.Clamp keeps the stored row's grant and the drop has to come
-		// from filterMemberGrants — which is the point: clampGrants passes
+		// from filterUserGrants — which is the point: clampGrants passes
 		// same-kind pairings through verbatim, so Clamp alone would hand this
 		// member the operator secret the stored row named.
 		profile.Ceiling.EligibleGrants = []types.GrantSpec{{
@@ -915,7 +925,7 @@ func TestStoredPolicyClampCounterfactual(t *testing.T) {
 			t.Errorf("min_confinement_class = %q, want the profile's CC2", got.MinConfinementClass)
 		}
 		// The grant-bearing half, which is the reason Clamp alone is not enough:
-		// the profile carries no eligible grants, so filterMemberGrants must
+		// the profile carries no eligible grants, so filterUserGrants must
 		// drop the pairing the stored row carried verbatim.
 		for _, g := range got.EligibleGrants {
 			if strings.Contains(string(g.Scope), govCorpSecret) {

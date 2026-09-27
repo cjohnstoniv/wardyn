@@ -3,7 +3,7 @@
 
 // POST /governance/preview — the console's resolved-profile dry run.
 //
-// THE CONTRACT UNDER TEST is not "the preview ranks correctly". It is that the
+// The contract under test is not "the preview ranks correctly". It is that the
 // preview HAS NO RANKING OF ITS OWN: every case below asserts the endpoint's
 // answer against a DIRECT Store.ResolveGovernanceProfile call on the same
 // fixtures and the same claim lists — the identical call the enforcement path
