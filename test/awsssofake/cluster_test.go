@@ -21,9 +21,10 @@ import (
 
 // TestCreateToken_RefreshGrant is the G4 arm: a real dispatch-time renewal
 // (internal/api/awssso_refresh.go createAWSSSOToken) POSTs grantType
-// "refresh_token" with the stored refreshToken, and this fake used to answer
-// every such call UnsupportedGrantTypeException — so the renewal path could
-// only ever be exercised against an httptest stub written for that one test.
+// "refresh_token" with the stored refreshToken, and the fake must answer it
+// rather than reject every such call with UnsupportedGrantTypeException —
+// otherwise the renewal path could only be exercised against an httptest stub
+// written for one test.
 func TestCreateToken_RefreshGrant(t *testing.T) {
 	s := New()
 	defer s.Close()
@@ -168,7 +169,7 @@ func TestNewHandler(t *testing.T) {
 	}
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+// helpers
 
 type seenBody struct {
 	AccountID    string `json:"account_id"`

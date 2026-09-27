@@ -28,8 +28,8 @@
  *
  * PROVENANCE. Split from 03-what-it-stops.spec.ts 2026-08-24 (acts 3/3b/3c),
  * lines moved verbatim. The chapter card, the opener and the close are
- * [OWNER SLOT — drafted] in local/episode-03-mega-proposal.md;
- * local/episode-03-stanza-check.py fails if a spec string and a stanza drift.
+ * [OWNER SLOT — drafted] in the take-3 proposal; an untracked stanza-check
+ * script fails if a spec string and a stanza drift.
  *
  * STAGING THIS FILE OWNS (off camera): sweepStaleState() only. None of these
  * three demos carries `needsSecret`, so there is no secret to stage — but

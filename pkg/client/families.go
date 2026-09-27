@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -310,13 +311,39 @@ func (c *Client) RevokeDevice(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), nil, nil)
 }
 
+// ListSSHKeysPage is ListSSHKeys plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See client.go's package doc's "# Pagination".
+func (c *Client) ListSSHKeysPage(ctx context.Context, opts ...ListOpts) (keys []types.SSHPublicKey, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/me/ssh-keys", opts), nil, &keys, &hdr)
+	return keys, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
+// ListDeviceEnrolmentTokens returns every enrolment token still redeemable —
+// minted, not yet redeemed, revoked or expired — newest first, never the token
+// itself (admin or security_admin). GET /api/v1/admin/devices/enrolment-tokens.
+func (c *Client) ListDeviceEnrolmentTokens(ctx context.Context) ([]DeviceEnrolmentToken, error) {
+	var out []DeviceEnrolmentToken
+	err := c.do(ctx, http.MethodGet, "/api/v1/admin/devices/enrolment-tokens", nil, &out)
+	return out, err
+}
+
+// RevokeDeviceEnrolmentToken cancels a token that has not been redeemed yet, so
+// no laptop can trade it for a device credential (admin or security_admin). 404
+// for one already redeemed, revoked, expired or unknown.
+// DELETE /api/v1/admin/devices/enrolment-tokens/{id}.
+func (c *Client) RevokeDeviceEnrolmentToken(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/enrolment-tokens/"+id.String(), nil, nil)
+}
+
 // ListSSHKeys returns the caller's own registered SSH gateway keys — the
 // gateway's entire trust root (docs/SSH.md §1). There is no admin view of
-// another principal's keys. GET /api/v1/me/ssh-keys.
-func (c *Client) ListSSHKeys(ctx context.Context) ([]types.SSHPublicKey, error) {
-	var out []types.SSHPublicKey
-	err := c.do(ctx, http.MethodGet, "/api/v1/me/ssh-keys", nil, &out)
-	return out, err
+// another principal's keys. Pass a ListOpts to page; prefer ListSSHKeysPage,
+// which also returns the server's truncation signal. GET /api/v1/me/ssh-keys.
+func (c *Client) ListSSHKeys(ctx context.Context, opts ...ListOpts) ([]types.SSHPublicKey, error) {
+	keys, _, err := c.ListSSHKeysPage(ctx, opts...)
+	return keys, err
 }
 
 // AddSSHKey registers one authorized_keys line under the caller's own
@@ -329,6 +356,16 @@ func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.S
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
 		map[string]string{"name": name, "public_key": publicKey}, &out)
 	return out, err
+}
+
+// DeleteSSHKey removes one of the caller's own registered SSH gateway keys.
+// fp is ssh.FingerprintSHA256's raw form, which routinely contains '/' — it
+// is percent-encoded here, matching the server's decode
+// (handleDeleteSSHKey). Deleting a fingerprint registered by someone else
+// (or one that never existed) 404s the same way — no existence leak across
+// principals. DELETE /api/v1/me/ssh-keys/{fingerprint}.
+func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
 // RunFileStat is one changed file in a RunFiles listing.
@@ -427,10 +464,10 @@ type DriveGrantRequest struct {
 }
 
 // DrivesDocument is GET /drives's body and ApplyDrives's parameter: every
-// registered drive, a bounded page of allocations, and the deployment facts
-// an operator cannot derive from the rows alone (whether host_path drives are
-// even authorable here, which substrate this deployment dispatches to, and
-// whether the org switch is off). `wardyn drive get` prints this verbatim;
+// registered drive, every allocation (GetDrives reads every page), and the
+// deployment facts an operator cannot derive from the rows alone (whether
+// host_path drives are even authorable here, which substrate this deployment
+// dispatches to, and whether the org switch is off). `wardyn drive get` prints this verbatim;
 // ApplyDrives strict-decodes it back — HostRootsConfigured, RunnerTarget,
 // Disabled and GrantTotal are read-only and ignored on write.
 type DrivesDocument struct {
@@ -442,12 +479,38 @@ type DrivesDocument struct {
 	GrantTotal          int                 `json:"grant_total"`
 }
 
-// GetDrives returns every registered drive and a bounded page of allocations.
-// GET /api/v1/drives.
+// GetDrives returns every registered drive and EVERY allocation. GET
+// /api/v1/drives serves allocations one page at a time (X-Wardyn-Truncated),
+// so this reads ?offset= until the flag clears, and then refuses a result
+// whose allocation count is not the server's grant_total: a document that
+// silently dropped allocations would, fed back to ApplyDrives, restore a
+// partial set.
 func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
-	var out DrivesDocument
-	err := c.do(ctx, http.MethodGet, "/api/v1/drives", nil, &out)
-	return out, err
+	grants := []UserDriveGrant{}
+	for {
+		var page DrivesDocument
+		var hdr http.Header
+		path := appendListOpts("/api/v1/drives", []ListOpts{{Offset: len(grants)}})
+		if err := c.do(ctx, http.MethodGet, path, nil, &page, &hdr); err != nil {
+			return DrivesDocument{}, err
+		}
+		grants = append(grants, page.Grants...)
+		more := hdr.Get("X-Wardyn-Truncated") == "true"
+		// Past grant_total, or no progress, is a server not paging the way this
+		// loop reads it; stopping there is what bounds the loop.
+		if len(grants) > page.GrantTotal || more && len(page.Grants) == 0 {
+			return DrivesDocument{}, fmt.Errorf("drives: the server's allocation pages do not add up (%d read, %d reported); retry",
+				len(grants), page.GrantTotal)
+		}
+		if !more {
+			if len(grants) != page.GrantTotal {
+				return DrivesDocument{}, fmt.Errorf("drives: read %d allocations but the server reports %d; allocations changed while being read, retry",
+					len(grants), page.GrantTotal)
+			}
+			page.Grants = grants
+			return page, nil
+		}
+	}
 }
 
 // ApplyDrives upserts every drive and grant doc names, over the existing

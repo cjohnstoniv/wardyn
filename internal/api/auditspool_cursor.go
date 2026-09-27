@@ -91,27 +91,17 @@ func spoolCursorFingerprint(spoolPath string, offset int64) string {
 }
 
 // seedSpoolCursor reads the cursor back, and honours it only while it still
-// DESCRIBES the file it was written against.
+// DESCRIBES the file it was written against. Honouring a stale cursor (spool
+// compacted, truncated or replaced) would SKIP un-replayed events, the one
+// direction this file never errs in, so an unusable cursor reads as 0: replay
+// from the start, at-least-once.
 //
-// A cursor past the end of the file describes a file that no longer exists — the
-// spool was compacted, truncated or replaced while this sidecar was stale — and
-// honouring it would SKIP un-replayed events, which is the one direction this
-// file never errs in. So an out-of-range or unreadable cursor reads as 0: replay
-// from the start, at-least-once, exactly the pre-cursor behaviour.
-//
-// A size bound cannot say that: a cursor left over a REPLACED spool would be
-// honoured whenever the replacement happened to be at least as large — and a
-// replacement usually IS, because the two cases that produce one are a
-// compaction (a smaller file, but a smaller CURSOR too, so the old larger one
-// often still fits) and an operator moving a `.quarantine` file back onto the
-// spool path.
-//
-// So the sidecar carries the offset AND a fingerprint of the content ending
-// there, and a mismatch reads as 0 like any other unusable cursor. A sidecar in
-// the PRE-IDENTITY one-field format is unusable by the same rule: it asserts an
-// offset over a file nothing can tie it to. That costs one extra replay of an
-// in-flight batch on the upgrade that first reads it — at-least-once, the
-// residual C1 accepts — and never the loss it would license.
+// A size bound is not enough: a REPLACED spool (a compaction, or an operator
+// moving a `.quarantine` file back) is often at least as large as the old
+// cursor. So the sidecar carries the offset AND a fingerprint of the content
+// ending there; a mismatch, or a one-field sidecar with no fingerprint, reads as
+// 0. That costs one extra replay of an in-flight batch (at-least-once), never a
+// loss.
 func seedSpoolCursor(cursorPath, spoolPath string, size int64) int64 {
 	buf, err := os.ReadFile(cursorPath)
 	if err != nil {

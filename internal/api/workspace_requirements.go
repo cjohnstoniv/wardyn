@@ -59,17 +59,13 @@ func splitRequirementKey(key string) (typ, rest string, ok bool) {
 
 // validateWorkspaceRequirement validates one Workspace.Requirements key+value
 // pair before it is ever persisted: the key's grammar (splitRequirementKey),
-// the suffix shape appropriate to its type — egress host via
-// workspacescan.ValidApprovedHost (the SAME rule approved-egress promotion
-// enforces: a plain lowercase host, no scheme/port/wildcard — deliberately
-// stricter than a run policy's AllowedDomains, which also accepts a
-// "*."-wildcard; a requirement is written here through an operator-gated
-// endpoint like approved-egress, so the same conservative rule applies),
-// secret name via the existing secret-name rule (validSecretRef: secretNameRE
-// plus the reserved-platform-name guard), write path via
-// runner.ValidateMountSource (the same host bind-mount deny-list a policy
-// mount is checked against) — and the value's level/provenance enums. A
-// non-empty return is the 400 message.
+// the suffix shape for its type — egress host via
+// workspacescan.ValidApprovedHost (the approved-egress rule: plain lowercase
+// host, no scheme/port/wildcard, deliberately stricter than AllowedDomains),
+// secret name via validSecretRef (secretNameRE plus the reserved-platform-name
+// guard), write path via runner.ValidateMountSource (the policy mount deny-list)
+// — and the value's level/provenance enums. A non-empty return is the 400
+// message.
 func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) string {
 	typ, rest, ok := splitRequirementKey(key)
 	if !ok {
@@ -88,19 +84,15 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 			return fmt.Sprintf("requirement %q: invalid secret name", key)
 		}
 	case "integration":
-		// Shape only. EXISTENCE is deliberately not checked here: a workspace
-		// may name an integration before it is configured (the contract states
-		// an intent), and the fold degrades silently to "opens nothing" until
-		// the row exists. Requiring it to exist first would make ordering the
-		// operator's problem.
+		// Shape only. EXISTENCE is deliberately not checked: a workspace may name an
+		// integration before it is configured, and the fold degrades silently to
+		// "opens nothing" until the row exists.
 		//
 		// The ref grammar is WIDER than an operator-authored id
-		// (validateIntegrationWrite's secretNameRE): Wardyn itself mints
-		// colon-qualified ids for ADOPTED legacy rows
-		// ("anthropic_subscription:managed", "git_host:<host>") and stores
-		// them verbatim — a contract must
-		// be able to name what the store holds. Split on the FIRST colon at
-		// the key layer keeps this unambiguous.
+		// (validateIntegrationWrite's secretNameRE): Wardyn mints colon-qualified ids
+		// for ADOPTED legacy rows ("anthropic_subscription:managed", "git_host:<host>"),
+		// and a contract must be able to name what the store holds. Splitting on the
+		// FIRST colon at the key layer keeps this unambiguous.
 		if !integrationRefRE.MatchString(rest) {
 			return fmt.Sprintf("requirement %q: invalid integration id", key)
 		}
@@ -158,18 +150,12 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 
 // dropSourceContributedScanSeeded strips provenance:"scan_seeded" rows from
 // reqs whose key an ATTACHED SOURCE already contributes to this workspace's
-// fold — the server-side belt. The overlay this endpoint writes is
-// meant to carry only the OPERATOR's own edits (setRequirementLane always
-// stamps operator_set); a scan_seeded row here can only be the wizard's
-// client-side seeding, which FoldWorkspaceContract's rule 6 makes win over
-// the SOURCE's own (correctly rescanned) contract forever — a name a rescan
-// drops from the source stays stuck in the overlay with no way to remove it.
-// Dropped silently, never rejected: the wizard still sends these until its
-// own fix lands (source_scan.go's design note), and a dropped row is
-// provably redundant — the source already contributes it — never a lost
-// operator intent. Best-effort: a store
-// read error leaves reqs untouched (fail OPEN on the belt; the write itself
-// must not become unavailable because of it).
+// fold — the server-side belt. The overlay should carry only the OPERATOR's
+// edits; a scan_seeded row here is the wizard's client-side seeding, which
+// FoldWorkspaceContract's rule 6 makes win over the source's own rescanned
+// contract forever. Dropped silently, never rejected (the wizard still sends
+// them; see source_scan.go), and provably redundant. Best-effort: a store read
+// error leaves reqs untouched (fail OPEN; the write must stay available).
 func (s *Server) dropSourceContributedScanSeeded(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) map[string]types.WorkspaceRequirement {
 	hasScanSeeded := false
 	for _, req := range reqs {

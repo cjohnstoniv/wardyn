@@ -475,12 +475,9 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, l
 	if err != nil {
 		return "", err
 	}
-	// W20-W20-record-image-4: runBuildAndFinalize (the devcontainer build path)
-	// applies BuildTimeout/defaultBuildTimeout here; this BYOI-wrap path used to
-	// run under whatever deadline (if any) the caller's ctx happened to carry —
-	// a caller that detaches from request cancellation (context.WithoutCancel,
-	// e.g. launchRecordRun) got NO bound at all. Apply the same ceiling here so
-	// every FinalizeBase caller gets it, not just the ones that remember to wrap.
+	// The same ceiling runBuildAndFinalize applies: a caller that detaches from
+	// request cancellation (context.WithoutCancel, e.g. launchRecordRun) would
+	// otherwise get NO bound at all.
 	timeout := b.BuildTimeout
 	if timeout <= 0 {
 		timeout = defaultBuildTimeout

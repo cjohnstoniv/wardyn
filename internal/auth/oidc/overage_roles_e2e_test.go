@@ -70,7 +70,7 @@ func buildClaimOverageIDToken(t *testing.T, e *idpEnv, sub, email, overClaim str
 // into other people's runs, credentials and sandboxes, handed out because an
 // App Role assignment count crossed a limit in the directory.
 func TestClaimOverageDeniesTheWideningDefaultForBothClaims(t *testing.T) {
-	roleMap := map[string]string{"walled-contractors": writoidc.RoleMember}
+	roleMap := map[string]string{"walled-contractors": writoidc.RoleUser}
 
 	cases := []struct {
 		name       string
@@ -109,12 +109,12 @@ func TestClaimOverageDeniesTheWideningDefaultForBothClaims(t *testing.T) {
 	for _, overClaim := range []string{"groups", "roles"} {
 		t.Run(overClaim+" overage + default member still signs in", func(t *testing.T) {
 			env := newIdPEnv(t)
-			auth := env.newRoleAuth(t, roleMap, writoidc.RoleMember, nil)
+			auth := env.newRoleAuth(t, roleMap, writoidc.RoleUser, nil)
 			buildClaimOverageIDToken(t, env, "sub-ok-"+overClaim, "contractor@corp.example", overClaim, "", nil)
 			w, sess := doCallback(t, auth)
-			if sess.Role != writoidc.RoleMember {
+			if sess.Role != writoidc.RoleUser {
 				t.Fatalf("role = %q (status %d, %q), want %q — a human in 200+ groups or App Roles must still be able to sign in",
-					sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleMember)
+					sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleUser)
 			}
 		})
 	}

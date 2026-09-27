@@ -111,7 +111,7 @@ func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 	answered := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		answered <- doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	}()
 
 	var w *httptest.ResponseRecorder
@@ -141,14 +141,14 @@ func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 	}
 	// The launch-time stamp is written BEFORE the answer: the upload binds to
 	// it, so it can never be a thing the goroutine might not get to.
-	if n := len(audit.find("harness.login.started")); n != 1 {
-		t.Fatalf("harness.login.started rows = %d at response time, want 1", n)
+	if n := len(audit.find("harness.login.start")); n != 1 {
+		t.Fatalf("harness.login.start rows = %d at response time, want 1", n)
 	}
 
 	released = true
 	close(gr.gate)
-	waitForAuditRows(t, audit, "run.interactive", 1)
-	waitForAuditRows(t, audit, "harness.login.started", 1)
+	waitForAuditRows(t, audit, "run.interactive.start", 1)
+	waitForAuditRows(t, audit, "harness.login.start", 1)
 }
 
 // ceilingBlipStore is integStore with two additions the ceiling arm below needs:
@@ -163,11 +163,11 @@ type ceilingBlipStore struct {
 	hint map[uuid.UUID]string
 }
 
-func (s *ceilingBlipStore) ResolveGovernanceProfile(ctx context.Context, users, groups []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *ceilingBlipStore) ResolveGovernanceProfile(ctx context.Context, users, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.fail.Load() {
 		return nil, "", errors.New("governance store unavailable")
 	}
-	return s.integStore.ResolveGovernanceProfile(ctx, users, groups)
+	return s.integStore.ResolveGovernanceProfile(ctx, users, groups, userType)
 }
 
 func (s *ceilingBlipStore) SetRunFailureHint(_ context.Context, id uuid.UUID, hint string) error {
@@ -218,13 +218,13 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	// A member context with a usable group snapshot: the ceiling resolves
 	// through the ordinary lane, so flipping the store below is the only thing
 	// that changes between the two resolutions.
-	ctx := withOIDCGroups(withOIDCRole(withOIDCHuman(context.Background(), "sub-member"), oidc.RoleMember), []string{"eng"})
+	ctx := withOIDCGroups(withOIDCRole(withOIDCHuman(context.Background(), "sub-member"), oidc.RoleUser), []string{"eng"})
 	ctx = withOIDCEmail(ctx, "member@corp.example")
 	hl, ok := agentHarnessLogin(awsSSOAgent)
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -305,13 +305,13 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	cfg.DefaultPolicy = govDeployment()
 	srv := New(cfg)
 
-	ctx := withOIDCGroups(withOIDCRole(withOIDCHuman(context.Background(), "sub-member"), oidc.RoleMember), []string{"eng"})
+	ctx := withOIDCGroups(withOIDCRole(withOIDCHuman(context.Background(), "sub-member"), oidc.RoleUser), []string{"eng"})
 	ctx = withOIDCEmail(ctx, "member@corp.example")
 	hl, ok := agentHarnessLogin(awsSSOAgent)
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}

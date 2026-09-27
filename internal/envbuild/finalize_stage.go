@@ -43,14 +43,11 @@ func finalizeDockerfile(baseRef string) string {
 
 // finalizeGitConfig is the system gitconfig the wrap lays down at /etc/gitconfig.
 //
-// WHY THIS EXISTS: the wrap COPYs the wardyn-git-helper BINARY onto PATH but
-// used to wire NOTHING to it, so git never called it. Every BYOI run under a
-// policy declaring a `github_token` eligible grant therefore failed its
-// `agent-run --selftest` with "a git grant is present but the credential helper
-// is not wired — brokered git would silently no-op" — which is precisely what
-// would have happened. examples/policies/demo.json declares exactly that grant
-// and is the desktop tier's own managed ceiling, so this broke the whole BYOI
-// lane, not an edge case. The selftest was right; the wrap was incomplete.
+// WHY THIS EXISTS: copying the wardyn-git-helper BINARY onto PATH is not
+// enough — without this config wiring it into git, the binary is never
+// called. Any BYOI run under a policy declaring a `github_token` eligible
+// grant then fails `agent-run --selftest` with "a git grant is present but
+// the credential helper is not wired".
 //
 // This mirrors deploy/images/base/Dockerfile's `git config --system`, with ONE
 // deliberate difference: the secret-file path is $HOME-relative, not the agent

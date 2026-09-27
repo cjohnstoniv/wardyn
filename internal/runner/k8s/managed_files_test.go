@@ -51,7 +51,7 @@ func TestCreateSandbox_DeliversManagedFiles(t *testing.T) {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
 
-	// ── the content rides the per-run Secret, not the pod spec ─────────────
+	// the content rides the per-run Secret, not the pod spec
 	sec, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec.RunID), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get run secret: %v", err)
@@ -71,7 +71,7 @@ func TestCreateSandbox_DeliversManagedFiles(t *testing.T) {
 		t.Fatalf("get agent pod: %v", err)
 	}
 
-	// ── one read-only Secret volume, mounted at the managed directory ──────
+	// one read-only Secret volume, mounted at the managed directory
 	main, ok := findContainer(pod.Spec.Containers, mainContainerName)
 	if !ok {
 		t.Fatal("no main container")
@@ -130,7 +130,7 @@ func TestCreateSandbox_DeliversManagedFiles(t *testing.T) {
 		t.Errorf("the volume never projects %v", wantModes)
 	}
 
-	// ── and the mount reaches the container the AGENT runs in ──────────────
+	// and the mount reaches the container the agent runs in
 	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}

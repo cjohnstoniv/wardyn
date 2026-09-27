@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// TestEventSink_ReadsAndRefreshesTokenFromFile is the recovery-path regression:
-// the file-backed token source (WARDYN_GROUNDTRUTH_TOKEN_FILE) is the ONLY wiring that
-// survives the ~1h token TTL, and its disk-reading branch had zero test coverage. The
-// sink must seed its token from the file AND, on refresh (the 401 path), re-read the
-// file — so once the wardynd rotator rewrites it, the ingest recovers.
+// TestEventSink_ReadsAndRefreshesTokenFromFile covers the recovery path: the
+// file-backed token source (WARDYN_GROUNDTRUTH_TOKEN_FILE) is the only wiring that
+// survives the ~1h token TTL. The sink must seed its token from the file and, on
+// refresh (the 401 path), re-read the file — so once the wardynd rotator rewrites it,
+// the ingest recovers.
 func TestEventSink_ReadsAndRefreshesTokenFromFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gt-token")
 	if err := os.WriteFile(path, []byte("file-token-1\n"), 0o600); err != nil {

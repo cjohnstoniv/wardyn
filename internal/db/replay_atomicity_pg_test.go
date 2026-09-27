@@ -150,7 +150,7 @@ func TestPG_AFailedTriggerReplayLeavesNoSupersededChainFunction(t *testing.T) {
 			names[1], auditChainTrigger, serializedChainDef, names, schema)
 	}
 
-	// AND THE RETRY — the operator's actual next move — still restores. A replay
+	// And the retry — the operator's actual next move — still restores. A replay
 	// that rolled back must leave a database the next boot can fix.
 	if err := replayTriggerMigrations(ctx, pool, auditChainTrigger); err != nil {
 		t.Fatalf("the retried replay failed: %v", err)

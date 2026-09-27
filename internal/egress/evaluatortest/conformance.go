@@ -50,7 +50,7 @@ func (ErrorEvaluator) MethodAllowed(string) bool { return true }
 // closed)", and nothing tested it. evaluate is given an evaluator that always
 // errors and must report what the host decided plus the rule source it recorded.
 //
-// F142: with the branch disabled (`if verr != nil` -> `if false`) the whole
+// With the branch disabled (`if verr != nil` -> `if false`) the whole
 // egress + ipguard + hostrules + contentscan suite stayed green, and the shared
 // conformance suite could not catch it either — its verdict helper t.Fatalf's on
 // any error, so an alternate engine can pass conformance while returning the

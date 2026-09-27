@@ -172,8 +172,8 @@ func TestPG_SourceScanSeedsOwnContract(t *testing.T) {
 	}
 }
 
-// TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows is the junk-secrets-
-// wall regression at the store: a rescan's seed REBUILDS the scan_seeded
+// TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows pins, at the store,
+// that a rescan's seed rebuilds the scan_seeded
 // subset of a source's contract instead of only filling gaps, so a name a
 // prior scan found but this one no longer does is DROPPED — while an
 // operator's own row survives untouched regardless of what the new seed
@@ -223,10 +223,10 @@ func TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows(t *testing.T) {
 	}
 	assertRebuilt(t, "fenced", got.Requirements)
 
-	// The other half of the fix: an EMPTY (non-nil) seed — a rescan that
-	// legitimately finds nothing — must still drop stale scan_seeded rows, not
-	// leave them stranded because an empty map used to serialize to SQL NULL,
-	// indistinguishable from "scan failed, don't touch anything".
+	// The other half: an empty (non-nil) seed — a rescan that legitimately
+	// finds nothing — must still drop stale scan_seeded rows, not leave them
+	// stranded because an empty map serialized to SQL NULL, indistinguishable
+	// from "scan failed, don't touch anything".
 	assertEmptyRebuilt := func(t *testing.T, label string, reqs map[string]types.WorkspaceRequirement) {
 		t.Helper()
 		if _, present := reqs["secret:junk"]; present {
@@ -547,18 +547,16 @@ func TestPG_DeleteBaseImageInUse(t *testing.T) {
 	}
 }
 
-// TestPG_UpsertBaseImage_IdentityHitNeverTouchesName pins the OTHER half of
-// W7-S1-3 — the safety property a first attempt at this finding got wrong by
-// folding `name = EXCLUDED.name` straight into UpsertBaseImage's own ON
-// CONFLICT clause: this upsert is not only the Add dialog's create path, it
+// TestPG_UpsertBaseImage_IdentityHitNeverTouchesName pins the safety half of
+// base-image renames: UpsertBaseImage's ON CONFLICT clause must not set `name
+// = EXCLUDED.name`. This upsert is not only the Add dialog's create path, it
 // is also the PASSTHROUGH a workspace/run resolves its declared base-image
 // spec through (internal/api/sources.go's attachSourcesAndBaseImage-shaped
 // caller), which always derives an auto-placeholder name
 // (lastPathSegment(image)) with NO rename intent whatsoever. Applying
-// EXCLUDED.name unconditionally meant every such passthrough call silently
-// renamed an operator's custom-named catalog row back to that placeholder —
-// the exact "can never be renamed" promise this finding exists to fix, just
-// inverted. An identity hit must leave name alone; see
+// EXCLUDED.name unconditionally would make every such passthrough call
+// silently rename an operator's custom-named catalog row back to that
+// placeholder. An identity hit must leave name alone; see
 // TestPG_UpdateBaseImageName_Renames for the actual (scoped) rename path.
 func TestPG_UpsertBaseImage_IdentityHitNeverTouchesName(t *testing.T) {
 	s := hydrateStore(t)
@@ -599,11 +597,11 @@ func TestPG_UpsertBaseImage_IdentityHitNeverTouchesName(t *testing.T) {
 	}
 }
 
-// TestPG_UpdateBaseImageName_Renames pins the ACTUAL W7-S1-3 fix: the
-// scoped rename path handleCreateBaseImage calls on an identity hit where
-// the request carried an explicit name (the Add dialog's re-POST-to-rename
-// shape) — the only route (UI, API, CLI, SDK) to rename a catalog row at
-// all, since none of them ever gained a dedicated edit endpoint.
+// TestPG_UpdateBaseImageName_Renames pins the rename path: the scoped rename
+// handleCreateBaseImage calls on an identity hit where the request carried an
+// explicit name (the Add dialog's re-POST-to-rename shape) — the only route
+// (UI, API, CLI, SDK) to rename a catalog row at all, since none of them has
+// a dedicated edit endpoint.
 func TestPG_UpdateBaseImageName_Renames(t *testing.T) {
 	s := hydrateStore(t)
 	ctx := context.Background()

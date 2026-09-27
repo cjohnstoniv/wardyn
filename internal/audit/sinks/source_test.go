@@ -14,10 +14,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 )
 
-// TestSourceStamp is the #10 regression for WARDYN_AUDIT_SOURCE: when
-// sinks.Source is set, every sink-serialized event gains a top-level
-// "source" field with that value; when unset (the default), the payload is
-// byte-identical to before the field existed — no "source" key at all.
+// TestSourceStamp pins WARDYN_AUDIT_SOURCE: when sinks.Source is set, every
+// sink-serialized event gains a top-level "source" field with that value;
+// when unset (the default), the payload carries no "source" key at all.
 //
 // Not t.Parallel(): sinks.Source is process-global (set once at boot in
 // real wardynd), so this test owns it exclusively and restores it after.

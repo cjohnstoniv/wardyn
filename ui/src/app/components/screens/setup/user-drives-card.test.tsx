@@ -72,7 +72,7 @@ describe("UserDrivesCard", () => {
     expect(screen.getByText(DRIVES.CARD_LEAD)).toBeInTheDocument();
 
     await userEvent.click(screen.getByText(DRIVES.CARD_OPEN));
-    expect(navigateMock).toHaveBeenCalledWith("/drives");
+    expect(navigateMock).toHaveBeenCalledWith("/admin/drives");
   });
 
   it("pluralises through the inline ternary — one drive, one allocation", async () => {

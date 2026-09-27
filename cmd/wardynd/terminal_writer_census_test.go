@@ -35,7 +35,7 @@ var terminalRunStates = map[string]bool{
 // decidable for 24h — long enough for an `always` approve to be replayed into
 // the workspace allowlist for a sandbox that no longer existed.
 //
-// A FIFTH writer added anywhere in internal/api or cmd/wardynd reds this test,
+// A new writer added anywhere in internal/api or cmd/wardynd reds this test,
 // which is the point: the author must say which treatment it gets before the
 // transition can ship.
 var terminalWriterCensus = map[string]string{
@@ -64,10 +64,19 @@ var terminalWriterCensus = map[string]string{
 	// --selftest`, a failed task Exec — with the sandbox and proxy sidecar up and
 	// an egress approval already raisable), and skips it below RUNNING, where no
 	// approval can exist yet. Both arms are pinned in internal/api. The frozen
-	// claim here USED to be "exempt: fails a run that never reached RUNNING" —
-	// which was false at three call sites and is what let a PENDING approval sit
-	// in the queue for 24h and expire as "nobody answered".
+	// claim must not read "exempt: fails a run that never reached RUNNING" —
+	// that is false at three call sites, and would let a PENDING approval sit in
+	// the queue for 24h and expire as "nobody answered".
 	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
+	// (5) The lease (#568) and lost runs (#574): a run whose end passed, or
+	// whose sandbox was lost, and could not be kept, or whose grace ran out.
+	// CASes RUNNING->STOPPED or FAILED, then finalizeRunTail.
+	"stopKeptRun": "CASes, then finalizeRunTail",
+	// A run whose token lapsed and that cannot be kept (#574).
+	"sweepLapsedRunTokens": "reconcileFinalize -> finalizeRunTail",
+	// A revived run whose proxy could not be replaced and that cannot be kept
+	// lost (#575).
+	"reloseRun": "reconcileFinalize -> finalizeRunTail",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api
@@ -130,9 +139,10 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 }
 
 // writesTerminalState reports whether call is a run-state write whose TARGET is
-// one of the terminal states — the two primitives every transition goes through
-// (internal/api's casRunState, and the reaper's guarded UpdateRunStateIfIdle) —
-// or a finalize helper handed a terminal state.
+// one of the terminal states — the three primitives every transition goes
+// through (internal/api's casRunState, its StopKeptRunIf sibling for a kept
+// run's atomic-mark CAS (F04), and the reaper's guarded UpdateRunStateIfIdle)
+// — or a finalize helper handed a terminal state.
 func writesTerminalState(call *ast.CallExpr) bool {
 	name := ""
 	switch fn := call.Fun.(type) {
@@ -142,7 +152,7 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		name = fn.Sel.Name
 	}
 	switch name {
-	case "casRunState", "UpdateRunStateIfIdle", "reconcileFinalize":
+	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize":
 	default:
 		return false
 	}

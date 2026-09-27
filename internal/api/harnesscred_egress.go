@@ -13,26 +13,15 @@ import "fmt"
 // loginEgress is the allowlist the login sandbox actually runs under: the row's
 // region-free hosts plus, for a region-scoped flow, the AWS SSO endpoints for
 // ssoRegion.
-//
-// Region-DERIVED, never wildcarded, because the proxy's only matcher
-// (classifyDomain, internal/egress/proxy/policy.go) understands exactly two
-// forms: a LEADING "*." suffix match, or an exact host. A mid-label pattern
-// like "oidc.*.amazonaws.com" is neither — it compiles to an exact hostname no
-// real request can ever equal, so it allows nothing. The one
-// supported form that would cover every region is "*.amazonaws.com", which
-// opens every AWS service (S3, EC2, …) to the sandbox — far too wide for a
-// login box, so the region is resolved instead of widened.
-//
-// ssoRegion == "" (Bedrock region not configured yet) pre-allows nothing
-// regional: the two hosts the CLI dials then surface as deny_with_review
-// approvals the operator can grant from the login pane — recoverable and
-// honest, unlike the silent dead entries it replaces.
+// Region-DERIVED, never wildcarded: the proxy's matcher (classifyDomain) knows
+// only a LEADING "*." or an exact host, so "oidc.*.amazonaws.com" allows nothing,
+// and "*.amazonaws.com" opens every AWS service — too wide for a login box.
+// ssoRegion == "" pre-allows nothing regional: the CLI's hosts then surface as
+// deny_with_review approvals the operator can grant from the login pane.
 // endpointOverride is the TEST hatch (awssso_endpoint.go). It collapses ALL
-// THREE regional entries — including device.sso.<r>, which no other caller adds
-// — onto the one fake host, because the fake serves the verification page from
-// the same server as the two services. Missing that third entry is the failure
-// that looks like the login hanging: the CLI prints a verification URL the
-// sandbox is then denied.
+// THREE regional entries, including device.sso.<r>, onto the one fake host,
+// which serves the verification page too; missing that entry looks like a hung
+// login (the CLI prints a verification URL the sandbox is denied).
 func (hl harnessLogin) loginEgress(ssoRegion, endpointOverride string) []string {
 	hosts := append([]string(nil), hl.egress...)
 	if hl.regionalSSOEgress && ssoRegion != "" {

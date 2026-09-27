@@ -7,9 +7,14 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -71,6 +76,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
+		// 403, not 404, for a not-found run: same reason as refuseTerminalRun —
+		// claims.RunID comes from the presented run token, not a path parameter,
+		// so a run this store cannot find is that token's own authority gone.
+		// This branch does not split out store.ErrNotFound, so any other store
+		// failure currently answers the same 403.
 		writeError(w, http.StatusForbidden, "run not found for sso-token upload")
 		return
 	}
@@ -142,8 +152,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	scope, ok := s.loginRunScope(r.Context(), stamp, claims.Sub)
 	if !ok {
 		// No stamp, on a deployment whose row now reads `per_user`: unprovable, so
-		// refused. See ssoTokenUnstampedScopeRefusal.
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, ssoTokenUnstampedScopeRefusal, nil)
+		// refused. See ssoTokenUnstampedScopeRefusal. A provider sign-in whose
+		// stamp names no owner, or another one, is refused the same way.
+		msg := ssoTokenUnstampedScopeRefusal
+		if stamp.ModelProviderUID != "" {
+			msg = mpsCaptureNotOwner
+		}
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, msg, nil)
 		return
 	}
 
@@ -155,8 +170,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// Taken FIRST, before the per-scope mutex below, and that order is fixed:
 	// creator key, then scope key, everywhere both are held. Inverting it here
 	// would be the only place in the tree that did, which is how a deadlock gets
-	// written. Fails open exactly as the launch's does.
-	releaseLoginLock := s.lockLoginSupersede(r.Context(), run.CreatedBy)
+	// written. Refuses exactly as the launch's does when the lock cannot be
+	// taken: nothing is stored, and the person signs in again.
+	releaseLoginLock, lerr := s.lockLoginSupersede(r.Context(), run.CreatedBy, claims.RunID)
+	if lerr != nil {
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, refuseReasonSignInBusy, signInBusyRefusal, &scope)
+		return
+	}
 	defer releaseLoginLock()
 
 	// Serialised per scope, because the once-only guard below is a read-then-put
@@ -184,7 +204,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// member's own login sandbox could PUT over its own genuine capture as often
 	// as it liked — the exact overwrite this guard exists to refuse, reopened by
 	// reading the wrong namespace.
-	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
+	if prev, found, rerr := s.readAWSSSOBlob(secretstore.WithPurpose(r.Context(), secretstore.PurposeStatus), scope); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
 			loggedMsg(r.Context(), "read existing aws sso credential", rerr), &scope)
 		return
@@ -225,7 +245,16 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.CapturedAt = s.cfg.Now().UTC()
 	blob.SourceRunID = claims.RunID.String()
 
-	if err := s.storeAWSSSOBlob(r.Context(), scope, blob); err != nil {
+	// A provider sign-in lands only while that provider is still the one it
+	// was launched for (storeProviderSignIn); the legacy door as before.
+	store := func() (bool, error) { return false, s.storeAWSSSOBlob(r.Context(), scope, blob) }
+	if scope.provider != "" {
+		store = func() (bool, error) { return s.storeProviderSignIn(r.Context(), stamp, scope, blob) }
+	}
+	if changed, err := store(); changed {
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonProviderChanged, mpsCaptureChanged, &scope)
+		return
+	} else if err != nil {
 		// Audited like every other refusal on this route: the provenance is
 		// already stamped but NOTHING is persisted, so "the capture did not
 		// land" is the honest reading, and a failed persist is exactly the
@@ -254,16 +283,19 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.RefreshToken))
 	}
 
+	captured := map[string]any{
+		"provider": awsSSOProvider, "source": "helper",
+		// owner + credential_source say WHOSE credential landed: "" / "shared" is
+		// the one every run uses, a subject / "per_user" is one person's. Without
+		// the pair a per_user estate's capture rows are indistinguishable from
+		// each other, and "who signed in" is the first question after an incident.
+		"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
+	}
+	if stamp.ModelProvider != "" {
+		captured["model_provider"] = stamp.ModelProvider
+	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.captured", harnessCredSecretName(awsSSOProvider), "success",
-		mustJSON(map[string]any{
-			"provider": awsSSOProvider, "source": "helper",
-			// owner + credential_source say WHOSE credential landed: "" / "shared" is
-			// the one every run uses, a subject / "per_user" is one person's. Without
-			// the pair a per_user estate's capture rows are indistinguishable from
-			// each other, and "who signed in" is the first question after an incident.
-			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
-		})))
+		"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
 
 	// A sign-in answers any held run. Every PENDING credential_reauth
 	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
@@ -279,6 +311,63 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
 	}
 	w.WriteHeader(http.StatusNoContent)
+	s.killSignInRunAfterCapture(r.Context(), claims.RunID, scope.owner)
+}
+
+// signInCaptureKillGrace is how long a sign-in sandbox outlives its stored
+// capture: long enough for the helper to receive its 204 and print the DONE
+// line the console corroborates (signin-pane.sh) before the sandbox goes.
+const signInCaptureKillGrace = 30 * time.Second
+
+// killSignInRunAfterCapture is #151's server belt: a sign-in run whose capture
+// was just STORED ends on the server, so a closed console tab (or a pane mount
+// that never kills) no longer leaves the sandbox running to its idle cap. Only
+// the success path reaches it — every refusal and a failed store return first.
+//
+// The whole wait is tracked by goBackground and selects on the grace and
+// BaseCtx (cancelled on shutdown before WaitBackground), so an orderly stop
+// neither waits out the grace nor adds to a WaitGroup already being waited
+// on. A shutdown inside the grace skips the kill; the run's idle cap and
+// ReconcileOnBoot still end it. The run is re-read after the grace: the
+// console's own killRun or the banner door may have ended it already, and a
+// terminal run is left alone (a re-kill would re-run the teardown and write a
+// second run.kill row). A lost CAS is not an error. Detached and panic-safe,
+// the same idiom as supersedeOneLoginRun.
+func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID, owner string) {
+	detached := context.WithoutCancel(ctx)
+	grace := s.signInCaptureKillGrace
+	s.goBackground(func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.ErrorContext(detached, "wardynd: post-capture sign-in kill panicked",
+					slog.String("run_id", runID.String()), slog.Any("panic", rec))
+			}
+		}()
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.cfg.BaseCtx.Done():
+			return
+		}
+		readCtx, cancel := context.WithTimeout(detached, killCascadeTimeout)
+		run, err := s.cfg.Store.GetRun(readCtx, runID)
+		cancel()
+		if err != nil {
+			slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
+				slog.String("run_id", runID.String()), slog.Any("error", err))
+			return
+		}
+		if isTerminalRunState(run.State) {
+			return
+		}
+		_, killData, kerr := s.killRunCascade(detached, run, types.ActorSystem, "wardynd",
+			map[string]any{"reason": signInCapturedReason, "captured_for": owner})
+		if kerr != nil || len(killData) > 0 {
+			slog.WarnContext(detached, "wardynd: captured sign-in sandbox was not fully torn down",
+				slog.String("run_id", runID.String()), slog.Any("error", kerr), slog.Any("errors", killData))
+		}
+	})
 }
 
 // bindSSOBlob binds WHAT is uploaded to what the operator asked for, and is the
@@ -347,15 +436,22 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// needs no new trust source: the region is the same
 	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
 	// launched with, and the start URL is the operator's own request value read
-	// back off THIS run's harness.login.started row.
-	if blob.Region != cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) {
+	// back off THIS run's harness.login.start row.
+	//
+	// A provider sign-in binds to that provider's region and model as they read
+	// at launch (its stamp), never the boot config; an empty one refuses.
+	region, model := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion), s.cfg.BedrockModel
+	if stamp.ModelProviderUID != "" {
+		region, model = stamp.SSORegion, stamp.Model
+	}
+	if blob.Region != region {
 		return "sso token region does not match the AWS SSO region this login run was launched with", refuseReasonRegionMismatch
 	}
 	if blob.StartURL != stamp.SSOStartURL {
 		return "sso token start_url does not match the AWS access portal URL this login run was launched with", refuseReasonStartURLMismatch
 	}
 	// Which account and role, not merely which portal.
-	return bindCaptureToPin(blob, stamp, s.cfg.BedrockModel)
+	return bindCaptureToPin(blob, stamp, model)
 }
 
 // missingFields names the fields valid() requires and this blob does not carry.
@@ -401,6 +497,15 @@ func (b awsSSOBlob) missingFields() []string {
 // and it needs a pre-upgrade run still alive across the wardynd restart that
 // deployed this code. Every run launched from here on carries a stamp.
 func (s *Server) loginRunScope(ctx context.Context, stamp loginRunStamp, subject string) (awsSSOScope, bool) {
+	if stamp.ModelProviderUID != "" {
+		// A provider's own door: the launcher's own name for that provider, and
+		// only the launcher's — the run token is authority for whose run it is.
+		// The roster never decides it.
+		if stamp.Owner == "" || stamp.Owner != subject {
+			return awsSSOScope{}, false
+		}
+		return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+	}
 	switch stamp.CredentialSource {
 	case string(types.CredentialSourcePerUser):
 		// The launch-time owner, not the live roster's answer. Empty is fail-closed

@@ -28,7 +28,7 @@ type errTeardownRunner struct {
 func (e *errTeardownRunner) StopSandbox(context.Context, string) error { return e.stopErr }
 
 // TestAuditK8sNetpolIfUnenforced covers 6b commit 2: ReconcileOnBoot's
-// auditK8sNetpolIfUnenforced writes "k8s.netpol_unenforced" for the two
+// auditK8sNetpolIfUnenforced writes "k8s.netpol.fail" for the two
 // verdicts under which a sandbox runs unconfined (unenforced, acknowledged),
 // carrying {verdict, driver} with a nil run id (the apitokens.go token.create/
 // token.revoke precedent — a deployment-wide fact, not tied to a run).
@@ -44,7 +44,7 @@ func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
 	}
 	find := func(events []types.AuditEvent) *types.AuditEvent {
 		for i := range events {
-			if events[i].Action == "k8s.netpol_unenforced" {
+			if events[i].Action == "k8s.netpol.fail" {
 				return &events[i]
 			}
 		}
@@ -62,7 +62,7 @@ func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
 			audit := fire(t, tc.rn)
 			ev := find(audit.events)
 			if ev == nil {
-				t.Fatalf("no k8s.netpol_unenforced event recorded (have %d events)", len(audit.events))
+				t.Fatalf("no k8s.netpol.fail event recorded (have %d events)", len(audit.events))
 			}
 			if ev.RunID != nil {
 				t.Errorf("RunID = %v, want nil (deployment-wide, not run-scoped)", ev.RunID)
@@ -90,19 +90,19 @@ func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
 	t.Run("negative control: enforced stays silent", func(t *testing.T) {
 		audit := fire(t, k8sRunner{networkPolicy: true})
 		if ev := find(audit.events); ev != nil {
-			t.Errorf("k8s.netpol_unenforced fired on a PROVEN-enforced verdict: %+v", ev)
+			t.Errorf("k8s.netpol.fail fired on a PROVEN-enforced verdict: %+v", ev)
 		}
 	})
 	t.Run("negative control: non-k8s driver stays silent", func(t *testing.T) {
 		audit := fire(t, &fakeRunner{})
 		if ev := find(audit.events); ev != nil {
-			t.Errorf("k8s.netpol_unenforced fired on a non-k8s (Docker) driver: %+v", ev)
+			t.Errorf("k8s.netpol.fail fired on a non-k8s (Docker) driver: %+v", ev)
 		}
 	})
 	t.Run("negative control: Capabilities() error stays silent", func(t *testing.T) {
 		audit := fire(t, k8sRunner{capsErr: errors.New("k8s api unreachable")})
 		if ev := find(audit.events); ev != nil {
-			t.Errorf("k8s.netpol_unenforced fired despite a Capabilities() error: %+v", ev)
+			t.Errorf("k8s.netpol.fail fired despite a Capabilities() error: %+v", ev)
 		}
 	})
 }

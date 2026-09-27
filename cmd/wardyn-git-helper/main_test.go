@@ -724,8 +724,7 @@ func TestGetGitHubFallsThroughToPATWhenNoAppGrant(t *testing.T) {
 // against the branch namespace. So a GitHub host emits NOTHING here (no mint call
 // at all), even though a github.com git_pat grant is also configured: the
 // installation token must never reach the sandbox, and a PAT fallthrough would
-// just reopen the direct lane the parser cannot see. This is the regression pin
-// for the bypass.
+// just reopen the direct lane the parser cannot see.
 func TestGetGitHubAppGrantRefusesBrokeredLane(t *testing.T) {
 	var mintCalls atomic.Int32
 	mux := http.NewServeMux()

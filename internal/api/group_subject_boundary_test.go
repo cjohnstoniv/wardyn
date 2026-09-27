@@ -50,7 +50,7 @@ func TestGroupSubjectWriteBoundariesShareTheSnapshotRule(t *testing.T) {
 		{"trimmed and lowercased", "  Eng-Team  ", "eng-team"},
 		{"an Entra App Role value", "Wardyn.Contractors", "wardyn.contractors"},
 		// A directory that names groups in a non-English locale is ordinary,
-		// and these are the rows that used to be stored permanently inert.
+		// and these rows must not be stored permanently inert.
 		{"non-ASCII group name (de)", "Entwickler-Büro", ""},
 		{"non-ASCII group name (fr)", "équipe-fr", ""},
 		{"non-ASCII group name (ru)", "инженеры", ""},

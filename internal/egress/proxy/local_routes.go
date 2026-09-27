@@ -36,8 +36,13 @@ const (
 	// endpoint pair, same token injection.
 	routeApprovalsCreate = "/wardyn/v1/approvals"
 	routeApprovals       = "/wardyn/v1/approvals/"
-	routeRecordings      = "/wardyn/v1/recordings/"
-	routeScanResults     = "/wardyn/v1/scan-results/"
+	// routeApprovalsExpireSuffix (POST, {id}+suffix) is wardyn-toolgate's own
+	// give-up signal (#811): it closes the tool_call approval it raised the
+	// moment its wait deadline is reached, instead of leaving the row PENDING
+	// for the periodic sweep to catch up to.
+	routeApprovalsExpireSuffix = "/expire"
+	routeRecordings            = "/wardyn/v1/recordings/"
+	routeScanResults           = "/wardyn/v1/scan-results/"
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
 	// scan/verify result uploads.
@@ -102,6 +107,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerCreateApproval(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, routeApprovals):
 		p.handleBrokerApproval(w, r)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, routeApprovals) && strings.HasSuffix(path, routeApprovalsExpireSuffix):
+		p.handleBrokerExpireApproval(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeRecordings):
 		p.handleBrokerRecording(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeScanResults):
@@ -162,6 +169,20 @@ func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.relayControlPlane(w, r, http.MethodGet, "/api/v1/internal/approvals/"+id,
+		nil, "", ruleSourceApprovals, nil)
+}
+
+// handleBrokerExpireApproval forwards POST /wardyn/v1/approvals/{id}/expire to
+// the control plane's internal expire endpoint with the run token injected —
+// wardyn-toolgate's own give-up signal (#811), closing the tool_call approval
+// it raised itself rather than leaving it PENDING for the periodic sweep.
+func (p *Proxy) handleBrokerExpireApproval(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, routeApprovals), routeApprovalsExpireSuffix)
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "invalid approval id", http.StatusNotFound)
+		return
+	}
+	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals/"+id+"/expire",
 		nil, "", ruleSourceApprovals, nil)
 }
 

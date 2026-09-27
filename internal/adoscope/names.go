@@ -59,6 +59,9 @@ func UnescapeName(raw string) (string, error) {
 		i += 2
 	}
 	seg := b.String()
+	if !utf8.ValidString(seg) {
+		return "", fmt.Errorf("adoscope: path segment %q decodes to invalid UTF-8", raw)
+	}
 	if hazard := segmentHazard(seg); hazard != "" {
 		return "", fmt.Errorf("adoscope: path segment %q %s", raw, hazard)
 	}
@@ -168,8 +171,14 @@ func splitRepoAddress(raw string) (head, path, host string, ok bool) {
 		if i == 0 || strings.ContainsFunc(raw[:i], func(r rune) bool { return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') }) {
 			return "", "", "", false
 		}
-		j := strings.IndexByte(raw[i+3:], '/')
-		if j < 0 {
+		// The host ends at the first "/", "?" or "#" — whichever comes first.
+		// A "?" or "#" reaching here before any "/" means there is no path,
+		// the same refusal as no "/" at all: reading it as part of the host
+		// would let a query or fragment on a NON-Azure-DevOps address smuggle
+		// an "@host" that this function's later "@"-strip then reads back out
+		// as the real host, e.g. "https://github.com#@dev.azure.com/acme/x".
+		j := strings.IndexAny(raw[i+3:], "/?#")
+		if j < 0 || raw[i+3+j] != '/' {
 			return "", "", "", false
 		}
 		head, path = raw[:i+3+j], raw[i+3+j:]

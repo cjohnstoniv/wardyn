@@ -62,7 +62,7 @@ import (
 // adoSignInCapturedAction is the one audit action the sign-in owns. Both outcomes
 // ride it: `success` once the blob is stored, `failure` with a `reason` for
 // every refusal, so a review reads one action rather than correlating two.
-const adoSignInCapturedAction = "scm.ado.signin.captured"
+const adoSignInCapturedAction = "ado.signin.capture"
 
 // entraDefaultAuthority is the public Entra authority. Every endpoint this lane
 // dials is derived from it plus the tenant, exactly as Microsoft's own client
@@ -590,9 +590,13 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
-	// Mask BEFORE anything can log or persist either value.
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
+	// Mask BEFORE anything can log or persist either value. Merge, not replace:
+	// until the store write below succeeds, the sign-in already stored stays the
+	// live one, so its tokens must stay current rather than be retired and swept.
+	// The access token is let go one grace after its expiry (#151).
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -602,22 +606,21 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted := adoEntraSplitScope(resp.Scope)
+	granted := adoCaptureScopes(resp.Scope, cfg.Scopes)
 	if resp.RefreshToken == "" || len(granted) == 0 {
 		// No refresh token means nothing to store and nothing to renew; no
-		// granted scope means the authority told us nothing about what this
-		// credential may do. Either way there is no usable capture.
+		// granted scope inside the row's ceiling means this credential may do
+		// nothing a run could use. Either way there is no usable capture.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		http.Error(w, "the identity provider returned no renewable Azure DevOps grant", http.StatusBadGateway)
 		return
 	}
-	now := s.cfg.Now()
 	blob := adoEntraBlob{
 		RefreshToken: resp.RefreshToken,
 		Scopes:       granted,
-		ExpiresAt:    now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC(),
+		ExpiresAt:    accessExpiry,
 		TenantID:     cfg.TenantID,
 		ClientID:     cfg.ClientID,
 		Subject:      subject,
@@ -629,12 +632,18 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	unlock := s.adoEntra.lock(subject, cfg.RowID)
 	defer unlock()
 	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+		// The cause is logged, never put on the row: the trail and its SIEM
+		// export carry a fixed reason only, like every other store failure.
+		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
 		return
 	}
+	// Stored: this sign-in is now the credential, and the one it replaced is not.
+	s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": granted, "source": adoEntraSourceSignIn,

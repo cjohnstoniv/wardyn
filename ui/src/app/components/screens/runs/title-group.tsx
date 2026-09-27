@@ -30,8 +30,8 @@ const GROUP_PREVIEW = 3;
 // #160 — the second chip row: one counted chip per wait reason, suppressed
 // entirely once every run in the group is terminal (nothing left to wait on),
 // and standing in for the whole row with a single "Checking…" chip until the
-// approvals fetch resolves — nothing derived from that fetch (held, reauth,
-// stale) may paint before then, or it reads as "nothing is held" rather than
+// approvals fetch resolves — nothing derived from that fetch (held, reauth)
+// may paint before then, or it reads as "nothing is held" rather than
 // "not known yet". `starting` is a run.state fact, not an approvals one, so
 // it renders in the Checking window too.
 function WaitRow({
@@ -64,13 +64,6 @@ function WaitRow({
       chips.push(
         <Chip key="reauth" tone="warning" dot>
           {RUNS_WAIT.REAUTH(w.reauth)}
-        </Chip>,
-      );
-    }
-    if (w.staleHeld > 0) {
-      chips.push(
-        <Chip key="stale" tone="neutral">
-          {RUNS_WAIT.STALE_GROUP(w.staleHeld)}
         </Chip>,
       );
     }

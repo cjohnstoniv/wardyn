@@ -45,6 +45,10 @@ func (s getErrStore) Get(context.Context, string) ([]byte, error) { return s.val
 // of caller, and no test here scopes it by owner.
 func (s getErrStore) For(string) secretstore.Store { return s }
 
+func (getErrStore) DeleteEverywhere(context.Context, []string) (int, error) { return 0, nil }
+
+func (getErrStore) Holders(context.Context, []string) (map[string][]string, error) { return nil, nil }
+
 // TestReadManagedBlob_DistinguishesStoreErrors pins only ErrNotFound is
 // "not connected" (found=false, err=nil). Any OTHER store error (decrypt failure
 // after key rotation, backend down) MUST propagate rather than masquerade as
@@ -184,15 +188,17 @@ func TestManagedCredProvider(t *testing.T) {
 	if tok.Value != "sk-ant-oat01-real-token" {
 		t.Fatalf("wrong token: %q", tok.Value)
 	}
-	// Managed tokens carry no machine-readable expiry (zero) so the sink treats
-	// them as static — no re-resolve churn.
+	// Managed tokens carry no machine-readable expiry (zero): the sink gives
+	// them a stored key's expiry instead (storedKeyExpiry).
 	if !tok.ExpiresAt.IsZero() {
 		t.Fatalf("managed token must have zero expiry, got %v", tok.ExpiresAt)
 	}
 
-	// Empty token blob == not connected.
+	// Empty token blob == not connected. The write goes behind the provider's
+	// back, so drop its 60-second cache as a capture or disconnect does.
 	empty, _ := json.Marshal(managedCredBlob{Token: ""})
 	_ = store.Put(context.Background(), harnessCredSecretName("anthropic"), empty)
+	p.(*managedCredProvider).evict()
 	if _, err := p.Current(context.Background()); err == nil {
 		t.Fatal("empty token must fail closed")
 	}
@@ -331,7 +337,7 @@ func TestHarnessCredentialPaste_NilMaskRegistry(t *testing.T) {
 	}
 }
 
-// ── HTTP-router-level tests (through the real mux + humanOrAdminAuth) ─────────
+// HTTP-router-level tests (through the real mux + humanOrAdminAuth)
 
 // harnessCredSrv builds a Server with the harness login/credential routes MOUNTED
 // (they mount only when cfg.Secrets != nil) over the given secret store, reusing
@@ -442,7 +448,7 @@ func TestHandleHarnessLogin_ErrorMapping(t *testing.T) {
 
 // TestHandleHarnessCredentialPaste_HappyPath: a well-formed setup-token is stored
 // under the RESERVED name, the response reports captured:true, and a
-// harness.credential.captured audit event is written.
+// harness.credential.capture audit event is written.
 func TestHandleHarnessCredentialPaste_HappyPath(t *testing.T) {
 	const token = "sk-ant-oat01-happy-path-stored-token"
 	sec := &memSecrets{m: map[string][]byte{}}
@@ -471,8 +477,8 @@ func TestHandleHarnessCredentialPaste_HappyPath(t *testing.T) {
 	if blob.Token != token {
 		t.Errorf("stored token = %q, want %q", blob.Token, token)
 	}
-	if !auditHas(h.audit.events, "harness.credential.captured") {
-		t.Error("no harness.credential.captured audit event")
+	if !auditHas(h.audit.events, "harness.credential.capture") {
+		t.Error("no harness.credential.capture audit event")
 	}
 }
 
@@ -510,7 +516,7 @@ func TestHandleHarnessCredentialPaste_Errors(t *testing.T) {
 }
 
 // TestHandleHarnessDisconnect_HappyPath: DELETE removes the stored blob, reports
-// captured:false, and writes a harness.credential.disconnected audit event.
+// captured:false, and writes a harness.credential.disconnect audit event.
 func TestHandleHarnessDisconnect_HappyPath(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{
 		harnessCredSecretName("anthropic"): []byte(`{"token":"sk-ant-oat01-existing"}`),
@@ -531,8 +537,8 @@ func TestHandleHarnessDisconnect_HappyPath(t *testing.T) {
 	if _, ok := sec.m[harnessCredSecretName("anthropic")]; ok {
 		t.Error("stored blob was not deleted")
 	}
-	if !auditHas(h.audit.events, "harness.credential.disconnected") {
-		t.Error("no harness.credential.disconnected audit event")
+	if !auditHas(h.audit.events, "harness.credential.disconnect") {
+		t.Error("no harness.credential.disconnect audit event")
 	}
 }
 
@@ -786,7 +792,7 @@ func TestHandleHarnessLogin_AWSNeedsStartURLAndRegion(t *testing.T) {
 
 // TestLaunchHarnessLoginRun_SeedsPinEnv: the admin's account/role pin reaches
 // the login sandbox as launch ENV, and is stamped on the run's own
-// harness.login.started row.
+// harness.login.start row.
 //
 // Both halves matter and they are different claims. The ENV is what lets the
 // in-sandbox helper verify the pin against the portal instead of taking
@@ -801,7 +807,7 @@ func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
 		SSOAccountID: "111111111111", SSORoleName: "BedrockRunner",
 	})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -823,7 +829,7 @@ func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
 
 	stamp := loginStartedStamp(t, audit)
 	if stamp.SSOAccountID != "111111111111" || stamp.SSORoleName != "BedrockRunner" {
-		t.Errorf("harness.login.started stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live roster", stamp)
+		t.Errorf("harness.login.start stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live roster", stamp)
 	}
 }
 
@@ -836,7 +842,7 @@ func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
 	})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -854,16 +860,16 @@ func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
 }
 
 // loginStartedStamp decodes the launch-time stamp off this run's own
-// harness.login.started row — the same read handleUploadSSOToken makes.
+// harness.login.start row — the same read handleUploadSSOToken makes.
 func loginStartedStamp(t *testing.T, audit *memAudit) loginRunStamp {
 	t.Helper()
-	rows := audit.find("harness.login.started")
+	rows := audit.find("harness.login.start")
 	if len(rows) != 1 {
-		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+		t.Fatalf("harness.login.start rows = %d, want 1", len(rows))
 	}
 	var stamp loginRunStamp
 	if err := json.Unmarshal(rows[0].Data, &stamp); err != nil {
-		t.Fatalf("decode harness.login.started data: %v", err)
+		t.Fatalf("decode harness.login.start data: %v", err)
 	}
 	return stamp
 }
@@ -905,5 +911,79 @@ func TestLoginEnv_PinWithNoConfigEnvDoesNotPanic(t *testing.T) {
 	}
 	if got := anthropic.loginEnv("", "", awsSSOPin{}, ""); got != nil {
 		t.Errorf("an unpinned non-AWS login seeded %v, want nil", got)
+	}
+}
+
+// awsSSOScopeDeleteBlob builds a minimal, structurally-valid captured blob so
+// readAWSSSOBlob's valid() shape check passes, distinguished by access token.
+func awsSSOScopeDeleteBlob(access string) awsSSOBlob {
+	return awsSSOBlob{
+		AccessToken: access, StartURL: "https://acme.awsapps.com/start", Region: "us-east-1",
+		AccountID: "123456789012", RoleName: "WardynBedrockRole", ExpiresAt: awsSSOTestFixedNow.Add(time.Hour),
+	}
+}
+
+// TestDeleteSpentAWSSSOBlob_ProviderScopeDeletesOnlyItsOwnRow pins dcc0c9622:
+// after the model-provider stack, a provider-scoped scope's session lives
+// under scope.ssoSecret() (wardyn-provider-<uid>-sso), not the roster's
+// harnessCredSecretName(awsSSOProvider). A provider refresh AWS refuses must
+// delete only the provider's own row and leave the same person's roster AWS
+// sign-in (harnessCredSecretName(awsSSOProvider)) alone.
+func TestDeleteSpentAWSSSOBlob_ProviderScopeDeletesOnlyItsOwnRow(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{cfg: Config{Secrets: &memSecrets{}, Now: func() time.Time { return awsSSOTestFixedNow }}}
+	const owner = "alice@example.com"
+	rosterScope := awsSSOScope{perUser: true, owner: owner}
+	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
+
+	if err := s.storeAWSSSOBlob(ctx, rosterScope, awsSSOScopeDeleteBlob("roster-access-token-1234567890")); err != nil {
+		t.Fatalf("seed roster row: %v", err)
+	}
+	if err := s.storeAWSSSOBlob(ctx, providerScope, awsSSOScopeDeleteBlob("provider-access-token-123456789")); err != nil {
+		t.Fatalf("seed provider row: %v", err)
+	}
+
+	s.deleteSpentAWSSSOBlob(ctx, providerScope)
+
+	if _, found, err := s.readAWSSSOBlob(ctx, providerScope); err != nil || found {
+		t.Errorf("provider row after its own refresh was refused: found=%v err=%v, want gone", found, err)
+	}
+	roster, found, err := s.readAWSSSOBlob(ctx, rosterScope)
+	if err != nil || !found {
+		t.Fatalf("roster row after a PROVIDER-scoped refusal: found=%v err=%v, want intact", found, err)
+	}
+	if roster.AccessToken != "roster-access-token-1234567890" {
+		t.Errorf("roster row AccessToken = %q, want the original — a provider-scoped delete touched it", roster.AccessToken)
+	}
+}
+
+// TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow is the reverse: a
+// roster-scoped refusal (no provider) must delete only the roster row and
+// leave the same person's provider-scoped row alone.
+func TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{cfg: Config{Secrets: &memSecrets{}, Now: func() time.Time { return awsSSOTestFixedNow }}}
+	const owner = "alice@example.com"
+	rosterScope := awsSSOScope{perUser: true, owner: owner}
+	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
+
+	if err := s.storeAWSSSOBlob(ctx, rosterScope, awsSSOScopeDeleteBlob("roster-access-token-1234567890")); err != nil {
+		t.Fatalf("seed roster row: %v", err)
+	}
+	if err := s.storeAWSSSOBlob(ctx, providerScope, awsSSOScopeDeleteBlob("provider-access-token-123456789")); err != nil {
+		t.Fatalf("seed provider row: %v", err)
+	}
+
+	s.deleteSpentAWSSSOBlob(ctx, rosterScope)
+
+	if _, found, err := s.readAWSSSOBlob(ctx, rosterScope); err != nil || found {
+		t.Errorf("roster row after its own refresh was refused: found=%v err=%v, want gone", found, err)
+	}
+	provider, found, err := s.readAWSSSOBlob(ctx, providerScope)
+	if err != nil || !found {
+		t.Fatalf("provider row after a ROSTER-scoped refusal: found=%v err=%v, want intact", found, err)
+	}
+	if provider.AccessToken != "provider-access-token-123456789" {
+		t.Errorf("provider row AccessToken = %q, want the original — a roster-scoped delete touched it", provider.AccessToken)
 	}
 }

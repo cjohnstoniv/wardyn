@@ -66,7 +66,7 @@
 #     registered-but-not-yours branch, reason "not the run owner" (SV13). The
 #     REST API can only ever bind the CALLER's own principal, so the psql
 #     INSERT is the sole method for a second identity (SV19).
-#  6. Both ssh clients DETACH before the browser half runs. session.recording is
+#  6. Both ssh clients DETACH before the browser half runs. session.recording.write is
 #     written at detach (attach.go's finishRecording, which the ssh bridge calls
 #     too), so a client left connected means an empty Session picker at beat 6.
 #  7. The KERNEL SENSOR IS OFF. Beat 5 (browser lane) says "unavailable, because
@@ -115,7 +115,7 @@ SESSION="${WARDYN_V10_TMUX:-wardyn-v10}"
 # Three throwaway HOMEs (one key each) + this take's scratch.
 TAKE_DIR="${WARDYN_V10_DIR:-/tmp/wardyn-v10}"
 # The second identity the refusal is attributed to — a real, distinct principal
-# string. It is what the ssh.auth failure row records, and what beat 3's
+# string. It is what the ssh.authenticate failure row records, and what beat 3's
 # narration means by "a different person".
 FOREIGN_PRINCIPAL="${WARDYN_V10_FOREIGN_PRINCIPAL:-local:dana}"
 PG_CONTAINER="${WARDYN_V10_PG:-${WARDYN_NS:-wardyn}-postgres}"
@@ -568,10 +568,10 @@ drive() {
   # THE MONEY ROW. "not the run owner" is the registered-but-foreign branch; a
   # key that was never registered logs "unregistered key" instead and the whole
   # finale is then about the wrong refusal (SV13).
-  [[ "$(audit_rows ssh.auth 'select(.outcome == "failure" and .data.reason == "not the run owner")')" -ge 1 ]] \
-    || die "no ssh.auth failure with reason 'not the run owner' — the foreign key was refused for some other reason"
-  [[ "$(audit_rows ssh.auth 'select(.outcome == "success")')" -ge 2 ]] \
-    || die "fewer than two successful ssh.auth rows — beat 4 would have nothing to show but the refusal"
+  [[ "$(audit_rows ssh.authenticate 'select(.outcome == "failure" and .data.reason == "not the run owner")')" -ge 1 ]] \
+    || die "no ssh.authenticate failure with reason 'not the run owner' — the foreign key was refused for some other reason"
+  [[ "$(audit_rows ssh.authenticate 'select(.outcome == "success")')" -ge 2 ]] \
+    || die "fewer than two successful ssh.authenticate rows — beat 4 would have nothing to show but the refusal"
   beat 1200
 
   # --- B3b · the decoy, tried for real -------------------------------------
@@ -592,7 +592,7 @@ drive() {
 
   # --- hand over to the browser half --------------------------------------
   # Observer first, holder last, neither with `exit`. These detaches are what
-  # WRITE the session.recording rows beat 6's Session picker lists and beat 6's
+  # WRITE the session.recording.write rows beat 6's Session picker lists and beat 6's
   # player replays; the holder's is written last, which is what makes it the
   # newest row in the run's own trail.
   pane_detach "${P_OBS}"
@@ -600,11 +600,11 @@ drive() {
   local rec='select(.outcome == "success" and ((.target // "") | test("~ssh-")))'
   local end2=$((SECONDS + 60))
   while ((SECONDS < end2)); do
-    [[ "$(audit_rows session.recording "${rec}")" -ge 1 ]] && break
+    [[ "$(audit_rows session.recording.write "${rec}")" -ge 1 ]] && break
     sleep 1
   done
-  [[ "$(audit_rows session.recording "${rec}")" -ge 1 ]] \
-    || die "no ssh session.recording was written — beat 6's Session picker would be empty. Are both ssh clients really gone?"
+  [[ "$(audit_rows session.recording.write "${rec}")" -ge 1 ]] \
+    || die "no ssh session.recording.write was written — beat 6's Session picker would be empty. Are both ssh clients really gone?"
 
   narration_end
 }

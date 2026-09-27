@@ -22,7 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE MITM'S UPSTREAM LEG SPEAKS THE SCHEME ITS ENTRY NAMES (walk-3).
+// The MITM's upstream leg speaks the scheme its entry names (walk-3).
 //
 // Terminating the tunnel is not optional for Phase B: the sandbox holds a
 // placeholder, not a credential, so the real token can only be substituted into
@@ -148,18 +148,17 @@ const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 // SDK actually sends (measured — TestMITMConnect_PlaintextClientInsideTheTunnelIsServed
 // below).
 //
-// An earlier version of this file assumed only the TLS shape, which is what a
-// MITM is "supposed" to see — and that assumption is what let walk-5 stay red
-// after the upstream leg was fixed.
+// The TLS shape is only what a MITM is "supposed" to see; assuming it alone
+// leaves the SDK's plaintext client unserved.
 
-// THE CLIENT LEG, MEASURED. The test above drives the tunnel the
-// way a TLS client does. The agent's SDK does NOT: with a proxy configured it
-// reaches an `http://` endpoint by CONNECT and then sends PLAINTEXT inside the
-// tunnel — first byte 0x47, `G`, never 0x16. Reproduced offline against the real
-// wardyn/agent-claude-code:local, and it is why walk-5 was still red after the
-// upstream leg was fixed: mitmConnect handshook at that client, failed, and
-// dropped the connection, so the request was never seen, never injected and
-// never forwarded. The SDK retried 36-69 times a run and the portal saw nothing.
+// The client leg, measured. The test above drives the tunnel the way a TLS
+// client does. The agent's SDK does not: with a proxy configured it reaches an
+// `http://` endpoint by CONNECT and then sends plaintext inside the tunnel —
+// first byte 0x47, `G`, never 0x16 (reproduced offline against the real
+// wardyn/agent-claude-code:local). A mitmConnect that handshakes at that client
+// fails and drops the connection, so the request is never seen, never injected
+// and never forwarded — the SDK retries 36-69 times a run and the portal sees
+// nothing.
 func TestMITMConnect_PlaintextClientInsideTheTunnelIsServed(t *testing.T) {
 	var gotHeader, gotPath string
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +314,7 @@ func TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks(t *testing.T) {
 	}
 }
 
-// ONE HOST, TWO ENTRIES, TWO SCHEMES (W6-S F2). The scheme belongs to the
+// One host, two entries, two schemes. The scheme belongs to the
 // ENTRY, and entries are port-scoped: a cleartext entry on :8090 must not make
 // the TLS entry on :443 for the same host re-originate in cleartext. Keyed by
 // host alone it did — the flag was sticky while the port map was
@@ -341,9 +340,9 @@ func TestCompileMITMHosts_PlaintextIsPortScoped(t *testing.T) {
 	}
 }
 
-// ─── the path/query pin (W6-S F3) ────────────────────────────────────────────
+// the path/query pin
 
-// THE INJECTED SESSION RIDES ONE REQUEST SHAPE, NOT ONE HOST.
+// The injected session rides one request shape, not one host.
 //
 // Before this, the resolved header went on whatever the sandbox sent to the
 // portal host. That includes `POST /logout`, which AWS documents as invalidating
@@ -380,7 +379,7 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 		{"the right path, the wrong verb", true, http.MethodPost, "/federation/credentials",
 			"account_id=" + account + "&role_name=" + role, ""},
 		{"listing the session's accounts", true, http.MethodGet, "/assignment/accounts", "", ""},
-		// THE AMBIGUOUS QUERIES (security re-round SHOULD-1). Each carries the
+		// The ambiguous queries (security re-round SHOULD-1). Each carries the
 		// pinned pair AND a second account or role. Matching on url.Values.Get
 		// accepted all four, with the credential attached and RawQuery forwarded
 		// verbatim — so whether a second account was honoured was the ORIGIN's
@@ -455,7 +454,7 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 	}
 }
 
-// THE PLAIN LANE HONOURS THE PIN TOO (docs REVIEW-3 coverage note).
+// The plain lane honours the pin too (docs REVIEW-3 coverage note).
 //
 // injector.apply is the cleartext path — an ordinary absolute-URI request that
 // never enters a tunnel — and it reaches the very same portal host. A pin

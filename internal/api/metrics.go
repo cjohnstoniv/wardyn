@@ -48,7 +48,7 @@ type metrics struct {
 	launchSum    float64 // seconds, run creation -> RUNNING
 	launchCount  int64
 
-	// authFailedSuppressed counts auth.failed audit emits the rate limiter
+	// authFailedSuppressed counts auth.fail audit emits the rate limiter
 	// DISCARDED, and it is the reason that limiter is safe to have. Without it
 	// a burst of authentication failures produces a bounded ~1 row/sec no
 	// matter how hard it is pushed, so a credential-stuffing run reads QUIETER
@@ -67,6 +67,14 @@ type metrics struct {
 	// answers a PING (see writeHealthGauges), which a healthy pool passes while
 	// one table denies a read or one statement times out.
 	authStoreErrors int64
+	// driveProbeErrors counts host_path drive agent-readability probes
+	// (driveHomeReadableByAgent) that could not run at all — a transient
+	// docker/apiserver error, not a substrate saying "unreadable". Those
+	// errors fail OPEN (the caller falls back to "cannot tell" rather than
+	// refusing), so without this counter a daemon whose probe is never
+	// succeeding reads as ordinary, silent passes — this is the series that
+	// makes that visible.
+	driveProbeErrors int64
 	// driveRefusals counts runs REFUSED their user drive, by reason. It is the
 	// series that made a whole class of failure operable: a refused drive was
 	// answered to the member as a 422 and recorded NOWHERE — no audit row (the
@@ -254,7 +262,7 @@ func (m *metrics) ssoRefreshRecorded(outcome string) {
 	m.ssoRefreshOutcomes[outcome]++
 }
 
-// authFailedSuppressedInc records one dropped auth.failed audit emit.
+// authFailedSuppressedInc records one dropped auth.fail audit emit.
 func (m *metrics) authFailedSuppressedInc() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -274,6 +282,14 @@ func (m *metrics) authStoreErrorInc() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.authStoreErrors++
+}
+
+// driveProbeErrorInc records one host_path drive agent-readability probe
+// that could not run (see driveProbeErrors).
+func (m *metrics) driveProbeErrorInc() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.driveProbeErrors++
 }
 
 func (m *metrics) runTerminal(st types.RunState) {
@@ -328,7 +344,7 @@ func (m *metrics) egressDenied() {
 //     opposite direction: an identical retry does not fix it, so it is
 //     also DELIBERATELY absent from the exclusion list below and counts as a
 //     denial like any other.
-//   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
+//   - egress:dropped-decisions-<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
 //     rule_source, hence the prefix match.
@@ -342,7 +358,7 @@ func (m *metrics) egressDenied() {
 //     series an operator actually wants for it.
 const (
 	ruleSourceDialFailed       = "builtin:dial-failed"
-	ruleSourceDroppedDecisions = "egress.decisions.dropped:"
+	ruleSourceDroppedDecisions = "egress:dropped-decisions-"
 	// Mirrors internal/egress/proxy's ruleSourceCredentialReauthTimeout; the
 	// two packages do not import each other, and the decision arrives here as
 	// a string on the wire.
@@ -413,21 +429,23 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_credential_reauth_wait_seconds summary\n"+
 		"wardyn_credential_reauth_wait_seconds_sum %g\nwardyn_credential_reauth_wait_seconds_count %d\n",
 		m.credentialReauthWaitSum, m.credentialReauthWaitCount)
-	// HELP text: DRAFT (M2 canon pending). M2 recommends the HELP-only
-	// remediation (this wording change) over the filed alternative that also
-	// splits the series into {reason="policy"|"dial_failed"|"decisions_dropped"};
-	// no owner ruling yet (M2-canon-sheet.md §2/§6b), so the series itself is
-	// unchanged — still one unlabeled counter, still isPolicyDeny-scoped.
-	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny, by reason (proxy decision ingest).\n"+
+	// #205: the HELP text used to promise a "reason" breakdown this series
+	// never carried — one unlabeled counter, still isPolicyDeny-scoped. Fixed
+	// to describe the labels the series actually has (none), rather than
+	// splitting it into {reason=...}, which stays a separate, owner-gated
+	// change (the filed alternative in M2-canon-sheet.md §2/§6b).
+	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny (proxy decision ingest). Unlabeled: does not break down by reason.\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
-	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures whose auth.failed audit row was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
+	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures whose auth.fail audit row was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
 		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
 		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
+	fmt.Fprintf(w, "# HELP wardyn_drive_probe_errors_total Host_path drive agent-readability probes that could not run at all (fails open: the caller falls back to \"cannot tell\" rather than refusing).\n"+
+		"# TYPE wardyn_drive_probe_errors_total counter\nwardyn_drive_probe_errors_total %d\n", m.driveProbeErrors)
 	fmt.Fprint(w, "# HELP wardyn_run_start_wait_seconds Time a sandbox still being created spent waiting on each substrate reason (pulling an image, waiting for a node, a reference that will not pull).\n"+
 		"# TYPE wardyn_run_start_wait_seconds summary\n")
 	for _, reason := range startWaitReasons {
@@ -503,6 +521,10 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		"# TYPE wardyn_audit_spool_torn_total counter\nwardyn_audit_spool_torn_total %d\n", s.cfg.AuditSpool.TornDrops())
 	fmt.Fprintf(w, "# HELP wardyn_audit_spool_quarantined_total Spool lines moved aside after the store rejected them repeatedly; each one is an event missing from the queryable trail until it is re-fed.\n"+
 		"# TYPE wardyn_audit_spool_quarantined_total counter\nwardyn_audit_spool_quarantined_total %d\n", s.cfg.AuditSpool.Quarantined())
+	if s.cfg.OrgFederation != nil {
+		fmt.Fprintf(w, "# HELP wardyn_org_federation_lag Local audit rows the organisation has not yet acknowledged (hybrid laptops only).\n"+
+			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
+	}
 	s.writeSinkDrops(w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.

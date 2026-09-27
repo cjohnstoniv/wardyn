@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -76,7 +77,7 @@ const maxProviderBaseURLPathSegments = 2
 // base URL names corporate topology (the org's forge hosts and org paths), so the
 // GET is the same disclosure the sibling GET was narrowed for. A member never
 // needs it — a member's refusal names the provider KIND only, never the allowed
-// addresses — and the member-safe projection (memberSafeIntegration's shape) is
+// addresses — and the member-safe projection (userSafeIntegration's shape) is
 // the later one-line widening, the safe direction routes.go's tier note
 // describes. There is no DELETE: removing a row is a PUT without it.
 func (s *Server) mountWorkspaceProviderRoutes(operatorOnly chi.Router) {
@@ -118,33 +119,40 @@ func adoServerHosts(sc types.SiteConfig) []string {
 // forAddresses), so a write naming no such address costs no read. A config
 // that cannot be read yields none — the narrower answer: only the Azure DevOps
 // service hosts then take the name rule, and an escaped name on any other host
-// is refused as it always was. A nil loader answers none.
-type adoHostsLoader func() []string
+// is refused as it always was — together with the read error, so a write door
+// can say the store, not the address, is what it could not check
+// (storeNamedLocatorRefusal). A nil loader answers none.
+type adoHostsLoader func() ([]string, error)
 
 func (s *Server) adoHostsLoader(ctx context.Context) adoHostsLoader {
 	var once sync.Once
 	var hosts []string
-	return func() []string {
+	var readErr error
+	return func() ([]string, error) {
 		once.Do(func() {
 			if s.cfg.Store == nil {
 				return
 			}
-			if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-				hosts = adoServerHosts(sc)
+			sc, err := s.cfg.Store.GetSiteConfig(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "wardynd: could not read the site config for the Azure DevOps Server hosts", slog.Any("error", err))
+				readErr = err
+				return
 			}
+			hosts = adoServerHosts(sc)
 		})
-		return hosts
+		return hosts, readErr
 	}
 }
 
 // forAddresses is the Azure DevOps Server hosts to canonicalise and validate
 // values with. Only a "%" or whitespace makes the answer matter — the name
 // rule leaves every other address as written — so without one nothing is read.
-func (l adoHostsLoader) forAddresses(values ...string) []string {
+func (l adoHostsLoader) forAddresses(values ...string) ([]string, error) {
 	if l == nil || !slices.ContainsFunc(values, func(v string) bool {
 		return strings.ContainsFunc(v, func(r rune) bool { return r == '%' || unicode.IsSpace(r) })
 	}) {
-		return nil
+		return nil, nil
 	}
 	return l()
 }
@@ -153,7 +161,7 @@ func (l adoHostsLoader) forAddresses(values ...string) []string {
 // the ONE place "legacy open mode" is decided. Every predicate in this file
 // answers "admitted" when it is false, BEFORE any other read, so an upgraded
 // 0.7.1 install behaves byte-identically to what it did before this feature
-// existed (the absent-row doctrine capEnforced and every GovernanceLimits zero
+// existed (the absent-row doctrine capBatch.enforced and every GovernanceLimits zero
 // value already follow).
 //
 // It counts rows enabled or disabled: a disabled row is still configuration —
@@ -249,6 +257,9 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 		if err := validateProviderEntra(i, row); err != nil {
 			return err
 		}
+	}
+	if err := validateOneEntraRow(p.Git); err != nil {
+		return err
 	}
 	return validateStorageProviders(p.Storage)
 }
@@ -667,7 +678,7 @@ type workspaceProvidersPutResponse struct {
 // handleGetWorkspaceProviders returns the stored provider block.
 //
 // operatorOnly, for the same reason GET /site-config is (routes.go): base URLs
-// name corporate topology. A member-safe projection (the memberSafeIntegration
+// name corporate topology. A member-safe projection (the userSafeIntegration
 // shape) is the later one-line widening — the safe direction.
 //
 // The response carries an ETag so a caller that means to base a later PUT on
@@ -850,7 +861,7 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 const capProvider403 = "you are not granted this deployment's %s provider — ask an admin to grant it, " +
 	"or launch against a repository on a provider you hold"
 
-// denyMemberWorkspaceProviders is the member half of provider admission: of the
+// denyUserWorkspaceProviders is the member half of provider admission: of the
 // repositories this request brings in, is every one on a provider row the
 // caller holds? Reports true — having written the 403 and an authz.denied row
 // carrying `capability_workspace_provider` — when the caller must stop.
@@ -870,14 +881,14 @@ const capProvider403 = "you are not granted this deployment's %s provider — as
 // for a grant to name and the capability has nothing to say about it.
 //
 // Operators are exempt in one line, before the site-config read, exactly as
-// denyMemberRequest is: nothing below ever costs them a store round-trip. A
+// denyUserRequest is: nothing below ever costs them a store round-trip. A
 // build with no store at all answers "allowed", which is capSeamAllowed's own
 // documented rule for a seam running in a harness that holds no rows.
 //
 // repos are RAW sources (a slug, an https URL or an scp-form SSH target); the
 // derived clone URL is computed HERE, once, so no call site can compare a bare
 // <org>/<name> against a base URL and miss.
-func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
+func (s *Server) denyUserWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
 	if len(repos) == 0 || s.cfg.Store == nil || s.isOperator(r.Context()) {
 		return false
 	}
@@ -896,7 +907,7 @@ func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Req
 			continue
 		}
 		seen[row.ID] = true
-		if s.denyMemberCapability(w, r, capWorkspaceProvider, row.ID, target,
+		if s.denyUserCapability(w, r, capWorkspaceProvider, row.ID, target,
 			fmt.Sprintf(capProvider403, row.Kind)) {
 			return true
 		}
@@ -905,7 +916,7 @@ func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Req
 }
 
 // repoSourceLocators is the raw repo source of every repo entry in sources —
-// the shape denyMemberWorkspaceProviders takes, and the one every workspace
+// the shape denyUserWorkspaceProviders takes, and the one every workspace
 // door already holds.
 func repoSourceLocators(sources []types.WorkspaceSource) []string {
 	var out []string

@@ -20,11 +20,20 @@ import (
 // class the corpus declares, it either RUNS the class (when the host installs its
 // runtime) or asserts the control plane FAILS CLOSED (422) for it — no silent
 // skip, no green that reads as "confined" when only the scheduler was exercised.
+//
+// WARDYN_TEST_REQUIRE_CLASS names a class this host was set up to run (the
+// nightly gVisor leg sets CC2). On such a host a missing runtime is a broken
+// leg, not the honest fail-closed case: without this the leg would go green on
+// a runner whose runtime install silently failed, having proven nothing.
 func TestLive_TierMatrix(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	installed := h.installedClasses(ctx)
 	t.Logf("installed confinement classes: %v", slices.Sorted(maps.Keys(installed)))
+	if req := strings.ToUpper(os.Getenv("WARDYN_TEST_REQUIRE_CLASS")); req != "" && !installed[req] {
+		t.Fatalf("WARDYN_TEST_REQUIRE_CLASS=%s but the stack advertises %v: the runtime this leg exists to exercise is not installed",
+			req, slices.Sorted(maps.Keys(installed)))
+	}
 
 	for _, class := range []string{"CC1", "CC2", "CC3"} {
 		class := class
@@ -189,11 +198,10 @@ func TestLive_RealModel(t *testing.T) {
 			})
 		}
 
-		// The COMPOSER path ("AI Run Composer -> real sandbox -> graded") used to
-		// be this suite's headline sub-test. The composer was cut in 0.5 and
-		// POST /api/v1/runs/compose no longer exists, so the sub-test would have
-		// 404'd on its first run. The paths above still cover what mattered
-		// about it: a real model driving a real sandbox to a graded result.
+		// There is no composer sub-test ("AI Run Composer -> real sandbox ->
+		// graded"): POST /api/v1/runs/compose does not exist. The paths above
+		// cover what mattered about it: a real model driving a real sandbox to
+		// a graded result.
 	}
 }
 

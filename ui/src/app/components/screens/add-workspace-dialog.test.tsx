@@ -18,10 +18,10 @@ vi.mock("../../lib/api/workspaces", () => ({ workspaces: { createWorkspace: vi.f
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn() } }));
 
 // 0.7 §B — the local_dir root hint follows the workspace-ownership namespace,
-// which /me keys on !isOperator (me.go), not on role === "member". A security
-// admin's workspaces are owner-stamped like a member's, so memberSourcesAllowed
-// clamps them at authoring time and ValidateMemberMountSource at bind time —
-// asking `role === "member"` here instead would never render the real
+// which /me keys on !isOperator (me.go), not on role === "user". A security
+// admin's workspaces are owner-stamped like a member's, so userSourcesAllowed
+// clamps them at authoring time and ValidateUserMountSource at bind time —
+// asking `role === "user"` here instead would never render the real
 // member_local_dir_root /me is already sending them, so a security admin
 // would type a path with no boundary shown and get refused later.
 function renderDialog(operator: boolean, root: string | null) {
@@ -111,7 +111,8 @@ describe("AddWorkspaceDialog — the 201's advisory warnings", () => {
 // has zero production callers, workspaces.test.tsx's "kebab is Open ·
 // Delete… only" describe pins the kebab menu to exactly Open/Delete). Delete
 // the sentence, keep the rest of the description.
-describe("AddWorkspaceDialog — F5-F2: no false promise of a later edit", () => {
+describe("AddWorkspaceDialog — no false promise of a later edit", () => {
+  // ticket: F5-F2
   it("never claims everything can be changed later", () => {
     renderDialog(true, null);
     expect(screen.queryByText(/you can change everything later/i)).not.toBeInTheDocument();
@@ -125,7 +126,8 @@ describe("AddWorkspaceDialog — F5-F2: no false promise of a later edit", () =>
 // local_dir/ephemeral (only the repo submit arm ever reads it) — offer it
 // only where it does something, and let Name take the full row when it's
 // gone.
-describe("AddWorkspaceDialog — F5-F5: Branch only where it's wired", () => {
+describe("AddWorkspaceDialog — Branch only where it's wired", () => {
+  // ticket: F5-F5
   it("shows Branch for a repo source", () => {
     renderDialog(true, null);
     expect(screen.getByLabelText(/branch/i)).toBeInTheDocument();
@@ -150,7 +152,8 @@ describe("AddWorkspaceDialog — F5-F5: Branch only where it's wired", () => {
 // (the dialog runs no scan) — an honest chip would then contradict the pick
 // the operator just made. Collapse the two dishonest choices into one "Auto"
 // option that stores nothing at all; Pinned stays the one explicit choice.
-describe("AddWorkspaceDialog — F5-F6: one honest Auto image choice", () => {
+describe("AddWorkspaceDialog — one honest Auto image choice", () => {
+  // ticket: F5-F6
   async function openImagePicker() {
     await userEvent.click(screen.getByRole("button", { name: /advanced/i }));
   }

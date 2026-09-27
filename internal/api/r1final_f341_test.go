@@ -15,13 +15,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F341: an admin's cross-principal ?owner= took the raw query string as the
-// namespace key, with no canonicalization and no resolution. Naming a real
-// member by their EMAIL (or by a case-variant of their subject) answered 204
-// with an outcome=success audit row while the PUT landed in a namespace nobody
-// reads and the DELETE left the live secret in place.
+// An admin's cross-principal ?owner= must not be used as a raw namespace key,
+// with no canonicalization and no resolution: naming a real member by their
+// email (or by a case-variant of their subject) would answer 204 with an
+// outcome=success audit row while the PUT lands in a namespace nobody reads and
+// the DELETE leaves the live secret in place.
 //
-// The shipped contract, pinned below: ?owner= names a HUMAN, and is resolved to
+// The contract, pinned below: ?owner= names a human, and is resolved to
 // the namespace key that human's own writes land in — matched case-insensitively
 // against the principals this deployment knows, and mapped from the email form
 // through the SAME (principal, email) pairing revokeAPITokensFor already matches
@@ -53,7 +53,7 @@ func f341Server(t *testing.T, sec *memSecrets, toks []types.APIToken) (*harness,
 func f341Alice() []types.APIToken {
 	return []types.APIToken{{
 		ID: uuid.New(), Principal: "alice", Email: "alice@corp.example",
-		Role: string(oidc.RoleMember), CreatedAt: time.Now().UTC(),
+		Role: string(oidc.RoleUser), CreatedAt: time.Now().UTC(),
 	}}
 }
 
@@ -62,27 +62,22 @@ func f341Admin(t *testing.T) *http.Cookie {
 	return ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
 }
 
-// TestF341_OwnerParamResolvesIdentityForms is the headline arm: an admin naming
+// TestOwnerParamResolvesIdentityForms is the headline arm: an admin naming
 // a member by EMAIL, or by a case-variant of their subject, must reach the same
-// row the member's own self-service call does.
-func TestF341_OwnerParamResolvesIdentityForms(t *testing.T) {
+// row the member's own self-service call does. (A PUT no longer takes ?owner=,
+// K7-A; the DELETE is the admin's cross-namespace act.)
+func TestOwnerParamResolvesIdentityForms(t *testing.T) {
+	// ticket: F341
 	for _, form := range []string{"alice@corp.example", "ALICE", "alice"} {
 		t.Run(form, func(t *testing.T) {
 			sec := &memSecrets{m: map[string][]byte{}}
 			_, srv := f341Server(t, sec, f341Alice())
 			admin := f341Admin(t)
 
-			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner="+form, admin,
-				`{"value":"sk-ant-alices-key-value-000"}`)
-			if w.Code != http.StatusNoContent {
-				t.Fatalf("admin PUT ?owner=%s = %d, want 204: %s", form, w.Code, w.Body.String())
+			if err := sec.For("alice").Put(context.Background(), "anthropic-api-key", []byte("sk-ant-alices-key-value-000")); err != nil {
+				t.Fatal(err)
 			}
-			got, err := sec.For("alice").Get(context.Background(), "anthropic-api-key")
-			if err != nil || string(got) != "sk-ant-alices-key-value-000" {
-				t.Fatalf("alice's OWN namespace after an admin PUT ?owner=%s = (%q, %v); the write landed somewhere she cannot read", form, got, err)
-			}
-
-			// And the delete half: it must remove the row the member can see.
+			// The delete must remove the row the member can see.
 			if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner="+form, admin, ""); w.Code != http.StatusNoContent {
 				t.Fatalf("admin DELETE ?owner=%s = %d, want 204: %s", form, w.Code, w.Body.String())
 			}
@@ -93,13 +88,14 @@ func TestF341_OwnerParamResolvesIdentityForms(t *testing.T) {
 	}
 }
 
-// TestF341_OwnerParamCaseCollision: an OIDC subject is opaque and
+// TestOwnerParamCaseCollision: an OIDC subject is opaque and
 // case-SENSITIVE, so a deployment may legitimately hold two that differ only by
 // case. An EXACT match must win outright, and a value that merely folds onto
 // both must be REFUSED rather than resolved to whichever the directory happened
 // to list first — guessing there writes a credential into the wrong human's
 // namespace, which is worse than the miss this finding is about.
-func TestF341_OwnerParamCaseCollision(t *testing.T) {
+func TestOwnerParamCaseCollision(t *testing.T) {
+	// ticket: F341
 	collision := []types.APIToken{
 		{ID: uuid.New(), Principal: "alice", Email: "alice@corp.example", CreatedAt: time.Now().UTC()},
 		{ID: uuid.New(), Principal: "ALICE", Email: "alice.other@corp.example", CreatedAt: time.Now().UTC()},
@@ -109,18 +105,20 @@ func TestF341_OwnerParamCaseCollision(t *testing.T) {
 		for _, want := range []string{"alice", "ALICE"} {
 			t.Run(want, func(t *testing.T) {
 				sec := &memSecrets{m: map[string][]byte{}}
+				for _, p := range []string{"alice", "ALICE"} {
+					if err := sec.For(p).Put(context.Background(), "anthropic-api-key", []byte("sk-ant-exact-match-value-00")); err != nil {
+						t.Fatal(err)
+					}
+				}
 				_, srv := f341Server(t, sec, collision)
-				w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner="+want, f341Admin(t),
-					`{"value":"sk-ant-exact-match-value-00"}`)
+				w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner="+want, f341Admin(t), "")
 				if w.Code != http.StatusNoContent {
-					t.Fatalf("admin PUT ?owner=%s = %d, want 204: %s", want, w.Code, w.Body.String())
+					t.Fatalf("admin DELETE ?owner=%s = %d, want 204: %s", want, w.Code, w.Body.String())
 				}
-				if _, err := sec.For(want).Get(context.Background(), "anthropic-api-key"); err != nil {
-					t.Fatalf("the exactly-named subject %q did not receive the write (%v); a case-fold overrode an exact match", want, err)
-				}
-				for other := range sec.owned {
-					if other != want {
-						t.Fatalf("the write also reached %q; an exact ?owner= must resolve to nothing else", other)
+				for _, p := range []string{"alice", "ALICE"} {
+					names, _ := sec.For(p).List(context.Background())
+					if gone := len(names) == 0; gone != (p == want) {
+						t.Fatalf("after DELETE ?owner=%s, %q holds %v; an exact ?owner= must reach that subject and nothing else", want, p, names)
 					}
 				}
 			})
@@ -130,17 +128,13 @@ func TestF341_OwnerParamCaseCollision(t *testing.T) {
 	t.Run("ambiguous fold is refused", func(t *testing.T) {
 		sec := &memSecrets{m: map[string][]byte{}}
 		h, srv := f341Server(t, sec, collision)
-		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=AlIcE", f341Admin(t),
-			`{"value":"sk-ant-ambiguous-value-0000"}`)
+		w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner=AlIcE", f341Admin(t), "")
 		if w.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("admin PUT ?owner=AlIcE (folds onto two known subjects) = %d, want 422: %s", w.Code, w.Body.String())
-		}
-		if len(sec.owned) != 0 {
-			t.Errorf("an ambiguous ?owner= wrote into %v; it must write nothing", sec.owned)
+			t.Fatalf("admin DELETE ?owner=AlIcE (folds onto two known subjects) = %d, want 422: %s", w.Code, w.Body.String())
 		}
 		for _, ev := range h.audit.events {
-			if ev.Action == "secret.write" && ev.Outcome == "success" {
-				t.Errorf("an ambiguous ?owner= recorded secret.write outcome=success: %s", ev.Data)
+			if ev.Action == "secret.delete" && ev.Outcome == "success" {
+				t.Errorf("an ambiguous ?owner= recorded secret.delete outcome=success: %s", ev.Data)
 			}
 		}
 	})
@@ -152,36 +146,29 @@ func TestF341_OwnerParamCaseCollision(t *testing.T) {
 		}
 		sec := &memSecrets{m: map[string][]byte{}}
 		_, srv := f341Server(t, sec, shared)
-		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=shared@corp.example", f341Admin(t),
-			`{"value":"sk-ant-shared-email-value00"}`)
+		w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner=shared@corp.example", f341Admin(t), "")
 		if w.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("admin PUT ?owner=shared@corp.example (two principals) = %d, want 422: %s", w.Code, w.Body.String())
-		}
-		if len(sec.owned) != 0 {
-			t.Errorf("an ambiguous email ?owner= wrote into %v; it must write nothing", sec.owned)
+			t.Fatalf("admin DELETE ?owner=shared@corp.example (two principals) = %d, want 422: %s", w.Code, w.Body.String())
 		}
 	})
 }
 
-// TestF341_UnpairedEmailOwnerRefused: an email form that pairs to no principal
+// TestUnpairedEmailOwnerRefused: an email form that pairs to no principal
 // this deployment knows can only mint a namespace nothing reads. It must be
 // refused — never 204 with a success audit row.
-func TestF341_UnpairedEmailOwnerRefused(t *testing.T) {
-	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodGet} {
+func TestUnpairedEmailOwnerRefused(t *testing.T) {
+	// ticket: F341
+	for _, method := range []string{http.MethodDelete, http.MethodGet} {
 		t.Run(method, func(t *testing.T) {
 			sec := &memSecrets{m: map[string][]byte{}}
 			h, srv := f341Server(t, sec, nil) // empty directory
 			admin := f341Admin(t)
 
 			path := "/api/v1/secrets/anthropic-api-key?owner=nobody@corp.example"
-			body := `{"value":"sk-ant-orphaned-key-value00"}`
 			if method == http.MethodGet {
-				path, body = "/api/v1/secrets?owner=nobody@corp.example", ""
+				path = "/api/v1/secrets?owner=nobody@corp.example"
 			}
-			if method == http.MethodDelete {
-				body = ""
-			}
-			w := doSSO(t, srv, method, path, admin, body)
+			w := doSSO(t, srv, method, path, admin, "")
 			if w.Code == http.StatusNoContent || w.Code == http.StatusOK {
 				t.Fatalf("%s ?owner=nobody@corp.example = %d — an identity form that resolves to no principal answered success", method, w.Code)
 			}
@@ -200,12 +187,13 @@ func TestF341_UnpairedEmailOwnerRefused(t *testing.T) {
 	}
 }
 
-// TestF341_CrossNamespaceDeleteThatRemovedNothingIsReported: the DELETE half's
+// TestCrossNamespaceDeleteThatRemovedNothingIsReported: the DELETE half's
 // own closure, and it needs no directory. An admin who names a namespace that
 // does not hold the row is told so, rather than being handed the 204 +
 // outcome=success that made the miss invisible. (A MEMBER's own delete keeps its
 // idempotent 204 — the no-existence-oracle posture is about members.)
-func TestF341_CrossNamespaceDeleteThatRemovedNothingIsReported(t *testing.T) {
+func TestCrossNamespaceDeleteThatRemovedNothingIsReported(t *testing.T) {
+	// ticket: F341
 	sec := &memSecrets{m: map[string][]byte{}}
 	h, srv := f341Server(t, sec, f341Alice())
 	admin := f341Admin(t)
@@ -221,7 +209,7 @@ func TestF341_CrossNamespaceDeleteThatRemovedNothingIsReported(t *testing.T) {
 	}
 
 	// The member's own idempotent delete is untouched: 204, no oracle.
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key", alice, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("member's own DELETE of a never-set name = %d, want the idempotent 204: %s", w.Code, w.Body.String())
 	}
