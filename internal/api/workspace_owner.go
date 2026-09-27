@@ -74,9 +74,10 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 //
 // What it deliberately does NOT do is change the actor. The actor stays the
 // admin's own principal, exactly as auditEvent's caller passes it: an admin
-// acting on a member's workspace must never be recorded as the member. There is
-// no impersonation anywhere in this path, and TestWorkspaceOwner_NoImpersonation
-// pins that.
+// acting on a member's workspace must never be recorded as the member. No
+// impersonation; delegation is recorded as delegation (a portal acting for a
+// person is data.via beside them, never the actor — delegation.go), and
+// TestWorkspaceOwner_NoImpersonation pins that.
 //
 // owner "" (an operator-owned workspace, i.e. every pre-0.6 row) never stamps,
 // so the audit Data of an admin-only deployment is byte-identical to what it

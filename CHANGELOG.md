@@ -8,6 +8,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
+  registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
+  group); the portal then trades the person's own live identity-provider token for a ten-minute,
+  non-refreshable delegated token at `POST /api/v1/token` (RFC 8693 token exchange). The token
+  acts as the person at ordinary user reach — an admin gets no admin reach through it — on a fixed
+  set of run routes (create, preflight, list, read, extend, stop, attach ticket, `GET /me`); every
+  other route answers `403` `delegation_scope`. No impersonation; delegation is recorded as
+  delegation: every audit row it causes has the person as actor and the portal in `data.via`, each
+  exchange writes `delegation.exchange`, and a run it launches carries `created_via`. Revoking the
+  portal, or `POST /sessions/revoke` for the person, ends its tokens on their next request; runs it
+  launched keep running. Migration `0094_delegates` adds the `delegates` and `delegated_tokens`
+  tables, `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`; nothing that
+  worked before newly fails. See OPERATIONS.md, "Delegated run management (portals)".
+
 ### Changed
 
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query

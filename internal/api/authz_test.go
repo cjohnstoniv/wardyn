@@ -106,6 +106,10 @@ const (
 	// every human credential — the admin's included — is refused with 401, and
 	// a live device token on another device's id gets 404, never 403.
 	classDevice routeClass = "device"
+	// classPortal: the token exchange (#1142), authenticated by a registered
+	// portal's own credential alone. Every human credential — an admin's
+	// session and the admin token included — is refused with 401.
+	classPortal routeClass = "portal"
 )
 
 // routeEntity names which seeded fixture a classOwner route's path id(s) are
@@ -652,6 +656,14 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/internal/scan-results/{runID}":   {class: classInternal},
 	"PUT /api/v1/internal/sso-token/{runID}":      {class: classInternal},
 
+	// portal (a registered portal's own credential, HTTP Basic)
+	"POST /api/v1/token": {class: classPortal},
+	// The portal registry (#1142): registering is the super admin's alone;
+	// listing and revoking only ever subtract reach, like the device inventory.
+	"POST /api/v1/admin/delegates":        {class: classAdmin},
+	"GET /api/v1/admin/delegates":         {class: classSecurity},
+	"DELETE /api/v1/admin/delegates/{id}": {class: classSecurity},
+
 	// device (a `wdd_` device bearer on its own {id} only)
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
 	"POST /api/v1/devices/{id}/heartbeat": {class: classDevice},
@@ -838,6 +850,12 @@ func TestAuthzMatrix(t *testing.T) {
 	if _, err := ast.CreateDevice(context.Background(), types.Device{ID: matrixDeviceID, Name: "matrix-laptop"}, matrixDeviceToken); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
+	// A registered portal: classPortal's positive control.
+	matrixPortalID := uuid.New()
+	const matrixPortalCred = delegateCredentialPrefix + "matrix-portal"
+	if _, err := ast.CreateDelegate(context.Background(), types.Delegate{ID: matrixPortalID, Name: "matrix-portal", Group: "g"}, matrixPortalCred); err != nil {
+		t.Fatalf("seed portal: %v", err)
+	}
 
 	// discover every actual route via chi.Walk; classify or fail
 	//
@@ -948,6 +966,27 @@ func TestAuthzMatrix(t *testing.T) {
 				// A live device token on ANOTHER device's id: 404, never 403.
 				if w := do(t, srv, method, buildPath(pattern, uuid.NewString()), matrixDeviceToken, body); w.Code != http.StatusNotFound {
 					t.Errorf("device token on a foreign id: status = %d, want 404 (no existence oracle); body=%s", w.Code, w.Body.String())
+				}
+
+			case classPortal:
+				// The control first: the portal's own credential is admitted
+				// past client authentication (the empty form is then a 400).
+				r := httptest.NewRequest(method, pattern, strings.NewReader(""))
+				r.SetBasicAuth(matrixPortalID.String(), matrixPortalCred)
+				w := httptest.NewRecorder()
+				panicFails(t, srv.Handler()).ServeHTTP(w, r)
+				if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+					t.Errorf("portal credential: status = %d, want admitted; body=%s", w.Code, w.Body.String())
+				}
+				for who, w := range map[string]*httptest.ResponseRecorder{
+					"admin session":  doSSO(t, srv, method, pattern, adminSess, body),
+					"member session": doSSO(t, srv, method, pattern, memberSess, body),
+					"admin token":    do(t, srv, method, pattern, adminToken, body),
+					"no credential":  doSSO(t, srv, method, pattern, nil, body),
+				} {
+					if w.Code != http.StatusUnauthorized {
+						t.Errorf("%s: status = %d, want 401; body=%s", who, w.Code, w.Body.String())
+					}
 				}
 
 			// classAdmin and classSecurity are the SAME probe here — admin
@@ -1315,11 +1354,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER). #1157 added
 	// POST /people and the per-person token mint and list on the security tier
 	// (= 41 SEC). #1125's branding writes (PUT/DELETE /branding/settings) are
-	// SUPER, the site-config PUT's tier (= 48 SUPER). A route silently reclassified in the
+	// SUPER, the site-config PUT's tier (= 48 SUPER). #1142's portal registry:
+	// registering is SUPER (= 49 SUPER), listing and revoking are security
+	// (= 43 SEC). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 41 || super != 48 {
-		t.Errorf("tier split = %d security / %d admin, want 41 / 48 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 43 || super != 49 {
+		t.Errorf("tier split = %d security / %d admin, want 43 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1412,14 +1453,18 @@ type authzStore struct {
 	// refusing the credential, not the capability being absent
 	// (devices_test.go).
 	*fakeDeviceStore
+	// The portal capability (store.DelegateStore), for the same reason
+	// (delegation_test.go).
+	*fakeDelegateStore
 }
 
 func newAuthzStore() *authzStore {
 	return &authzStore{
-		runs:            map[uuid.UUID]types.AgentRun{},
-		workspaces:      map[uuid.UUID]types.Workspace{},
-		tickets:         map[string]store.AttachTicket{},
-		fakeDeviceStore: newFakeDeviceStore(),
+		runs:              map[uuid.UUID]types.AgentRun{},
+		workspaces:        map[uuid.UUID]types.Workspace{},
+		tickets:           map[string]store.AttachTicket{},
+		fakeDeviceStore:   newFakeDeviceStore(),
+		fakeDelegateStore: newFakeDelegateStore(),
 	}
 }
 

@@ -296,6 +296,9 @@ the seams that shape needs (`Decision` is already wire-serializable;
    `Actor` field (`actor_type` + one string — human sub, agent SPIFFE ID, or
    component name); today's mint/egress audit events record only `act` (the
    agent's SPIFFE ID) there, not a separate `sub`/`sponsor` pair per event.
+   No impersonation; delegation is recorded as delegation: a registered portal
+   acting for a signed-in person is never the actor — the person is, and every
+   row the request writes names the portal as `data.via` (#1142).
    Enforcement points live at the proxy/gateway/broker — never inside the
    agent loop.
 5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;

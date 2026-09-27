@@ -132,7 +132,8 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 }
 
 // buildAuditChain assembles the audit recorder chain:
-// maskingRecorder → spoolingRecorder → (fanoutRecorder →) store.Recorder.
+// audit.DelegationRecorder → maskingRecorder → spoolingRecorder →
+// (fanoutRecorder →) store.Recorder.
 //
 // The Postgres store is the source of truth. When audit sinks are configured,
 // every persisted event ALSO fans out to file/webhook/syslog; the store write is
@@ -178,7 +179,9 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		}
 	}
 	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
-	return masked, fan, auditFallback, storeRec, nil
+	// Outermost: a row any writer records under a portal's delegated request
+	// names the portal (data.via, #1142) before it is masked, spooled or stored.
+	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
 }
 
 // buildRunnerFromFlags resolves the optional sandbox runner: "none" (nil runner,

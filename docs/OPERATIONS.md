@@ -900,7 +900,7 @@ A few things that don't fit the grid:
   person to sign in — nothing it does is saved.
 - **Some subjects never sign in.** The callback refuses an identity-provider
   `sub` that names an identity that is not a person — `admin-token`, the
-  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:` name, trimmed
+  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:` name, trimmed
   and case-folded — with the generic sign-in error and an `auth.fail` row
   (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
   one is refused on use. Switching a local-mode install to SSO: the default
@@ -986,6 +986,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
+| `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
+| `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `POST /people`, `POST /people/{principal}/tokens` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and minting or listing API tokens for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). The mint is refused for an admin or security-admin target unless the caller is an admin | ⛔ admin or `security_admin` |
@@ -1267,7 +1269,8 @@ migration `0050`)** are the second and third owned nouns after runs.
   refresh token: an unused one is kept until the provider refuses it or it is
   erased.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
-  workspace stays the ADMIN in the audit actor (no impersonation) with
+  workspace stays the ADMIN in the audit actor (no impersonation; delegation
+  is recorded as delegation — [Delegated run management](#delegated-run-management-portals)) with
   `workspace_owner` naming the member; `secret.write`/`secret.delete` carry
   `secret_owner` naming the non-"" namespace a write landed in (a member's own
   ordinary write included) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
@@ -2372,7 +2375,9 @@ token's role AND group snapshot are bounded-stale, not frozen").
 ### Tokens for a person who never signs in
 
 For people who never open the console, an admin or `security_admin` can set the
-person up and mint their token. This is the interim path until delegation lands.
+person up and mint their token. A trusted front-end that acts for people who ARE
+signed in to it uses [delegation](#delegated-run-management-portals) instead: it
+never holds a long-lived token for anyone.
 
 | Call | What |
 |---|---|
@@ -2402,7 +2407,7 @@ happens when the email already names another known subject, when the subject is
 already known under a different email, when the subject differs from a known
 one only by case, or when the subject is another person's email. It answers
 `422` for the reserved subjects `admin-token`, the local-mode operator,
-`local:…` and `device:…`, in any case — the same set a sign-in is refused for
+`local:…`, `device:…` and `delegate:…`, in any case — the same set a sign-in is refused for
 (see "Some subjects never sign in").
 
 **What the minted token carries.** It gets the role and user type the person's
@@ -2430,6 +2435,81 @@ them is **revoked** instead of re-stamped. Otherwise a `security_admin` who kept
 the plaintext would hold an admin's credential once an admin person signed in.
 Revocation is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's
 own `DELETE /api/v1/me/tokens/{id}`.
+
+### Delegated run management (portals)
+
+A trusted front-end — a portal — can create, list, extend, stop and open runs
+for the person signed in to it, without holding that person's API token. The
+portal trades the person's own live identity-provider token for a short
+delegated token (RFC 8693 token exchange). The rule is **no impersonation;
+delegation is recorded as delegation**: the person owns and is the actor of
+everything the token does, and every audit row names the portal beside them.
+
+**Register a portal** (super admin only). The portal must sign people in
+against the same identity provider and issuer as Wardyn, with a group claim in
+its tokens.
+
+| Call | What |
+|---|---|
+| `POST /api/v1/admin/delegates` `{"name":"…","idp_client_id":"<the portal's client id>","group":"<group>"}` | register a portal; the `credential` (`wdp_…`) is in this response only, the row keeps its hash |
+| `GET /api/v1/admin/delegates` | every portal, revoked ones included (admin or `security_admin`) |
+| `DELETE /api/v1/admin/delegates/{id}` | revoke it (admin or `security_admin`) |
+
+The portal acts only for people in its `group`, matched against the group
+claim of the person's own token (canonicalized the way a sign-in snapshot is).
+`idp_client_id` cannot be Wardyn's own client id.
+
+**Exchange.** `POST /api/v1/token`, form-encoded, the portal's id and
+credential as HTTP Basic:
+
+```
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+subject_token=<the person's token>
+subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_token, …:jwt)
+```
+
+The subject token must verify against Wardyn's issuer and key set, be
+unexpired, carry an `iat`, and be either an access token for Wardyn (`aud`
+holds Wardyn's client id) that the portal requested (`azp` is the portal's
+client id), or a token issued to the portal itself (`aud` is exactly the
+portal's client id). The person is then admitted exactly as a sign-in would
+admit them — reserved subjects, the email-domain gate, role and user-type
+derivation from the token's own claims. On success the answer is
+`{"access_token":"wdg_…","token_type":"Bearer","expires_in":600,…}`: ten
+minutes, no refresh token. A portal that needs longer exchanges the person's
+live token again. `actor_token` is refused (the authenticated portal is the
+actor), and a delegated token cannot itself be exchanged.
+
+| Answer | Why |
+|---|---|
+| `401 invalid_client` | no, wrong or revoked portal credential (`auth.fail`, actor `wardyn/delegation`) |
+| `400 invalid_grant` | the subject token did not verify, was not issued to or for the portal, or its person was refused as a sign-in would be, or their sessions were revoked after it was issued |
+| `403 access_denied` | the person is not in the portal's group |
+
+**What a delegated token can do.** Exactly: `POST /runs`, `POST
+/runs/preflight`, `GET /runs`, `GET /runs/{id}`, `PATCH /runs/{id}` (end and
+wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also
+`/attach/ticket`, and the UI-gateway ticket), and `GET /me`. Every other
+route answers `403` with reason `delegation_scope` and an `authz.denied` row —
+including secrets, API tokens, SSH keys, approving or denying the person's own
+held egress, revive, and every admin route. The person is always treated at
+**user** reach, whatever their own role: an admin acting through a portal
+reaches only their own runs. Ownership, secrets, drives and the governance
+ceiling all resolve on the person.
+
+**What is recorded.** Each exchange writes `delegation.exchange` (actor
+`delegate:<id>`, target the person). Every row a delegated request writes —
+the API's, the identity provider's, the attach and UI-gateway rows of a
+ticket it minted — has the person as actor and `data.via =
+{"delegate":"<portal id>","grant":"<token id>"}`. A run it launches carries
+`created_via` (the portal id) on the run row and in the API.
+
+**Revocation.** Revoking the portal ends every delegated token it holds on
+their next request. `POST /api/v1/sessions/revoke` for the person ends theirs
+the same way and refuses new exchanges of tokens issued before it. A disable
+done only at the identity provider takes effect at the next exchange, so at
+most ten minutes. Runs a portal launched keep running after it is revoked:
+they are the person's runs.
 
 ### Three roles, and who sets the walls
 
@@ -2656,6 +2736,7 @@ admin walking the member path, not an incident.
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
+| `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -2866,8 +2947,8 @@ operator-only route 403-ing. The pressed **User view** segment says so on every
 screen, and **Admin view** is the way back; there is no band, because the User
 view is a normal state. Other tabs follow the session into the same view. Every
 audit row the session writes still names **your
-own sub** — this is not impersonation, and there is no way to become anybody
-else. The transition itself is audited as `auth.user_view.set` (`auth.member_mode`
+own sub** — no impersonation; delegation is recorded as delegation, and there
+is no way to become anybody else. The transition itself is audited as `auth.user_view.set` (`auth.member_mode`
 dual-emitted alongside it through 0.8.x, [Renamed in 0.8](#renamed-in-08))
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
 mode is on carries `user_view: true` on its `authz.denied` row — the two
