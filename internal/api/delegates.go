@@ -89,7 +89,7 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"delegate.register", d.ID.String(), "success",
+		"delegate.create", d.ID.String(), "success",
 		mustJSON(map[string]any{"name": d.Name, "idp_client_id": d.IdPClientID, "group": d.Group})))
 	d.Credential = raw
 	writeJSON(w, http.StatusCreated, d)

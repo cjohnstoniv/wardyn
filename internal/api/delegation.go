@@ -121,8 +121,10 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, oidc.RoleUser, t.UserType, t.Groups, t.GroupsTruncated)
 		r = r.WithContext(audit.WithDelegation(ctx, types.DelegationVia{Delegate: t.DelegateID, Grant: t.ID}))
 		if rctx := chi.RouteContext(r.Context()); rctx == nil || !delegationAllowed[r.Method+" "+rctx.RoutePattern()] {
-			d := authz.Deny(authz.ReasonDelegationScope, r.URL.Path, "")
-			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonDelegationScope), delegationRefusal)
+			// refuse's row with the reason on the wire too: a portal branches
+			// on delegation_scope, not on the sentence.
+			d := authz.Deny(authz.ReasonDelegationScope, r.URL.Path, delegationRefusal)
+			writeErrorReason(w, d.Status, string(d.Reason), d.Sentence)
 			s.recordRefusal(r.Context(), r, d)
 			return
 		}

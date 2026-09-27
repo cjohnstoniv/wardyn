@@ -160,18 +160,19 @@ func (s *Server) authenticateDelegate(w http.ResponseWriter, r *http.Request) (t
 		writeOAuthError(w, http.StatusNotImplemented, "server_error", "delegation requires the Postgres store backend")
 		return types.Delegate{}, nil, false
 	}
-	refuse := func(reason string) (types.Delegate, store.DelegateStore, bool) {
-		s.auditAuthFailedAs(r, delegationAuthActor, reason)
+	refuse := func() (types.Delegate, store.DelegateStore, bool) {
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "portal authentication failed")
 		return types.Delegate{}, nil, false
 	}
 	id, secret, ok := r.BasicAuth()
 	if !ok || !strings.HasPrefix(secret, delegateCredentialPrefix) {
-		return refuse("missing_client_credential")
+		s.auditAuthFailedAs(r, delegationAuthActor, "missing_client_credential")
+		return refuse()
 	}
 	d, err := ds.GetDelegateByRaw(r.Context(), secret)
 	if errors.Is(err, store.ErrNotFound) {
-		return refuse("invalid_client_credential")
+		s.auditAuthFailedAs(r, delegationAuthActor, "invalid_client_credential")
+		return refuse()
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "api: portal credential lookup failed", "error", err)
@@ -180,7 +181,8 @@ func (s *Server) authenticateDelegate(w http.ResponseWriter, r *http.Request) (t
 		return types.Delegate{}, nil, false
 	}
 	if id != d.ID.String() {
-		return refuse("invalid_client_credential")
+		s.auditAuthFailedAs(r, delegationAuthActor, "invalid_client_credential")
+		return refuse()
 	}
 	return d, ds, true
 }
