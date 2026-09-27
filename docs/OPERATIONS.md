@@ -2562,14 +2562,16 @@ identity and the sandbox all at once. When `ends_at` passes instead, the
 periodic lease sweep stops the run and, substrate and grace allowing, KEEPS it:
 the agent container is stopped (not removed), the proxy sidecar is stopped so
 the run has no network, its pending approvals are cancelled and its broker
-credentials revoked — but the run stays `RUNNING` and holds its quota slot
-until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once)
-or a kill. `run.ending_soon` warns at 24h, 1h and 10m before the end.
+credentials get a best-effort, audit-only revoke — but the run's own identity
+is NOT revoked, so the run stays `RUNNING` and holds its quota slot until
+`WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or a
+kill. `run.ending_soon` warns at 24h, 1h and 10m before the end.
 
 A stopped-but-kept container is not an empty one: the proxy's own rendered
-configuration — its per-run TLS-MITM CA private key and its (retired) run
-token included — sits in that container's own environment for the whole grace
-window, specifically so a revive (below) can read it back. Sizing
+configuration — its per-run TLS-MITM CA private key and its run token, still
+unrevoked and valid until its ≤1h TTL lapses from its last renewal (see
+#1176), included — sits in that container's own environment for the whole
+grace window, specifically so a revive (below) can read it back. Sizing
 `WARDYN_ENDED_RUN_GRACE` is therefore also sizing the exposure window of that
 container's own state to whoever already has host or Docker-daemon access —
 see the threat model's residual on kept-proxy-state. The same "kept, not
@@ -2589,11 +2591,11 @@ deployment (see the threat model). Revive is refused, nothing changed, when
 the run's captured profile no longer exists or now denies a host its git
 broker needs, the model credential its proxy would inject has been erased or
 its provider disabled, the run is past its end, or — this is the gap an open
-PR targets — **the run is already kept by its own end**; only a run lost to an
-`outage` or a `reboot` is revivable today. Admins get the same path in bulk
-over LIVE runs only: `POST /admin/runs/restart` ("Restart with current
-limits") and `GET /admin/runs/proxy-window` (listing runs on an out-of-window
-proxy release) — see the admin-routes table above.
+PR targets — **the run is already kept by its own end**; a live run, or one
+lost to an `outage` or a `reboot`, is revivable today. Admins get the same
+path in bulk over LIVE runs only: `POST /admin/runs/restart` ("Restart with
+current limits") and `GET /admin/runs/proxy-window` (listing runs on an
+out-of-window proxy release) — see the admin-routes table above.
 
 A revived run keeps its ORIGINAL agent image: a reboot revive restarts the
 same, already-created agent container rather than recreating it from the

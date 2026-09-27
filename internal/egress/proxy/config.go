@@ -26,14 +26,17 @@ import (
 // via the -config flag. The run token authenticates the sidecar to the
 // control plane's internal endpoints (verified via identity.Provider.Verify
 // with audience "wardyn-internal"); it is NOT a secret usable outside the
-// platform. No third-party secrets ever appear here — an injected credential
-// VALUE is minted at startup from the broker and held only in proxy memory
-// (InjectionConfig below carries a grant_id, never a value). RunToken and
-// MITMCAKeyPEM, in contrast, ARE part of this struct, so they persist
-// wherever the sidecar's own rendered config does — its container's env on
-// Docker — for as long as that container exists, which under the long-holds
-// design can outlive the run itself (an ended or lost run's proxy is stopped,
-// not removed, so a revive can read this config back).
+// platform. Injected PER-RUN credential VALUES never appear here — each is
+// minted at startup from the broker and held only in proxy memory
+// (InjectionConfig below carries a grant_id, never a value). One exception:
+// UpstreamProxyURL below can embed the OPERATOR's own corporate-proxy
+// credential, a genuine third-party secret that IS part of this struct (see
+// its own doc). RunToken and MITMCAKeyPEM likewise ARE part of this struct,
+// so they persist wherever the sidecar's own rendered config does — its
+// container's env on Docker — for as long as that container exists, which
+// under the long-holds design can outlive the run itself (an ended or lost
+// run's proxy is stopped, not removed, so a revive can read this config
+// back).
 type Config struct {
 	// RunID is the governed run this sidecar serves.
 	RunID uuid.UUID `json:"run_id"`
@@ -120,9 +123,11 @@ type Config struct {
 	// — the org's HTTP CONNECT proxy is the only way out (and is frequently a
 	// PRIVATE address). When set, forward-egress dials are issued as
 	// CONNECT <real-host> to this proxy; control-plane calls to wardynd never
-	// traverse it. Any embedded credential is held proxy-memory-only (like
-	// RunToken) and masked from all decision-log/stdout output. Empty => direct
-	// dial (backward-compatible).
+	// traverse it. Any embedded credential persists wherever this struct's own
+	// rendered config does — proxy memory while running, and the container's
+	// own env for as long as it exists (like RunToken, above) — and is masked
+	// from all decision-log/stdout output. Empty => direct dial
+	// (backward-compatible).
 	//
 	// SOURCE vs TRANSPORT: the only source is the persisted site-config
 	// (upstream_proxy_secret_ref, admin-authored via PUT /api/v1/site-config).

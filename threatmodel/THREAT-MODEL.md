@@ -2113,10 +2113,14 @@ hiding them would repeat the failure mode we are designed to avoid.
     OWNER's own current governance-profile denies before touching anything
     (`reviveCeiling` in `internal/api/run_revive.go`) — an admin's click never
     grants a member's run more than that member already holds. What is not
-    scoped is REACH: keeping a fleet's runs alive, or tearing them down early,
-    is available to every super admin over every user's run, with no separate
-    "operational continuity" capability a deployment could hand to a narrower
-    role — a security admin cannot use it at all. The action is fully audited
+    scoped is REACH: keeping a fleet's runs alive — revive, bulk restart, and
+    extending a run's end — is available to every super admin over every
+    user's run, with no separate "operational continuity" capability a
+    deployment could hand to a narrower role. Tearing a run down early is
+    scoped differently: a security admin already has that axis, on any run in
+    the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in
+    `internal/api/helpers.go`, which admits `isSecurityOperator`) — it is keeping a
+    run alive that no narrower role can do. The action is fully audited
     with both the actor and the owner as `subject` (`run.revive`,
     `docs/AUDIT-ACTIONS.md`), so misuse is visible after the fact; nothing
     today narrows who holds the button in advance.
@@ -2159,24 +2163,33 @@ hiding them would repeat the failure mode we are designed to avoid.
     the prerequisite direction for closing this rather than a k8s-specific
     reimplementation of each behavior individually. See
     [Kubernetes: known gaps](../docs/OPERATIONS.md#kubernetes-known-gaps).
-59. **A kept run's proxy container holds its own run token and per-run MITM
-    CA private key for the whole grace window, not just "in proxy memory."**
+59. **A kept run's proxy container holds its own run token, per-run MITM CA
+    private key and (when configured) the operator's upstream-proxy
+    credential for the whole grace window, not just "in proxy memory."**
     `Config` (`internal/egress/proxy/config.go`) — the sidecar's own rendered
-    configuration, `RunToken` and `MITMCAKeyPEM` included — is delivered to
-    the container as its own env on Docker (`proxyConfigEnv` in
-    `internal/runner/docker/driver_proxy_revive.go`), so that revive can read
-    it back later. That is a real, on-disk persistence of the container's own
-    state (Docker's container config), not merely process memory, for as long
-    as the container exists — and under the long-holds design an ended or
-    lost run's proxy is stopped rather than removed for exactly that reason,
-    for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days). This is distinct from
-    §5.1a's resident-secret exception list, which is about what the SANDBOX
-    (the agent container) can read: the agent never sees this config, and no
-    injected credential VALUE is in it (only a `grant_id` reference,
-    re-minted fresh at each proxy start). The exposure here is scoped to
-    whoever already has host or Docker-daemon access — the same actor every
-    other proxy-state residual in this section already assumes — and it is
-    bounded to one run's own token and CA, never the fleet's.
+    configuration, `RunToken`, `MITMCAKeyPEM` and `UpstreamProxyURL` included
+    — is delivered to the container as its own env on Docker (`proxyConfigEnv`
+    in `internal/runner/docker/driver_proxy_revive.go`), so that revive can
+    read it back later. That is a real, on-disk persistence of the
+    container's own state (Docker's container config), not merely process
+    memory, for as long as the container exists — and under the long-holds
+    design an ended or lost run's proxy is stopped rather than removed for
+    exactly that reason, for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days).
+    This is distinct from §5.1a's resident-secret exception list, which is
+    about what the SANDBOX (the agent container) can read: the agent never
+    sees this config, and no injected per-run credential VALUE is in it (only
+    a `grant_id` reference, re-minted fresh at each proxy start). The run
+    token itself is NOT revoked when the run ends — `endRun` never revokes
+    the run's identity, and `Broker.RevokeRun` is audit-only
+    (`internal/broker/revoke.go`) — so it stays valid, unrevoked, until its
+    ≤1h TTL lapses from its last renewal (tracked as #1176). The exposure
+    here is scoped to whoever already has host or Docker-daemon access — the
+    same actor every other proxy-state residual in this section already
+    assumes. It is bounded to one run's own token and CA — but when an
+    operator has configured an authenticated upstream proxy, that same
+    operator-wide credential rides in `UpstreamProxyURL` into every run's
+    proxy container, so that part of the exposure is never scoped to one
+    run: it is the fleet's.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
