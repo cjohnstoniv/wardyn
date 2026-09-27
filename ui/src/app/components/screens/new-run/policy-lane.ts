@@ -104,6 +104,24 @@ export function combineFloors(
   return ccRank(governance) > ccRank(authored) ? governance : authored;
 }
 
+// #1200 review R2-1 — "set by your admin" is a claim that the governance
+// floor REMOVED a tier this host has: some installed tier ranks below the
+// governance floor yet at or above the run's own authored floor (so the
+// authored floor alone would have kept it). /policies/default always returns
+// a floor (the deployment default, usually CC1, for an unassigned member),
+// so comparing the two floors is not enough. Unknown availability claims
+// nothing.
+export function governanceRemovedTier(
+  installed: ConfinementClass[] | null,
+  authored: ConfinementClass | undefined,
+  governance: ConfinementClass | undefined,
+): boolean {
+  if (!installed || !governance) return false;
+  return installed.some(
+    (c) => ccRank(c) < ccRank(governance) && (!authored || ccRank(c) >= ccRank(authored)),
+  );
+}
+
 // #1200 — T-9's one line naming the requirement, for the Barrier control's
 // TierPicker when NOTHING qualifies: whichever of the two barrierReasons
 // buckets actually contains the floor tier decides the honest cause — it

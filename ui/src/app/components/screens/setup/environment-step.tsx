@@ -112,9 +112,8 @@ export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
 // control, when a governance floor requires a tier this host can't build)
 // can name the SAME reason rather than a generic "isn't installed" — the
 // approved T-9 example is "...and this host can't run it: {this reason}".
-// Docker/k8s-shaped guidance stays local to ColumnState below; this is only
-// the WHY, which is driver-independent (the KVM fact is about the physical
-// host either way).
+// Docker-host only: on k8s the probe describes wardynd's own pod, not the
+// node Vault would run on (see tierState below) — use vaultRequirementReason.
 export function vaultIncompatibleReason(platform: SetupStatus["platform"]): string {
   const kvmProbed = typeof platform.kvm === "boolean";
   const kvm = platform.kvm ?? !(platform.wsl || /darwin|mac/i.test(platform.os));
@@ -122,6 +121,16 @@ export function vaultIncompatibleReason(platform: SetupStatus["platform"]): stri
   return kvmProbed
     ? "Vault needs KVM virtualization and this host doesn't expose /dev/kvm. If wardynd is containerized (the compose quick-start), bind-mount /dev/kvm into it and Re-check; on WSL2 enable nested virtualization; on a laptop/desktop enable virtualization in firmware. Only a genuinely KVM-less host stays incompatible."
     : "Vault likely can't run here — WSL/macOS hosts usually can't register a Kata runtime, and this daemon predates the /dev/kvm probe that would say for sure. Upgrade wardynd for a definitive answer.";
+}
+
+// #1200 review R2-4 — the driver-aware reason for a caller outside this
+// picker, split the same way tierState is (`!k8s && !kvm`): on k8s the remedy
+// is a Kata RuntimeClass, as K8S_TIER_GUIDES.CC3 says; elsewhere the /dev/kvm
+// reason. A member's redacted driver ("") reads as not-k8s, as it does here.
+const K8S_VAULT_REASON =
+  "Vault needs a Kata RuntimeClass — register one on a KVM-capable node pool, then pin it with k8s.runtimeClasses.CC3.";
+export function vaultRequirementReason(driver: string, platform: SetupStatus["platform"]): string {
+  return driver === "k8s" ? K8S_VAULT_REASON : vaultIncompatibleReason(platform);
 }
 
 // #213 — the strongest INSTALLED class, never inferred from the operating

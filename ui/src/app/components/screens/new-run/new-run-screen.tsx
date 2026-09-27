@@ -29,7 +29,7 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type SetupStatus, type Workspace } from "../../../lib/types";
+import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard } from "./new-run-primitives";
 import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
@@ -53,7 +53,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
 import { TierPicker, allowedFromFloor } from "../../wardyn/tier-picker";
-import { vaultIncompatibleReason } from "../setup/environment-step";
+import { vaultRequirementReason } from "../setup/environment-step";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
@@ -63,6 +63,7 @@ import {
   clearedSpecOnCustomSwitch,
   combineFloors,
   defaultSpecText,
+  governanceRemovedTier,
   savedPolicyGone,
 } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
@@ -165,11 +166,11 @@ export function NewRunScreen() {
   // in both cases the Barrier control falls back to the authored floor alone,
   // never a floor it could not confirm.
   const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
-  // #1200 review P2-6 — this host's platform facts (the /dev/kvm probe),
-  // read off the same /setup/status call, so the T-9 requirement card can
-  // name the SAME honest reason environment-step.tsx's own picker computes
-  // (vaultIncompatibleReason) instead of a generic "isn't installed".
-  const [platform, setPlatform] = React.useState<SetupStatus["platform"] | undefined>(undefined);
+  // #1200 review P2-6/R2-4 — Vault's driver-aware reason (the /dev/kvm probe
+  // on docker, a Kata RuntimeClass on k8s), read off the same /setup/status
+  // call, so the T-9 requirement card names the SAME honest reason
+  // environment-step.tsx computes instead of a generic "isn't installed".
+  const [vaultReason, setVaultReason] = React.useState<string | undefined>(undefined);
   // The Workspace card's drive block: this caller's allocation (nil-means-none)
   // and the door beside it ("" means open), read off the shell's ONE GET /me
   // rather than a second one of this screen's own — app-shell's useMeta already
@@ -208,7 +209,7 @@ export function NewRunScreen() {
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
         if (st.unreachable) return;
-        setPlatform(st.platform);
+        setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
         // No runner AT ALL (environment-step.tsx's own noDriver fold — a
         // member's redacted Driver:"" WITH classes is a withheld NAME, not
@@ -357,14 +358,12 @@ export function NewRunScreen() {
   // only read `floor` could offer a tier the server then 422s at launch.
   const effectiveFloor = combineFloors(floor, boundGovFloor);
 
-  // #1200 review P2-1 — whether the GOVERNANCE ceiling is what actually
-  // removed a tier, as opposed to this host simply having one tier
-  // installed, or the run's OWN authored policy floor doing the narrowing.
+  // #1200 review P2-1/R2-1 — whether the GOVERNANCE ceiling actually removed
+  // an installed tier, as opposed to this host simply having one tier, or the
+  // run's OWN authored floor doing the narrowing (governanceRemovedTier).
   // Only this case gets TierPicker's "set by your admin" line and the
-  // governance-sourced requirement wording — ranking "at or above" (not
-  // strictly above) the authored floor, since a tie is still the ceiling's
-  // doing (it would have bound here even without an authored floor at all).
-  const governanceBinding = !!boundGovFloor && (!floor || rank(boundGovFloor) >= rank(floor));
+  // governance-sourced requirement wording.
+  const governanceBinding = governanceRemovedTier(availableClasses, floor, boundGovFloor);
 
   // The Barrier control's per-tier state — see barrierReasons.
   const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, effectiveFloor);
@@ -742,7 +741,7 @@ export function NewRunScreen() {
                             effectiveFloor,
                             unavailable,
                             belowFloor,
-                            platform && vaultIncompatibleReason(platform),
+                            vaultReason,
                           ),
                         )
                       : undefined

@@ -163,6 +163,20 @@ describe("MemberGettingStarted — the barrier chip respects the governance floo
     expect(screen.queryByText("Barrier · Wall")).not.toBeInTheDocument();
   });
 
+  // Review R2-5 — the same Vault reason New Run's requirement card names.
+  it("a Vault floor on a KVM-less host names the /dev/kvm reason, not a bare 'isn't installed'", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      status({
+        runner: { driver: "", confinement_classes: ["CC1", "CC2"] },
+        platform: { os: "linux", wsl: false, kvm: false },
+      }),
+    );
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
+    renderPage();
+    expect(await screen.findByText(/Your admin requires Vault, and this host can't run it: .*\/dev\/kvm/)).toBeInTheDocument();
+    expect(screen.queryByText(/Vault isn't installed on this host/)).not.toBeInTheDocument();
+  });
+
   it("no floor at all shows the strongest installed tier, unrestricted", async () => {
     getSetupStatusMock.mockResolvedValue(
       status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),

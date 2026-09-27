@@ -23,9 +23,10 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 const getDefaultPolicyMock = vi.fn();
+const listPoliciesMock = vi.fn();
 vi.mock("../../../lib/api/policies", () => ({
   policies: {
-    listPolicies: () => Promise.resolve([]),
+    listPolicies: (...a: unknown[]) => listPoliciesMock(...a),
     createPolicy: vi.fn(),
     getDefaultPolicy: (...a: unknown[]) => getDefaultPolicyMock(...a),
   },
@@ -81,6 +82,7 @@ beforeEach(() => {
   );
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
   getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
+  listPoliciesMock.mockReset().mockResolvedValue([]);
   myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
@@ -238,6 +240,87 @@ describe("NewRunScreen — a member's governance ceiling folds into the Barrier 
     renderScreen(); // operator:true
     expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
     expect(screen.queryByText(/set by your admin/)).toBeNull();
+  });
+
+  // Every mount-time read has resolved and re-rendered, so a line that only
+  // appears once /policies/default lands cannot be missed.
+  async function settled() {
+    await waitFor(() => expect(getDefaultPolicyMock).toHaveBeenCalled());
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    await act(async () => {
+      await getDefaultPolicyMock.mock.results[0].value;
+      await getSetupStatusMock.mock.results[0].value;
+    });
+  }
+
+  // Review R2-1 probe P2b — the deployment default's Fence floor removed
+  // nothing on a Fence-only host: the line must be the neutral one.
+  it("an UNASSIGNED member on a Fence-only host is never told their admin set it (P2b)", async () => {
+    mockConfinementClasses = ["CC1"];
+    renderAsMember(); // /policies/default: Fence floor, no profile (beforeEach)
+    await settled();
+    expect(screen.getByText(RUN.BARRIER_ONLY_QUALIFIER)).toBeInTheDocument();
+    expect(screen.queryByText(/set by your admin/)).toBeNull();
+  });
+
+  // Review R2-1 probe P2c — a profile requiring Wall on a Wall-only host:
+  // the floor removed no installed tier, so the line is neutral too.
+  it("a Wall floor on a Wall-only host removes nothing, so the line is neutral (P2c)", async () => {
+    mockConfinementClasses = ["CC2"];
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC2",
+      governance_profile_name: "wall-required",
+    });
+    renderAsMember();
+    await settled();
+    expect(screen.getByText(RUN.BARRIER_ONLY_QUALIFIER)).toBeInTheDocument();
+    expect(screen.queryByText(/set by your admin/)).toBeNull();
+  });
+
+  // Review R2-2 — the saved-policy half of govFloorApplies: an unassigned
+  // member's saved policy is not raised to the deployment default
+  // (inline_policy.go: `ceiling.Profile != nil`), while their inline one is.
+  it("an UNASSIGNED member's saved policy keeps Fence although the deployment default floors at Wall", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2" });
+    listPoliciesMock.mockResolvedValue([
+      {
+        id: "pol_fence",
+        name: "Fence policy",
+        spec: { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC1" },
+      },
+    ]);
+    renderAsMember();
+    // The Custom lane IS clamped for every non-operator.
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument();
+      expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
+    });
+    await user.click(screen.getByRole("button", { name: /Reuse a saved policy/ }));
+    await user.click(screen.getByRole("combobox", { name: "Saved policy" }));
+    await user.click(await screen.findByRole("option", { name: "Fence policy" }));
+    expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
+  });
+
+  // Review R2-4 — the Vault reason follows the driver, as environment-step's
+  // tierState does: on k8s the remedy is a Kata RuntimeClass, never /dev/kvm.
+  it.each([
+    ["k8s", /Kata RuntimeClass/, /\/dev\/kvm/],
+    ["docker", /\/dev\/kvm/, /Kata RuntimeClass/],
+  ])("a Vault floor on a KVM-less %s host names that driver's remedy", async (driver, want, never) => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        runner: { driver, confinement_classes: ["CC1", "CC2"] },
+        platform: { os: "linux", wsl: false, kvm: false },
+      }),
+    );
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC3",
+      governance_profile_name: "vault-required",
+    });
+    renderAsMember();
+    expect(await screen.findByText(want)).toBeInTheDocument();
+    expect(screen.queryByText(never)).toBeNull();
   });
 });
 

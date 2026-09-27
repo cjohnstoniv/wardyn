@@ -70,6 +70,7 @@ import { modelKeyState, ownKeyApplies } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
 import { ceilingNarrows, walkableDemos } from "../setup/steps";
+import { vaultRequirementReason } from "../setup/environment-step";
 import { useViewAccess } from "../../wardyn/console-view";
 
 // M-6 (D5, admin-member-modes-design.md §4.8): a demo is a sandbox run, a
@@ -399,7 +400,9 @@ export function MemberGettingStarted() {
                   onSelect={() => {}}
                   requirementNote={TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE(
                     CC_META[govFloor ?? "CC1"].label,
-                    `${CC_META[govFloor ?? "CC1"].label} isn't installed on this host.`,
+                    // Review R2-5 — the same Vault reason New Run names.
+                    (govFloor === "CC3" && status && vaultRequirementReason(status.runner.driver, status.platform)) ||
+                      `${CC_META[govFloor ?? "CC1"].label} isn't installed on this host.`,
                   )}
                 />
               )}
