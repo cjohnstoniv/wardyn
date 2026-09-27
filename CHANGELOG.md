@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Two replicas booting at once no longer end on different boot keys (#754).** With
+  `-allow-multi-instance`, two wardynd replicas starting against an empty store could each
+  generate the identity signing key (or the OIDC, UI, SSH host key, or internal hop CA) and
+  each write it; the one whose write was overwritten served with a key no other replica held.
+  A boot key is now created only under a Postgres advisory lock and read again under it, so
+  every replica ends on the one stored value; a replica that cannot take the lock fails its
+  boot instead of creating a key unlocked. A single-instance daemon is unchanged — its
+  instance lock already excludes any other replica.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

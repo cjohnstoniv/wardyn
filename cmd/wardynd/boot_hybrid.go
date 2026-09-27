@@ -47,7 +47,7 @@ const secretOrgDeviceCredential = "wardyn-org-device-credential"
 // is pushed again. Re-enrolment is the ONLY thing that clears that mark: a
 // laptop the organisation revoked comes back up still refusing new runs, the
 // organisation reachable or not.
-func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets secretKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
+func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets bootKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
 	if orgURL == "" {
 		return nil, nil
 	}
@@ -119,7 +119,7 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 // already vetted by validateHybridPosture (validateBootPosture, before
 // connectAndMigrate).
 func checkPostureAndBootHybrid(ctx, rootCtx context.Context, f *bootFlags, localMode, oidcConfigured bool,
-	secrets secretKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
+	secrets bootKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
 	if err := validateMemberModePosture(*f.memberMode, localMode, oidcConfigured); err != nil {
 		return nil, err
 	}
