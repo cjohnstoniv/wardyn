@@ -90,13 +90,14 @@ func TestKillSandbox_NotRunningIsBenignRealErrorIsNot(t *testing.T) {
 	}
 }
 
-// TestStopProxy_EscalatesToKillAndNeverRemoves is #1060 (0.8 review F06): a
-// proxy whose graceful stop fails is killed, which keeps the container and its
-// env (a revive reads its config back), and the stop reports success with the
-// agent left running. A proxy that survives the kill too is an error, and the
-// agent is stopped so no work runs while its egress is unconfirmed. Nothing is
-// ever removed: the writable layer is the files the run is kept for.
-func TestStopProxy_EscalatesToKillAndNeverRemoves(t *testing.T) {
+// TestStopProxy_EscalatesToKillAndNeverRemovesTheAgent is #1060 (0.8 review
+// F06): a proxy whose graceful stop fails is killed and then removed (nothing a
+// revive needs is in it, #1176), and the stop reports success with the agent
+// left running. A proxy that survives the kill too is an error, is not
+// removed, and the agent is stopped so no work runs while its egress is
+// unconfirmed. The agent is never removed: its writable layer is the files the
+// run is kept for.
+func TestStopProxy_EscalatesToKillAndNeverRemovesTheAgent(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		killErr      error
@@ -124,13 +125,11 @@ func TestStopProxy_EscalatesToKillAndNeverRemoves(t *testing.T) {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			for name, c := range f.containers {
-				if c.removed {
-					t.Errorf("container %s was removed; a failed stop must never remove anything", name)
-				}
+			if f.containers[sb.Ref].removed {
+				t.Error("the agent was removed; its writable layer is the files the run is kept for")
 			}
-			if p := f.containers[proxy]; !tc.wantErr && (p.state == nil || p.state.Running) {
-				t.Errorf("proxy after a landed kill = %+v; want it stopped", p.state)
+			if p := f.containers[proxy]; p.removed == tc.wantErr || (p.state != nil && p.state.Running && !tc.wantErr) {
+				t.Errorf("proxy removed %v state %+v; want removed only after a landed kill", p.removed, p.state)
 			}
 			if agent := f.containers[sb.Ref]; agent.state == nil || agent.state.Running != tc.agentRunning {
 				t.Errorf("agent running = %+v, want %v", agent.state, tc.agentRunning)

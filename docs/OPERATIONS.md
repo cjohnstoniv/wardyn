@@ -2689,8 +2689,8 @@ action. Ending it immediately, with no grace, is a KILL (`POST
 admin (not just the owner or a super admin), tearing down broker credentials,
 identity and the sandbox all at once. When `ends_at` passes instead, the
 periodic lease sweep stops the run and, substrate and grace allowing, KEEPS it:
-the agent container is stopped (not removed), the proxy sidecar is stopped so
-the run has no network, its pending approvals are cancelled and its broker
+the agent container is stopped (not removed), the proxy sidecar is stopped
+and removed so the run has no network, its pending approvals are cancelled and its broker
 credentials get a best-effort, audit-only revoke — but the run's own identity
 is NOT revoked, so the run stays `RUNNING` and holds its quota slot until
 `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or a
@@ -2701,22 +2701,30 @@ lost to a reboot or an outage) with `403` and an `authz.denied` row, reason
 approval with it; only the three tail uploads are still accepted, for five
 minutes after the run was kept. A revive gives the new proxy a fresh token.
 
-A stopped-but-kept container is not an empty one: the proxy's own rendered
-configuration — its per-run TLS-MITM CA private key, its run token (refused
-by the control plane once the run is kept, but not revoked, and valid as a
-signature until its ≤1h TTL lapses) and any authenticated upstream-proxy URL
-included — sits in that container's own environment for the whole grace
-window, specifically so a revive (below) can read it back (#1176 tracks
-moving it out). Sizing
-`WARDYN_ENDED_RUN_GRACE` is therefore also sizing the exposure window of that
-container's own state to whoever already has host or Docker-daemon access —
-see the threat model's residual on kept-proxy-state. The same "kept, not
-removed" container also holds whatever the agent wrote to its own writable
-layer for that entire window, with nothing on the run's page or in the admin
-runs list reporting how much that is today.
+No container holds the proxy's rendered configuration at rest (#1176): its
+per-run TLS-MITM CA private key, its run token and any authenticated
+upstream-proxy URL. On Docker the proxy reads the configuration from its stdin
+once at start, so neither the container's config nor its environment carries it,
+and the proxy is removed when the run is kept. Kept for a revive instead is one
+database row per run (`run_proxy_configs`), sealed with AES-256-GCM under the
+`wardyn-run-config-key` boot key, which the secret store holds under its own
+key-encryption key like every boot key (a `-rewrap` or `-rotate-age-key` moves
+it with the rest). The row is deleted when the run goes terminal, with a purge
+at boot and on the orphan sweep's cadence behind it; see the threat model's
+residual 59. The kept agent container still holds whatever the agent wrote to
+its own writable layer for the whole grace window, with nothing on the run's
+page or in the admin runs list reporting how much that is today.
 
-**Revive.** `POST /runs/{id}/revive` gives a run a NEW proxy sidecar under the
-OWNER's current governance-profile denies, without touching a running agent (a
+**Upgrading to this release:** a run started before it has no stored proxy
+config, so it cannot be revived (`409`, start a new run); it runs, ends and is
+torn down as before. `WARDYN_PROXY_IMAGE` must name a proxy image from this
+release or later: an older proxy does not read its config from stdin and exits
+at start.
+
+**Revive.** `POST /runs/{id}/revive` gives a run a NEW proxy sidecar, built from
+the run's stored proxy config (never from a container) with a fresh run token
+and the same per-run MITM CA, under the OWNER's current governance-profile
+denies, without touching a running agent (a
 "proxy-only" revive, for a run lost to a control-plane outage) — or, for a run
 lost to a reboot, also restarts the kept agent container behind that new proxy
 so Claude Code can continue its conversation. Authority is always the owner's:
@@ -2744,7 +2752,11 @@ driver does (a k8s agent pins its sidecar proxy's pod IP, so there is no "same
 address, new container" to replace, and a stopped pod is gone, not kept). A
 k8s run's end and limits still fire on schedule — that half is NOT a gap — but
 ending, losing its sandbox, or (once it ships) being idle all degrade to an
-immediate, non-resumable teardown rather than a grace window. See
+immediate, non-resumable teardown rather than a grace window. Its proxy
+config reaches the sidecar through a per-run Secret staged into an in-memory
+volume (#688), not stdin; since the run is never kept, that Secret lives exactly
+as long as the run and is never re-created from the stored row. The row is still
+written for a k8s run (and deleted with it), unused until k8s can revive. See
 [Kubernetes: known gaps](#kubernetes-known-gaps).
 
 **What's not here: pause.** The run-limits schema already carries a
@@ -3721,8 +3733,8 @@ it.
   on `WARDYN_INTERNAL_LISTEN` (default `:8443`, TLS 1.3 only). A bind failure
   ends the daemon. The console listener (`WARDYN_LISTEN`) is unchanged.
 - **The proxy's end.** Dispatch puts the CA's public certificate in each run's
-  sealed proxy config (`control_plane_ca_pem`: the docker driver's
-  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret, staged by a
+  sealed proxy config (`control_plane_ca_pem`: written to the proxy's stdin by
+  the docker driver, the k8s driver's per-run Secret, staged by a
   nonroot init container into an owner-only file the sidecar reads via
   `-config` — where the per-run MITM CA already travels). The proxy trusts
   that certificate and nothing else

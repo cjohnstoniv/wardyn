@@ -237,6 +237,9 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 			data["broker_error"] = berr.Error()
 		}
 	}
+	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
+		data["proxy_config_error"] = perr.Error()
+	}
 	if len(data) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
 			runID.String(), "failure", mustJSON(data)))
@@ -894,6 +897,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 		if berr := retryQuick(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
 			killData["broker_error"] = berr.Error()
 		}
+	}
+	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
+	if perr := s.dropRunProxyConfig(ctx, id); perr != nil {
+		killData["proxy_config_error"] = perr.Error()
 	}
 
 	// Honest outcome: the kill-switch is the central governance control and

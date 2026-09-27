@@ -29,7 +29,7 @@ import (
 func (f *reviveFixture) legacyHop(t *testing.T, edit func(map[string]json.RawMessage)) {
 	t.Helper()
 	var m map[string]json.RawMessage
-	if err := json.Unmarshal(f.rr.cfg, &m); err != nil {
+	if err := json.Unmarshal(f.rs.cfg, &m); err != nil {
 		t.Fatal(err)
 	}
 	m["control_plane_url"] = json.RawMessage(`"http://wardynd:8080"`)
@@ -38,10 +38,10 @@ func (f *reviveFixture) legacyHop(t *testing.T, edit func(map[string]json.RawMes
 		edit(m)
 	}
 	var err error
-	if f.rr.cfg, err = json.Marshal(m); err != nil {
+	if f.rs.cfg, err = json.Marshal(m); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := proxy.LoadConfigBytes(f.rr.cfg); err == nil {
+	if _, err := proxy.LoadConfigBytes(f.rs.cfg); err == nil {
 		t.Fatal("fixture: the pre-TLS config loads as rendered; the case would prove nothing")
 	}
 }

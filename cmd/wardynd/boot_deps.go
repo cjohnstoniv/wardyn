@@ -297,6 +297,8 @@ type optionalFeatures struct {
 	// ONLY when -ui-sandbox-listen is set — nil otherwise, the same
 	// never-mint-a-secret-for-a-disabled-feature discipline as sshHostKey.
 	uiSessionKey []byte
+	// runConfigKey seals each run's stored proxy config (api.Config.RunConfigKey).
+	runConfigKey []byte
 	// dir is the §I directory connector, nil unless WARDYN_DIRECTORY_PROVIDER is
 	// set. nil is the ABSENT mode all the way down: the search endpoint answers
 	// its distinct 503 and every "who" field stays free text.
@@ -574,6 +576,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 
 	var herr error
 	if of.hop, herr = loadHopTLS(bootCtx, bootKeys, *f.controlURL); herr != nil {
+		return of, herr
+	}
+	if of.runConfigKey, herr = loadOrCreateRunConfigKey(bootCtx, bootKeys); herr != nil {
 		return of, herr
 	}
 	// Before anything serves, so an ingest waiting on wardynd's healthcheck finds it.

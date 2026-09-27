@@ -44,12 +44,12 @@ func newOwnerFixture(t *testing.T) (*reviveFixture, uuid.UUID) {
 
 func (f *reviveFixture) editConfig(t *testing.T, edit func(*proxy.Config)) {
 	t.Helper()
-	c, err := proxy.LoadConfigBytes(f.rr.cfg)
+	c, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatalf("fixture config: %v", err)
 	}
 	edit(c)
-	if f.rr.cfg, err = json.Marshal(c); err != nil {
+	if f.rs.cfg, err = json.Marshal(c); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -350,7 +350,7 @@ func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T)
 func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	t.Helper()
 	f, _ := newOwnerFixture(t)
-	c, err := proxy.LoadConfigBytes(f.rr.cfg)
+	c, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

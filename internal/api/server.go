@@ -706,6 +706,9 @@ type Config struct {
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// RunConfigKey seals each run's stored proxy config (32 bytes, the
+	// wardyn-run-config-key boot key; run_proxy_config.go). Nil: none is kept.
+	RunConfigKey []byte
 	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
 	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
 	// gateway: https://, no userinfo, no query/fragment). It re-points the

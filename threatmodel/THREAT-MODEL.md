@@ -2153,8 +2153,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     does not extend to a long-kept run's agent container.
 57. **A kept run's writable-layer disk footprint is not reclaimed until its
     grace expires, and nothing surfaces how much that is.** An ended or lost
-    run is deliberately kept — its agent and proxy containers stopped, not
-    removed — for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days). Every byte
+    run is deliberately kept — its agent container stopped, not removed (its
+    proxy is removed, residual 59) — for up to `WARDYN_ENDED_RUN_GRACE`
+    (default 7 days). Every byte
     that run's agent wrote to its container's own writable layer sits on the
     host disk for the whole grace window, and nothing on the run's page or in
     the admin runs list reports it today — an operator sizing host disk for
@@ -2179,42 +2180,34 @@ hiding them would repeat the failure mode we are designed to avoid.
     the prerequisite direction for closing this rather than a k8s-specific
     reimplementation of each behavior individually. See
     [Kubernetes: known gaps](../docs/OPERATIONS.md#kubernetes-known-gaps).
-59. **A kept run's proxy container holds its own run token, per-run MITM CA
-    private key and (when configured) the operator's upstream-proxy
-    credential for the whole grace window, not just "in proxy memory."**
-    `Config` (`internal/egress/proxy/config.go`) — the sidecar's own rendered
-    configuration, `RunToken`, `MITMCAKeyPEM` and `UpstreamProxyURL` included
-    — is delivered to the container as its own env on Docker (`proxyConfigEnv`
-    in `internal/runner/docker/driver_proxy_revive.go`), so that revive can
-    read it back later. That is a real, on-disk persistence of the
-    container's own state (Docker's container config), not merely process
-    memory, for as long as the container exists — and under the long-holds
-    design an ended or lost run's proxy is stopped rather than removed for
-    exactly that reason, for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days).
-    This is distinct from §5.1a's resident-secret exception list, which is
-    about what the SANDBOX (the agent container) can read: the agent never
-    sees this config, and no injected per-run credential VALUE is in it (only
-    a `grant_id` reference, re-minted fresh at each proxy start). The run
-    token itself is NOT revoked when the run ends — `endRun` never revokes
-    the run's identity, because a run-wide revoke would also refuse the
-    fresh token a revive mints, and `Broker.RevokeRun` is audit-only
-    (`internal/broker/revoke.go`) — so it still verifies until its ≤1h TTL
-    lapses from its last renewal. Since #1176 it is refused anyway: the
-    `/internal` liveness gate (`refuseTerminalRun`,
-    `internal/api/internal_live_run.go`) refuses every door to a kept run
-    (`authz.denied`, `run_kept`), and renew refuses it on its own path, so a
-    token read out of a kept container mints, injects and decides nothing;
-    only the three upload-only tail doors accept it, for five minutes after
-    the run was kept. What remains is the material itself at rest in the
-    stopped container's env: the CA key and the upstream-proxy credential
-    (#1176's second half, still open). The exposure
-    here is scoped to whoever already has host or Docker-daemon access — the
-    same actor every other proxy-state residual in this section already
-    assumes. It is bounded to one run's own token and CA — but when an
-    operator has configured an authenticated upstream proxy, that same
-    operator-wide credential rides in `UpstreamProxyURL` into every run's
-    proxy container, so that part of the exposure is never scoped to one
-    run: it is the fleet's.
+59. **A run's rendered proxy config — its run token, per-run MITM CA private
+    key and (when configured) the operator's upstream-proxy credential — is
+    held in two places: the running proxy's memory, and one sealed database
+    row.** Since #1176 no container holds it at rest. On Docker the driver
+    writes the config to the proxy's stdin once at start
+    (`WARDYN_PROXY_CONFIG_STDIN`, `internal/runner/docker/driver_proxy_revive.go`),
+    so neither the container's config nor its environment carries it, and a
+    stopped proxy started again by hand gets none and exits non-zero. When a
+    run is kept (ended, or lost to a reboot or an outage) its proxy is stopped
+    and removed, not kept. A revive rebuilds the proxy from the
+    `run_proxy_configs` row (migration 0090, `internal/api/run_proxy_config.go`):
+    the rendered config sealed with AES-256-GCM under the
+    `wardyn-run-config-key` boot key and bound to its run. That key is kept in
+    the secret store like every boot key, so the secret store's own
+    key-encryption key (local, Vault Transit, or the organisation's store)
+    protects it, and a rewrap or rekey moves it with the rest. The row is
+    deleted when the run goes terminal (the shared terminal tail and the
+    kill), with a purge at boot and on the orphan sweep's cadence as the
+    backstop for a delete that failed. The kept run's token is also refused at
+    every `/internal` door (`authz.denied`, `run_kept`), so a copy of it
+    mints, injects and decides nothing. What remains: an actor with the
+    database AND the secret store's key can open any live or kept run's
+    config, the same actor who can already open every stored credential; an
+    actor with Docker-daemon or host access can still read a RUNNING proxy's
+    memory, the pre-existing process-memory residual. On Kubernetes the config
+    reaches the sidecar through a per-run Secret and an in-memory volume
+    (#688) and a kept run is not kept at all (residual 58), so the Secret's
+    life is the run's; it is not re-created from the row.
 60. **A stored key keeps working for a bounded time after it is revoked,
     rotated, or refused at the store — up to the injection TTL plus a
     transient-failure grace, never indefinitely.** A stored API key the proxy

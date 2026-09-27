@@ -25,8 +25,9 @@ import (
 
 // Revive and restart with current limits (long-holds design rev 4, §4.1,
 // RL-10 and RL-11). A run lost to a control-plane outage still has its agent
-// running and its proxy stopped (run_lost.go). Revive gives it a new proxy
-// built from the old one's own config, with only two things changed: a fresh
+// running and its proxy stopped and removed (run_lost.go). Revive gives it a
+// new proxy built from the run's stored config (run_proxy_config.go), with
+// only two things changed: a fresh
 // run token, and the owner's CURRENT profile denies unioned over the frozen
 // policy. The same path restarts a live run's proxy, which is how an admin
 // brings a standing run onto current limits and a current proxy release.
@@ -54,8 +55,10 @@ import (
 // the profile captured on the run at create, and a run whose profile no longer
 // exists is refused. The policy is never re-resolved; the rewrite only adds
 // denies and removes credential lanes, and the rest of the owner's authority
-// is re-checked as run_owner_authority.go describes. The per-run MITM CA inside the config
-// is carried over, and no copy of it is made anywhere else.
+// is re-checked as run_owner_authority.go describes. The old config comes
+// from the run's stored row (run_proxy_config.go), never from the proxy
+// container, and the per-run MITM CA inside it is carried over, so an agent
+// still running keeps trusting its proxy.
 
 // reviveBulkMax bounds one admin restart request.
 const reviveBulkMax = 100
@@ -168,12 +171,20 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	old, err := rv.ProxyConfig(ctx, run.SandboxRef)
-	if err != nil {
+	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
 		if errors.Is(err, runner.ErrReviveUnsupported) {
 			return reviveResult{}, reviveRefused(http.StatusConflict, err.Error())
 		}
-		return reviveResult{}, reviveRefused(http.StatusBadGateway, "read the run's proxy config: "+err.Error())
+		return reviveResult{}, reviveRefused(http.StatusBadGateway, "resolve the run's substrate: "+err.Error())
+	}
+	// From the run's own stored config, never the proxy container (#1176).
+	old, err := s.loadRunProxyConfig(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
+		return reviveResult{}, reviveRefused(http.StatusConflict,
+			"the run's proxy config is not stored (it started before this release, or this deployment keeps none); start a new run")
+	case err != nil:
+		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, "read the run's proxy config: "+err.Error())
 	}
 	cfg, err := s.loadRenderedProxyConfig(old)
 	if err != nil {
@@ -257,6 +268,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
 	s.revokeRetiringToken(ctx, retiring, run.ID)
+	// The stored config becomes the one now running. A failed write keeps the
+	// previous one, from which the next revive re-derives the same result.
+	if err := s.storeRunProxyConfig(ctx, run.ID, cfgJSON); err != nil {
+		slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
 	if rebooted {
 		// F2: refresh the watcher lease right before starting the agent — on a
 		// multi-replica deployment the claim's own stamp can go stale while

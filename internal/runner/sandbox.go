@@ -216,8 +216,8 @@ func ProxySidecarEnvKnobs() [][2]string {
 
 // BuildProxyConfig marshals a run's ProxyConfig (egress policy, MITM CA,
 // injection rules, run token, ...) into the JSON payload every substrate
-// delivers to its wardyn-proxy sidecar as WARDYN_PROXY_CONFIG_JSON — the proxy
-// fails closed without it (no policy => no working egress). Pure data
+// delivers to its wardyn-proxy sidecar (on stdin on Docker, as a staged file on
+// Kubernetes; never in its environment) — the proxy fails closed without it (no policy => no working egress). Pure data
 // transform (field mapping + json.Marshal); hoisted out of the docker driver
 // so a k8s substrate builds byte-identical sidecar config without duplicating
 // the mapping. port is the sidecar's listen port (ProxyListenPort in
