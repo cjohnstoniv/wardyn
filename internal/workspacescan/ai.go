@@ -22,8 +22,8 @@ package workspacescan
 // profile and can only RAISE NeedsReview. AI-suggested EGRESS is treated
 // cautiously — the deterministic filename-keyed table (WorkspaceProfile.
 // EgressDomains) is the SOLE authority for auto-granted hosts and the AI never
-// writes to it at all (W6-S1-3: it used to, which let a model guess ride the
-// same auto-union privilege as a real marker-table hit). An AI-suggested host
+// writes to it at all, so a model guess cannot ride the same auto-union
+// privilege as a real marker-table hit. An AI-suggested host
 // instead lands in SuggestedEgress — the SAME advisory, content-derived,
 // never-auto-unioned lane the deterministic content scanner's own hits use
 // (profile.go, workspace_egress.go's unionWorkspaceEgress) — and ALWAYS forces
@@ -161,7 +161,7 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 
 	// Egress is security-load-bearing: WorkspaceProfile.EgressDomains is the
 	// SOLE auto-granted-host authority and stays strictly filename-keyed — the
-	// AI never writes to it (W6-S1-3: seedSourceRequirements, source_scan.go,
+	// AI never writes to it (seedSourceRequirements, source_scan.go,
 	// treats every EgressDomains entry as a required, auto-unioned contract row
 	// with no way to tell an AI guess from a deterministic marker-table hit).
 	// An AI-suggested host is instead UNIONED into SuggestedEgress — content-
@@ -215,7 +215,7 @@ const (
 // and Languages/PackageManagers/Tools are written VERBATIM into the AGENTS.md
 // that the next agent reads. An entry carrying a newline and a "## SYSTEM:"
 // heading is therefore a prompt-injection re-entry path through a field that
-// used to be trimmed and nothing else. adviceItemSafe is what closes it; the
+// is only trimmed, nothing else. adviceItemSafe is what closes it; the
 // count and length caps close the size half.
 func cleanSet(xs []string) []string {
 	set := make(map[string]struct{}, len(xs))

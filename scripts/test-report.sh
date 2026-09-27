@@ -55,80 +55,75 @@ fi
 # ── the skip floor ───────────────────────────────────────────────────────────
 # A test that SKIPS produces `--- SKIP` -> `ok` -> exit 0, and everything above
 # grades on the exit code alone. So a probe that quietly stopped running looked
-# exactly like a probe that passed, and the invariant it proves - audit_events is
-# append-only, and the boot check says so honestly - was unfalsifiable from CI's
-# own output. The probes now derive fail-not-skip from the connection, but that
-# derivation is itself only observable here: if it ever stops holding, this is
-# the step that says so.
+# exactly like a probe that passed, and the invariant it proves - e.g. that
+# audit_events is append-only, or that a sandbox really has no default route -
+# was unfalsifiable from CI's own output.
 #
-# NAMED, not "no skips anywhere": a suite legitimately skips what its lane cannot
-# provide (no Docker, no cluster). The floor covers the tests whose whole purpose
-# is to be falsifiable, matched by NAME so a rename cannot quietly empty the set -
-# an empty match is itself a failure.
-# The DEFAULT floor applies to the pg suite, and only when the lane actually
-# declared a database: a run with WARDYN_TEST_PG unset has no substrate, and
+# NAMED, not "no skips anywhere": a suite legitimately skips what its lane
+# cannot provide (no Docker, no cluster). The floor covers the tests whose
+# whole purpose is to be falsifiable proof, declared by calling
+# testfloor.Mark(t, "<suite>") as the first line of the test func — NOT matched
+# by test NAME. A name regex here used to couple the floor to a string that had
+# nothing to do with the invariant: renaming the test silently emptied the set
+# unless the rename and this script moved together. The marker lives in the
+# test body, so a rename is safe and the floor still finds the same probes.
+#
+# Every suite (unit, pg, docker, k8s) carries its own probes. The one
+# exception: the pg suite's floor applies only when the lane actually declared
+# a database (WARDYN_TEST_PG set); with it unset there is no substrate, and
 # skipping what the environment genuinely cannot provide is the one sanctioned
-# skip. An explicitly-set regex is honoured either way, because then somebody
-# asserted the lane can satisfy it.
-REQUIRE_PASS="${WARDYN_TEST_REPORT_REQUIRE_PASS:-}"
-if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "pg" ] && [ -n "${WARDYN_TEST_PG:-}" ]; then
-  REQUIRE_PASS='^TestPG_ProbeF11_'
+# skip.
+DECLARE_FLOOR=1
+if [ "$SUITE" = "pg" ] && [ -z "${WARDYN_TEST_PG:-}" ]; then
+  DECLARE_FLOOR=0
 fi
-# X2-F16: the unit suite has its own falsifiable floor. The regex is
-# deliberately broader than "the seven curl skips": it matches all 17
-# top-level TestF7_*/TestRedirectProbe* tests across internal/api and
-# internal/egress/proxy, not just the site_config_probe* cases that carry
-# `t.Skip("curl not on PATH")` — tightening it to exactly those would be
-# fragile (a rename slips through either way) for no safety gain: every
-# other test in the set either always passes or, for the one
-# environment-dependent skip inside site_config_redirect_probe2_test.go, is a
-# SUBTEST (`t.Run`), whose outcome the "[^\"/]*" bare-name filter in names()
-# below does not see, so the parent still reports pass. Unlike the pg floor
-# above, curl is assumed present on every lane that can build the module at
-# all, so this applies unconditionally rather than gated on a declared
-# substrate.
-if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "unit" ]; then
-  REQUIRE_PASS='^(TestF7_|TestRedirectProbe)'
+if [ -n "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
+  DECLARE_FLOOR=0
 fi
+# conformance-docker, conformance-k8s and envbuild have no testfloor.Mark
+# probes of their own (see the REQUIRE_ALL floor right below, which is their
+# equivalent) — the testfloor.Mark floor further down must not run for them,
+# or it would read "no package suite tested calls testfloor.Mark" as a red
+# floor instead of a floor that simply lives elsewhere.
+case "$SUITE" in
+  conformance-docker | conformance-k8s | envbuild) DECLARE_FLOOR=0 ;;
+esac
+
 # T-08 (G9): conformance and envbuild have no must-pass floor at all today —
 # their Makefile targets call `go test` directly, never through this script —
 # and their falsifiable cases are exactly the ones a capability flip or an
 # unset probe silently turns into a SKIP that never reddens the job (see
 # conformance.go's DefaultRouteProbe/RecordingProbe skip sites). Named by
-# subtest so a rename cannot quietly empty the set, same law as the floors
-# above. WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran
-# at all — a lane without them declared has no substrate, same as the pg
-# floor's default-off shape.
+# subtest so a rename cannot quietly empty the set, same law as the
+# testfloor.Mark floor below — these three suites' must-pass cases are
+# specific subtests of a single shared Test func (TestConformanceDocker,
+# TestConformanceK8s), not distinct top-level funcs a source scan can find,
+# so they get their own name-list floor instead of a Mark call.
+# WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran at all —
+# a lane without them declared has no substrate, same as the pg floor's
+# default-off shape. WARDYN_TEST_REPORT_SKIP_FLOOR silences this floor too.
 # Exact names, not a pattern: EVERY one must pass (checked below), so dropping
 # or renaming one case reddens the job even while the others still match.
 REQUIRE_ALL=""
-if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-  REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestBootEgress_NoFirstUseApproval'
+if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
+  if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestBootEgress_NoFirstUseApproval'
+  fi
+  if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode'
+  fi
+  if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
+  fi
 fi
-if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
-  REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode'
-fi
-if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-  REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
-fi
-if [ -n "$REQUIRE_ALL" ]; then
+if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then
   REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"
-fi
-if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
-  # go test -json emits one event per line; a top-level test's outcome is the
-  # event whose Test is the bare name (subtests carry a "/"). Extracted with
-  # grep/sed so this needs no jq on the runner.
-  #
-  # G9: a REQUIRE_PASS that itself names a subtest (contains "/", e.g.
-  # "TestConformanceDocker/CreateStatusStop") widens the extraction to the
-  # full Test field so those events are not dropped before the match; a
-  # bare-name floor (pg, unit) keeps the narrower "[^\"/]*" filter unchanged,
-  # so this cannot surface an unrelated subtest skip those floors never
-  # claimed to police.
+  # go test -json emits one event per line. REQUIRE_ALL here always names a
+  # subtest (e.g. "TestConformanceDocker/CreateStatusStop"), so the extraction
+  # keeps the full Test field ("/" and all) — unlike the testfloor.Mark floor
+  # below, which only ever inspects top-level (bare-name) test outcomes.
   names() {
-    local extract='"Test":"[^"/]*"'
-    case "$REQUIRE_PASS" in *"/"*) extract='"Test":"[^"]*"' ;; esac
-    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",${extract}" "$OUT/test-output.json" \
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"]*\"" "$OUT/test-output.json" \
       | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
   }
   PASSED="$(names pass)"
@@ -140,31 +135,103 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   done
   if [ -z "$PASSED$SKIPPED$FAILED" ]; then
     echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
-    echo ">> Those probes are the falsifiable proof of the append-only invariant; a set that matches nothing" >&2
+    echo ">> Those probes are the falsifiable proof of the real invariant; a set that matches nothing" >&2
     echo ">> is a rename that silently removed the floor, not a suite with nothing to check." >&2
     GO_EXIT=1
   elif [ -n "$SKIPPED" ]; then
     echo ">> SKIP FLOOR: these probes SKIPPED:" >&2
     echo "$SKIPPED" | sed 's/^/>>   /' >&2
-    if [ "$SUITE" = "pg" ]; then
-      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
-      echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
-    elif [ "$SUITE" = "conformance-docker" ] || [ "$SUITE" = "conformance-k8s" ] || [ "$SUITE" = "envbuild" ]; then
-      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These cases are falsifiable ONLY" >&2
-      echo ">> against the real driver (a capability flip, a missing probe, or an unpullable image all read" >&2
-      echo ">> as this same skip) — see conformance.go's skip sites for the specific cause." >&2
-    else
-      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Put curl on PATH — these probes" >&2
-      echo ">> exist to prove a real curl round-trip and cannot do that skipped. A minimal dev container" >&2
-      echo ">> without curl can override this floor with WARDYN_TEST_REPORT_REQUIRE_PASS=<regex-or-empty>." >&2
-    fi
+    echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These cases are falsifiable ONLY" >&2
+    echo ">> against the real driver (a capability flip, a missing probe, or an unpullable image all read" >&2
+    echo ">> as this same skip) — see conformance.go's skip sites for the specific cause." >&2
     GO_EXIT=1
   elif [ -n "$MISSING" ]; then
     echo ">> SKIP FLOOR: these must-pass cases did not pass (failed, or never ran: renamed, removed or -run filtered):" >&2
     printf '>>   %s\n' $MISSING >&2
     GO_EXIT=1
   else
-    echo ">> skip floor: $(echo "$PASSED" | wc -l | tr -d ' ') probe(s) matching /$REQUIRE_PASS/ passed"
+    echo ">> skip floor: $(echo "$REQUIRE_ALL" | wc -w | tr -d ' ') probe(s) required by name, all passed"
+  fi
+fi
+
+if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
+  # Suite-scoped: a probe declares which suite it gates
+  # (testfloor.Mark(t, "pg")), because files with no build tag — internal/api's,
+  # notably — compile into every suite's binary, and a probe that skips on a
+  # missing precondition (WARDYN_TEST_PG unset) would otherwise trip suites it
+  # was never meant to gate.
+  FLOOR_MARKER="WARDYN_FLOOR_PROBE:$SUITE"
+  MODULE="$(sed -n 's/^module //p' "$ROOT/go.mod")"
+  # Every probe is keyed "<import path> <top-level test>": test names are only
+  # unique within a package. go test -json emits one event per line, and a
+  # top-level test's event is the one whose Test is the bare name (subtests
+  # carry a "/"). Extracted with grep/sed/awk so this needs no jq on the runner.
+  #
+  # The EXPECTED set is read from the SOURCE, not only from what this run
+  # logged: every `testfloor.Mark(t, "<suite>")` line in a *_test.go file of a
+  # package this run tested, named by the top-level func it sits in. A probe
+  # that skips or returns before its Mark line never logs the marker, so a set
+  # built from the run's output alone would just lose it, with no error.
+  source_probes() {
+    grep -o '"Package":"[^"]*"' "$OUT/test-output.json" | sed 's/^"Package":"//; s/"$//' | sort -u \
+      | while IFS= read -r pkg; do
+          set -- "$ROOT${pkg#"$MODULE"}"/*_test.go
+          [ -f "$1" ] || continue
+          awk -v pkg="$pkg" -v call="testfloor.Mark(t, \"$SUITE\")" '
+            FNR == 1 { name = "" }
+            /^func / { name = $2; sub(/\(.*/, "", name) }
+            { line = $0; sub(/^[ \t]+/, "", line) }
+            index(line, call) == 1 && name ~ /^Test/ { print pkg " " name }' "$@"
+        done
+  }
+  # The probes that logged the marker in this run.
+  marked() {
+    grep -F "$FLOOR_MARKER\\n" "$OUT/test-output.json" \
+      | sed -n 's/.*"Package":"\([^"]*\)","Test":"\([^"/]*\)".*/\1 \2/p' | sort -u
+  }
+  # The top-level tests whose outcome was $1 (pass, skip or fail).
+  outcome() {
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"/]*\"" "$OUT/test-output.json" \
+      | sed 's/.*"Package":"\([^"]*\)","Test":"\([^"]*\)"$/\1 \2/' | sort -u
+  }
+  MARKED="$(marked)"
+  EXPECTED="$( { source_probes; echo "$MARKED"; } | grep . | sort -u)"
+  PROVEN="$(comm -12 <(outcome pass) <(echo "$MARKED"))"
+  MISSING="$(comm -23 <(echo "$EXPECTED") <(echo "$PROVEN"))"
+  if [ -z "$EXPECTED" ]; then
+    echo ">> SKIP FLOOR: no package suite '$SUITE' tested calls testfloor.Mark(t, \"$SUITE\")." >&2
+    echo ">> Those probes are the falsifiable proof a real invariant holds; a suite with none marked" >&2
+    echo ">> is a floor that got silently emptied, not a suite with nothing to check." >&2
+    GO_EXIT=1
+  elif [ -n "$MISSING" ]; then
+    SKIPS="$(outcome skip)"
+    FAILS="$(outcome fail)"
+    PASSES="$(outcome pass)"
+    echo ">> SKIP FLOOR: these probes did not pass through testfloor.Mark(t, \"$SUITE\"):" >&2
+    while IFS= read -r probe; do
+      if echo "$SKIPS" | grep -qxF "$probe"; then why="SKIPPED"
+      elif echo "$FAILS" | grep -qxF "$probe"; then why="FAILED"
+      elif echo "$PASSES" | grep -qxF "$probe"; then why="passed without reaching its Mark line"
+      else why="did not run"
+      fi
+      echo ">>   $probe — $why" >&2
+    done <<<"$MISSING"
+    echo ">> A probe that skips, or returns before its Mark line, reports \`ok\` and exit 0 while proving nothing." >&2
+    case "$SUITE" in
+      pg)
+        echo ">> Give the lane a CREATE ROLE-capable role over a URL-form DSN, or set" >&2
+        echo ">> WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2 ;;
+      unit)
+        echo ">> Put curl on PATH — these probes exist to prove a real curl round-trip and cannot do that" >&2
+        echo ">> skipped. A minimal dev container without curl can set WARDYN_TEST_REPORT_SKIP_FLOOR=1." >&2 ;;
+      *)
+        echo ">> These probes need no real daemon or cluster — they are the fake-backed core cases every" >&2
+        echo ">> lane can run, so a skip means the environment broke, not that it is missing." >&2
+        echo ">> WARDYN_TEST_REPORT_SKIP_FLOOR=1 overrides." >&2 ;;
+    esac
+    GO_EXIT=1
+  else
+    echo ">> skip floor: $(echo "$EXPECTED" | wc -l | tr -d ' ') probe(s) marked, all passed"
   fi
 fi
 

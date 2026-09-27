@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -66,6 +67,11 @@ const (
 var groundtruthSensorRunID = uuid.Nil
 
 func main() {
+	// First, before any credential is read: no core dump, no same-uid ptrace.
+	if err := nodump.Disable(); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
+	}
 	if err := run(); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
 		os.Exit(1)
@@ -112,7 +118,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+	// The flag-only posture refusals (UI-sandbox gateway, HYBRID BOOT's org
+	// control plane — issue #100) validate here, beside validateConfig and
+	// before connectAndMigrate, rather than waiting for the daemon to stand up
+	// migration, secrets, identity, the broker and the runner first. See
+	// validateBootPosture's own doc comment (boot_posture.go) for why
+	// validateMemberModePosture is NOT in this list.
+	if err := validateBootPosture(f, posture); err != nil {
 		return err
 	}
 
@@ -165,7 +177,7 @@ func run() error {
 	// and the separate connect/migrate timeout budgets — a fixed 30s
 	// bounds the connect, -migrate-timeout/WARDYN_MIGRATE_TIMEOUT (default 5m)
 	// bounds db.Migrate so a slow migration doesn't crash-loop the upgrade.
-	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout)
+	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout, *f.allowUnknownMigrations)
 	if err != nil {
 		return err
 	}
@@ -350,20 +362,20 @@ func run() error {
 		return err
 	}
 
-	// MEMBER-MODE DESKTOP posture, then HYBRID BOOT's org control-plane posture
-	// (issue #100) right after it — folded into one call so run() gains no
-	// extra branch for the second, adjacent refusal (gocyclo); see each
-	// validator's own doc comment in boot_posture.go for what it enforces.
-	// Checked here (not in validateConfig) because both of member mode's
+	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
+	// beside validateConfig). Checked here, not there, because both of its
 	// inputs only exist this far into boot: lm.enabled is the RESOLVED
 	// local-mode fact — local mode auto-enables, so the raw flag is not the
 	// answer — and feats.authn is the resolved "OIDC is configured" one.
-	if err := checkMemberAndHybridBootPosture(*f.memberMode, lm.enabled, feats.authn != nil,
-		*f.orgURL, *f.orgEnrolToken, *f.allowPlaintextListen); err != nil {
+	//
+	// Hybrid enrolment (issue #103) runs in the same call, after both checks
+	// and before the server that serves its status; orgFederation is nil when
+	// WARDYN_ORG_URL is unset.
+	st := store.NewPG(pool)
+	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, secrets, st, maskedRec)
+	if err != nil {
 		return err
 	}
-
-	st := store.NewPG(pool)
 	// The roster half of the model-identity posture, WARNED at boot beside the
 	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
 	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
@@ -427,7 +439,7 @@ func run() error {
 		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:        *f.oidcAllowEmailMappings,
-		MemberMounts:              memberMounts,
+		UserMounts:                memberMounts,
 		UserDriveHostRoots:        driveHostRoots,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
@@ -436,6 +448,7 @@ func run() error {
 		BedrockModel:              *f.bedrockModel,
 		BedrockBaseURL:            bedrockBaseURL,
 		AWSSSOEndpointOverride:    awsSSOEndpointOverride,
+		AllowTestEndpoints:        *f.allowTestEndpoints,
 		AWSSSOProxyInject:         api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
 		BedrockAWSConfigDir:       *f.bedrockAWSDir,
 		BedrockAWSProfile:         *f.bedrockAWSProfile,
@@ -458,6 +471,8 @@ func run() error {
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:   storesExternally(secrets),
+		SecretKeyService:      keyService(secrets),
+		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
@@ -482,7 +497,8 @@ func run() error {
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
-		BaseCtx: rootCtx,
+		BaseCtx:       rootCtx,
+		OrgFederation: orgFederation,
 	})
 
 	// The login-grant edge, joined after both sides exist and before anything is

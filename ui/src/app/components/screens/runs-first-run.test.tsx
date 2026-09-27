@@ -32,7 +32,8 @@ function renderIt(r: Readiness) {
   );
 }
 
-describe("RunsFirstRun — model provider row icon (X3-F12)", () => {
+describe("RunsFirstRun — model provider row icon", () => {
+  // ticket: X3-F12
   it("llmReady:false renders the dashed (untested) icon", () => {
     const { container } = renderIt(readiness({ llmReady: false }));
     const row = screen.getByText("Model provider").closest("li")!;

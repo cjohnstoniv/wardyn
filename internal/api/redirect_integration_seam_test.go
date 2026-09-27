@@ -33,7 +33,7 @@ func seamSrv(t *testing.T, integs []types.Integration) *Server {
 	return New(integrationsTestConfig(t, types.SiteConfig{Integrations: integs}, nil))
 }
 
-// ─── the legacy path is untouched ────────────────────────────────────────────
+// the legacy path is untouched
 
 // A bare token_secret_ref must resolve exactly as it always has:
 // "Authorization: Bearer <secret>". This is the byte-identical-behavior guard
@@ -52,7 +52,7 @@ func TestResolveRedirectToken_BareSecretIsUnchanged(t *testing.T) {
 	}
 }
 
-// ─── the seam ────────────────────────────────────────────────────────────────
+// the seam
 
 // The integration's OWN header and format come along with the secret name.
 // That is the whole gain: the hardcoded Bearer above would send a header this
@@ -86,7 +86,7 @@ func TestResolveRedirectToken_EmptyFormatBecomesRawSecret(t *testing.T) {
 	}
 }
 
-// ─── degrade to redirect-only, never fail the run ───────────────────────────
+// degrade to redirect-only, never fail the run
 
 // Every one of these keeps the REROUTING and drops only the token — the same
 // posture a dangling token_secret_ref already had. A redirect that still
@@ -143,7 +143,7 @@ func TestResolveRedirectToken_DegradesToRedirectOnly(t *testing.T) {
 	}
 }
 
-// ─── write-time validation ───────────────────────────────────────────────────
+// write-time validation
 
 func TestValidateSiteConfig_RedirectTokenSources(t *testing.T) {
 	red := func(r types.EgressRedirect) types.SiteConfig {

@@ -64,7 +64,8 @@ import App from "./App";
 // X3-F13: the shell's own attention-badge tick (refreshBadges, two unscoped
 // LIST_LIMIT reads — "the most expensive tick in the shell") duplicates work
 // the Runs board already does on its own 3s poll while parked there.
-describe("App — the shell's attention-badge poll pauses on /runs (X3-F13)", () => {
+describe("App — the shell's attention-badge poll pauses on /runs", () => {
+  // ticket: X3-F13
   it("stops ticking while parked on /runs — only the health heartbeat stays live", async () => {
     pollRegistry.clear();
     render(

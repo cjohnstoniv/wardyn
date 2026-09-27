@@ -15,12 +15,11 @@ import (
 // TestManagedHomeTemplateDocMatchesTheValidator pins docs/OPERATIONS.md's
 // managed-backend home-template rule to the function that enforces it.
 //
-// The defect this was written for: the rule WIDENED (0.7 refuses every non-hash
-// template on a managed backend, where it previously refused only email_local)
-// and OPERATIONS.md went on telling operators to "use `hash` (the default) or
-// `sub`". An admin following that sentence gets a 400 from a page that told them
-// to send it, and the sentence read as an ordinary recommendation rather than a
-// stale one — nothing failed.
+// The rule: a managed backend refuses every non-hash template, not only
+// email_local, so OPERATIONS.md must not tell operators to "use `hash` (the
+// default) or `sub`" — an admin following that sentence gets a 400 from a page
+// that told them to send it, and the sentence reads as an ordinary
+// recommendation rather than a stale one.
 //
 // It ASKS the validator which templates a managed backend accepts rather than
 // restating an answer, so a future widening or narrowing changes the expected

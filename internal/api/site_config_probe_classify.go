@@ -24,44 +24,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// siteConfigProbeResponse is the shared {state, detail, elapsed_ms?} shape
-// both test-proxy and test-redirect return, always HTTP 200 -- the STATE,
-// never the transport, carries a probe's outcome (including no_runner and
-// not_run -- the sandbox that would have carried the probe never got to
-// running it, so nothing was learned about the network at all). States:
-//   - reached / blocked / bypass (test-redirect only): see classifyProxyProbe
-//     / classifyRedirectProbe.
-//   - no_runner / not_run: nothing was learned about the network either way
-//     (no runner to launch a probe with, or the sandbox never got to
-//     running it).
-//   - timed_out: the sandbox DID start and the task DID launch (run.exec
-//     succeeded), but the run itself never reported completion within the
-//     wait budget -- provably not a network verdict. The usual cause is the
-//     recorder's own upload tail hanging (cmd/wardyn-rec/main.go) against an
-//     unreachable control plane, most often on Kubernetes where the proxy
-//     pod -> WARDYN_CONTROL_PLANE_URL hop can be dropped by a cluster-wide
-//     default-deny even with the ambient-deny ack in place. Distinct from
-//     blocked (blocked means the probe DID complete and observed a real
-//     network fact) and from not_run (not_run means the task never even
-//     launched).
-//
-// The last four fields are test-proxy qualifiers the UI renders distinct
-// treatments from (the mock's ok/okdirect/okcustom/intercepted kinds) --
-// machine-readable so no client ever has to string-match a detail sentence:
-//   - via: which path the probe actually traversed ("proxy" | "direct").
-//   - intercepted: state=blocked's captive-portal flavor -- something
-//     ANSWERED, but not with the endpoint's published payload. Same verdict
-//     as blocked (it is NOT reachability), rendered apart because it sends
-//     the operator to a different person than a refused connection does.
-//   - custom: the probe hit a caller-named URL with no known payload to
-//     verify, so a reached here is the deliberately WEAKER "request
-//     completed" claim, never the builtin targets' "payloads matched".
-//   - warning: set alongside a `reached` verdict when the probe's OWN
-//     recording never reached the control plane (RecordingStore.OpenCast ->
-//     recording.ErrNotFound) even though egress itself worked -- see the
-//     handlers' post-classify check. A `reached` probe with no Warning still
-//     says nothing about whether recordings for OTHER, non-probe runs
-//     arrive; it only proves this probe run's own recording did.
+// siteConfigProbeResponse is the {state, detail, elapsed_ms?} shape test-proxy
+// and test-redirect return, always HTTP 200: the STATE carries the outcome.
+// States: reached / blocked / bypass (test-redirect only), see classifyProxyProbe
+// / classifyRedirectProbe; no_runner / not_run: nothing was learned about the
+// network; timed_out: the task launched but the run never reported completion
+// within the wait budget (usually the recorder's upload tail, cmd/wardyn-rec,
+// against an unreachable control plane on Kubernetes) — provably not a verdict.
+// Machine-readable test-proxy qualifiers, so no client string-matches a detail:
+// via ("proxy" | "direct"); intercepted (blocked's captive-portal flavor);
+// custom (a caller-named URL, so reached means only "request completed");
+// warning (reached, but the probe's OWN recording never reached the control
+// plane; its absence says nothing about other runs' recordings).
 type siteConfigProbeResponse struct {
 	State       string `json:"state"`
 	Detail      string `json:"detail"`

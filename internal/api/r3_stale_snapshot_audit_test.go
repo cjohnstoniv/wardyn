@@ -23,7 +23,7 @@ type staleAuditStore struct {
 	hasGroupTier bool
 }
 
-func (staleAuditStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (staleAuditStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 func (s staleAuditStore) HasGroupTierAssignments(context.Context) (bool, error) {
@@ -80,7 +80,7 @@ func TestStaleSnapshotRefusalIsAudited(t *testing.T) {
 			t.Fatalf("a member-reachable 403 produced NO authz.denied row (%d events recorded) — the denial "+
 				"stream is the operator's only view of who cannot use the product", len(rec.events))
 		}
-		// ONCE PER REQUEST, not once per seam: effectiveCeiling memoizes, so a
+		// Once per request, not once per seam: effectiveCeiling memoizes, so a
 		// create that asks three times is one denial, which is what an operator
 		// counting denials means.
 		if found != 1 {

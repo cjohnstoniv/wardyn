@@ -125,14 +125,24 @@ export interface RecordResult {
 // api.setWorkspaceLLMCred (edit).
 export interface WorkspaceLLMCred {
   integration_ref?: string;
+  // The model provider (GET /model-providers id) a run on this workspace uses
+  // unless it chooses one itself. internal/types/workspace.go ProviderRef.
+  provider_ref?: string;
 }
 
-// The tier-1 source library and tier-2 image catalog wire rows (Source,
-// BaseImageEntry) lived here. Both screens that rendered them —
-// sources-library.tsx and image-catalog.tsx — were deleted in 0.5 when
-// Workspaces collapsed to one table and one dialog. The server routes still
-// exist (Stage 3 owns their removal); this file is the UI's own mirror, and the
-// UI no longer has a consumer for either shape.
+// The tier-1 source library's wire row (Source) lived here; its screen was
+// deleted in 0.5. The image catalog is back as the Images tab (#923).
+
+// One row of GET /base-images — internal/types.BaseImageEntry on the wire.
+export interface BaseImageEntry {
+  id: string;
+  kind: "registry" | "custom" | "byo";
+  name: string;
+  image: string;
+  steps?: string[];
+  created_at: string;
+  updated_at: string;
+}
 
 export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
 
@@ -199,7 +209,10 @@ export function effectiveWorkspaceRequirements(ws: Workspace): WorkspaceRequirem
 export interface Workspace {
   id: string;
   name: string;
-  kind: WorkspaceKind;
+  // "" means multi-source: the server (internal/types/workspace.go's Kind
+  // doc comment) leaves this mirror zero whenever len(Sources) != 1, since a
+  // multi-source workspace has no single "the" kind. Readers must handle it.
+  kind: WorkspaceKind | "";
   // Host directory path (local_dir) or repo slug/clone URL (repo).
   source: string;
   // repo only: branch/tag/commit to clone. Optional.

@@ -14,8 +14,8 @@ import (
 // from a request with `go s.something(...)` should route through this instead
 // of a bare `go`. The callers today are handleCreateRun's launch
 // (finishCreateRunLaunch, runs_create_launch.go), finishHarnessLoginLaunch's
-// launch (harnesscred_launch.go) and supersedeOneLoginRun's kill-teardown tail
-// (harnesscred_supersede.go).
+// launch (harnesscred_launch.go), supersedeOneLoginRun's kill-teardown tail
+// (harnesscred_supersede.go) and killSignInRunAfterCapture (ssotoken.go).
 func (s *Server) goBackground(fn func()) {
 	s.bg.Add(1)
 	go func() {
@@ -61,3 +61,11 @@ func (s *Server) WaitBackground() {
 			"still running; abandoning it", slog.Duration("budget", budget))
 	}
 }
+
+// HTTPShutdownTimeout bounds cmd/wardynd's http.Server.Shutdown, the step that
+// runs before WaitBackground. The two budgets run back to back, so together
+// with the audit sinks' final flush they set the shortest grace period
+// wardynd needs before SIGKILL. deploy/helm's terminationGracePeriodSeconds
+// and deploy/compose's stop_grace_period are 70s for that reason, and
+// TestShutdownGraceCoversTheBudget fails if either falls below the sum.
+const HTTPShutdownTimeout = 15 * time.Second

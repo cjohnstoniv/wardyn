@@ -64,6 +64,13 @@ func TestAutonomyPostureAxes(t *testing.T) {
 			{"cloud_sts is powerful", []types.GrantSpec{{Kind: types.GrantCloudSTS}}, types.AutonomySecretsPowerful},
 			{"a baseline api_key is baseline", []types.GrantSpec{apiKey("api.anthropic.com")}, types.AutonomySecretsBaseline},
 			{"an api_key to a third-party host is powerful", []types.GrantSpec{apiKey("api.stripe.com")}, types.AutonomySecretsPowerful},
+			// The Amazon Bedrock model credential (#504): the api layer grades it
+			// as an api_key to its host, and neither AWS host is a baseline model
+			// API — the credential is an identity in a cloud account.
+			{"the Bedrock data-plane credential is powerful",
+				[]types.GrantSpec{apiKey("bedrock-runtime.us-east-1.amazonaws.com")}, types.AutonomySecretsPowerful},
+			{"the captured AWS SSO portal credential is powerful",
+				[]types.GrantSpec{apiKey("portal.sso.us-east-1.amazonaws.com")}, types.AutonomySecretsPowerful},
 			{"git_pat is powerful", []types.GrantSpec{{Kind: types.GrantGitPAT}}, types.AutonomySecretsPowerful},
 			{"ssh_key is powerful", []types.GrantSpec{{Kind: types.GrantSSHKey}}, types.AutonomySecretsPowerful},
 			{"env_secret is powerful", []types.GrantSpec{{Kind: types.GrantEnvSecret}}, types.AutonomySecretsPowerful},

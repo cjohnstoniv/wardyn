@@ -155,22 +155,29 @@ type Config struct {
 	// optional-Config-field rule Revocations, above, follows.
 	RoleMappings RoleMappingSource
 
+	// UserTypes is the store of user types (0.8), read once per login beside
+	// RoleMappings: a role-map value may name a type, and the type's priority
+	// and existence decide which one the session carries. A read error denies
+	// the login with authErrorRoleCheckUnavailable, the same fail-closed rule.
+	// nil means only the built-in "standard" type exists.
+	UserTypes UserTypeSource
+
 	// OnLogin, when set, is called synchronously from CallbackHandler after a
 	// login is APPROVED (role derived, session about to be issued) with the
-	// ID token's sub, the freshly-derived role, and the SAME group snapshot
-	// (plus its completeness bit) the new session itself carries — the exact
-	// values sessionGroups just computed, not a second derivation. It exists
-	// for exactly one caller today — internal/api wires it to refresh
-	// ssh_public_keys.role/role_checked_at (migration 0046) and api_tokens'
-	// role/groups/groups_truncated (#152) for every credential this principal
-	// owns, the bounded-stale re-check the SSH gateway's admin override reads
+	// ID token's sub, the freshly-derived role and user type, and the SAME
+	// group snapshot (plus its completeness bit) the new session itself
+	// carries — the exact values sessionGroups just computed, not a second
+	// derivation. It exists for exactly one caller today — internal/api wires
+	// it to refresh ssh_public_keys.role/role_checked_at (migration 0046) and
+	// api_tokens' role/user_type/groups/groups_truncated (#152, #611) for
+	// every credential this principal owns, the bounded-stale re-check the SSH gateway's admin override reads
 	// and the snapshot every wdn_ token replays — but this package stays
 	// store-agnostic: it knows nothing about SSH keys or tokens, only that a
 	// login happened. A failure inside OnLogin must never fail the login
 	// itself (the integrator is expected to log-and-continue, not panic);
 	// CallbackHandler does not inspect its return because it has none. nil
 	// (the default) is a plain no-op, so every existing caller is unaffected.
-	OnLogin func(ctx context.Context, sub, role string, groups []string, groupsTruncated bool)
+	OnLogin func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool)
 }
 
 // SessionRevocations is the store D16's revoke-a-human-now admin action
@@ -277,9 +284,7 @@ type Session struct {
 	// signed out. `sess.V != SessionCodecVersion` (session_codec.go) is an exact
 	// compare, and a pre-0.7 cookie carries no "v" key at all, so it decodes to
 	// 0 and is refused outright: upgrading to 0.7 signs every SSO human out
-	// ONCE, on their next request. This comment used to assert the opposite —
-	// that an older cookie survived the upgrade and nobody was forced to sign in
-	// again — and three shipped documents were written from it.
+	// ONCE, on their next request.
 	//
 	// So the nil-vs-empty signal above discriminates within ONE codec version:
 	// a session this binary wrote either has groups or has `[]`. The pre-0.6
@@ -332,7 +337,7 @@ type Session struct {
 	MemberMode bool `json:"mm,omitempty"`
 	// MemberModeNoCredential (0.7.5, field report finding 3) is the SECOND
 	// posture of the same mode: "view as a NEW member — one who has not signed
-	// in yet". Meaningful only with MemberMode; SetMemberMode writes it as
+	// in yet". Meaningful only with MemberMode; SetUserView writes it as
 	// `on && noCredential`, so turning the mode off clears it by construction
 	// and it can never be set on its own.
 	//
@@ -354,6 +359,15 @@ type Session struct {
 	// shows the admin their own credential — the 0.7.4 behaviour, never a
 	// widening. docs/OPERATIONS.md publishes it as a ceiling.
 	MemberModeNoCredential bool `json:"mmnc,omitempty"`
+	// UserViewType is the user type the user view looks through, chosen at
+	// the switch (SetUserView validates it first). Meaningful only with
+	// MemberMode; contextWithPrincipal publishes it in place of UserType.
+	// It chooses which type's rows bind, never the tier: the view clamps the
+	// tier to user whatever the type.
+	UserViewType string `json:"uvt,omitempty"`
+	// UserViewDropped names the type whose deletion turned the view off
+	// (DropUserView), so GET /me can say why until the next switch clears it.
+	UserViewDropped string `json:"uvd,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -387,7 +401,7 @@ type Authenticator struct {
 }
 
 // New constructs an Authenticator by performing OIDC discovery against
-// cfg.IssuerURL. hmacKey is the secret used to sign session cookies; it must
+// cfg.IssuerURL. hmacKey is the secret that signs session cookies; it must
 // be provided by the caller (e.g. loaded from the secret store). The key is
 // never logged.
 func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error) {
@@ -779,8 +793,8 @@ func clearCookie(w http.ResponseWriter, name string) {
 	})
 }
 
-// Auth-error codes carried on the "/?auth_error=<code>" redirect
-// (W31-S1-5) — stable, machine-readable strings a sign-in screen maps to a
+// Auth-error codes carried on the "/?auth_error=<code>" redirect:
+// stable, machine-readable strings a sign-in screen maps to a
 // human message; never the raw internal error text.
 const (
 	authErrorEmailUnverified = "email_unverified"
@@ -791,7 +805,7 @@ const (
 	// common denial shape on an Entra tenant with AllowedEmailDomains set.
 	authErrorEmailVerifiedAbsent = "email_verified_absent"
 	authErrorEmailDomain         = "email_domain"
-	authErrorNoRole              = "no_role"
+	authErrorNoRole              = DenialNoRole
 	// authErrorRoleCheckUnavailable: Config.RoleMappings is wired but
 	// ListRoleMappings errored — the console role-mapping store couldn't be
 	// read, distinct from authErrorNoRole's "checked, and nothing matched".

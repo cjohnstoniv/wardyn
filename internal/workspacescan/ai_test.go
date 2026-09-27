@@ -74,14 +74,14 @@ func TestAdviseProfile_MergeOnlyFillsEmptyNeverOverrides(t *testing.T) {
 }
 
 func TestAdviseProfile_AIEgressForcesReview(t *testing.T) {
-	// W6-S1-3 regression: an AI-suggested host must flip NeedsReview true (never
-	// silently trusted) and must land ONLY in SuggestedEgress — NEVER in
-	// EgressDomains, the sole field seedSourceRequirements/
-	// applyWorkspaceRequirements treat as an auto-granted, auto-unioned contract
-	// row. Before the fix, mergeAdvice gap-filled EgressDomains directly, so an
-	// AI guess rode the exact same auto-union privilege as a real filename-keyed
-	// marker-table hit, silently widening a run's allowlist with no operator
-	// approval — defeating the NeedsReview promise this test's name describes.
+	// An AI-suggested host must flip NeedsReview true (never silently trusted)
+	// and must land only in SuggestedEgress — never in EgressDomains, the sole
+	// field seedSourceRequirements/applyWorkspaceRequirements treat as an
+	// auto-granted, auto-unioned contract row. If mergeAdvice gap-filled
+	// EgressDomains directly, an AI guess would ride the exact same auto-union
+	// privilege as a real filename-keyed marker-table hit, silently widening a
+	// run's allowlist with no operator approval — defeating the NeedsReview
+	// promise this test's name describes.
 	base := WorkspaceProfile{
 		Languages:   []string{"Ada"},
 		Confidence:  ConfidenceMedium,
@@ -143,7 +143,7 @@ func TestAdviseProfile_HighConfidenceUnchangedWhenNothingAdded(t *testing.T) {
 		Source:          SourceDeterministic,
 	}
 	// egress_domains empty: SuggestedEgress unions whatever the AI proposes
-	// regardless of EgressDomains' own fill state (a DIFFERENT field, W6-S1-3),
+	// regardless of EgressDomains' own fill state (a different field),
 	// so this profile stays a fair "AI has nothing new to say" fixture only if
 	// the AI's own advice is empty here too.
 	adv := wrapper(`{"languages":["Zig"],"package_managers":["zig"],"tools":[],"egress_domains":[],"needs_review":false,"notes":""}`)

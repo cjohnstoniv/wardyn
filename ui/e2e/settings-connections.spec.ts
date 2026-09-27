@@ -29,7 +29,8 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 // rule, for the same reason).
 test.describe.configure({ mode: "serial" });
 
-test.describe("Settings — Host card (X2-F1)", () => {
+test.describe("Settings — Host card", () => {
+  // ticket: X2-F1
   test("renders this host's deployment facts, operator-only rows included", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
@@ -72,14 +73,15 @@ test.describe("Settings — Host card (X2-F1)", () => {
   });
 });
 
-test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1/F23)", () => {
+test.describe("Settings — the corp-proxy landing and its BYPASS verdict", () => {
+  // ticket: X2-F1/F23
   test("the Host card's Corporate proxy & egress row lands on the Network step, and a bypassed redirect renders 'Redirect not enforced'", async ({
     page,
   }) => {
     // The setup ROUTE renders the welcome hero instead of the funnel until
     // this per-browser flag is set (onboardingSeen()) — same pre-seed
     // demos.spec.ts uses for its own ?step= deep links, needed here because
-    // Settings' link is a client-side navigate() to /setup?step=corp_network,
+    // Settings' link is a client-side navigate() to /admin/setup?step=corp_network,
     // and the flag is read at GettingStarted's mount regardless of the query
     // string it carries.
     await page.addInitScript(() => {
@@ -94,7 +96,9 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1
     await navToRoute(page, "/admin/settings");
     await page.getByRole("button", { name: "Corporate proxy & egress" }).click();
 
-    await expect(page).toHaveURL(/\/setup\?step=corp_network/);
+    // The Admin view's funnel, never plain /setup: that is the User view's
+    // Getting Started, which has no Network step (M-6).
+    await expect(page).toHaveURL(/\/admin\/setup\?step=corp_network/);
     await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible();
 
     await page.getByRole("tab", { name: "Egress redirection" }).click();
@@ -127,7 +131,8 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1
   });
 });
 
-test.describe("Settings — Model provider Connect / Replace / Disconnect (X2-F3)", () => {
+test.describe("Settings — Model provider Connect / Replace / Disconnect", () => {
+  // ticket: X2-F3
   test("an API-key connect, a replace, and a disconnect all round-trip against GET /secrets", async ({
     page,
   }) => {

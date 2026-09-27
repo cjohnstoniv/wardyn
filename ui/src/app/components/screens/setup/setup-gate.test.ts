@@ -106,7 +106,8 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
 // The PRODUCTION path (setup-screen.tsx calls clearStaleVisitFlagsOnce,
 // never the unlatched clearStaleVisitFlags above) — pinned separately so its
 // once-per-load semantics actually has coverage.
-describe("clearStaleVisitFlagsOnce — the module-level once-per-load latch (L3)", () => {
+describe("clearStaleVisitFlagsOnce — the module-level once-per-load latch", () => {
+  // ticket: L3
   beforeEach(() => {
     localStorage.clear();
     resetStaleFlagsCheckForTests();

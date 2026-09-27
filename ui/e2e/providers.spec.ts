@@ -14,22 +14,15 @@ import {
   sidebarLink,
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
-// U-15: the starting sentence is a constant in a CSS-free module now — this
-// spec used to re-type its opening clause, so a reworded wait could move on
-// screen while the assertion went on passing.
-import { LOGIN_SANDBOX_STARTING } from "../src/app/components/screens/settings/login-pane-copy";
-// auth-tab-handle.ts is a pure TS module (no React, no xterm.css) — safe for
-// Playwright's Node-side spec collection, unlike the pane itself.
-import { AUTH_TAB_BLOCKED_NOTE } from "../src/app/components/screens/settings/auth-tab-handle";
-import type { BrowserContext, Page } from "@playwright/test";
-
-// review-1 S3: the AWS device-authorization URL this spec's REAL-terminal
-// cases navigate the auto-opened tab to — inside extractDeviceVerificationUrl's
-// own host allowlist (harness-login-pane.tsx), unlike the kind walk's fake.
-const DEVICE_VERIFICATION_URL = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH";
+// U-15: the door's wait copy is a constant in a CSS-free module — this spec
+// used to re-type it, so a reworded wait could move on screen while the
+// assertion went on passing.
+import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pane-copy";
+import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
 // Workspace providers e2e (0.7.2) — lane: providers, port 8088, db wardyn_e2e.
@@ -381,7 +374,9 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     expect(enabledCount).toBeGreaterThan(0);
 
     await gotoConsole(page);
-    await navToRoute(page, "/setup");
+    // The funnel step lives at /admin/setup since M-6/D1 — plain /setup is
+    // the User Getting Started now, even for this harness's admin session.
+    await navToRoute(page, "/admin/setup");
     const stepBtn = page.getByRole("button", { name: new RegExp(`^${PROVIDERS.STEP_LABEL}`) });
     await expect(stepBtn).toBeVisible();
     await expect(stepBtn).toContainText(PROVIDERS.STEP_BADGE_READY(enabledCount));
@@ -625,226 +620,14 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 
     const starting = page.getByTestId("login-sandbox-starting");
     await expect(starting).toBeVisible();
-    await expect(starting).toContainText(LOGIN_SANDBOX_STARTING);
+    await expect(starting).toContainText(SIGNIN_PROGRESS.STEP_START);
     await starting.getByRole("button", { name: /cancel/i }).click();
     await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
   });
 
-  // Finding 7a (0.7.5 field report, this lane's own spec): the verification
-  // tab never opened because it was opened from a PTY callback, never a user
-  // gesture. These cases pin the CLICK-side half — a page opens on the click
-  // itself, needing no PTY output at all (`-runner none` keeps this daemon's
-  // login run PENDING forever, so the PTY-dependent half — the tab actually
-  // NAVIGATING to a real device-authorization URL, a repeated URL line, focus
-  // restoration after a real capture — has no real terminal to drive it here
-  // and is recorded as a gap in TEST-GAPS, not silently skipped).
-  test.describe("the verification tab opens on the click (Finding 7a)", () => {
-    async function openStartingPane(page: Page, runId: string): Promise<void> {
-      await splicePerUserBedrock(page, "live");
-      await page.route("**/api/v1/setup/harness-login", async (route) =>
-        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
-        route.fulfill({ json: { id: runId, task: "harness login", state: "PENDING", interactive: true } }),
-      );
-      await gotoConsole(page);
-      await navToRoute(page, "/admin/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    }
-
-    // review-1 S3: a REAL terminal, on the `-runner none` backend. The run
-    // read answers RUNNING (never PENDING) and the attach-ticket POST answers
-    // a ticket (member-getting-started.spec.ts:228's own precedent), then
-    // `page.routeWebSocket` stands in for the daemon's attach socket — the
-    // SAME two frame shapes AttachTerminal itself reads (attach-terminal.tsx):
-    // a text attach-mode frame, then a binary PTY chunk. This is what makes
-    // the click-opened tab's NAVIGATE half (not just its open) provable here.
-    async function attachWithRealTerminal(page: Page, context: BrowserContext, runId: string): Promise<void> {
-      await splicePerUserBedrock(page, "live");
-      await page.route("**/api/v1/setup/harness-login", async (route) =>
-        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
-        route.fulfill({ json: { id: runId, task: "harness login", state: "RUNNING", interactive: true } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}/attach-ticket`, async (route) =>
-        route.fulfill({ json: { ticket: "e2e-ticket" } }),
-      );
-      await page.routeWebSocket(/\/api\/v1\/runs\/[^/]+\/attach/, (ws) => {
-        ws.send(JSON.stringify({ type: "attach-mode", read_only: false }));
-        ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
-      });
-      // Context-level (not page-level) so the NEW tab the click opens is
-      // covered too — the whole point of this stub.
-      await context.route(`${DEVICE_VERIFICATION_URL.split("?")[0]}**`, (route) =>
-        route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
-      );
-      await gotoConsole(page);
-      await navToRoute(page, "/admin/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    }
-
-    test("clicking Start opens a page — before the launch POST even resolves", async ({ page, context }) => {
-      await splicePerUserBedrock(page, "live");
-      // The launch POST never resolves: if the tab-open were hoisted below an
-      // `await`, this proves it by never opening at all.
-      await page.route("**/api/v1/setup/harness-login", () => {});
-      await gotoConsole(page);
-      await navToRoute(page, "/admin/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      await expect(tab).toHaveTitle("Wardyn — waiting for the sign-in page");
-      await tab.close();
-    });
-
-    // review-1 S6 (rewritten — the original body never checked the link or
-    // the note its own name claimed): a REAL terminal, so the pane actually
-    // reaches `attached` with a verification URL on screen, and `tabBlocked`
-    // is genuinely true (window.open blocked even on the click).
-    test("a browser that blocks the popup still offers the header link, with a note explaining why", async ({
-      page,
-      context,
-    }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f011";
-      // Simulate a strict popup policy: window.open answers null, exactly the
-      // contract openAuthTab() already handles.
-      await page.addInitScript(() => {
-        window.open = () => null;
-      });
-      await attachWithRealTerminal(page, context, runId);
-      await page.getByRole("button", { name: /start login/i }).click();
-
-      await expect(page.getByTestId("auth-url-link")).toBeVisible();
-      await expect(page.getByTestId("auth-url-link")).toHaveAttribute("href", DEVICE_VERIFICATION_URL);
-      await expect(page.getByTestId("auth-tab-blocked-note")).toHaveText(AUTH_TAB_BLOCKED_NOTE);
-    });
-
-    // review-1 S6 (rewritten — the original body never clicked Cancel; it
-    // closed the tab itself). "launching" renders no Cancel button at all
-    // (nothing to click yet) — the real Cancel path a person can reach is
-    // from "starting", once the POST has resolved; this is the case the
-    // original name was reaching for.
-    test("Cancel closes the tab it opened, once the sandbox is starting", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f012";
-      await openStartingPane(page, runId);
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      expect(tab.isClosed()).toBe(false);
-
-      // expect.poll, not tab.waitForEvent("close") — the click's own JS
-      // handler (cancel() -> closeAuthTab() -> tab.close()) can close the
-      // tab SYNCHRONOUSLY inside the click, before a `waitForEvent` call
-      // placed after it ever gets to attach its listener; polling current
-      // state can't miss an event that already happened.
-      await page.getByTestId("login-sandbox-starting").getByRole("button", { name: /cancel/i }).click();
-      await expect.poll(() => tab.isClosed()).toBe(true);
-    });
-
-    // review-1 S3: the route-intercepted navigation — the extractor's own
-    // host allowlist matches this URL (unlike the kind walk's fake), so this
-    // is what proves the tab NAVIGATES, not merely that it opens.
-    test("the verification URL navigates the tab already open", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f014";
-      await attachWithRealTerminal(page, context, runId);
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-
-      await expect(tab).toHaveURL(new RegExp(`user_code=ABCD-EFGH`));
-      await expect(page.getByTestId("auth-url-link")).toHaveAttribute("href", DEVICE_VERIFICATION_URL);
-    });
-
-    // review-1 S3: a repeated URL line (the sandbox's own tmux session can
-    // reprint its banner on a reconnect) must navigate the SAME tab once,
-    // never open a second one and never throw.
-    test("a repeated URL line navigates once — no second tab, no page error", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f015";
-      await splicePerUserBedrock(page, "live");
-      await page.route("**/api/v1/setup/harness-login", async (route) =>
-        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
-        route.fulfill({ json: { id: runId, task: "harness login", state: "RUNNING", interactive: true } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}/attach-ticket`, async (route) =>
-        route.fulfill({ json: { ticket: "e2e-ticket" } }),
-      );
-      await page.routeWebSocket(/\/api\/v1\/runs\/[^/]+\/attach/, (ws) => {
-        ws.send(JSON.stringify({ type: "attach-mode", read_only: false }));
-        ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
-        // The SAME line again — the marker for "the sandbox reprinted itself",
-        // not a second, different URL.
-        ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
-        // Frames are handled in order (attach-terminal.tsx's onmessage), so
-        // this marker on screen means the duplicate has been handled too.
-        ws.send(Buffer.from("\r\ne2e-after-duplicate\r\n"));
-      });
-      await context.route(`${DEVICE_VERIFICATION_URL.split("?")[0]}**`, (route) =>
-        route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
-      );
-      const pageErrors: Error[] = [];
-      page.on("pageerror", (e) => pageErrors.push(e));
-      await gotoConsole(page);
-      await navToRoute(page, "/admin/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-
-      const newPages: Page[] = [];
-      context.on("page", (p) => newPages.push(p));
-      await page.getByRole("button", { name: /start login/i }).click();
-      await expect(page.getByTestId("auth-url-link")).toBeVisible();
-      await expect
-        .poll(() => page.locator(".xterm-screen").first().innerText().catch(() => ""))
-        .toContain("e2e-after-duplicate");
-
-      expect(newPages).toHaveLength(1);
-      expect(pageErrors).toHaveLength(0);
-    });
-
-    // review-1 B2, S3: once the tab has navigated cross-origin, close() is
-    // BEST-EFFORT (the browser refuses it — the same tab-nabbing bound that
-    // makes severing `opener` correct). Cancel must not crash the console
-    // over a tab it can no longer close; the dialog still closes cleanly.
-    test("Cancel after the tab has navigated is a harmless best-effort close", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f016";
-      await attachWithRealTerminal(page, context, runId);
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      await expect(tab).toHaveURL(new RegExp("user_code=ABCD-EFGH"));
-
-      await page.getByRole("button", { name: /cancel/i }).click();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-    });
-
-    // A person who closes the auto-opened tab by hand must never crash the
-    // pane on the NEXT thing that tries to touch it (a later navigate/close
-    // call) — auth-tab-handle.ts's own try/catch is pinned in vitest; this is
-    // the live-browser half: the console keeps working afterwards.
-    test("a user-closed tab does not break the pane — Cancel still works", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f013";
-      await openStartingPane(page, runId);
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      await tab.close();
-
-      await expect(page.getByTestId("login-sandbox-starting")).toBeVisible();
-      await page.getByTestId("login-sandbox-starting").getByRole("button", { name: /cancel/i }).click();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
-    });
-  });
+  // Finding 7a's click-side cases — the tab opening, navigating, blocked and
+  // cancelled — moved to signin-door-aws.spec.ts with #628, which opens the
+  // tab from the door's own Open button instead of on Start.
 
   // Finding 6 (0.7.4 field report): the wait's OTHER end. A first pull of the
   // aws-sso image measured 131s on the reporting estate — healthy reads
@@ -876,7 +659,8 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await page.getByRole("button", { name: /start login/i }).click();
 
     const starting = page.getByTestId("login-sandbox-starting");
-    await expect(starting).toContainText(LOGIN_SANDBOX_STARTING);
+    await expect(starting).toContainText(SIGNIN_PROGRESS.STEP_START);
+    await expect(starting).not.toContainText(LOGIN_SANDBOX_SLOW_START);
 
     await page.clock.fastForward("01:10");
     await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);
@@ -921,7 +705,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 //
 // mockMemberBedrockRowRedacted below is this file's own composed splice
 // instead: ONE **/api/v1/setup/status* handler that mirrors
-// redactSetupStatusForMember's structural drops (the same shape
+// redactSetupStatusForUser's structural drops (the same shape
 // mockMemberSetupStatus, fixtures.ts, mirrors for every OTHER member spec in
 // this repo) AND injects the harnesses row, so nothing here can bypass the
 // redaction the way stacking two routes on the same pattern did.
@@ -950,7 +734,7 @@ async function mockMemberBedrockRowRedacted(
   let bearerPresent = initialBearerPresent;
   await page.route("**/api/v1/setup/status*", async (route) => {
     const body = (await (await route.fetch()).json()) as Record<string, unknown>;
-    // Mirrors redactSetupStatusForMember (internal/api/setup.go) — the same
+    // Mirrors redactSetupStatusForUser (internal/api/setup.go) — the same
     // drop list mockMemberSetupStatus (fixtures.ts) applies for every other
     // member spec, plus the #337 BearerPresent carve-out that function now
     // applies under the caller's own per_user bearer row.
@@ -1024,5 +808,76 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
     await expect(page.getByText(/Saved bedrock-api-key/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Replace" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
+  });
+});
+
+// UT-7b — the "Available to" control embedded in the git provider row: real
+// writes against /permissions/availability and /permissions/grants, proving
+// the round trip an admin actually performs (not just this file's own
+// component-level coverage in availability-control.test.tsx). The github row
+// already exists by this point in the file (the serial walk above never
+// removes it), so this reuses it rather than adding a third row.
+test.describe("providers — the git provider row's Available to control (UT-7b)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("Everyone by default; turning Only on with nobody listed refuses, verbatim", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+
+    // The server's own availabilityOnlyEmptyMsg (permissions_availability.go),
+    // rendered verbatim — never a console reword.
+    await expect(
+      row.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
+    ).toBeVisible();
+    // The failed PUT never flipped the segment — it still reads Everyone.
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+  });
+
+  test("adding a user type lands the chip, turns Only on, and both survive a reload", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+
+    // "standard" — the one user type every deployment seeds and can never
+    // delete (UT-1) — is the only type id guaranteed to exist on a fresh e2e
+    // backend: userTypeSubjectExists (permissions.go) refuses a grant naming
+    // an id nobody created.
+    await row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
+    await row.getByRole("button", { name: AVAILABILITY.ADD_CTA }).click();
+    await expect(row.getByText(/standard/i)).toBeVisible();
+
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+
+    await page.reload();
+    const reloaded = page.getByTestId("provider-row-github");
+    await expect(reloaded).toBeVisible();
+    await expect(reloaded.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+    await expect(reloaded.getByText(/standard/i)).toBeVisible();
+    // The mock's two provider lines, and the last audience locked while Only is on.
+    await expect(reloaded.getByText(AVAILABILITY.PROVIDER_ONLY_HINT)).toBeVisible();
+    await expect(reloaded.getByText(AVAILABILITY.PROVIDER_NOTE)).toBeVisible();
+    await expect(reloaded.getByRole("button", { name: /Remove.*standard/i })).toBeDisabled();
+    await expect(reloaded.getByText(AVAILABILITY.LAST_AUDIENCE_LOCKED)).toBeVisible();
+
+    // The wire itself — restricted, and the allow row naming this exact kind/value.
+    const view = await (
+      await page.request.get("/api/v1/permissions/availability/workspace_provider/github", { headers: auth })
+    ).json();
+    expect(view.restricted).toBe(true);
+    expect(view.allowed_by).toEqual([
+      expect.objectContaining({ subject_type: "user_type", subject: "standard", capability: "workspace_provider", value: "github" }),
+    ]);
+
+    // Clean up: back to Everyone, then remove the audience — this row's
+    // availability must not leak into a later run of this same suite.
+    await reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
+    await expect(reloaded.getByText(/standard/i)).toHaveCount(0);
   });
 });

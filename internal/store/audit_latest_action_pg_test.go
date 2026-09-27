@@ -4,7 +4,7 @@
 // PIN for B8-F5: /healthz reports the eBPF sensor DEGRADED, with a stale
 // last_heartbeat, while beats are arriving normally.
 //
-// LatestAuditEventByAction answered "the latest kernel.sensor.heartbeat" with
+// LatestAuditEventByAction answered "the latest kernel.sensor.ping" with
 // ORDER BY seq DESC — insertion order, not event order. The audit spool replays
 // at-least-once and replays KEEP their original ev.Time, so a beat that was
 // spooled during a database blip comes back later with the HIGHEST seq and an
@@ -148,7 +148,7 @@ func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
 			"newest row by time inside the window", got.Time)
 	}
 
-	// AND IT SELF-HEALS AT THE NEXT BEAT, which is the whole reason the residual
+	// And it self-heals at the next beat, which is the whole reason the residual
 	// was accepted: one live beat takes the top of the window back.
 	next := beat(now.Add(time.Second))
 	got, err = pg.LatestAuditEventByAction(ctx, action)

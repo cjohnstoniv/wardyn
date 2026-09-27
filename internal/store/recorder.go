@@ -16,7 +16,7 @@ import (
 // is plain TEXT, i.e. unbounded).
 //
 // The target is `r.URL.Path` on the two lanes an untrusted caller drives —
-// auth.failed and authz.denied — and chi matches a path of any length the
+// auth.fail and authz.denied — and chi matches a path of any length the
 // server accepted, which is MaxHeaderBytes (1 MiB) plus slack. The
 // UNAUTHENTICATED twin is rate-limited to ~1 row/sec; the AUTHENTICATED
 // authz.denied lane is not limited at all, so a member looping

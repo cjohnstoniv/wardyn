@@ -10,6 +10,7 @@
 package api
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -333,16 +334,13 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// (sshLaneWidePastPathRows) and warns loudly rather than failing silently.
 	// The console door (handlePutWorkspaceProviders) keeps the hard refusal.
 	//
-	// The SIBLING agent_providers block is validated by its own gate at each of
-	// those two doors instead of here (validateAgentProviders, agent_providers.go):
-	// admitting a row needs the boot agent-image map, which is server state this
-	// deliberately pure function has no access to. Both doors run it, so the
-	// "one validator, two doors" property is the same.
-	if err := validateWorkspaceProviders(cfg.WorkspaceProviders, false); err != nil {
-		return err
-	}
-	// model_providers needs no server state, so its one validator runs here.
-	return validateModelProviders(cfg.ModelProviders)
+	// The SIBLING agent_providers and model_providers blocks are validated by
+	// their own gates at each of their two doors instead of here
+	// (validateAgentProviders, validateModelProviders): admitting a row needs
+	// server state this deliberately pure function has no access to — the boot
+	// agent-image map, and WARDYN_ALLOW_TEST_ENDPOINTS for a Bedrock base URL.
+	// Both doors run each, so the "one validator, two doors" property is the same.
+	return validateWorkspaceProviders(cfg.WorkspaceProviders, false)
 }
 
 // validateInternalHosts enforces SiteConfig.InternalHosts's write-time
@@ -729,6 +727,11 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
+	if err := validateModelProviders(cfg.ModelProviders, s.cfg.AllowTestEndpoints); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
+	imageOK := s.claudeSignInImageOK(r.Context(), cfg.ModelProviders)
 	// SEAM-1: serializes this read-modify-write (it carries the STORED
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
@@ -775,6 +778,20 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// After the carry-forward: the roster's defaults are checked against the
+	// providers this document will actually hold, whichever side was named; the
+	// sign-in help link against the stored one (signInHelpURLHTTPS).
+	if err := cmp.Or(validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders),
+		signInHelpURLHTTPS(cfg.SignInHelpURL, existing.SignInHelpURL)); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
+	// E4 against the stored block: this door is the one re-applied on every
+	// boot, so a subscription it already holds must never be refused here.
+	if err := validateModelProviderImagePrereqs(cfg.ModelProviders, existing.ModelProviders, imageOK); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
 	// Narrowing is never silent on this door either, and this is the door where
 	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
 	// boot, so an MDM-tightened base URL lands here, not on the providers page,
@@ -790,6 +807,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		narrowed = &n
+	}
+	// Rule 8 on this door too: it mints UIDs and accepts address changes the
+	// same as PUT /model-providers, so it purges the same way, before the save.
+	invalidated, err := s.purgeProviderCredentials(r.Context(), existing.ModelProviders, cfg.ModelProviders)
+	if err != nil {
+		writeServerError(w, r, "purge model provider credentials", err)
+		return
 	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
@@ -838,6 +862,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// row it always wrote.
 	if saved.ModelProviders != nil {
 		datum["model_providers"] = enabledModelProviderCount(saved)
+	}
+	if saved.ModelProviders != nil || invalidated > 0 {
+		datum["per_user_credentials_invalidated"] = invalidated
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {

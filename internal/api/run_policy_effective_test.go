@@ -30,7 +30,7 @@ func (artifactSiteCfgStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 // run row cannot answer "what was this agent allowed to do?" (agent_runs.policy_id
 // has no FK and no spec column, run_policies.spec is overwritten in place, and an
 // inline/default policy has no row at all), so the append-only
-// run.policy.effective event is the only durable record — and it is worth nothing
+// run.policy.resolve event is the only durable record — and it is worth nothing
 // if it snapshots the PRE-widening spec. Counterfactual: emit the event at the end
 // of handleCreateRun (or anywhere above dispatch's widening phases) and the corp
 // mirror is missing while the dropped public registry is still listed.
@@ -40,7 +40,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 	srv.cfg.Store = artifactSiteCfgStore{st}
 	run.Task = "" // no agent exec / completion watcher: this test is about the envelope
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{
 			AllowedDomains:      []string{"api.anthropic.com", "registry.npmjs.org"},
@@ -48,9 +48,9 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 		},
 	})
 
-	ev := findAudit(audit.events, run.ID, "run.policy.effective", "success")
+	ev := findAudit(audit.events, run.ID, "run.policy.resolve", "success")
 	if ev == nil {
-		t.Fatalf("dispatch recorded no run.policy.effective envelope; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("dispatch recorded no run.policy.resolve envelope; events=%s", auditDump(audit.events, run.ID))
 	}
 	var got types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &got); err != nil {
@@ -66,7 +66,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 }
 
 // TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues is
-// W12-A-2 (secret-leak): the run.policy.effective envelope used to
+// W12-A-2 (secret-leak): the run.policy.resolve envelope used to
 // mustJSON(policy) the FULL spec straight into the append-only audit log —
 // including llm_inspection.workspace_secret_values, contradicting the
 // field's own "NEVER logged" doc comment (types.LLMInspectionSpec). The
@@ -77,7 +77,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *te
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = ""
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{
 			MinConfinementClass: types.CC1,
@@ -88,9 +88,9 @@ func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *te
 		},
 	})
 
-	ev := findAudit(audit.events, run.ID, "run.policy.effective", "success")
+	ev := findAudit(audit.events, run.ID, "run.policy.resolve", "success")
 	if ev == nil {
-		t.Fatalf("dispatch recorded no run.policy.effective envelope; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("dispatch recorded no run.policy.resolve envelope; events=%s", auditDump(audit.events, run.ID))
 	}
 	if strings.Contains(string(ev.Data), "hunter2-must-never-be-logged") {
 		t.Fatalf("W12-A-2: the audit envelope leaked the llm_inspection secret VALUE verbatim, contradicting its own doc comment: %s", ev.Data)
@@ -116,7 +116,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *te
 }
 
 // TestDispatch_ResolvesLLMInspectionSecretNamesAtDispatch is the structural
-// fix underlying W12-A-2/W12-S1-1: workspace_secret_names (what a policy
+// fix underlying: workspace_secret_names (what a policy
 // actually authors) is resolved against the secret store ONLY at dispatch,
 // onto the in-memory copy of the policy the proxy sidecar receives — never
 // stored, never read back, never logged. Belt-and-braces: every resolved
@@ -129,7 +129,7 @@ func TestDispatch_ResolvesLLMInspectionSecretNamesAtDispatch(t *testing.T) {
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"prod-db-password": []byte("resolved-secret-value")}}
 	srv.cfg.MaskRegistry = secretmask.NewRegistry()
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{
 			MinConfinementClass: types.CC1,
@@ -147,7 +147,7 @@ func TestDispatch_ResolvesLLMInspectionSecretNamesAtDispatch(t *testing.T) {
 
 	// Belt-and-braces: the resolved value is registered in the run's mask
 	// registry, so it is scrubbed from PTY capture / recordings / any other
-	// audit event's Data, not merely kept out of run.policy.effective.
+	// audit event's Data, not merely kept out of run.policy.resolve.
 	found := false
 	for _, v := range srv.cfg.MaskRegistry.Snapshot(run.ID) {
 		if string(v) == "resolved-secret-value" {
@@ -159,9 +159,9 @@ func TestDispatch_ResolvesLLMInspectionSecretNamesAtDispatch(t *testing.T) {
 	}
 
 	// The audit trail names WHICH secret was resolved, never its value.
-	ev := findAudit(audit.events, run.ID, "run.llm_inspection.secrets_resolve", "success")
+	ev := findAudit(audit.events, run.ID, "run.llm_inspection.resolve", "success")
 	if ev == nil {
-		t.Fatalf("expected a run.llm_inspection.secrets_resolve audit event; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("expected a run.llm_inspection.resolve audit event; events=%s", auditDump(audit.events, run.ID))
 	}
 	if strings.Contains(string(ev.Data), "resolved-secret-value") {
 		t.Errorf("the secrets_resolve audit event must never carry the value, got %s", ev.Data)

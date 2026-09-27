@@ -183,6 +183,9 @@ resources:
 podAnnotations:
   prometheus.io/scrape: "true"
 
+# Raised above the 70s default; the render must carry the operator's value.
+terminationGracePeriodSeconds: 90
+
 nodeSelector:
   kubernetes.io/os: linux
 
@@ -212,6 +215,13 @@ secretStore:
     auth: token-file
     tokenFile: /vault/secrets/token
     kvPrefix: wardyn-ci
+
+# Data keys of rows still sealed in Postgres wrapped by Vault Transit, over the
+# same Vault client.
+kek:
+  provider: transit
+  transit:
+    key: wardyn
 
 # Verbatim pod volumes / wardynd mounts (#596), shaped as the Secrets Store CSI
 # volume docs/OPERATIONS.md "Secrets from files" describes. Rendered only; no

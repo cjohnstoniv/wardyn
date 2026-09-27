@@ -303,10 +303,10 @@ func TestSSOEndpointOverride_MountLaneMovesEnvAndEgressTogether(t *testing.T) {
 			}
 		})
 	}
-	// …and the caller that used to be asymmetric: resolveBedrockAuth's mount
+	// …and the caller that must stay symmetric: resolveBedrockAuth's mount
 	// branch must merge the same pair its ssoInject sibling does. Source-level,
 	// because constructing a full mount-lane Server here would assert nothing
-	// about the line that was missing.
+	// about that one line.
 	src, err := os.ReadFile("runs_bedrock.go")
 	if err != nil {
 		t.Fatalf("read runs_bedrock.go: %v", err)

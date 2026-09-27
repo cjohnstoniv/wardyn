@@ -25,12 +25,16 @@ import (
 // always ends.
 
 // fakeApprovalReader answers a scripted sequence of (state, status) pairs,
-// repeating the last one forever.
+// repeating the last one forever. Optionally, notifyAfter closes notifyCh
+// once the poll at that 1-based index has been answered, so a test can wait
+// for a specific poll instead of sleeping a guessed wall-clock duration.
 type fakeApprovalReader struct {
-	mu     sync.Mutex
-	steps  []approvalStep
-	reads  int
-	lastID uuid.UUID
+	mu          sync.Mutex
+	steps       []approvalStep
+	reads       int
+	lastID      uuid.UUID
+	notifyAfter int
+	notifyCh    chan struct{}
 }
 
 type approvalStep struct {
@@ -49,6 +53,9 @@ func (f *fakeApprovalReader) readApproval(_ context.Context, id uuid.UUID) (type
 		i = len(f.steps) - 1
 	}
 	s := f.steps[i]
+	if f.notifyCh != nil && f.reads == f.notifyAfter {
+		close(f.notifyCh)
+	}
 	return s.state, s.status, s.err
 }
 
@@ -170,7 +177,30 @@ func shortBudget(t *testing.T, v string) {
 	t.Setenv(envCredentialReauthTimeout, v)
 }
 
-// THE HAPPY PATH: 423, two PENDING polls, APPROVED, exactly ONE re-resolve, and
+// shrinkReauthFloor lowers minCredentialReauthTimeout to d for one test,
+// restoring the real 10s production floor after. Used only by tests that wait
+// out a hold's FULL budget to observe its expiry, so they wait d instead of
+// the real 10s — pair it with shortBudget(t, v) where v is below d, so the
+// clamp still lands on the (now-shrunk) floor exactly as it does in
+// production. See TestMinCredentialReauthTimeout_ProductionFloorUnchanged for
+// the guard that pins the real floor's production default.
+func shrinkReauthFloor(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := minCredentialReauthTimeout
+	minCredentialReauthTimeout = d
+	t.Cleanup(func() { minCredentialReauthTimeout = prev })
+}
+
+// TestMinCredentialReauthTimeout_ProductionFloorUnchanged pins the production
+// default of minCredentialReauthTimeout. It does not check that a shrinking
+// test restored it — shrinkReauthFloor's t.Cleanup does that.
+func TestMinCredentialReauthTimeout_ProductionFloorUnchanged(t *testing.T) {
+	if minCredentialReauthTimeout != 10*time.Second {
+		t.Fatalf("minCredentialReauthTimeout = %v, want the production 10s floor", minCredentialReauthTimeout)
+	}
+}
+
+// The happy path: 423, two PENDING polls, APPROVED, exactly one re-resolve, and
 // the header the SDK needed.
 func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
@@ -198,15 +228,14 @@ func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 	}
 }
 
-// THE REGRESSION THAT KEEPS EVERY OTHER GRANT UNTOUCHED: a non-423 error
-// returns immediately, with no hold, no poll and no second resolve.
+// The case that keeps every other grant untouched: a non-423 error returns
+// immediately, with no hold, no poll and no second resolve.
 func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
 	// The budget is set even though this test must never reach it: without it a
-	// REGRESSION here (a 424 mistaken for a 423) parks for the 600 s default and
+	// mistake here (a 424 mistaken for a 423) parks for the 600 s default and
 	// reds as a ten-minute test-binary panic instead of an assertion. The clamp's
-	// floor makes the same regression fail in ~11 s with the message below
-	// (general N-new-2).
+	// floor makes the same mistake fail in ~11 s with the message below.
 	shortBudget(t, "10s")
 	is := &injectionServer{approvalID: uuid.New()}
 	is.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -237,18 +266,20 @@ func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	}
 }
 
-// Nobody signs in: the hold ends inside its advertised bound (+10%) with the
-// sentinel that earns the 401 body.
+// Nobody signs in: the hold ends inside its advertised bound (+10%, at least
+// 100ms of slack for the 423 round trip and polling) with the sentinel that
+// earns the 401 body.
 func TestResolveInjectionHolding_TimesOutInsideItsBudget(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s") // clamped UP to the 10s floor either way
+	shrinkReauthFloor(t, 200*time.Millisecond)
+	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor either way
 	is := newInjectionServer(t, 1000)
 	reader := &fakeApprovalReader{steps: pending(1)}
 	tok := &tokenSource{}
 	tok.Set("t")
 
-	// The BUDGET, not a caller, is what expires a hold. Clamped to the 10s
-	// floor, so the wait is real; the assertion is the sentinel and the bound.
+	// The BUDGET, not a caller, is what expires a hold. Clamped to the floor,
+	// so the wait is real; the assertion is the sentinel and the bound.
 	inj := holdInjector(t, is, reader)
 	start := time.Now()
 	_, _, err := inj.resolveCtx(context.Background(), holdHost)
@@ -259,8 +290,8 @@ func TestResolveInjectionHolding_TimesOutInsideItsBudget(t *testing.T) {
 	if elapsed < minCredentialReauthTimeout {
 		t.Errorf("the hold ended after %v, before its %v budget", elapsed, minCredentialReauthTimeout)
 	}
-	if elapsed > minCredentialReauthTimeout+minCredentialReauthTimeout/10 {
-		t.Errorf("the hold ran %v, past its advertised bound +10%%", elapsed)
+	if slack := max(minCredentialReauthTimeout/10, 100*time.Millisecond); elapsed > minCredentialReauthTimeout+slack {
+		t.Errorf("the hold ran %v, past its advertised bound +%v", elapsed, slack)
 	}
 	// The FIRST live observer gets the reportable sentinel — it writes the one
 	// decision row — and a later caller of the same workflow does not.
@@ -296,7 +327,7 @@ func TestResolveCtx_ACallerThatHangsUpIsReleasedAndTheHoldContinues(t *testing.T
 	if elapsed > 2*time.Second {
 		t.Errorf("the caller took %v to be released, want ~its own 300ms deadline", elapsed)
 	}
-	// THE HOLD IS STILL RUNNING: the workflow owns its deadline, not the caller.
+	// The hold is still running: the workflow owns its deadline, not the caller.
 	inj.reauth.mu.Lock()
 	wf := inj.reauth.workflows[is.approvalID]
 	inj.reauth.mu.Unlock()
@@ -446,7 +477,7 @@ func TestResolveInjectionHolding_SixtyFourResolversShareOneWorkflow(t *testing.T
 	if counted != 1 {
 		t.Errorf("counted workflows = %d, want 1 for 64 resolvers of ONE lapse", counted)
 	}
-	// THE ASSERTION THE FIRST SHAPE LACKED (general B1): the injection URL is a
+	// The assertion the first shape lacked (general B1): the injection URL is a
 	// MINT — each resolve writes a credential.mint audit row — so "one workflow"
 	// is only true if 64 callers made exactly TWO calls between them: the 423
 	// that opened the hold, and the ONE re-resolve that ended it.
@@ -458,7 +489,7 @@ func TestResolveInjectionHolding_SixtyFourResolversShareOneWorkflow(t *testing.T
 	}
 }
 
-// A LATE ARRIVAL, after the workflow's terminal result, does not open a second
+// A late arrival, after the workflow's terminal result, does not open a second
 // hold for the same lapse: it re-resolves and takes whatever the control plane
 // now says (here: another 423, which is a NEW, separately counted workflow).
 func TestResolveInjectionHolding_LateArrivalStartsANewCountedWorkflow(t *testing.T) {
@@ -686,7 +717,7 @@ func waitForWorkflowDeadline(t *testing.T, coord *reauthCoordinator) time.Time {
 	return time.Time{}
 }
 
-// THE LEADER DISCONNECTS. Codex #2's clause, and the one the first shape got
+// The leader disconnects. Codex #2's clause, and the one the first shape got
 // exactly backwards: the caller that happened to arrive first ended the
 // workflow with a timeout that had not happened, handing every follower a
 // terminal 401 and writing a credential:reauth-timeout deny row for a hold that
@@ -757,13 +788,14 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 	}
 }
 
-// A LATE ARRIVAL AFTER THE EXPIRY gets that terminal result at once: no second
+// A late arrival after the expiry gets that terminal result at once: no second
 // hold, no second count, and — because the decision row is claimed once — no
 // second deny row. With the measured ~30 s SDK cadence this is the difference
 // between one recorded expiry and one per retry for ten minutes.
 func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")
+	shrinkReauthFloor(t, 500*time.Millisecond)
+	shortBudget(t, "1ms")             // clamped UP to the (shrunk) floor; the first call below waits it out
 	is := newInjectionServer(t, 1000) // 423 forever
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := holdInjector(t, is, reader)
@@ -785,7 +817,7 @@ func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 	if !errors.Is(second, errReauthTimedOutAgain) {
 		t.Error("the late arrival was handed a REPORTABLE expiry — it would write a second credential:reauth-timeout row for one hold")
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
+	if elapsed := time.Since(start); elapsed > minCredentialReauthTimeout/2 {
 		t.Errorf("the late arrival waited %v — it opened a second hold instead of taking the sticky result", elapsed)
 	}
 	inj.reauth.mu.Lock()
@@ -806,7 +838,8 @@ func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 // counted lifecycle and its own budget.
 func TestResolveCtx_ANewApprovalIDStartsASecondCountedWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")
+	shrinkReauthFloor(t, 50*time.Millisecond) // two full-budget waits below
+	shortBudget(t, "1ms")                     // clamped UP to the (shrunk) floor
 	is := newInjectionServer(t, 1000)
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := holdInjector(t, is, reader)
@@ -833,7 +866,7 @@ func TestResolveCtx_ANewApprovalIDStartsASecondCountedWorkflow(t *testing.T) {
 	}
 }
 
-// TWO STACKED JOINERS, and the SECOND hangs up. Adopted verbatim from
+// Two stacked joiners, and the second hangs up. Adopted verbatim from
 // REVIEW-2-security's appendix (SHOULD-2), because the brief's own
 // counterfactual did not discriminate: with a fake that answers 423 once, the
 // follower in every other test re-resolves into a direct 200 and never joins

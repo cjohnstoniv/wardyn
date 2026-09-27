@@ -90,7 +90,7 @@ func TestInHandlerMemberDenialsAreAudited(t *testing.T) {
 		}
 	})
 
-	// THE SECOND SILENT GATE, in another handler: `always` is operator-only
+	// The second silent gate, in another handler: `always` is operator-only
 	// (rule 6) because it writes a permanent workspace allowlist entry, which is
 	// the back door around the operatorOnly PUT /workspaces/{id}/approved-egress.
 	// The refusal is a 403 and left no row, while its two neighbours on the same

@@ -41,14 +41,15 @@ import { baseStatus } from "../../../lib/test-fixtures";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { ProfileEditor } from "./profile-editor";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const GREENFIELD: GovernanceProfile = {
   id: "p1",
   name: "Greenfield contractors",
   ceiling: { allowed_domains: ["api.anthropic.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
   limits: {},
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-01T00:00:00Z",
+  created_at: aheadByHours(-1),
+  updated_at: aheadByHours(-1),
 };
 
 function renderEditor(profile: GovernanceProfile | null = GREENFIELD) {

@@ -55,7 +55,7 @@ func TestOverageWidensRole(t *testing.T) {
 		// just as completely — both claims feed the same role map.
 		{"roles overage + default admin fallthrough", overageNames("roles"), writoidc.RoleAdmin, defaultMatch(writoidc.RoleAdmin), true},
 
-		// NOT AN ESCALATION, and each of these must keep signing in.
+		// Not an escalation, and each of these must keep signing in.
 		//
 		// A real match is authoritative: hiding a claim can only REMOVE matches
 		// from a highest-wins fold, so an overage can only narrow a matched
@@ -85,16 +85,16 @@ func TestOverageWidensRole(t *testing.T) {
 	}
 }
 
-// TestOverageLoginDeniedNotPromoted is the end-to-end pin, and it is the one
-// that reproduces the finding: ONE human, ONE role map, ONE default, and the
-// only difference between the two legs is whether the IdP sent the claim.
+// TestOverageLoginDeniedNotPromoted is the end-to-end pin: one human, one role
+// map, one default, and the only difference between the two legs is whether
+// the IdP sent the claim.
 //
-// Leg 1 (claim present): "walled-contractors" maps to member, so the human is a
-// member. Leg 2 (the identical human, in overage): the claim is absent, the
-// map matches nothing, and WARDYN_OIDC_DEFAULT_ROLE=admin used to hand them a
+// Leg 1 (claim present): "walled-contractors" maps to member, so the human is
+// a member. Leg 2 (the identical human, in overage): the claim is absent, the
+// map matches nothing, and WARDYN_OIDC_DEFAULT_ROLE=admin would hand them a
 // SUPER ADMIN session — full reach into other people's runs, secrets, harness
-// credentials and an interactive PTY in any sandbox. It must now be refused
-// with a code that says retrying will not help.
+// credentials and an interactive PTY in any sandbox. It must be refused with a
+// code that says retrying will not help.
 //
 // Counterfactual: remove the overageWidensRole branch from CallbackHandler and
 // leg 2 mints a cookie with Role=admin instead of redirecting.

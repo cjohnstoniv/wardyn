@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBootWarnsOnceForEachDeadDomainEntry (W6-S6) pins the runtime signal for a
+// TestBootWarnsOnceForEachDeadDomainEntry pins the runtime signal for a
 // policy entry that can never match.
 //
 // ValidDomainEntry runs at the API WRITE doors only, so it refuses a bad entry

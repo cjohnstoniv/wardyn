@@ -34,7 +34,7 @@ export function EgressWidget({
    *
    *  B3 — this used to be `egress.filter(e => e.decision === "pending").length`,
    *  counted over an AUDIT projection. The trail is append-only, so an
-   *  `egress.pending` row is a historical event that never stops being one: the
+   *  `egress.hold` row is a historical event that never stops being one: the
    *  chip counted every hold the run ever had and read "3 held" on a run
    *  holding nothing, on the surface whose entire job is to be the alarm. The
    *  rows below still render those events as history — it is the NUMBER that
