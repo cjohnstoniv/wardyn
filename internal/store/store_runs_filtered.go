@@ -154,12 +154,13 @@ func ageWindowSQL(nonTerminal, secsParam string) string {
 
 // killedVisibleSQL is TRUE for a row killedVisibleFor's default does not hide:
 // anything but a KILLED row, or include_killed=1, or a KILLED row that ended
-// within killedVisibleFor. A KILLED row with no ended_at (should not happen
-// past migration 0091 — every terminal transition stamps it — but a
-// defensive read, not an assumed invariant) is treated as too old to show.
-func killedVisibleSQL(includeParam string) string {
-	return fmt.Sprintf("(state <> 'KILLED' OR %s::boolean OR (%s IS NOT NULL AND %s >= now() - interval '24 hours'))",
-		includeParam, runEndTimeSQL, runEndTimeSQL)
+// within killedVisibleFor (killedSecsParam). A KILLED row with no ended_at
+// (should not happen past migration 0091 — every terminal transition stamps
+// it — but a defensive read, not an assumed invariant) is treated as too old
+// to show.
+func killedVisibleSQL(includeParam, killedSecsParam string) string {
+	return fmt.Sprintf("(state <> 'KILLED' OR %s::boolean OR (%s IS NOT NULL AND %s >= now() - make_interval(secs => %s::int)))",
+		includeParam, runEndTimeSQL, runEndTimeSQL, killedSecsParam)
 }
 
 // runOrderSQL is the landing page's order (design.md §3.1 / attention-decision
@@ -213,7 +214,8 @@ func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.
 	where := baseWhere(f, nonTerminal, &args)
 	secsParam := bindArg(&args, endedWithinSecs(f.EndedWithin))
 	includeParam := bindArg(&args, f.IncludeKilled)
-	clauses := []string{ageWindowSQL(nonTerminal, secsParam), killedVisibleSQL(includeParam)}
+	killedSecsParam := bindArg(&args, int(killedVisibleFor.Seconds()))
+	clauses := []string{ageWindowSQL(nonTerminal, secsParam), killedVisibleSQL(includeParam, killedSecsParam)}
 	if where != "" {
 		clauses = append([]string{where}, clauses...)
 	}
@@ -230,6 +232,7 @@ func (s PG) CountHiddenRuns(ctx context.Context, f RunFilter) (olderHidden, kill
 	where := baseWhere(f, nonTerminal, &args)
 	secsParam := bindArg(&args, endedWithinSecs(f.EndedWithin))
 	includeParam := bindArg(&args, f.IncludeKilled)
+	killedSecsParam := bindArg(&args, int(killedVisibleFor.Seconds()))
 	live := fmt.Sprintf(runLiveSQL, nonTerminal)
 
 	// olderHidden: matches baseWhere, is an ended row, and falls outside the
@@ -241,8 +244,8 @@ func (s PG) CountHiddenRuns(ctx context.Context, f RunFilter) (olderHidden, kill
 	// still hides it — moot (always 0) once include_killed=1, since nothing is
 	// hidden by that rule then.
 	killedClause := fmt.Sprintf(
-		"state = 'KILLED' AND NOT %s::boolean AND (%s::int IS NULL OR %s >= now() - make_interval(secs => %s::int)) AND (%s IS NULL OR %s < now() - interval '24 hours')",
-		includeParam, secsParam, runEndTimeSQL, secsParam, runEndTimeSQL, runEndTimeSQL)
+		"state = 'KILLED' AND NOT %s::boolean AND (%s::int IS NULL OR %s >= now() - make_interval(secs => %s::int)) AND (%s IS NULL OR %s < now() - make_interval(secs => %s::int))",
+		includeParam, secsParam, runEndTimeSQL, secsParam, runEndTimeSQL, runEndTimeSQL, killedSecsParam)
 
 	q := `SELECT count(*) FILTER (WHERE ` + olderClause + `), count(*) FILTER (WHERE ` + killedClause + `) FROM agent_runs`
 	if where != "" {
