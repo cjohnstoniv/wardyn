@@ -541,6 +541,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   of the admin monitor, and an admin-only SSO token had the link refused outright. Both now
   route through `runPath(view, id)`, the same helper `/admin/runs` and `/admin/approvals`
   already use, so the link stays in the view it was opened from (#876).
+- **A red `build`/`test-pg` job named only `make: *** [Makefile:195: test-report] Error 1`, hiding
+  which test failed or why the package didn't compile behind an artifact download.**
+  `scripts/test-report.sh` now prints the failing test names, the compiler's own error text on a
+  compile failure, and the panic or last output lines of a package that failed outside any test (a
+  `-timeout`, a panic in `init`, `os.Exit` in `TestMain`) directly in the job log, with a script
+  test pinning all three. A new
+  `make lint` gate (`scripts/check-workflow-artifacts.sh`) catches an `actions/upload-artifact`
+  step with an empty `path` before it ships (#374's exact shape). `run-e2e-ssh-k8s.sh`'s
+  no-cluster-installed skip now prints a greppable `SKIPPED no-install` marker for future nightly
+  wiring to assert on (#669).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
