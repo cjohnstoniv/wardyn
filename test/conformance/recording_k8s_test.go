@@ -7,8 +7,8 @@ package conformance_test
 
 // recording_k8s_test.go is TestRecordingDocker's k8s counterpart (#704): it
 // builds the REAL k8s substrate (the real wardyn-proxy image, an agent image
-// carrying wardyn-rec — k8s's SessionRecording is unconditionally true, see
-// internal/runner/k8s/exec.go's recordCmd doc, no docker-style opt-out) and
+// carrying wardyn-rec, built with Record: true — the production default,
+// off only under WARDYN_RECORDING_STORE=off) and
 // proves a recorded command's cast leaves the sandbox through the proxy's
 // brokered recording route, over the TLS hop, to a stand-in control plane
 // (test/conformance/hopfake) that logs what it received — the same proof
@@ -75,7 +75,7 @@ func TestRecordingK8s(t *testing.T) {
 	}
 	agentImage := os.Getenv("WARDYN_TEST_K8S_AGENT_IMAGE")
 	if agentImage == "" {
-		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (carries wardyn-rec — a recorder-less image fails every Exec closed under this substrate's unconditional SessionRecording; see conformance_k8s_test.go's doc comment)")
+		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (carries wardyn-rec — a recorder-less image fails every Exec closed once Record is on; see conformance_k8s_test.go's doc comment)")
 	}
 	ns := os.Getenv("WARDYN_K8S_NAMESPACE")
 	if ns == "" {
@@ -84,7 +84,7 @@ func TestRecordingK8s(t *testing.T) {
 
 	restCfg, cs := k8sTestClient(t)
 
-	sub, err := k8s.New(k8s.Config{Namespace: ns, ProxyImage: proxyImage})
+	sub, err := k8s.New(k8s.Config{Namespace: ns, ProxyImage: proxyImage, Record: true})
 	if err != nil {
 		t.Fatalf("k8s.New: %v (this cluster's CNI must enforce NetworkPolicy — see ci.yml's Calico step)", err)
 	}
@@ -97,7 +97,7 @@ func TestRecordingK8s(t *testing.T) {
 		t.Fatalf("Capabilities: %v", err)
 	}
 	if !caps.SessionRecording {
-		t.Fatalf("k8s substrate declares SessionRecording=false (exec.go's recordCmd has no opt-out — this should never happen)")
+		t.Fatalf("k8s substrate built with Record: true declares SessionRecording=false")
 	}
 
 	caBlob, err := hoptls.NewCA(time.Now())
