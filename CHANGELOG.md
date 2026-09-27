@@ -612,6 +612,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **New admin read: `GET /permissions/explain` (#739).** For one named `user`, `group` or
+  `user_type` subject, it answers each capability kind's state — everyone, this type, blocked,
+  admins only, or not available — at the default plus every specific resource a grant names or
+  "Available to" restricts (those rows carry `restricted: true`). Each state is the grant
+  resolver's own answer, including the kind's enforcement switch, a value's restriction and any
+  broader deny that covers the resource. It reads only the rows that name that exact subject or
+  `all`: it does not look up a user's groups or type, so a group or type deny that blocks the
+  person does not show on their grid. A user type that doesn't exist is refused (`400`). It is the
+  data the user type editor's "What this type gets" screen reads. Admin and `security_admin`
+  only, like the rest of `/permissions`.
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.

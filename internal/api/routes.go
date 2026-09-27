@@ -790,6 +790,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// The value is the rest of the path: an image ref carries slashes.
 	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
 	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
+	// Explain (K4) reads this same table at a NAMED subject rather than the
+	// caller's own: still securityOps, never wider.
+	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

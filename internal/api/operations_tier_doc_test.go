@@ -90,6 +90,7 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/permissions/enforcement", "the `/permissions` routes below"},
 	{"GET /api/v1/permissions/availability/{kind}/*", "the `/permissions` routes below"},
 	{"PUT /api/v1/permissions/availability/{kind}/*", "the `/permissions` routes below"},
+	{"GET /api/v1/permissions/explain", "the `/permissions` routes below"},
 	{"GET /api/v1/tokens", "`GET`/`DELETE /tokens`"},
 	{"POST /api/v1/sessions/revoke", "`POST /sessions/revoke`"},
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
