@@ -156,6 +156,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   switched off. `Config.Record` on both drivers now follows the boot recording-store selection
   (off skips the recorder wrap entirely — no upload attempt; `pg`/`fs` wrap and upload exactly as
   before). The image contract is unchanged — agent images still ship `wardyn-rec`.
+- **`make release-check` now propagates a Postgres-suite failure (#1068).** The Postgres-gated
+  `if` chained `test-report-pg` and `test-race-pg` with plain `;` in one shell, so the `if`'s
+  exit status was whichever submake ran last — a `test-report-pg` failure was silently swallowed
+  whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
+  The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
+  survives.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
