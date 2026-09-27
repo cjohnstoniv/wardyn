@@ -8,7 +8,10 @@ import type { AgentRun, RunState } from "../../../lib/types";
 import { rowPresentation, sectionRuns, isTopQuiet } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
-const NOW = Date.parse("2026-09-27T15:00:00.000Z");
+// Relative to the moment the suite runs, not a literal date (scripts/
+// check-fixture-dates.sh) — every case below offsets from this by a fixed
+// duration, so the absolute value never matters.
+const NOW = Date.now();
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run-1",

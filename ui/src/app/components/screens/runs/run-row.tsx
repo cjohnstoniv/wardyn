@@ -7,16 +7,18 @@
 // title (a real link, §5), a muted meta line, the status word, and at most
 // one action button. Review and Sign in both resolve to the SAME place —
 // the run's own cockpit (its decision card, or the sign-in door already on
-// the run header) — so the action is a second link to the run, a sibling of
-// the title link rather than a nested interactive widget (same rule
-// run-card.tsx's old container followed).
-import { Link } from "react-router-dom";
+// the run header) — so the action navigates there too, but design.md §5 is
+// explicit: "the single action is a sibling <button>", not a second link
+// (also keeps it out of getByRole("link") queries elsewhere on the page —
+// the shell's own "Review" link, model-access-copy.ts's BANNER.REVIEW,
+// shares the word).
+import { Link, useNavigate } from "react-router-dom";
 import type { AgentRun } from "../../../lib/types";
 import { relativeTime } from "../../../lib/format";
-import { runPath, useConsoleMode } from "../../wardyn/console-view";
+import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { usePrincipal } from "../../wardyn/operator-context";
-import { buttonVariants } from "../../ui/button";
+import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
@@ -43,6 +45,7 @@ function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
 }
 
 export function RunRow({ run }: { run: AgentRun }) {
+  const navigate = useNavigate();
   const view = useConsoleMode();
   const adminView = view === "admin";
   const principal = usePrincipal();
@@ -86,14 +89,24 @@ export function RunRow({ run }: { run: AgentRun }) {
         {/* The held-count subline (design.md §2.2) — its own line under the
             status word, always muted (the word already carries the hue). */}
         {p.subword && <span className="whitespace-nowrap text-meta text-muted-foreground">{p.subword}</span>}
+        {/* M-7 (admin-member-modes-design.md §4.6/§6): the admin's own run,
+            seen in the Admin view, carries a switch link to its own User-view
+            cockpit — the Admin view has no personal doors of its own. Not
+            the row's "action" (that stays Review/Sign-in only); a separate,
+            always-available navigation affordance. */}
+        {adminView && own && <OpenInUserView runId={run.id} className="h-7 shrink-0" />}
         {actionLabel && (
-          <Link
-            to={href}
-            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 shrink-0")}
-            onClick={(e) => e.stopPropagation()}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0"
+            onClick={(e) => {
+              e.stopPropagation();
+              void navigate(href);
+            }}
           >
             {actionLabel}
-          </Link>
+          </Button>
         )}
       </div>
     </div>

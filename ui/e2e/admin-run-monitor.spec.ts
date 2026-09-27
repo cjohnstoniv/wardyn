@@ -42,7 +42,15 @@ async function createRun(page: Page, task: string, owner: string, state: string)
   });
   expect(res.status(), await res.text()).toBe(201);
   const id = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
-  sql(`UPDATE agent_runs SET state = '${state}', created_by = '${owner}' WHERE id = '${id}'`);
+  // #1197 L3: this raw UPDATE bypasses the normal state-transition write path
+  // (store.go), which is what stamps ended_at on a real terminal transition
+  // — without it a COMPLETED row here reads ended_at=NULL, which the Runs
+  // landing page's default 7-day ended_within window then silently excludes
+  // (store_runs_filtered.go's ageWindowSQL: a NULL end time never satisfies
+  // >=). Same fix as scripts/e2e-backend.sh's seed.
+  const TERMINAL = new Set(["COMPLETED", "STOPPED", "FAILED", "KILLED", "ARCHIVED"]);
+  const endedAt = TERMINAL.has(state) ? ", ended_at = now()" : "";
+  sql(`UPDATE agent_runs SET state = '${state}', created_by = '${owner}'${endedAt} WHERE id = '${id}'`);
   return id;
 }
 
@@ -60,25 +68,26 @@ test.describe("the admin run monitor (M-7)", () => {
       await expect(page.getByText(/Every run, live/)).toBeVisible();
       await expect(page.getByRole("button", { name: "New run" })).toHaveCount(0);
 
-      const mineCard = page.getByTestId("run-card").filter({ hasText: mineTask });
-      const theirsCard = page.getByTestId("run-card").filter({ hasText: theirsTask });
-      await expect(mineCard.getByText(`${ME} (you)`)).toBeVisible();
-      await expect(mineCard.getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeVisible();
-      await expect(theirsCard.getByText(SOMEONE, { exact: true })).toBeVisible();
-      await expect(theirsCard.getByRole("button", { name: OPEN_IN_USER_VIEW })).toHaveCount(0);
+      const mineRow = page.getByTestId("run-row").filter({ hasText: mineTask });
+      const theirsRow = page.getByTestId("run-row").filter({ hasText: theirsTask });
+      await expect(mineRow.getByText(`${ME} (you)`)).toBeVisible();
+      await expect(mineRow.getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeVisible();
+      // Not exact: the row's meta line is one dot-joined string (design.md
+      // §1's row anatomy), not a separate span per field — same reason
+      // mineRow's "(you)" check above isn't exact either.
+      await expect(theirsRow.getByText(SOMEONE)).toBeVisible();
+      await expect(theirsRow.getByRole("button", { name: OPEN_IN_USER_VIEW })).toHaveCount(0);
 
-      // No relaunch in the kebab of a finished run, even the admin's own.
-      await mineCard.getByRole("button", { name: "Run actions" }).click();
-      await expect(page.getByRole("menuitem", { name: "Open detail" })).toBeVisible();
-      await expect(page.getByRole("menuitem", { name: RUN.CLONE_CTA })).toHaveCount(0);
-      await page.keyboard.press("Escape");
-
-      // The monitor for that run carries no relaunch either — reached by
-      // CLICKING the card, not page.goto: a goto would reach the monitor
-      // even if the card's own link pointed at the wrong view (review
-      // finding — every board/table link must stay in the Admin view via
-      // ViewGate's TWIN rule, not just the URL typed directly).
-      await mineCard.click();
+      // #1197 D2 removed the kebab menu (Kill/Clone/Open) from the Runs
+      // landing page entirely — one inline action at most per row, and the
+      // row's title is the ONLY thing that opens it (design.md §5: not
+      // role="button", no nested interactive widget). The monitor for that
+      // run carries no relaunch either — reached by CLICKING the title link,
+      // not page.goto: a goto would reach the monitor even if the row's own
+      // link pointed at the wrong view (review finding — every link must
+      // stay in the Admin view via ViewGate's TWIN rule, not just the URL
+      // typed directly).
+      await mineRow.getByRole("link", { name: mineTask }).click();
       await expect(page).toHaveURL(new RegExp(`/admin/runs/${mine}$`));
       await expect(page.getByRole("heading", { name: mineTask, level: 1 })).toBeVisible();
       await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toHaveCount(0);
@@ -86,7 +95,7 @@ test.describe("the admin run monitor (M-7)", () => {
       // …and the switch link on the board lands on the owner's own cockpit,
       // where the relaunch is.
       await page.goto("/admin/runs");
-      await mineCard.getByRole("button", { name: OPEN_IN_USER_VIEW }).click();
+      await page.getByTestId("run-row").filter({ hasText: mineTask }).getByRole("button", { name: OPEN_IN_USER_VIEW }).click();
       await expect(page).toHaveURL(new RegExp(`/runs/${mine}$`));
       await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
     } finally {

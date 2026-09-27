@@ -121,8 +121,6 @@ export function RunsScreen() {
   const noBarrier = !!setupStatus && !setupStatus.unreachable && confinementClasses.length === 0;
   usePoll(loadSetupStatus, SETUP_POLL_MS, !noBarrier && !setupStatus?.unreachable);
 
-  const trueEmpty = setupStatus != null && setupStatus.has_runs === false;
-
   const sections: RunSections = React.useMemo(() => sectionRuns(runsList), [runsList]);
   const workspaceOptions = React.useMemo(
     () => Array.from(new Set(runsList.map((r) => r.repo).filter(Boolean))).sort(),
@@ -131,6 +129,17 @@ export function RunsScreen() {
 
   const activeFilter = filters.q !== "" || filters.status !== "all" || filters.workspace !== "all";
   const nothingHidden = hiddenOlder + hiddenKilled === 0;
+  // The true first-run state: this caller's OWN scoped fetch (server-scoped
+  // by view/owner, unlike setup/status's has_runs, which is a bare
+  // deployment-wide existence check — internal/api/setup.go's own doc — and
+  // so is wrong for a member, or an admin's User view, on a deployment that
+  // has OTHER people's history) found nothing, under the DEFAULT filters,
+  // with nothing hidden by the window either. Only reachable with default
+  // filters, so a deliberate filter that matches nothing still reads as
+  // "no match", never as first-run.
+  const trueEmpty =
+    status === "ready" && runsList.length === 0 && nothingHidden && runsFiltersAreDefault(filters);
+  const stillLoading = status === "loading";
   const noMatch = status === "ready" && !trueEmpty && runsList.length === 0 && (nothingHidden || activeFilter);
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(filters);
@@ -149,12 +158,12 @@ export function RunsScreen() {
 
       {!adminView && <RunsComposer />}
 
-      {status === "loading" ? (
-        <RunsLoadingSkeleton />
-      ) : status === "error" ? (
+      {status === "error" ? (
         <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
           <ErrorState onRetry={load} />
         </div>
+      ) : stillLoading ? (
+        <RunsLoadingSkeleton />
       ) : trueEmpty ? (
         adminView ? (
           <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">

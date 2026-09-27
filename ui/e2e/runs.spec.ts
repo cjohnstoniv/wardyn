@@ -1078,7 +1078,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       const lane = page.getByRole("region", { name: "Needs you" });
       const row = lane.getByTestId("run-row").filter({ hasText: "e2e long-held solo" });
       await expect(row).toBeVisible();
-      await expect(row.getByRole("link", { name: "Review" })).toBeVisible();
+      await expect(row.getByRole("button", { name: "Review" })).toBeVisible();
       await expect(row.getByText("Needs your approval")).toBeVisible();
       await expect(row.getByText(RUN_WAIT.waitingHeld(1))).toBeVisible();
     } finally {
@@ -1106,7 +1106,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       const row = lane.getByTestId("run-row").filter({ hasText: "e2e long-held reauth" });
       await expect(row).toBeVisible();
       await expect(row.getByText("Waiting for your AWS sign-in")).toBeVisible();
-      await expect(row.getByRole("link", { name: "Sign in" })).toBeVisible();
+      await expect(row.getByRole("button", { name: "Sign in" })).toBeVisible();
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }
