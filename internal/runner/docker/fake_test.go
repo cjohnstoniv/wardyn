@@ -9,9 +9,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -73,6 +75,14 @@ type fakeDocker struct {
 	images map[string]bool // ref -> present
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
+	// subnets is each network's IPv4 subnet: the one its create asked for, or
+	// else the first free 10.N.0.0/16 from N=88, as the daemon picks one. A
+	// create asking for a subnet another network holds fails on the overlap.
+	subnets map[string]netip.Prefix
+	// onNetworkCreate, when set, runs INSIDE NetworkCreate before the network
+	// is recorded, so a test can have another network take a subnet first.
+	// Called without f.mu held.
+	onNetworkCreate func(name string, opts client.NetworkCreateOptions)
 
 	containers map[string]*createdContainer // id (== name) -> record
 
@@ -202,6 +212,7 @@ func newFakeDocker() *fakeDocker {
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
 		networks:   map[string]client.NetworkCreateOptions{},
+		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
 		volumes:    map[string]client.VolumeCreateOptions{},
 	}
@@ -258,9 +269,61 @@ func (f *fakeDocker) ImageRemove(ctx context.Context, imageID string, _ client.I
 
 func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
 	f.mu.Lock()
+	hook := f.onNetworkCreate
+	f.mu.Unlock()
+	if hook != nil {
+		hook(name, opts)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
+	var subnet netip.Prefix
+	if opts.IPAM != nil && len(opts.IPAM.Config) > 0 {
+		subnet = opts.IPAM.Config[0].Subnet
+		for other, held := range f.subnets {
+			if held == subnet {
+				return client.NetworkCreateResult{}, fmt.Errorf("invalid pool request: Pool overlaps with other one on this address space (%s)", other)
+			}
+		}
+	} else {
+		for n := 88; !subnet.IsValid() || slices.Contains(slices.Collect(maps.Values(f.subnets)), subnet); n++ {
+			subnet = netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(n), 0, 0}), 16)
+		}
+	}
 	f.networks[name] = opts
+	f.subnets[name] = subnet
 	return client.NetworkCreateResult{ID: name}, nil
+}
+
+func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.networks[networkID]; !ok {
+		return client.NetworkInspectResult{}, fakeNotFound{msg: "no such network: " + networkID}
+	}
+	var res client.NetworkInspectResult
+	res.Network.Name = networkID
+	res.Network.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[networkID]}}
+	return res, nil
+}
+
+// refusePinWithoutSubnet reproduces Docker Engine 28's create-time rule
+// (moby daemon/container_operations.go validateEndpointIPAddress): an endpoint
+// pinned to an IPv4 address is refused on a network whose create named no
+// subnet. Engine 29 accepts it, which is why a real Docker Desktop cannot show it.
+func (f *fakeDocker) refusePinWithoutSubnet(nc *network.NetworkingConfig) error {
+	if nc == nil {
+		return nil
+	}
+	for name, ep := range nc.EndpointsConfig {
+		opts, known := f.networks[name]
+		if !known || ep == nil || ep.IPAMConfig == nil || !ep.IPAMConfig.IPv4Address.IsValid() {
+			continue
+		}
+		if opts.IPAM == nil || len(opts.IPAM.Config) == 0 {
+			return errors.New("invalid endpoint settings:\nuser specified IP address is supported only when connecting to networks with user configured subnets")
+		}
+	}
+	return nil
 }
 
 func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
@@ -281,6 +344,7 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ clie
 		return client.NetworkRemoveResult{}, fakeNotFound{msg: "no such network: " + networkID}
 	}
 	delete(f.networks, networkID)
+	delete(f.subnets, networkID)
 	return client.NetworkRemoveResult{}, nil
 }
 
@@ -332,6 +396,9 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
 	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
+		return client.ContainerCreateResult{}, err
+	}
+	if err := f.refusePinWithoutSubnet(opts.NetworkingConfig); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
 	cfg := opts.Config
