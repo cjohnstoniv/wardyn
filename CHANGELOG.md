@@ -1624,6 +1624,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
+  Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
+  operator's and a device's, so an identity provider that let a user pick their `sub` could
+  produce a human treated as that identity — owning every run the admin token created. The SSO
+  callback now refuses a subject equal to `admin-token`, the configured `WARDYN_LOCAL_OPERATOR`,
+  or starting with `local:` or `device:` (trimmed and case-folded), before role derivation, with
+  the generic sign-in error and an `auth.fail` row (`wardyn/oidcCallback`, reason
+  `reserved_principal`). A session cookie or `wdn_` API token carrying such a principal, issued
+  before this change, is refused with `401` and the same reason on every request; with OIDC
+  configured, a stored SSH key under one is refused at the gateway (`ssh.authenticate` failure),
+  while local-mode and admin-token-only SSH keep working. The revive/restart/extend owner
+  re-check now exempts a run by its recorded `operator_owned` flag instead of `created_by ==
+  "admin-token"`, so a person's run named like the admin token is re-checked; an admin-token run
+  created before 0.8 (flag unset) is re-checked too when a signed-in admin revives it, so under an
+  enforced kind it needs an allow row for everyone, its user type or `admin-token`; the admin
+  token reviving its own run is unaffected. A guard test now fails on any new
+  comparison against the admin token's principal string outside a reviewed allow-list. If a local
+  install moves to SSO with a custom `WARDYN_LOCAL_OPERATOR`, keep the variable set: that seat is
+  reserved only while it is configured.
+
 - **The UI-sandbox gateway drops a sandbox app's `Set-Cookie` that carries a `Domain` attribute, and
   can keep other hosts' HttpOnly cookies away from the app (#1158).** A relayed app confined to its
   own origin never needs `Domain=`; with it, the app's server on a relay host under a shared parent

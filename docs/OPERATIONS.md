@@ -898,6 +898,16 @@ A few things that don't fit the grid:
   real login would, against pasted claims or the caller's own session, so an
   admin can see "who would this row make an admin" without waiting for that
   person to sign in — nothing it does is saved.
+- **Some subjects never sign in.** The callback refuses an identity-provider
+  `sub` that names an identity that is not a person — `admin-token`, the
+  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:` name, trimmed
+  and case-folded — with the generic sign-in error and an `auth.fail` row
+  (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
+  one is refused on use. Switching a local-mode install to SSO: the default
+  seat (`local:<os-user>`) stays reserved by its prefix, but a custom
+  `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains
+  set — unset it, and a person whose `sub` is that name would own the runs
+  local mode created under it. Keep it set.
 - **The same claim values do double duty.** The `roles`/`groups` values a role
   mapping matches are the exact same login-time snapshot a `/permissions`
   capability grant's `subject_type=group` matches against (see "Subjects, and
@@ -2391,8 +2401,9 @@ is not supported.
 happens when the email already names another known subject, when the subject is
 already known under a different email, when the subject differs from a known
 one only by case, or when the subject is another person's email. It answers
-`422` for the reserved subjects `admin-token`, the local-mode operator, and
-`device:…`.
+`422` for the reserved subjects `admin-token`, the local-mode operator,
+`local:…` and `device:…`, in any case — the same set a sign-in is refused for
+(see "Some subjects never sign in").
 
 **What the minted token carries.** It gets the role and user type the person's
 sign-in would derive from their email. Their groups are unknown until they sign

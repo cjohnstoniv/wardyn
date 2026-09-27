@@ -321,12 +321,13 @@ func (meTypeStore) GetUserType(_ context.Context, id string) (types.UserType, er
 	return types.UserType{}, store.ErrNotFound
 }
 
-// TestAuditSignInDenied: the two user-type refusals are auth.fail rows from
-// the callback's own boundary; any other reason writes nothing.
+// TestAuditSignInDenied: the two user-type refusals and the reserved-subject
+// refusal are auth.fail rows from the callback's own boundary; any other
+// reason writes nothing.
 func TestAuditSignInDenied(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, &roleMapStore{}))
-	for _, reason := range []string{oidc.DenialUserTypeAmbiguous, oidc.DenialUserTypeUnknown, oidc.DenialNoRole} {
+	for _, reason := range []string{oidc.DenialUserTypeAmbiguous, oidc.DenialUserTypeUnknown, oidc.DenialReservedPrincipal, oidc.DenialNoRole} {
 		srv.auditSignInDenied(httptest.NewRequest(http.MethodGet, "/auth/callback?reason="+reason, nil), reason)
 	}
 	var got []string
@@ -343,8 +344,8 @@ func TestAuditSignInDenied(t *testing.T) {
 		_ = json.Unmarshal(ev.Data, &data)
 		got = append(got, data.Reason)
 	}
-	if !slices.Equal(got, []string{authFailedUserTypeAmbiguous, authFailedUserTypeUnknown}) {
-		t.Errorf("auth.fail reasons = %v, want the two user-type refusals only", got)
+	if !slices.Equal(got, []string{authFailedUserTypeAmbiguous, authFailedUserTypeUnknown, authFailedReservedPrincipal}) {
+		t.Errorf("auth.fail reasons = %v, want the two user-type refusals and the reserved subject only", got)
 	}
 	if authFailedUserTypeAmbiguous != oidc.DenialUserTypeAmbiguous || authFailedUserTypeUnknown != oidc.DenialUserTypeUnknown {
 		t.Error("the audit reasons drifted from the sign-in denial codes")

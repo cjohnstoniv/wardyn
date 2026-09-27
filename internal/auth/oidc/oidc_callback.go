@@ -205,18 +205,26 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 }
 
 func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
-	a.callback(w, r, nil)
+	a.callback(w, r, nil, nil)
 }
 
-// CallbackHandlerWithDenials is CallbackHandler that also reports each sign-in
-// refused over a user type (DenialUserTypeAmbiguous, DenialUserTypeUnknown) to
-// onDenied, so internal/api can audit it as auth.fail. This package stays
-// store- and audit-agnostic, as it is for OnLogin.
-func (a *Authenticator) CallbackHandlerWithDenials(onDenied func(r *http.Request, reason string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, onDenied) }
+// DenialReservedPrincipal is the reason CallbackHandlerWithDenials reports a
+// sign-in refused because reserved said its subject names an identity that
+// is not a person. Not an auth_error code: the browser gets the generic
+// authErrorSignInRefused, since nothing the person does can clear it.
+const DenialReservedPrincipal = "reserved_principal"
+
+// CallbackHandlerWithDenials is CallbackHandler that refuses any subject
+// reserved reports true for (DenialReservedPrincipal), and reports each
+// sign-in refused over that or over a user type (DenialUserTypeAmbiguous,
+// DenialUserTypeUnknown) to onDenied, so internal/api can audit it as
+// auth.fail. This package stays store- and audit-agnostic, as it is for
+// OnLogin: which principals are reserved is internal/api's to say.
+func (a *Authenticator) CallbackHandlerWithDenials(reserved func(sub string) bool, onDenied func(r *http.Request, reason string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, reserved, onDenied) }
 }
 
-func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserTypeDenied func(*http.Request, string)) {
+func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserved func(string) bool, onDenied func(*http.Request, string)) {
 	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
 	nonce, verifier, widened, ok := a.consumeCallbackCookies(w, r)
 	if !ok {
@@ -294,6 +302,20 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
 		return
 	}
+	// (3b) A subject that names a non-person identity (the admin token, the
+	// local operator, a device) would be treated as that identity everywhere
+	// a principal is compared — refused before anything derives from it, so
+	// neither OnLogin nor the login-grant sink ever sees it.
+	if reserved != nil && reserved(idToken.Subject) {
+		slog.Warn("oidc: login denied — the identity provider's subject is reserved for a non-person Wardyn identity",
+			"sub", idToken.Subject, "issuer", a.cfg.IssuerURL)
+		if onDenied != nil {
+			onDenied(r, DenialReservedPrincipal)
+		}
+		a.clearCookie(w, sessionCookieName)
+		a.redirectAuthError(w, r, authErrorSignInRefused)
+		return
+	}
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		switch {
@@ -323,7 +345,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	}
 
 	// (5) Role derivation — deriveLogin. A refusal names its auth_error code.
-	d, denied := a.deriveLogin(r, idToken.Subject, cc, onUserTypeDenied)
+	d, denied := a.deriveLogin(r, idToken.Subject, cc, onDenied)
 	if denied != "" {
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
 		// (from before this re-login attempt) still valid in the browser.

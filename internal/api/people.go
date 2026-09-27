@@ -61,15 +61,6 @@ func principalParam(r *http.Request) string {
 	return raw
 }
 
-// reservedPrincipal reports whether p names something that is not a person:
-// the admin token, the local-mode operator, or a device. A token minted under
-// one would compare equal to the operator at every site that grants by string
-// (#1162).
-func (s *Server) reservedPrincipal(p string) bool {
-	return p == adminTokenPrincipal || (s.cfg.LocalOperator != "" && p == s.cfg.LocalOperator) ||
-		strings.HasPrefix(p, "device:")
-}
-
 // validSubject is the shape an OIDC `sub` may take (OIDC Core §2: at most 255
 // ASCII characters): printable, no spaces.
 func validSubject(p string) bool {
@@ -103,7 +94,7 @@ func (s *Server) handleCreatePerson(w http.ResponseWriter, r *http.Request) {
 	case !validSubject(req.Principal):
 		writeError(w, http.StatusUnprocessableEntity, "principal: the identity provider's subject (sub) exactly, 1-255 printable characters, no spaces")
 		return
-	case s.reservedPrincipal(req.Principal):
+	case s.isReservedPrincipal(req.Principal):
 		writeError(w, http.StatusUnprocessableEntity, "principal: that subject is reserved for a non-person identity")
 		return
 	case email != "" && !validPersonEmail(email):
@@ -225,7 +216,7 @@ func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request
 	}
 	principal := principalParam(r)
 	p, err := ps.GetPerson(ctx, principal)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && s.reservedPrincipal(p.Principal)) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && s.isReservedPrincipal(p.Principal)) {
 		writeError(w, http.StatusNotFound, "no person is recorded under this subject — create or confirm them with POST /api/v1/people first")
 		return
 	}
