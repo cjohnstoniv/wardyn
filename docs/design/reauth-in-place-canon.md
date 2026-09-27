@@ -19,11 +19,11 @@ every row with it byte for byte.
 | REAUTH_DIALOG.ROLE_CHANGED_BODY | You're signed in, but this page is no longer yours to open. Copy anything you need — Wardyn will take you to Runs. | Dialog body, same person with a narrower role |
 | REAUTH_BAR.BODY | You're signed out. This page is read-only until you sign in again. | Bar across the top after "Not now" |
 | REAUTH_BAR.CTA | Sign in | Bar button (reopens the dialog); the dialog's token submit |
+| SESSION_ENDED_REASON | You were signed out. Sign in again to continue. | The full sign-in screen's own notice (`lib/api/core.ts`), amber not red (Q457-10) |
 
 Reused, not restated: "Copy my changes" and its toast (`PROVIDERS_DRAFT.CONFLICT_COPY`,
 `CONFLICT_COPIED_TOAST`), "Not now" (`MODEL_ACCESS_BANNER.NOT_NOW`), "Sign in with SSO"
-(`sign-in.tsx` `SSO_SIGN_IN`). The full sign-in screen's notice is `SESSION_ENDED_REASON` in
-`lib/api/core.ts`: "You were signed out. Sign in again to continue."
+(`sign-in.tsx` `SSO_SIGN_IN`).
 
 The mock's OTHER_PERSON_* strings are retired by Q457-12.
 
