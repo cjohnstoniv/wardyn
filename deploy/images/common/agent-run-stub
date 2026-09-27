@@ -16,8 +16,9 @@
 # far worse to debug than a sentence.
 set -euo pipefail
 source /usr/local/bin/agent-run-lib.sh
-# ponytail: exec task mode only — no clone/credential prep beyond the git
-# rewrites below, since the probe policy never grants those. install_mitm_ca
+# ponytail: exec task mode does no clone/credential prep beyond the git
+# rewrites below, since the probe policy never grants those; --idle (below)
+# does the full workspace prep, as the harness images do. install_mitm_ca
 # IS called: it is a no-op unless dispatch delivered a WARDYN_MITM_CA_PEM bundle, and when it did (a corporate
 # CA via WARDYN_TRUSTED_CA_FILE, or intercept_tls) dispatch also pointed
 # CURL_CA_BUNDLE/SSL_CERT_FILE/REQUESTS_CA_BUNDLE at the bundle it writes —
@@ -34,6 +35,11 @@ configure_git_broker_insteadof; configure_git_pat_broker_insteadof
 # interactive run's ENTIRE main process, so exiting here kills the sandbox.
 if [[ "${1:-}" == "--idle" ]]; then
     : "${HOME:=/home/agent}"; export HOME
+    rm -f "$HOME/.wardyn/prep-done"  # a re-boot must not look prepared before it is
+    if [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]]; then
+        echo "agent-run: WARNING: this image ships no coding agent, so the run's task text is not started; attach gives a plain shell" >&2
+    fi
+    install_artifact_config
     provision_git_helper_secret
     workdir="${HOME}/work"
     mkdir -p "$workdir"
