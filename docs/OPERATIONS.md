@@ -6511,6 +6511,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 (`0088_agent_runs_containment_error`) adds `containment_error` and `containment_error_at`.
 `0089` adds `agent_runs.operator_owned`.
 `0090` adds `api_tokens.minted_by` beside its new `people` table.
+`0092` adds `agent_runs.ended_at`.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
