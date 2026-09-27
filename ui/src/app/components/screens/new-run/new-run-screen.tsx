@@ -31,7 +31,7 @@ import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
-import { ccRank as rank, SectionCard, Seg } from "./new-run-primitives";
+import { ccRank as rank, SectionCard } from "./new-run-primitives";
 import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
@@ -52,9 +52,20 @@ import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
+import { TierPicker, allowedFromFloor } from "../../wardyn/tier-picker";
+import { vaultRequirementReason } from "../setup/environment-step";
+import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
-import { barrierReasons, clearedSpecOnCustomSwitch, defaultSpecText, savedPolicyGone } from "./policy-lane";
+import {
+  barrierReasons,
+  barrierRequirementReason,
+  clearedSpecOnCustomSwitch,
+  combineFloors,
+  defaultSpecText,
+  governanceRemovedTier,
+  savedPolicyGone,
+} from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
 import { agentLabel, initialWizardState, titleFromTask, type RunPrefill, type WizardState } from "./wizard-types";
 import { useLaunch } from "./use-launch";
@@ -151,6 +162,18 @@ export function NewRunScreen() {
   // ceiling section simply does not render, which is the honest answer: never
   // claim a ceiling that could not be read.
   const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  // #1200 — the SAME read's min_confinement_class: the governance ceiling's
+  // own floor, which composer.Clamp raises the run to regardless of what the
+  // authored policy sets (internal/composer/clamp.go). Undefined for the same
+  // two reasons governanceProfile is: no assignment, or a read that failed —
+  // in both cases the Barrier control falls back to the authored floor alone,
+  // never a floor it could not confirm.
+  const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
+  // #1200 review P2-6/R2-4 — Vault's driver-aware reason (the /dev/kvm probe
+  // on docker, a Kata RuntimeClass on k8s), read off the same /setup/status
+  // call, so the T-9 requirement card names the SAME honest reason
+  // environment-step.tsx computes instead of a generic "isn't installed".
+  const [vaultReason, setVaultReason] = React.useState<string | undefined>(undefined);
   // The Workspace card's drive block: this caller's allocation (nil-means-none)
   // and the door beside it ("" means open), read off the shell's ONE GET /me
   // rather than a second one of this screen's own — app-shell's useMeta already
@@ -197,6 +220,7 @@ export function NewRunScreen() {
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
         if (st.unreachable) return;
+        setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
         // No runner AT ALL (environment-step.tsx's own noDriver fold — a
         // member's redacted Driver:"" WITH classes is a withheld NAME, not
@@ -240,7 +264,11 @@ export function NewRunScreen() {
   React.useEffect(() => {
     policiesApi
       .getDefaultPolicy()
-      .then((p) => setGovernanceProfile(p.governance_profile_name))
+      .then((p) => {
+        setGovernanceProfile(p.governance_profile_name);
+        const f = p.min_confinement_class;
+        setGovFloor(f && (ORDERED_CLASSES as string[]).includes(f) ? (f as ConfinementClass) : undefined);
+      })
       .catch(() => {
         /* unknown stays unknown — the rail names no ceiling it could not read */
       });
@@ -319,8 +347,38 @@ export function NewRunScreen() {
   // successful parse's. Both paths refuse to launch below it server-side.
   const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
 
+  // #1200 review P2-2 — govFloor binds ONLY where the server would actually
+  // clamp to it, mirrored exactly from the two doors that decide that:
+  //   - an OPERATOR is never clamped at all (effectiveCeiling's own
+  //     short-circuit, internal/api/governance.go; an admin's inline policy
+  //     specifically, inline_policy.go's "admin ⇒ no clamp");
+  //   - the INLINE (custom) lane clamps every non-operator unconditionally —
+  //     even unassigned, since the deployment default IS the ceiling then;
+  //   - the SAVED-POLICY lane clamps only when a NAMED profile is assigned
+  //     (governanceProfile present) — an unassigned member's saved policy is
+  //     not raised to the deployment default at all (inline_policy.go:310's
+  //     `ceiling.Profile != nil`).
+  // Folding it unconditionally (the pre-review build) hid tiers the server
+  // would have let an admin, or an unassigned member's saved policy, use.
+  const govFloorApplies = !operator && (!useSaved || !!governanceProfile);
+  const boundGovFloor = govFloorApplies ? govFloor : undefined;
+
+  // #1200 — the floor that actually binds: whichever of the authored
+  // policy's own floor and the (now correctly gated) governance ceiling's
+  // ranks HIGHER (combineFloors — composer.Clamp raises a weaker authored
+  // floor to the ceiling's, never the other way). A Barrier control that
+  // only read `floor` could offer a tier the server then 422s at launch.
+  const effectiveFloor = combineFloors(floor, boundGovFloor);
+
+  // #1200 review P2-1/R2-1 — whether the GOVERNANCE ceiling actually removed
+  // an installed tier, as opposed to this host simply having one tier, or the
+  // run's OWN authored floor doing the narrowing (governanceRemovedTier).
+  // Only this case gets TierPicker's "set by your admin" line and the
+  // governance-sourced requirement wording.
+  const governanceBinding = governanceRemovedTier(availableClasses, floor, boundGovFloor);
+
   // The Barrier control's per-tier state — see barrierReasons.
-  const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, floor);
+  const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, effectiveFloor);
 
   // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
   // purpose: the /setup/status read resolves ASYNCHRONOUSLY and re-seeds
@@ -328,12 +386,12 @@ export function NewRunScreen() {
   // floor this already clamped to. Watching the value, not just the floor,
   // makes "never below the floor" an invariant instead of a one-shot.
   React.useEffect(() => {
-    if (!floor || !ORDERED_CLASSES.includes(floor)) return;
-    if (rank(floor) > rank(cc)) {
-      pristineCc.current = floor;
-      patch({ confinementClass: floor });
+    if (!effectiveFloor || !ORDERED_CLASSES.includes(effectiveFloor)) return;
+    if (rank(effectiveFloor) > rank(cc)) {
+      pristineCc.current = effectiveFloor;
+      patch({ confinementClass: effectiveFloor });
     }
-  }, [floor, cc, patch]);
+  }, [effectiveFloor, cc, patch]);
 
   // The post-parse union, computed ONCE: the same value renders the "Added for
   // this run's selections" line and goes on the wire, so the screen cannot show
@@ -655,50 +713,50 @@ export function NewRunScreen() {
                 </div>
               )}
 
-              {/* The run's REQUESTED barrier — a separate wire field from the
-                  spec's min_confinement_class floor. Exactly one qualifying
-                  class leaves nothing to ask — a sentence, not a picker. */}
+              {/* #1200 — the shared TierPicker: only what THIS run can
+                  actually use (installed ∧ at-or-above the active floor,
+                  which folds in the governance ceiling ONLY where the server
+                  would clamp to it — see govFloorApplies). A tier the floor
+                  forbids or the host can't build is DROPPED, never shown
+                  disabled (the global rule every user-facing picker now
+                  follows); the ONE qualifying case collapses to TierPicker's
+                  own decided row, and NONE qualifying shows the T-9
+                  requirement card instead of a fully-disabled Seg. Review
+                  P2-1/P2-3: decidedLine/pickOneNote override TierPicker's
+                  defaults, which both assume a governance floor and a
+                  browser-persisted pick — neither true of this screen's
+                  non-governance decided case or its per-run choice. */}
               <div className="border-t border-border pt-3">
-                {qualifying && qualifying.length === 1 ? (
-                  <div className="space-y-1">
-                    <div className="text-sm font-medium text-foreground">Barrier</div>
-                    <p className="text-body text-foreground">
-                      <Chip tone="neutral">{CC_META[qualifying[0]].label}</Chip>{" "}
-                      {RUN.BARRIER_ONLY_QUALIFIER}
-                    </p>
-                  </div>
-                ) : (
-                  <Seg
-                    label="Barrier"
-                    value={cc}
-                    onChange={(id) => {
-                      setCcTouched(true);
-                      patch({ confinementClass: id as ConfinementClass });
-                    }}
-                    options={ORDERED_CLASSES.map((c) => ({
-                      id: c,
-                      label: CC_META[c].label,
-                      // Two independent reasons, each with its own line below:
-                      // the host can't build this tier, or the policy forbids it.
-                      disabled: unavailable.includes(c) || belowFloor.includes(c),
-                    }))}
-                  />
-                )}
-                {unavailable.map((c) => (
-                  <p key={c} className="mt-2 text-xs text-muted-foreground">
-                    {CC_META[c].label} isn&apos;t installed on this host.
-                  </p>
-                ))}
-                {/* Floor-disabled tiers get their OWN reason (barrierReasons
-                    keeps the two lists disjoint — one reason per tier). A
-                    floor above every buildable tier disables the Seg
-                    entirely — fail-closed, with preflight/launch naming why. */}
-                {floor &&
-                  belowFloor.map((c) => (
-                    <p key={c} className="mt-2 text-xs text-muted-foreground">
-                      {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
-                    </p>
-                  ))}
+                <div className="text-sm font-medium text-foreground">Barrier</div>
+                <TierPicker
+                  className="mt-2"
+                  // P2-7: an UNKNOWN probe (qualifying: null) must not offer
+                  // a tier the active floor already forbids — it falls back
+                  // to the floor's own allowed set, not the unfiltered
+                  // ORDERED_CLASSES, and only to that when there is no floor
+                  // either.
+                  tiers={qualifying ?? allowedFromFloor(effectiveFloor) ?? ORDERED_CLASSES}
+                  selected={cc}
+                  onSelect={(id) => {
+                    setCcTouched(true);
+                    patch({ confinementClass: id });
+                  }}
+                  decidedLine={governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
+                  pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
+                  requirementNote={
+                    qualifying && qualifying.length === 0 && effectiveFloor
+                      ? (governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
+                          CC_META[effectiveFloor].label,
+                          barrierRequirementReason(
+                            effectiveFloor,
+                            unavailable,
+                            belowFloor,
+                            vaultReason,
+                          ),
+                        )
+                      : undefined
+                  }
+                />
                 {/* Unknown never blocks launch: an untouched pick sends no
                     confinement_class (ccTouched), so the server decides. */}
                 {probeSettled && !availableClasses && (

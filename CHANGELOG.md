@@ -42,6 +42,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a Kubernetes driver, exactly as the Getting-started funnel does. The Governance profile editor gains
   an "Allowed barriers" control: one radio over the existing `min_confinement_class` ceiling field, so
   an admin sets the floor without hand-editing the ceiling's JSON.
+- **New Run's Barrier control and member Getting-started's barrier summary now obey the caller's
+  governance ceiling (#1200), exactly where the server would enforce it — never an admin's inline
+  launch (never clamped) or an unassigned member's saved policy (not raised to the deployment
+  default).** A tier the ceiling forbids or the host can't build is dropped from the Barrier control
+  rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
+  admin" only when the governance ceiling actually did the narrowing; none qualifying names the
+  requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
   (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,

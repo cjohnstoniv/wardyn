@@ -10,6 +10,7 @@
 // about it.
 import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { ccRank } from "./new-run-primitives";
+import { CC_META } from "../../wardyn/cc-meta";
 import { POLICY_TEMPLATES } from "../../wardyn/policy-panel";
 import type { WizardAgent, WizardState } from "./wizard-types";
 
@@ -85,6 +86,67 @@ export function barrierReasons(
     unavailable: CC_ORDER.filter((c) => !available.includes(c)),
     belowFloor: floor ? CC_ORDER.filter((c) => available.includes(c) && ccRank(c) < ccRank(floor)) : [],
   };
+}
+
+// #1200 — the ACTIVE floor a run is clamped to is never just the authored
+// policy's own min_confinement_class: composer.Clamp (clamp.go) raises it to
+// the caller's governance ceiling floor whenever THAT ranks higher
+// (internal/composer/clamp.go:138-141). A client-side floor that only read
+// the authored spec would let the Barrier control offer a tier the server
+// then 422s at launch. Either half may be absent (no floor authored, no
+// governance profile assigned); undefined only when both are.
+export function combineFloors(
+  authored: ConfinementClass | undefined,
+  governance: ConfinementClass | undefined,
+): ConfinementClass | undefined {
+  if (!authored) return governance;
+  if (!governance) return authored;
+  return ccRank(governance) > ccRank(authored) ? governance : authored;
+}
+
+// #1200 review R2-1 — "set by your admin" is a claim that the governance
+// floor REMOVED a tier this host has: some installed tier ranks below the
+// governance floor yet at or above the run's own authored floor (so the
+// authored floor alone would have kept it). /policies/default always returns
+// a floor (the deployment default, usually CC1, for an unassigned member),
+// so comparing the two floors is not enough. Unknown availability claims
+// nothing.
+export function governanceRemovedTier(
+  installed: ConfinementClass[] | null,
+  authored: ConfinementClass | undefined,
+  governance: ConfinementClass | undefined,
+): boolean {
+  if (!installed || !governance) return false;
+  return installed.some(
+    (c) => ccRank(c) < ccRank(governance) && (!authored || ccRank(c) >= ccRank(authored)),
+  );
+}
+
+// #1200 — T-9's one line naming the requirement, for the Barrier control's
+// TierPicker when NOTHING qualifies: whichever of the two barrierReasons
+// buckets actually contains the floor tier decides the honest cause — it
+// either isn't installed at all, or every tier this host DOES have is weaker
+// than the floor. Never both; barrierReasons keeps the two lists disjoint.
+export function barrierRequirementReason(
+  effectiveFloor: ConfinementClass,
+  unavailable: ConfinementClass[],
+  belowFloor: ConfinementClass[],
+  // #1200 review P2-6 — the SAME honest /dev/kvm reason
+  // environment-step.tsx's own picker computes (vaultIncompatibleReason),
+  // passed in by the caller when it has a SetupStatus to compute it from.
+  // Preferred over the generic "isn't installed" line whenever the missing
+  // tier IS Vault, since that's the one case with a comparable hardware fact
+  // to name instead of a bare "not installed".
+  vaultReason?: string,
+): string {
+  if (effectiveFloor === "CC3" && vaultReason) return vaultReason;
+  if (unavailable.includes(effectiveFloor)) {
+    return `${CC_META[effectiveFloor].label} isn't installed on this host.`;
+  }
+  if (belowFloor.length > 0) {
+    return `Every barrier installed on this host is below ${CC_META[effectiveFloor].label}.`;
+  }
+  return `${CC_META[effectiveFloor].label} isn't installed on this host.`;
 }
 
 // A saved-policy id that no longer resolves (the policy was deleted

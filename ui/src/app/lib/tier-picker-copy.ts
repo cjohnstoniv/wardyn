@@ -26,6 +26,10 @@ export const TIER_PICKER = {
   // every non-table shape says "pick one" instead.
   PICK_ONE:
     "Weakest to strongest — pick one to save it in this browser as the default barrier for new runs.",
+  // #1200 review P2-3 — New Run's own pick is per-run and nothing persists
+  // (no localStorage write anywhere under new-run/*), so PICK_ONE's browser-
+  // persistence claim would be false here.
+  PICK_ONE_PER_RUN: "Weakest to strongest — pick one for this run.",
   // Any user picker collapsed to its one allowed+installed tier (Strings
   // table: "any user picker with exactly one allowed+installed tier").
   DECIDED: (tierLabel: string) => `${tierLabel} · set by your admin`,

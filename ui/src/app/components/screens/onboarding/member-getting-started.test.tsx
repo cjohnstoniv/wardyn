@@ -217,6 +217,10 @@ describe("MemberGettingStarted", () => {
     expect(screen.getByText(MEMBER.GS_BODY("walled"))).toBeInTheDocument();
   });
 
+  // #1200 — the barrier chip's OWN governance-floor filtering (installed ∧
+  // allowed) is pinned in member-getting-started-barrier.test.tsx, split out
+  // to stay under the file-size gate.
+
   // UT-7a: the subtitle introduces the caller's own type off /me.user_type.
   it("introduces the caller's user type with its description", async () => {
     renderPage(baseMe({ user_type: { id: "pm", name: "Portfolio manager", description: "Runs an agent over one portfolio." } }));
