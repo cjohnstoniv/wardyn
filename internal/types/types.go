@@ -273,6 +273,16 @@ type AgentRun struct {
 	// every pass and clears both once it lands (#1060, migration 0088).
 	ContainmentError   string     `json:"containment_error,omitempty"`
 	ContainmentErrorAt *time.Time `json:"containment_error_at,omitempty"`
+	// EndedAt is stamped by the three state writers that can move a run to a
+	// terminal RunState, at the same transition, never touched otherwise (a
+	// terminal->live transition does not exist, so it is never cleared). Nil
+	// for a live run and for a legacy row the backfill could not date exactly
+	// (migration 0091 backfills from updated_at, approximate for history). A
+	// lease-ended run (LostReason ended) stays RUNNING until the ended-run
+	// grace makes it terminal, so ITS end time is LostAt, not EndedAt — the
+	// landing page's end-time reader always picks between the two on
+	// LostReason, never reads EndedAt alone.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and

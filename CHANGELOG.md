@@ -10,6 +10,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
+  params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
+  (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,
+  `workspace` and `q` (capped at 400 characters) — reorder and narrow the listing for the upcoming
+  home/runs redesign; with none of them present the endpoint answers exactly as before. `view=user`
+  now forces `owner=me` for EVERY caller, including an admin or security-operator token (previously
+  only a member was scoped). Two new response headers, `X-Wardyn-Hidden-Older` and
+  `X-Wardyn-Hidden-Killed`, report how
+  many rows the `ended_within` window and the 24h killed-run default hid. `GET /approvals` gains the
+  same opt-in `?view=user`, which scopes the queue to the caller's own runs' approvals for every
+  caller. Every `AgentRun` now carries `ended_at` (migration `0091_agent_runs_ended_at`), stamped by
+  the run's terminal state transition; a lease-ended run's end time is still its lease end
+  (`lost_at`), not this column.
+
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
   button while a 201's advisory `warnings[]` sit listed in the rail; it always calls

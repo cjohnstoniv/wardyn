@@ -145,10 +145,10 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Ti
 // StopKeptRunIf — see RunLeaser.
 func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET state=$2, updated_at=now()
+		UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=CASE WHEN $6 THEN now() ELSE ended_at END
 		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT DISTINCT FROM $3
 		  AND lost_reason=$4 AND ends_at IS NOT DISTINCT FROM $5`,
-		id, string(to), lostAt, string(lostReason), endsAt)
+		id, string(to), lostAt, string(lostReason), endsAt, to.IsTerminal())
 	if err != nil {
 		return false, fmt.Errorf("store: stop kept run if: %w", err)
 	}
