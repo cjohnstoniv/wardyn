@@ -58,6 +58,12 @@ var (
 	_ client.HomeTemplate
 	_ client.DriveReclaim
 	_ client.CapabilitySubjectType
+	_ client.GovernanceDocument
+	_ client.GovernanceProfile
+	_ client.GovernanceAssignment
+	_ client.GovernanceLimits
+	_ client.AutonomyRubric
+	_ client.AutonomyLevel
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -76,6 +82,7 @@ func routeFamilies() map[string][]string {
 		"secrets":     {"ListSecrets", "ListSecretsPage", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"drives":      {"GetDrives", "ApplyDrives"},
+		"governance":  {"GetGovernance", "ApplyGovernance"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},

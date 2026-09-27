@@ -26,6 +26,7 @@
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
+//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -40,7 +41,6 @@
 // families 0.7 added were missing from BOTH halves, so docs/sdk.md's "the exact
 // list of what it wraps and what it does not" was exact about neither.
 //
-//   - /api/v1/governance     — governance profiles and assignments (0.7)
 //   - /api/v1/user-types     — the org's user types (0.8)
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)

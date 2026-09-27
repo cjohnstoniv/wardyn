@@ -612,6 +612,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`wardyn governance get`/`apply` round-trip governance profiles and their assignments as a
+  file (#1108).** `GET /api/v1/governance` and its writes had no CLI or SDK coverage; `governance
+  get > governance.json` prints every profile and assignment, and `governance apply
+  governance.json` upserts them — a profile **by name** (its unique handle), an assignment by its
+  own natural key (subject_type, subject) — over the existing profile and assignment write routes,
+  no new route added. A profile in the file but absent server-side is created; one present
+  server-side but absent from the file is left alone unless `--prune` is passed, which also removes
+  an omitted assignment (assignments before profiles, so a still-referenced profile never trips the
+  delete-while-assigned refusal). An unknown field is refused (strict decode). `governance get > f
+  && governance apply f` is a no-op: an unchanged profile or assignment is skipped rather than
+  re-written, so a repeat apply issues no writes and records no audit rows. New SDK methods
+  `GetGovernance`/`ApplyGovernance` (`pkg/client`).
+
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
