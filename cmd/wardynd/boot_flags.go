@@ -265,6 +265,11 @@ type bootFlags struct {
 	bedrockAWSProfile   *string
 	bedrockAWSSSORegion *string
 
+	// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100) size the sign-in
+	// sandbox itself — see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
+	harnessLoginCPUMillis *int
+	harnessLoginMemoryMiB *int
+
 	proxyURL *string
 
 	printGroundtruthToken *bool
@@ -494,7 +499,8 @@ func parseBootFlags() *bootFlags {
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and an unencrypted http:// -bedrock-base-url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		bedrockAWSDir:          flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", "bind a host ~/.aws directory read-only into each Bedrock run so the AWS SDK resolves credentials itself; exposes the whole directory to the sandbox, so point it at ~/.aws only. Empty (default) uses static aws-* secrets or a bedrock-api-key instead"),
 		bedrockAWSProfile:      flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", "AWS_PROFILE to select from the mounted ~/.aws; falls back to the standard AWS_PROFILE. Only used with -bedrock-aws-dir"),
-		bedrockAWSSSORegion:    flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", "AWS SSO region for exchanging an SSO token for role credentials. Defaults to -bedrock-region"),
+		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB. Crammed onto bedrockAWSSSORegion's line (not their own) to hold parseBootFlags under the funlen ratchet.
+		bedrockAWSSSORegion: flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", "AWS SSO region for exchanging an SSO token for role credentials. Defaults to -bedrock-region"), harnessLoginCPUMillis: flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"), harnessLoginMemoryMiB: flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
