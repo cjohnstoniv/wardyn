@@ -171,24 +171,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
-		if errors.Is(err, runner.ErrReviveUnsupported) {
-			return reviveResult{}, reviveRefused(http.StatusConflict, err.Error())
-		}
-		return reviveResult{}, reviveRefused(http.StatusBadGateway, "resolve the run's substrate: "+err.Error())
-	}
-	// From the run's own stored config, never the proxy container (#1176).
-	old, err := s.loadRunProxyConfig(ctx, run.ID)
-	switch {
-	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
-		return reviveResult{}, reviveRefused(http.StatusConflict,
-			"the run's proxy config is not stored (it started before this release, or this deployment keeps none); start a new run")
-	case err != nil:
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, "read the run's proxy config: "+err.Error())
-	}
-	cfg, err := s.loadRenderedProxyConfig(old)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
+	cfg, rerr := s.reviveSourceConfig(ctx, rv, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 	re, rerr := reassertProxyCeiling(run, cfg, c)
 	if rerr != nil {
@@ -307,6 +292,31 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
 	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version, AgentStarted: rebooted}, nil
+}
+
+// reviveSourceConfig is the config a revive starts from: the run's stored
+// one (run_proxy_config.go), never the proxy container's (#1176), once the
+// run's substrate says it can replace a proxy at all.
+func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun) (*proxy.Config, *reviveError) {
+	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
+		if errors.Is(err, runner.ErrReviveUnsupported) {
+			return nil, reviveRefused(http.StatusConflict, err.Error())
+		}
+		return nil, reviveRefused(http.StatusBadGateway, "resolve the run's substrate: "+err.Error())
+	}
+	old, err := s.loadRunProxyConfig(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
+		return nil, reviveRefused(http.StatusConflict,
+			"the run's proxy config is not stored (it started before this release, or this deployment keeps none); start a new run")
+	case err != nil:
+		return nil, reviveRefused(http.StatusServiceUnavailable, "read the run's proxy config: "+err.Error())
+	}
+	cfg, err := s.loadRenderedProxyConfig(old)
+	if err != nil {
+		return nil, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
+	}
+	return cfg, nil
 }
 
 // reviveEligible: a RUNNING run with a sandbox, inside its lease, that is live,

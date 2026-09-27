@@ -210,6 +210,17 @@ func loadOrCreateUISessionKey(ctx context.Context, secrets bootKeyStore) ([]byte
 	)
 }
 
+// loadProxyKeys loads the two boot keys every run's proxy config depends on:
+// the control-plane hop TLS CA (loadHopTLS) and the run config key.
+func loadProxyKeys(ctx context.Context, secrets bootKeyStore, controlURL string) (*hopTLS, []byte, error) {
+	hop, err := loadHopTLS(ctx, secrets, controlURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := loadOrCreateRunConfigKey(ctx, secrets)
+	return hop, key, err
+}
+
 // loadOrCreateRunConfigKey returns the 32-byte AES key that seals each run's
 // stored proxy config (#1176, api.Config.RunConfigKey). It is the data key of
 // those rows: kept in the secret store like every boot key, so the secret

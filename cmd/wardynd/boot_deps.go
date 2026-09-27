@@ -575,10 +575,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	}
 
 	var herr error
-	if of.hop, herr = loadHopTLS(bootCtx, bootKeys, *f.controlURL); herr != nil {
-		return of, herr
-	}
-	if of.runConfigKey, herr = loadOrCreateRunConfigKey(bootCtx, bootKeys); herr != nil {
+	if of.hop, of.runConfigKey, herr = loadProxyKeys(bootCtx, bootKeys, *f.controlURL); herr != nil {
 		return of, herr
 	}
 	// Before anything serves, so an ingest waiting on wardynd's healthcheck finds it.
