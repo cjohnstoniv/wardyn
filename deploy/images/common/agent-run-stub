@@ -4,8 +4,10 @@
 #
 # agent-run for wardyn/agent-base. The image contract requires this command;
 # agent-base ships no coding agent, so it cannot implement mode 1 (run a task
-# through an agent harness) or mode 3 (--idle). It CAN satisfy exec task mode
-# (WARDYN_TASK_MODE=exec, README.md §2): that lane runs the task as a plain
+# through an agent harness). It does implement mode 3 (--idle), which needs no
+# agent: agent-vscode and agent-novnc inherit this file, and both drivers run
+# `agent-run --idle` as an interactive run's main process. It also satisfies
+# exec task mode (WARDYN_TASK_MODE=exec, README.md §2): that lane runs the task as a plain
 # shell command, needs no coding agent, and is exactly what the setup
 # connectivity probe uses agent-base for — so honor it before falling through
 # to the usage stub. A derived image REPLACES this whole file — see
@@ -28,7 +30,25 @@ install_mitm_ca
 # connection refuses git outright, so an exec task that skipped this could not
 # run git against the run's own organisation at all.
 configure_git_broker_insteadof; configure_git_pat_broker_insteadof
-[ "${1:-}" = "--idle" ] || maybe_exec_task_mode "${1:-}"
+# Mode 3 needs no coding agent: both drivers run `agent-run --idle` as an
+# interactive run's ENTIRE main process, so exiting here kills the sandbox.
+if [[ "${1:-}" == "--idle" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    provision_git_helper_secret
+    workdir="${HOME}/work"
+    mkdir -p "$workdir"
+    make_ephemeral_dirs; make_toolchain_dirs; trust_mounted_repos
+    dispatch_repo_clones
+    resolve_workdir
+    mkdir -p "$HOME/.wardyn"
+    printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
+    : > "$HOME/.wardyn/prep-done"
+    echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    while :; do sleep 3600 & wait $! || :; done
+fi
+maybe_exec_task_mode "${1:-}"
 cat >&2 <<'MSG'
 agent-run: this is wardyn/agent-base, which ships no coding agent.
 

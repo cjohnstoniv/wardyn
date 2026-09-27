@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
+  run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
+  answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the
+  UI gateway's launcher then failed with "container is not running". agent-vscode inherited the
+  stub when it moved onto agent-base; agent-novnc always had it. The stub now implements mode 3
+  itself: it prepares the workspace, writes the prep-done marker, and idles until TERM or INT.
+
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
