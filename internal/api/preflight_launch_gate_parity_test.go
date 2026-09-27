@@ -64,12 +64,17 @@ var preflightGateExceptions = map[string]string{
 	// unenforceable class as a fixable checklist row instead of a fatal error
 	// that blanks the Review panel.
 	"resolveEnforcedConfinement": "preflight calls enforcedConfinement directly; the runner-capability + cloud_sts tail gates are reported by the checklist instead (doc comment)",
+	// Host capacity (#1099) is a fact about this instant, not about the
+	// request: a Review that passed can still meet a 503 with Retry-After at
+	// launch, which is that refusal's whole contract. The gate also writes a
+	// host_capacity.refuse audit row, and preflight writes nothing.
+	"admitHostCapacity": "a transient host condition, answered at launch with 503 + Retry-After; the gate audits its refusal and preflight persists nothing",
 }
 
 // preflightGateExceptionsMax caps preflightGateExceptions, which may only
 // shrink or stay (authorization-kernel design G3). Lower it when an entry
 // goes; raising it needs a reviewed reason.
-const preflightGateExceptionsMax = 2
+const preflightGateExceptionsMax = 3
 
 func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	fset := token.NewFileSet()
