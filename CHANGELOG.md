@@ -1242,6 +1242,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
   0 and mark themselves non-dumpable at start, so a crash writes no core file and another
   process of the same user cannot read their memory or environment.
+- **A derived Azure DevOps or AWS SSO access token is now held to the stored-key lease too
+  (#1083).** Both arms advertise an access token's own expiry, which can outlast the ten-minute
+  lease #589 gave stored keys, so a token minted just before a credential was erased or refused
+  could go on being served for up to its own hour. Both now cap the advertised expiry at
+  `min(token expiry, stored-key lease)`, and every cached Azure DevOps access token for an owner
+  is evicted the moment their credential is — on erase, on the daily expiry sweep, and when a
+  dead sign-in (`invalid_grant`) is deleted — so a stale cache entry can no longer outlive the
+  credential it was derived from.
 - **Security-API follow-ups (#724).** The sign-in help link is `https://` only: a new `http://`
   link is refused at save, and one already stored surfaces as the setup warning
   `sign_in_help_url` (#489). A second enabled Azure DevOps (Entra) row stored before the write

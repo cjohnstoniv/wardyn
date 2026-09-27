@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
@@ -174,6 +175,63 @@ func TestResolveADOInjection_EraseEvictsTheCachedToken(t *testing.T) {
 	w := rf.resolve(t, rf.subject, "dev.azure.com")
 	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "fake-entra-access-") {
 		t.Fatalf("after erase: status %d body %q, want 403 with no token: the cached token outlived the sign-in", w.Code, w.Body.String())
+	}
+	if d := rf.failureReason(t); d["reason"] != string(ADOEntraFailureNotCaptured) {
+		t.Errorf("reason = %v, want %s", d["reason"], ADOEntraFailureNotCaptured)
+	}
+}
+
+// The daily sweep evicts the cached access token for anyone whose stored
+// sign-in it just swept: without that eviction a still-unexpired cache entry
+// would go on serving a bearer for a credential the sweep already retired.
+func TestSweepExpiredCredentials_EvictsTheCachedADOToken(t *testing.T) {
+	rf := newADOResolveFixture(t)
+	issued := 0
+	rf.fake.OnIssue(func(entrafake.IssuedToken) { issued++ })
+	for range 2 {
+		if w := rf.resolve(t, rf.subject, "dev.azure.com"); w.Code != http.StatusOK {
+			t.Fatalf("warm: status %d body %q", w.Code, w.Body.String())
+		}
+	}
+	if issued != 1 {
+		t.Fatalf("redemptions = %d, want 1: the second resolve must come from the cache", issued)
+	}
+
+	rf.srv.cfg.Secrets = &sweepSecrets{memSecrets: rf.srv.cfg.Secrets.(*memSecrets),
+		gone: []secretstore.Expired{{Owner: rf.subject, Name: adoEntraSecretName(rf.cfg.RowID), ExpiresAt: adoTestNow.Add(-time.Hour)}}}
+	if n := rf.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+		t.Fatalf("swept %d, want 1", n)
+	}
+
+	if w := rf.resolve(t, rf.subject, "dev.azure.com"); w.Code != http.StatusOK {
+		t.Fatalf("after sweep: status %d body %q", w.Code, w.Body.String())
+	}
+	if issued != 2 {
+		t.Fatalf("redemptions after the sweep = %d, want 2: the swept owner's cached token must not survive it", issued)
+	}
+}
+
+// Deleting a dead credential (invalid_grant) evicts the cached access token
+// too, not just the persisted blob — otherwise a token cached before the
+// authority killed the sign-in would go on being served past the credential's
+// own death.
+func TestResolveADOInjection_DeadCredentialDeleteEvictsTheCachedToken(t *testing.T) {
+	rf := newADOResolveFixture(t)
+	if w := rf.resolve(t, rf.subject, "dev.azure.com"); w.Code != http.StatusOK {
+		t.Fatalf("warm: status %d body %q", w.Code, w.Body.String())
+	}
+
+	rf.fake.SetInvalidGrant(true)
+	scopes := rf.srv.adoRequestScopes(context.Background(), rf.cfg, rf.subject)
+	if _, err := rf.srv.RedeemADOEntraAccess(context.Background(), rf.cfg, rf.subject, scopes); err == nil {
+		t.Fatal("redeem with invalid_grant set succeeded, want a dead-credential error")
+	}
+	rf.fake.SetInvalidGrant(false)
+
+	rf.audit.rows = nil
+	w := rf.resolve(t, rf.subject, "dev.azure.com")
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "fake-entra-access-") {
+		t.Fatalf("after the dead-credential delete: status %d body %q, want 403 with no token: the cached token outlived the credential", w.Code, w.Body.String())
 	}
 	if d := rf.failureReason(t); d["reason"] != string(ADOEntraFailureNotCaptured) {
 		t.Errorf("reason = %v, want %s", d["reason"], ADOEntraFailureNotCaptured)
