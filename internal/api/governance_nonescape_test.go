@@ -70,6 +70,14 @@ func newGovEscapeStore(cs *capStore) *govEscapeStore {
 }
 
 func (s *govEscapeStore) ListRuns(context.Context) ([]types.AgentRun, error) { return nil, nil }
+
+// ListAPITokens: no token fixture in this double — an empty answer, same as
+// integStore's ListRoleMappings stub above it, keeps a test that reaches
+// knownPrincipals (CS-8's credential inventory, via emailsByPrincipal) from
+// panicking on an unimplemented promoted method rather than claiming a
+// directory this double never modeled.
+func (s *govEscapeStore) ListAPITokens(context.Context) ([]types.APIToken, error) { return nil, nil }
+
 func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

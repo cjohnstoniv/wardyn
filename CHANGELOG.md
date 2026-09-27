@@ -1071,6 +1071,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `provider_access` rows on `GET /setup/status` gain `added_at` and `last_used_at` for their
   own credential.
 
+- **Keeping people's credentials: an admin Credentials page, and an admin can erase a person's
+  whole namespace (#592).** A new `/admin/credentials` page, both admin tiers, lists who holds a
+  credential for each model provider and lets an admin erase one (offboarding), on top of the
+  metadata (#591, above) and erase route (`DELETE /people/{principal}/credentials`, 0.8) that
+  already shipped. `GET /api/v1/model-providers/credentials` rows now also carry `email` and
+  `provider_name` (both non-secret, additive) so a `security_admin` — who has no route to the
+  model-provider roster or an identity directory — can read the table well enough to offboard
+  from it. Erase is confirmed by typing the person's email; it is offered per listed person, and
+  by email or subject for someone whose only stored credentials are secrets. `GET
+  /api/v1/setup/status` gains `credential_storage` (`local`, `key_service`, `vault` or
+  `key_vault`) — never a host, path or vault name — kept for every signed-in person (unlike the
+  admin-only `checks`), so the key dialog's storage notice can say where a credential actually
+  goes. The key dialog also gains a Write-only field chip, a stored-value hint on Replace, and a
+  confirm on Remove (today it deleted on the first click). The erase route's `?owner=`-shaped
+  refusal is now its own sentence (it takes no `?owner=`), and a transient store failure on save
+  is its own 503, distinct from "no store configured".
+
 - **The key services now have a live suite (T-33, #693).** `make test-kek-conformance` runs the
   Vault Transit key-encryption key and the Vault KV store against the official `hashicorp/vault`
   and `openbao/openbao` dev images, and the PR `conformance` job runs it. It checks that a wrap is

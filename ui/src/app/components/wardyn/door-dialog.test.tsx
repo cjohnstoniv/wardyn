@@ -47,7 +47,7 @@ vi.mock("../../lib/api/model-provider-credentials", () => ({
 
 import { useModelAccessDoor, type OpenDoorOptions } from "./model-access-context";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { CLAUDE_DOOR, KEY_DOOR } from "./copy/door";
+import { CLAUDE_DOOR, KEY_DOOR, REMOVE_CONFIRM } from "./copy/door";
 import { HttpError } from "../../lib/api/core";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../lib/test-fixtures";
 import type { SetupStatus } from "../../lib/types";
@@ -168,13 +168,65 @@ describe("the key and token door (case c)", () => {
     expect(success).not.toHaveBeenCalled();
   });
 
-  it("with a token stored, Remove lives in the door (opened from Replace)", async () => {
+  it("with a token stored, Remove lives in the door (opened from Replace), and asks to confirm first", async () => {
     const onRefresh = renderDoor(providerStatus([{ provider: gateway, state: "live" }]), { for: { provider: gateway.id } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    const dialog = await screen.findByRole("dialog", { name: "Replace your token for Corp gateway" });
+    // A stored value is never shown, and the field's write-only chip and the
+    // stored hint say so (packet F §1 b).
+    expect(dialog).toHaveTextContent("Write-only");
+    expect(dialog).toHaveTextContent("Your token is stored and can't be shown. Paste a new one to replace it.");
     await userEvent.click(await screen.findByRole("button", { name: KEY_DOOR.REMOVE }));
+    // CONSOLE-RULES §6: Remove now confirms before it deletes.
+    expect(deleteCredential).not.toHaveBeenCalled();
+    expect(dialog).toHaveTextContent("Remove your token for Corp gateway?");
+    expect(dialog).toHaveTextContent("It still works at gateway.corp.example until you revoke it there.");
+    await userEvent.click(screen.getByRole("button", { name: REMOVE_CONFIRM.CONFIRM }));
     expect(deleteCredential).toHaveBeenCalledWith("corp-gateway");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(onRefresh).toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith("Token removed");
+  });
+
+  it("Remove's confirm: Cancel returns to the form without deleting", async () => {
+    renderDoor(providerStatus([{ provider: gateway, state: "live" }]), { for: { provider: gateway.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    await userEvent.click(await screen.findByRole("button", { name: KEY_DOOR.REMOVE }));
+    await screen.findByText("Remove your token for Corp gateway?");
+    await userEvent.click(screen.getByRole("button", { name: REMOVE_CONFIRM.CANCEL }));
+    expect(deleteCredential).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toHaveTextContent(KEY_DOOR.NOTE);
+  });
+
+  it("the notice's store-mode line names the product (design F-4)", async () => {
+    renderDoor(providerStatus([{ provider: anthropicKey }], { credential_storage: "key_vault" }), {
+      for: { provider: anthropicKey.id },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Stored in your organisation's Key Vault. Wardyn keeps no copy and no key.");
+    expect(dialog).toHaveTextContent(
+      "Admins can see that you stored it, when, and when a run last used it — never the value.",
+    );
+  });
+
+  it("the notice reads local by default (no credential_storage on an older daemon)", async () => {
+    renderDoor(providerStatus([{ provider: anthropicKey }]), { for: { provider: anthropicKey.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Encrypted in Wardyn's database with a key this deployment holds.",
+    );
+  });
+
+  it("a store failure on save is its own 503, and the notice gives way to it", async () => {
+    putCredential.mockRejectedValue(new HttpError(503, KEY_DOOR.SAVE_UNAVAILABLE));
+    renderDoor(providerStatus([{ provider: gateway }]), { for: { provider: gateway.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    await userEvent.type(await screen.findByLabelText("Token"), "gw-secret-123");
+    await userEvent.click(screen.getByRole("button", { name: KEY_DOOR.SAVE }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(KEY_DOOR.SAVE_UNAVAILABLE);
+    expect(screen.getByRole("dialog")).not.toHaveTextContent(KEY_DOOR.NOTE);
+    expect(success).not.toHaveBeenCalled();
   });
 });
 
