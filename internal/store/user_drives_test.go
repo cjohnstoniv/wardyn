@@ -586,7 +586,7 @@ func TestPG_ResolveUserDrive_TieHasATotalOrder(t *testing.T) {
 				_, _ = st.DeleteUserDriveGrant(ctx, id)
 			}
 		}()
-		d, g, tier, err := st.ResolveUserDrive(ctx, nil, []string{first, second})
+		d, g, tier, err := st.ResolveUserDrive(ctx, nil, []string{first, second}, "")
 		if err != nil {
 			t.Fatalf("resolve (%v): %v", order, err)
 		}
@@ -743,7 +743,7 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 	// returned IS the winning grant's own subject_type.
 	resolveName := func(t *testing.T, users, groups []string) string {
 		t.Helper()
-		d, g, tier, err := st.ResolveUserDrive(ctx, users, groups)
+		d, g, tier, err := st.ResolveUserDrive(ctx, users, groups, "")
 		if errors.Is(err, store.ErrNotFound) {
 			return ""
 		}
@@ -854,7 +854,7 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 			SubjectType: types.CapabilitySubjectUser, Subject: user, DriveID: off.ID,
 			SizeMiBOverride: 512,
 		})
-		d, got, tier, err := st.ResolveUserDrive(ctx, []string{user}, nil)
+		d, got, tier, err := st.ResolveUserDrive(ctx, []string{user}, nil, "")
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -951,7 +951,7 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 					users, groups = []string{"nobody-" + uniq}, []string{who}
 				}
 
-				d, g, tier, err := st.ResolveUserDrive(ctx, users, groups)
+				d, g, tier, err := st.ResolveUserDrive(ctx, users, groups, "")
 				if err != nil {
 					t.Fatalf("resolve: %v", err)
 				}
@@ -980,7 +980,7 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 			SubjectType: types.CapabilitySubjectGroup, Subject: "unusable-grp-" + uniq, DriveID: groupDrive.ID,
 		})
 
-		d, _, tier, err := st.ResolveUserDrive(ctx, []string{"nobody-" + uniq}, nil)
+		d, _, tier, err := st.ResolveUserDrive(ctx, []string{"nobody-" + uniq}, nil, "")
 		if err != nil {
 			t.Fatalf("resolve(users, nil): %v", err)
 		}

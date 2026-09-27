@@ -27,7 +27,7 @@ field-report strings · the two drives states) — open any in a browser; they s
 Frozen strings: §7 below. No TS copy module exists yet. The implementation stage creates
 `ui/src/app/lib/workspace-providers-copy.ts` **from §7 verbatim**; it does not retype copy from this
 document, and every product string in the mock matches §7 byte-for-byte. Its test,
-`workspace-providers-copy.test.ts`, clones `user-drives-copy.test.ts`'s `parseFrozenTables()` over
+`workspace-providers-copy.test.ts`, clones `user-drives-copy.test.ts`'s `parseFrozenTables()` (now shared: `ui/src/app/lib/copy-doc-parity.ts`) over
 §7.2–§7.7 of this file — which is why every table from §7.2 on is exactly two columns, `Key` and
 `String`, and why §7.1 is not: it holds the reused canon AND every admin-facing / run-time string
 the server composes this round, unparsed and checked against the Go source instead (the drives

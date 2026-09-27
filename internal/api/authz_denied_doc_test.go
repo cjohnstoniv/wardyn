@@ -25,24 +25,43 @@ import (
 // every emit to refuse, so a new reason cannot reach a row without landing
 // here. (The regex scanner this replaced missed harness_login_not_per_user for
 // a whole release: its call split across two lines.)
+//
+// A registered reason that is never audited on its own (run_quota, admin_view)
+// may still get a row in the same table for a caller who greps by reason
+// string rather than by audit action — the table tolerates it, in either
+// direction: it must be a real registered reason, and every AUDITED reason
+// must still be there. Only the audited set is required in AUDIT-ACTIONS.md's
+// inline vocabulary, because that is the one authz.denied actually writes.
 func TestAuthzDeniedReasonsAreDocumented(t *testing.T) {
-	var want []string
+	audited := map[string]bool{}
+	registered := map[string]bool{}
 	for _, r := range authz.Reasons() {
+		registered[string(r)] = true
 		if ref, _ := authz.Lookup(r); ref.Audit {
-			want = append(want, string(r))
+			audited[string(r)] = true
 		}
 	}
 
-	if got := documentedAuthzDeniedReasons(t); !slices.Equal(got, want) {
-		t.Errorf("docs/OPERATIONS.md's reason table lists\n  %v\nbut the registry's audited reasons are\n  %v\n"+
-			"that table calls itself the source of record for a CLOSED enum", got, want)
+	documented := map[string]bool{}
+	for _, reason := range documentedAuthzDeniedReasons(t) {
+		documented[reason] = true
+		if !registered[reason] {
+			t.Errorf("docs/OPERATIONS.md's reason table documents %q, which is not a registered reason", reason)
+		}
 	}
+	for reason := range audited {
+		if !documented[reason] {
+			t.Errorf("docs/OPERATIONS.md's reason table omits the audited reason %q — "+
+				"that table calls itself the source of record for a CLOSED enum", reason)
+		}
+	}
+
 	actions, err := os.ReadFile("../../docs/AUDIT-ACTIONS.md")
 	if err != nil {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
 	row := rowFor(t, string(actions), "| `authz.denied` |")
-	for _, reason := range want {
+	for reason := range audited {
 		if !strings.Contains(row, "`"+reason+"`") {
 			t.Errorf("docs/AUDIT-ACTIONS.md's authz.denied row omits %q from its inline vocabulary", reason)
 		}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"slices"
@@ -86,12 +87,12 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 			// --reconnect is passed (a reconnect PUT also resets the aging clock).
 			if !reconnect {
 				if st, err := fetchSetupStatus(ctx, c); err == nil && subscriptionConnected(st) {
-					fmt.Println("a managed Claude subscription is already connected — pass --reconnect to replace it")
+					fmt.Fprintln(cmd.OutOrStdout(), "a managed Claude subscription is already connected — pass --reconnect to replace it")
 					return nil
 				}
 			}
 			if isTerminal(os.Stdin) {
-				fmt.Fprintln(os.Stderr, "Run `claude setup-token` (opens your browser), paste the sk-ant-oat token here, then Ctrl-D:")
+				fmt.Fprintln(cmd.ErrOrStderr(), "Run `claude setup-token` (opens your browser), paste the sk-ant-oat token here, then Ctrl-D:")
 			}
 			tok, err := readSecretValue(os.Stdin)
 			if err != nil {
@@ -103,9 +104,9 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 			if err := c.ConnectManagedSubscription(ctx, subscriptionProvider, tok); err != nil {
 				return err
 			}
-			fmt.Println("managed Claude subscription connected — stored age-encrypted, injected proxy-side, never resident in the sandbox")
+			fmt.Fprintln(cmd.OutOrStdout(), "managed Claude subscription connected — stored age-encrypted, injected proxy-side, never resident in the sandbox")
 			if st, err := fetchSetupStatus(ctx, c); err == nil {
-				printSubscriptionStatus(st)
+				printSubscriptionStatus(cmd.OutOrStdout(), st)
 			}
 			return nil
 		},
@@ -124,7 +125,7 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printSubscriptionStatus(st)
+			printSubscriptionStatus(cmd.OutOrStdout(), st)
 			return nil
 		},
 	}
@@ -147,12 +148,12 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 				// every refusal it makes is 400/500/503.
 				var apiErr *sdk.APIError
 				if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-					fmt.Println("no managed Claude subscription was connected")
+					fmt.Fprintln(cmd.OutOrStdout(), "no managed Claude subscription was connected")
 					return nil
 				}
 				return err
 			}
-			fmt.Println("managed Claude subscription disconnected")
+			fmt.Fprintln(cmd.OutOrStdout(), "managed Claude subscription disconnected")
 			return nil
 		},
 	}
@@ -164,18 +165,18 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 // printSubscriptionStatus surfaces the model-access rows most relevant to
 // subscription setup: the managed credential (when present) and the aggregate
 // llm_provider readiness.
-func printSubscriptionStatus(st setupStatusLite) {
+func printSubscriptionStatus(w io.Writer, st setupStatusLite) {
 	shown := false
 	for _, c := range st.Checks {
 		if c.ID == "harness_credential" || c.ID == "llm_provider" {
-			fmt.Printf("  [%s] %s: %s\n", c.Status, c.Label, c.Detail)
+			fmt.Fprintf(w, "  [%s] %s: %s\n", c.Status, c.Label, c.Detail)
 			if c.Fix != "" {
-				fmt.Printf("        → %s\n", c.Fix)
+				fmt.Fprintf(w, "        → %s\n", c.Fix)
 			}
 			shown = true
 		}
 	}
 	if !shown {
-		fmt.Println("  (no model-access checks reported)")
+		fmt.Fprintln(w, "  (no model-access checks reported)")
 	}
 }

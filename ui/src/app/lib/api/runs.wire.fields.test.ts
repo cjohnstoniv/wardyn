@@ -118,8 +118,10 @@ const expectedWire: Record<string, unknown> = {
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
 // If the whitelist starts forwarding one of these, or the Go DTO drops one,
-// this list must change in the same commit.
-const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref"]);
+// this list must change in the same commit. model_provider is CLI/API-only
+// until the New Run rail's provider picker lands (multi-provider MP-23), which
+// moves it into runWireBody.
+const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider"]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
@@ -428,6 +430,39 @@ describe("source parity — five more flat structs", () => {
     const goTags = goJSONTags(scmaccessGo, "SCMAccess");
     expect(goTags.length).toBeGreaterThanOrEqual(4);
     const tsKeys = tsInterfaceKeys(setupTs, "SCMAccess");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+});
+
+// #510-F8 — the autonomy wire types (0.8 #97/#93) were hand-mirrored in
+// governance.ts with no entry in this suite: a Go rename of any of the nine
+// AutonomyRubric fields, or a drift on AutonomyPosture/AutonomyResolution,
+// would have shown up only as a runtime `undefined`. Full parity, base
+// structs — either direction of drift fails, same discipline as
+// RunPolicySpec/SCMAccess above.
+describe("source parity — autonomy wire types (#510-F8)", () => {
+  const root = repoRoot();
+  const governanceGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
+  const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
+
+  it("AutonomyRubric: full parity — the nine closed fields", () => {
+    const goTags = goJSONTags(governanceGo, "AutonomyRubric");
+    expect(goTags.length).toBe(9);
+    const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyRubric");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
+  it("AutonomyPosture: full parity — the three-axis shape", () => {
+    const goTags = goJSONTags(governanceGo, "AutonomyPosture");
+    expect(goTags.length).toBe(3);
+    const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyPosture");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
+  it("AutonomyResolution: full parity — level, posture, bound_by", () => {
+    const goTags = goJSONTags(governanceGo, "AutonomyResolution");
+    expect(goTags.length).toBe(3);
+    const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyResolution");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 });

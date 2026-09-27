@@ -126,9 +126,9 @@ export async function me(page: Page): Promise<{
   principal?: string;
   email?: string;
   operator?: boolean;
-  member_mode?: boolean;
-  member_mode_no_credential?: boolean;
-  member_preview_available?: boolean;
+  user_view?: boolean;
+  user_view_no_credential?: boolean;
+  user_preview_available?: boolean;
 }> {
   return page.evaluate(async () => {
     const r = await fetch("/api/v1/me", { credentials: "include" });
@@ -422,7 +422,7 @@ export async function awaitSelfRunStarted(screen: ReturnType<Page["locator"]>): 
  * the marker being printed. `screen.innerText()` then reads a detached node
  * (or throws), so the poll can watch for its full five minutes while the
  * capture has ALREADY succeeded server-side. That is exactly what happened:
- * `harness.credential.captured` in the audit, `session.detach reason="client
+ * `harness.credential.capture` in the audit, `session.detach reason="client
  * closed"` right after it, and a spec still waiting.
  *
  * So accept either witness, and keep failing fast on the helper's refusal. The

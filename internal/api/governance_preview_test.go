@@ -145,7 +145,7 @@ func previewViaHTTP(t *testing.T, srv *Server, users, groups []string) governanc
 // which is exactly what the endpoint ships as an empty object.
 func resolveDirect(t *testing.T, pool *pgxpool.Pool, users, groups []string) governancePreviewResponse {
 	t.Helper()
-	p, tier, err := store.NewPG(pool).ResolveGovernanceProfile(context.Background(), users, groups)
+	p, tier, err := store.NewPG(pool).ResolveGovernanceProfile(context.Background(), users, groups, "")
 	if errors.Is(err, store.ErrNotFound) {
 		return governancePreviewResponse{}
 	}

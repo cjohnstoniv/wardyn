@@ -31,6 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { approvals } from "./approvals";
 import { decisionArgs } from "../types";
+import { aheadByHours } from "../test-clock";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -52,7 +53,7 @@ const sentBody = (call = 0): Record<string, unknown> =>
 const sentPath = (call = 0): string => String(fetchMock.mock.calls[call][0]);
 const sentMethod = (call = 0): string => String(fetchMock.mock.calls[call][1]?.method);
 
-const UNTIL = "2026-09-30T12:00:00.000Z";
+const UNTIL = aheadByHours(24);
 
 // A. The exact body, both verbs, every scope shape.
 describe("approvals.approve/deny — the decision body on the wire", () => {

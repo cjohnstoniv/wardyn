@@ -289,7 +289,7 @@ func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
 //
 //	SSO admin            -> 503   reachable
 //	SSO security_admin   -> 503   reachable
-//	MEMBER               -> 404   UNREACHABLE — authorizeMemberDecision loads the
+//	MEMBER               -> 404   UNREACHABLE — authorizeUserDecision loads the
 //	                              run itself for a member and 404s first, so
 //	                              haveRun is true and this block is skipped
 //	admin token          -> 200   bypasses the gate entirely (break-glass)

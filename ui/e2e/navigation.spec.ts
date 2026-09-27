@@ -89,7 +89,8 @@ test.describe("navigation + shell", () => {
     // Runs is the default region (/ redirects to /runs): its <h1> and content
     // are present on boot.
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
-    await expect(page.getByText(/each confined behind its own barrier/i)).toBeVisible();
+    // The User view's description (M-7): the Admin view's reads "Every run…".
+    await expect(page.getByText(/^Your runs · \d+$/)).toBeVisible();
     await expectSidebarMounted(page, USER_SIDEBAR_LABELS);
   });
 

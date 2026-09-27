@@ -124,7 +124,7 @@ func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID,
 	foldInteg types.Integration, foldKind string, reqEvents []requirementAuditEntry,
 ) {
 	if foldKind != "" {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace_cred.resolve",
 			runID.String(), "success", mustJSON(map[string]any{"integration_ref": foldInteg.ID, "type": foldKind})))
 	}
 	for _, ev := range reqEvents {

@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { sshKeys } from "./ssh-keys";
 import { HttpError } from "./core";
+import { aheadByHours } from "../test-clock";
 
 // X2-F2 — ssh-keys.tsx's own component test (ssh-keys.test.tsx) mocks this
 // whole module, so the module's ACTUAL wire shape (the request this app
@@ -47,7 +48,7 @@ describe("sshKeys — wire shape", () => {
 
   it("listKeys GETs /api/v1/me/ssh-keys and returns the array verbatim", async () => {
     const rows = [
-      { fingerprint: "SHA256:abc", principal: "alice@example.com", name: "laptop", public_key: "", created_at: "2026-01-01T00:00:00Z" },
+      { fingerprint: "SHA256:abc", principal: "alice@example.com", name: "laptop", public_key: "", created_at: aheadByHours(-1) },
     ];
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(rows));
     vi.stubGlobal("fetch", fetchMock);
@@ -64,7 +65,7 @@ describe("sshKeys — wire shape", () => {
     const sshkeysGo = readFileSync(join(root, "internal/api/sshkeys.go"), "utf8");
     const goTags = goJSONTags(sshkeysGo, "addSSHKeyRequest");
 
-    const stored = { fingerprint: "SHA256:new", principal: "alice@example.com", name: "phone", public_key: "", created_at: "2026-01-02T00:00:00Z" };
+    const stored = { fingerprint: "SHA256:new", principal: "alice@example.com", name: "phone", public_key: "", created_at: aheadByHours(-1) };
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(stored, 201));
     vi.stubGlobal("fetch", fetchMock);
 

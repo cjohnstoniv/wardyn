@@ -43,6 +43,7 @@ func init() {
 		// network's name (deploy/compose: both derive from WARDYN_NS).
 		s, err := New(Config{
 			ProxyImage:      d.ProxyImage,
+			DriveProbeImage: d.DriveProbeImage,
 			Record:          true,
 			RecordingMount:  recordingMount,
 			InternalNetwork: os.Getenv("WARDYN_INTERNAL_NETWORK"),
@@ -57,6 +58,9 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
+		// SF-14: pull the proxy and drive-probe images now, in the
+		// background, rather than let a live request pay for the first pull.
+		s.PrewarmImages()
 		return s, nil // avoid the typed-nil interface trap
 	})
 }

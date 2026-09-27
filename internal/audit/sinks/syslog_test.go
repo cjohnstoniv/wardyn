@@ -174,6 +174,12 @@ func TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector(t *testing.T) {
 // must be bounded by syslogWriteTimeout and counted as a drop, so the writer
 // cannot wedge permanently on one TCP write.
 func TestSyslogSink_RemoteWriteTimeoutCounts(t *testing.T) {
+	// Shrink the wait: the property under test is "a blocked write is counted
+	// as a drop", not the exact production timeout (restored after — see
+	// TestSyslogWriteTimeout_ProductionValueUnchanged).
+	prevTimeout := setSyslogWriteTimeout(50 * time.Millisecond)
+	t.Cleanup(func() { setSyslogWriteTimeout(prevTimeout) })
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -216,7 +222,7 @@ func TestSyslogSink_RemoteWriteTimeoutCounts(t *testing.T) {
 
 	// The write timeout is syslogWriteTimeout; wait a bit longer than that for a
 	// timeout to register.
-	deadline := time.Now().Add(syslogWriteTimeout + 3*time.Second)
+	deadline := time.Now().Add(syslogWriteTimeout() + 3*time.Second)
 	for s.Drops() == 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -242,6 +248,12 @@ func (w *wedgedWriter) Close() error      { return nil }
 // block on the write once the daemon wedged, and this test would hang; the
 // local socket goes through the same bounded async buffer as the remote path.
 func TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon(t *testing.T) {
+	// Shrink the wait: the property under test is "a wedged write is counted
+	// as a drop", not the exact production timeout (restored after — see
+	// TestSyslogWriteTimeout_ProductionValueUnchanged).
+	prevTimeout := setSyslogWriteTimeout(50 * time.Millisecond)
+	t.Cleanup(func() { setSyslogWriteTimeout(prevTimeout) })
+
 	ww := &wedgedWriter{release: make(chan struct{})}
 	// Network=="" is the local /dev/log transport — the path that was synchronous.
 	s := newSyslogSinkWith(ww, "", "")
@@ -269,7 +281,7 @@ func TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon(t *testing.T) {
 
 	// The wedged write parks the writer; the bounded buffer fills and overflow is
 	// dropped + counted — never silently discarded, never blocking the caller.
-	deadline := time.Now().Add(syslogWriteTimeout + 3*time.Second)
+	deadline := time.Now().Add(syslogWriteTimeout() + 3*time.Second)
 	for s.Drops() == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -302,5 +314,28 @@ func makeSyslogEvent(action string) types.AuditEvent {
 		Actor:     syslogPadActor,
 		Action:    action,
 		Outcome:   "success",
+	}
+}
+
+// TestSyslogWriteTimeout_ProductionValueUnchanged pins the production
+// default of syslogWriteTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
+func TestSyslogWriteTimeout_ProductionValueUnchanged(t *testing.T) {
+	if got := syslogWriteTimeout(); got != 2*time.Second {
+		t.Fatalf("syslogWriteTimeout() = %v, want the production 2s default", got)
+	}
+}
+
+// TestWebhookConfig_TimeoutDefaultUnchanged guards the production default:
+// a test may shrink WebhookConfig.Timeout (see cmd/wardynd's
+// TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector), but omitting it must
+// still give the real 15s client timeout. It lives here, not in
+// webhook_test.go, because withDefaults is unexported and that file is the
+// external sinks_test package.
+func TestWebhookConfig_TimeoutDefaultUnchanged(t *testing.T) {
+	cfg := &WebhookConfig{URL: "https://example.invalid/ingest"}
+	got := cfg.withDefaults()
+	if got.Timeout != "15s" {
+		t.Fatalf("WebhookConfig{}.withDefaults().Timeout = %q, want the production 15s default", got.Timeout)
 	}
 }

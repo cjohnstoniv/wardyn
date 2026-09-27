@@ -174,6 +174,13 @@ type fakeDocker struct {
 	listItems       []container.Summary
 	lastListFilters client.Filters
 	lastListAll     bool
+
+	// probeExitCode is the exit code ContainerWait reports for a container
+	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
+	// there is no real command interpreter here to run `test -r/-x` against a
+	// bind mount, so a ProbeDrive test scripts the answer this way instead.
+	// Zero (readable) unless a test overrides it.
+	probeExitCode int64
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -423,7 +430,15 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	c.state = &container.State{Status: "running", Running: true}
+	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+		// No real command interpreter here to run the probe's `test -r/-x`
+		// against a bind mount — model it as already exited with the
+		// scripted code, the same "immediate" shape a real one-shot process
+		// this fast would leave ContainerWait to observe.
+		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
+	} else {
+		c.state = &container.State{Status: "running", Running: true}
+	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
 }
@@ -468,6 +483,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		Name:            "/" + c.name,
 		State:           c.state,
 		Config:          c.cfg,
+		HostConfig:      c.host,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
 }
@@ -492,6 +508,41 @@ func (f *fakeDocker) ContainerKill(ctx context.Context, id string, _ client.Cont
 	}
 	c.state = &container.State{Status: "exited", ExitCode: 137}
 	return client.ContainerKillResult{}, nil
+}
+
+// ContainerPause / ContainerUnpause mirror the real daemon's redundant-state
+// conflicts (a real "already paused"/"is not paused" 409) so the driver's
+// isAlreadyPaused/isNotPaused idempotency handling is actually exercised by a
+// repeated Freeze/Thaw, not merely assumed. A paused container reports what a
+// real daemon does — Status "paused" with Running=true and Paused=true — and
+// statusFromInspect must keep reporting RUNNING while frozen (the design's
+// "paused → Running=true → RUNNING" contract).
+func (f *fakeDocker) ContainerPause(ctx context.Context, id string, _ client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.containers[id]
+	if c == nil || c.removed {
+		return client.ContainerPauseResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	if c.state != nil && c.state.Paused {
+		return client.ContainerPauseResult{}, fmt.Errorf("Error response from daemon: Container %s is already paused", id)
+	}
+	c.state = &container.State{Status: "paused", Running: true, Paused: true}
+	return client.ContainerPauseResult{}, nil
+}
+
+func (f *fakeDocker) ContainerUnpause(ctx context.Context, id string, _ client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.containers[id]
+	if c == nil || c.removed {
+		return client.ContainerUnpauseResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	if c.state == nil || !c.state.Paused {
+		return client.ContainerUnpauseResult{}, fmt.Errorf("Error response from daemon: Container %s is not paused", id)
+	}
+	c.state = &container.State{Status: "running", Running: true, Paused: false}
+	return client.ContainerUnpauseResult{}, nil
 }
 
 func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
