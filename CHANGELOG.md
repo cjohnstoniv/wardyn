@@ -1684,7 +1684,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   diagnostics and logs); the new var is a **file path** instead, read once at
   boot — the daemon's proxy transport is installed before the database connects
   and before the secret store exists, so a secret-store reference cannot be
-  resolved here. The file's mode must be `0600` or tighter, and boot refuses if
+  resolved here. A group- or world-writable file is refused, and boot refuses if
   both vars are set rather than picking one silently. See `docs/ENV.md`.
   This resolves 0.7.6's known gap that `WARDYN_DAEMON_PROXY_URL` had no credentialed-proxy
   form.
