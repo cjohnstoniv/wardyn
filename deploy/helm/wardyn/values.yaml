@@ -662,7 +662,7 @@ userDrives:
   # still exists but every attempt ends in the apiserver's 403, recorded as a
   # failed `drive.reclaim` audit row. Turn it on only when your offboarding
   # runbook calls `POST /drives/{id}/reclaim` (super-admin only, refused while a
-  # run still holds the claim, audited on every attempt) instead of running
+  # run still holds the claim, audited on every attempt that reaches the cluster) instead of running
   # `kubectl delete pvc` by hand. Reclaiming by hand stays supported either way.
   #
   # It does not weaken anything else: no run path, no teardown and no sweep can

@@ -1613,7 +1613,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   super-admin only; it is refused `409` while a run still holds the object, while a reclaim is
   already in flight, or when the object answering to that name is not this drive's (the driver
   re-checks the same identity labels the mount path refuses on, on both substrates); and every
-  attempt — successes, refusals and failures alike — is audited as `drive.reclaim`, naming the
+  attempt that reaches the substrate — successes, `409` refusals and failures alike — is audited as `drive.reclaim`, naming the
   drive, the person, the backend, the object and what became of it. A share (`host_path`,
   `k8s_pvc_static`) is refused `422`: Wardyn did not create that object and never deletes it, and
   there is no recursive delete in this product at any privilege. There is **no console button** — a

@@ -203,10 +203,11 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrDriveInUse) || errors.Is(err, runner.ErrDriveNotReclaimable) {
-			// These are OUR OWN sentinel errors (runner.ErrDriveInUse /
-			// ErrDriveNotReclaimable), never driver/substrate text — the same
-			// justification handleRunResources' allowlisted sentinel carries.
-			// err.Error() here is always one of their two fixed strings.
+			// These wrap OUR OWN sentinel errors (runner.ErrDriveInUse /
+			// ErrDriveNotReclaimable). The drivers add the object's name and, on
+			// Kubernetes, the holding pod's name (wardyn-agent-<run id>); both
+			// are already in the 200 body and the audit row, and the route is
+			// super-admin only, so the body crosses no trust boundary.
 			s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
 			writeError(w, http.StatusConflict, "reclaim refused: "+err.Error())
 			return

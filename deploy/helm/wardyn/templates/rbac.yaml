@@ -185,7 +185,7 @@ rules:
   #   * its only caller is the operator's explicit POST /drives/{id}/reclaim
   #     (internal/api/user_drives_reclaim.go), super-admin only, refused 409
   #     while a pod still mounts the claim, and audited as drive.reclaim on
-  #     every attempt including the refusals;
+  #     every attempt that reaches the substrate, 409 refusals included;
   #   * the driver re-reads the claim and re-checks its wardyn.drive /
   #     wardyn.home / wardyn.subject labels before issuing the delete
   #     (drives_reclaim.go), so a colliding minted name cannot destroy another

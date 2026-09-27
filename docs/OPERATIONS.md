@@ -975,7 +975,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
 | the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
 | allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: none of the three names a host path — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
-| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate (`internal/api/user_drives_reclaim.go`) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt, refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `userDrives.reclaim.enabled` is set. There is no console button — API and CLI only |
+| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate (`internal/api/user_drives_reclaim.go`) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `userDrives.reclaim.enabled` is set. There is no console button — API and CLI only |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session. Answers only while there is no model-provider block (0.8); once one exists it is 409 and every sign-in goes through the row below | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
@@ -1361,7 +1361,10 @@ accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 Deleting a drive removes its row and deleting an allocation stops the mount;
 neither deletes a byte. The storage object one person's allocation resolved to
 — a Docker named volume, a PersistentVolumeClaim, or a directory on a share —
-outlives both. **Reclaiming it destroys data and nothing undoes it.**
+outlives both. **Reclaiming it destroys data and nothing undoes it.** On
+Kubernetes, Wardyn deletes the claim; what happens to the bytes then follows the
+StorageClass's `reclaimPolicy`: `Delete` (the usual default) destroys them,
+`Retain` leaves them on the released PersistentVolume until an operator removes it.
 
 There are two supported ways, and both stay supported: the substrate command by
 hand (the recipes in "User drives on Docker" and "User drives on Kubernetes"
@@ -1406,11 +1409,13 @@ row; turn it on only when your offboarding runbook calls the API instead of
 running `kubectl delete pvc` by hand. Nothing else changes either way: no run
 path, no teardown and no sweep can reach a claim on either setting.
 
-**Every attempt is audited**, refusals and failures included, as `drive.reclaim`
-— naming the drive, the person, the backend, the object and what became of it
+**Every attempt that reaches the substrate is audited**, `409` refusals and
+failures included, as `drive.reclaim` — naming the drive, the person, the backend, the object and what became of it
 ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). That row is deliberately the only
 durable record: the drive row and the allocation can both be gone by the time
-anyone reads the trail.
+anyone reads the trail. The `400`, `422` and `501` answers above, and a daemon
+that cannot read the allocation, are refused before any object is addressed and
+write no `drive.reclaim` row.
 
 ### User drives on Docker
 

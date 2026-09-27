@@ -605,7 +605,7 @@ setting. What `userDrives.reclaim.enabled=true` adds is `delete` on the same
 rule, for exactly one caller: the operator's explicit
 `POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim`), super-admin only,
 refused while a pod still mounts the claim, and audited as `drive.reclaim` on
-every attempt. **It destroys a member's stored bytes and nothing undoes it**, so
+every attempt that reaches the cluster. **It destroys a member's stored bytes and nothing undoes it**, so
 it is opt-in: leave the value unset and this Role is byte-for-byte the one it
 has always been, every reclaim attempt ends in the apiserver's own `403`, and
 reclaiming a departed person's storage stays an operator command, run once,
