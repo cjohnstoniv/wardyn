@@ -22,6 +22,10 @@ func init() {
 			Namespace:             resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
 			ProxyImage:            d.ProxyImage,
 			ImagePullSecret:       os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
+			// Mirrors docker/register.go's Record: true — recording stays on by
+			// default (unchanged production behaviour); Config.Record exists so a
+			// direct Driver caller (tests, a future off-switch) can turn it off.
+			Record:                true,
 			ConfinementRuntimes:   d.ConfinementRuntimes,
 			AllowUnenforcedNetPol: os.Getenv("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") == "1",
 			AckAmbientDefaultDeny: os.Getenv("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") == "1",

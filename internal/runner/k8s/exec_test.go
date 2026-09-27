@@ -30,7 +30,7 @@ import (
 // by the recorder (SessionRecording: mirrors docker's recordCmd) delivering
 // to the brokered proxy upload URL.
 func TestExec_Success(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{Record: true})
 	runID := uuid.New()
 	ref := createAgentPodFixture(t, cs, runID, "wardyn/agent-claude:local", map[string]string{"HOME": "/home/agent"})
 
@@ -72,6 +72,32 @@ func TestExec_Success(t *testing.T) {
 	}
 	if len(ec.Resources.Limits) != 0 || len(ec.Resources.Requests) != 0 {
 		t.Errorf("ephemeral container Resources = %+v, want zero-value (apiserver rejects it on ephemeral containers)", ec.Resources)
+	}
+}
+
+// TestExec_RecordOff_NoRecorderWrap is the #1113 pin: Config.Record: false
+// mirrors the docker driver's opt-out (docker/driver_exec.go's `if
+// d.cfg.Record`) — Exec must run argv UNWRAPPED, so no wardyn-rec invocation
+// and no brokered:recording upload is ever attempted. Off is the Config{}
+// zero value; register.go sets Record: true in production, so this is the
+// "recording off" install, not merely "field unset in this test".
+func TestExec_RecordOff_NoRecorderWrap(t *testing.T) {
+	d, cs := newTestDriver(t, Config{}) // Record: false (zero value)
+	runID := uuid.New()
+	ref := createAgentPodFixture(t, cs, runID, "wardyn/agent-claude:local", nil)
+
+	if _, err := d.Exec(context.Background(), ref, []string{"/usr/local/bin/agent-run", "do the task"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	ec := pod.Spec.EphemeralContainers[0]
+	wantCmd := []string{"/usr/local/bin/agent-run", "do the task"}
+	if !equalStrings(ec.Command, wantCmd) {
+		t.Errorf("ephemeral container command = %v, want %v (Record off: no wardyn-rec wrap, no upload attempt)", ec.Command, wantCmd)
 	}
 }
 
