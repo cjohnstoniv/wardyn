@@ -139,6 +139,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `DCO_ALLOW_GITHUB_MERGES=1`, which excuses a merge commit committed by
   `GitHub <noreply@github.com>` (push and merge_group only, where GitHub makes such merges
   itself).
+- **Credential erase and expiry follow-ups (#977).** The daily expiry sweep now reads the table
+  in bounded pages (rows and time) and moves past a row it cannot delete, so rows the store keeps
+  refusing no longer hold up the ones after them; each such row is audited
+  `credential.expired.delete` `failure` every day it is kept, and a failed scan writes one row
+  too. An erase refused for a blank principal (`400`) or a principal naming nobody or several
+  people (`422`) is audited `credential.erase` `denied`, and the same `422` on
+  `DELETE /secrets/{name}?owner=` is audited `secret.delete` `denied`; the statuses are unchanged.
+  `/me/scm-access` and setup status no longer give a `not_configured` Azure DevOps row the cause
+  `row_is_newer`: now that a dead or erased sign-in is deleted, "you signed in before your admin
+  turned Azure DevOps on" could be false. OPERATIONS.md lists the full offboarding order.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
