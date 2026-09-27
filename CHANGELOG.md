@@ -149,6 +149,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `/me/scm-access` and setup status no longer give a `not_configured` Azure DevOps row the cause
   `row_is_newer`: now that a dead or erased sign-in is deleted, "you signed in before your admin
   turned Azure DevOps on" could be false. OPERATIONS.md lists the full offboarding order.
+- **Runs no longer attempt a recording upload when recording is off (#1113).** Both the k8s and
+  docker substrates registered `Config.Record: true` unconditionally, so an install with
+  `WARDYN_RECORDING_STORE=off` still wrapped every `Exec` with `wardyn-rec`, still attempted the
+  brokered upload on every run, and still logged a `brokered:recording` deny for a feature that was
+  switched off. `Config.Record` on both drivers now follows the boot recording-store selection
+  (off skips the recorder wrap entirely — no upload attempt; `pg`/`fs` wrap and upload exactly as
+  before). The image contract is unchanged — agent images still ship `wardyn-rec`.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

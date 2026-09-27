@@ -1,6 +1,6 @@
 # Conformance suite's agent image: busybox + a REAL wardyn-rec binary, so the
-# k8s substrate's unconditional SessionRecording=true (exec.go's recordCmd
-# has no opt-out) is actually exercised end to end, not silently skipped by
+# k8s substrate's SessionRecording path (exec.go's recordCmd, invoked when
+# Config.Record is on) is actually exercised end to end, not silently skipped by
 # an image that fails Exec closed. wardyn-rec is staged into the build
 # context by the caller (make build-conformance-agent-image / ci.yml) — the
 # same `go build ./cmd/wardyn-rec` every agent image's own builder stage
