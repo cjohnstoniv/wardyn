@@ -14,7 +14,6 @@ import {
   canDecideApproval,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
-  isPushContentRequest,
   type ApprovalRequest,
   type DecisionOptions,
   type RunDetail,
@@ -26,7 +25,7 @@ import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives
 import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState } from "../wardyn/states";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
-import { PushContentCard } from "../wardyn/push-content-card";
+import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { PUSH } from "../wardyn/copy/push";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";

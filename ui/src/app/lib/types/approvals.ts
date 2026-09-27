@@ -259,11 +259,15 @@ export interface PushContentScope {
   acts_as_label: string;
 }
 
-export function isPushContentRequest(
-  a: Pick<ApprovalRequest, "kind" | "requested_scope">,
-): a is ApprovalRequest & { requested_scope: PushContentScope } {
-  return a.kind === "push_content";
-}
+// isPushContentRequest itself lives in push-content-card.tsx, not here, next
+// to isHeld's own board-groups.ts precedent: this module is eager (isHeld
+// above is imported into the eager runs board), and the type guard is only
+// ever called from the three lazy screens that already import
+// push-content-card.tsx for the card itself (live-approvals.tsx,
+// run-detail-approvals-tab.tsx, screens/approvals.tsx) — bundling it here
+// would hoist that dead-in-the-eager-graph function into the entry chunk for
+// nothing. isHeld's own push_content branch below checks `a.kind` directly
+// and never calls the guard.
 
 // canDecideApproval's ADO carve-out: authorizeUserDecision
 // (internal/api/approvals.go) lets the run's OWNER decide their own run's

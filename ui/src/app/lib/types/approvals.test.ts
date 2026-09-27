@@ -9,7 +9,6 @@ import {
   canDecideApproval,
   decisionArgs,
   isHeld,
-  isPushContentRequest,
   type ApprovalKind,
   type ApprovalRequest,
 } from "./approvals";
@@ -166,13 +165,9 @@ describe("isHeld — an Azure DevOps capability escalation is a bounded hold", (
   });
 });
 
-describe("isPushContentRequest (#181)", () => {
-  it("is true only for kind push_content", () => {
-    expect(isPushContentRequest(approval({ kind: "push_content" }))).toBe(true);
-    expect(isPushContentRequest(approval({ kind: "tool_call" }))).toBe(false);
-    expect(isPushContentRequest(approval({ kind: "egress_domain" }))).toBe(false);
-  });
-});
+// isPushContentRequest's own tests moved to push-content-card.test.tsx (#181
+// bundle-split fix): the guard now lives in push-content-card.tsx, not here —
+// see that function's own doc for why.
 
 // #181 (review finding 1) — push_content is a SHORT proxy hold, unlike
 // tool_call/credential_reauth's unconditional PENDING-is-live: the proxy

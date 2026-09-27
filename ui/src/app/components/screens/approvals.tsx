@@ -23,7 +23,6 @@ import {
   decisionArgs,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
-  isPushContentRequest,
   isTerminalRunState,
   type AgentRun,
   type ApprovalKind,
@@ -44,7 +43,7 @@ import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives
 import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/code-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
-import { PushContentCard } from "../wardyn/push-content-card";
+import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";

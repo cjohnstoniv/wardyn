@@ -37,6 +37,20 @@ import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "./primitives";
 
+// Lives here rather than beside isAdoCapabilityRequest/isAdoConsentRequest in
+// lib/types/approvals.ts: that module is eager (isHeld is imported into the
+// runs board — see board-groups.ts's own bundle-split note), and this guard
+// is only ever called from the three lazy screens that already import
+// PushContentCard below (live-approvals.tsx, run-detail-approvals-tab.tsx,
+// screens/approvals.tsx). Keeping it here instead of the barrel keeps it out
+// of the entry chunk; isHeld's own push_content branch checks `a.kind`
+// directly and never calls this.
+export function isPushContentRequest(
+  a: Pick<ApprovalRequest, "kind" | "requested_scope">,
+): a is ApprovalRequest & { requested_scope: PushContentScope } {
+  return a.kind === "push_content";
+}
+
 // unquoteGitPath decodes a path exactly as internal/egress/proxy/push_hold.go's
 // quotePath produced it (git's own core.quotePath=true / quote_c_style):
 // quotePath leaves a path with no control byte, no '"'/'\\' and no byte past

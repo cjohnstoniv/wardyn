@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import type { ApprovalRequest } from "../../lib/types";
 import type { PushContentScope } from "../../lib/types/approvals";
-import { PushContentCard, unquoteGitPath, type PushCardRun } from "./push-content-card";
+import { isPushContentRequest, PushContentCard, unquoteGitPath, type PushCardRun } from "./push-content-card";
 import { PUSH } from "./copy/push";
 import { APPROVAL, SECURITY_ONLY_REASON } from "./copy";
 
@@ -313,6 +313,14 @@ describe("unquoteGitPath", () => {
     expect(unquoteGitPath('"a\\qb"')).toBe('"a\\qb"'); // \q is not an escape quotePath ever emits
     expect(unquoteGitPath('"unterminated')).toBe('"unterminated'); // no closing quote
     expect(unquoteGitPath('"\\300\\300"')).toBe('"\\300\\300"'); // two lead bytes, not valid UTF-8
+  });
+});
+
+describe("isPushContentRequest (#181)", () => {
+  it("is true only for kind push_content", () => {
+    expect(isPushContentRequest(push())).toBe(true);
+    expect(isPushContentRequest({ kind: "tool_call", requested_scope: {} })).toBe(false);
+    expect(isPushContentRequest({ kind: "egress_domain", requested_scope: {} })).toBe(false);
   });
 });
 

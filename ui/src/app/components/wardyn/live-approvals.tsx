@@ -26,13 +26,12 @@ import {
   isAdoCapabilityRequest,
   isAdoConsentRequest,
   isHeld,
-  isPushContentRequest,
   type ApprovalRequest,
   type ApprovalScope,
   type DecisionOptions,
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
-import { PushContentCard } from "./push-content-card";
+import { isPushContentRequest, PushContentCard } from "./push-content-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
