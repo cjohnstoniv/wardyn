@@ -205,7 +205,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		if errors.Is(err, runner.ErrDriveInUse) || errors.Is(err, runner.ErrDriveNotReclaimable) {
 			// These are OUR OWN sentinel errors (runner.ErrDriveInUse /
 			// ErrDriveNotReclaimable), never driver/substrate text — the same
-			// justification run_resources.go:201's allowlisted sentinel carries.
+			// justification handleRunResources' allowlisted sentinel carries.
 			// err.Error() here is always one of their two fixed strings.
 			s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
 			writeError(w, http.StatusConflict, "reclaim refused: "+err.Error())
