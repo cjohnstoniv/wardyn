@@ -631,6 +631,9 @@ type Config struct {
 	// oidc.Config.SecureCookies. Feeds tls_cookie_posture alongside
 	// OIDCRedirectURL. Computed at boot in cmd/wardynd.
 	OIDCSecureCookies bool
+	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix Handler
+	// mounts every console route under (base_path.go).
+	BasePath string
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
 	// the profile is low-confidence or left unrecognized samples (ShouldAdvise),
@@ -927,9 +930,6 @@ const (
 	auditSpoolDrainInterval = 30 * time.Second
 	auditSpoolDrainBatch    = 200
 )
-
-// Handler returns the configured http.Handler (the chi router).
-func (s *Server) Handler() http.Handler { return s.router }
 
 // handleLogout terminates the human session. FIX #6: it is mounted as
 // POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing

@@ -151,7 +151,7 @@ func (s *Server) uiEnterURLTemplate() string {
 		// second flag; boot warns that this is almost never externally right.
 		base = "http://" + s.cfg.UIListenAddr
 	}
-	return strings.TrimSuffix(base, "/") + uiEnterPath + "?run={run}&app={app}&ticket={ticket}"
+	return strings.TrimSuffix(base, "/") + s.uiBasePath() + uiEnterPath + "?run={run}&app={app}&ticket={ticket}"
 }
 
 // UIGatewayHandler returns the gateway's http.Handler, or nil when the gateway
@@ -169,7 +169,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 	if !s.uiGatewayEnabled() {
 		return nil
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return underBasePath(s.uiBasePath(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Referrer-Policy on EVERY response: the enter URL carries a ticket in
 		// its query, and a referrer leak would hand it to whatever the app
 		// links to. No CSP/X-Frame-Options here — this origin serves the
@@ -184,7 +184,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 		default:
 			writeError(w, http.StatusNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		}
-	})
+	}))
 }
 
 // enter: redeem the ticket, re-check, set the cookie
@@ -293,7 +293,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
 		Value:    s.encodeUISession(sess),
-		Path:     uiCookiePath(runID, declared.Name),
+		Path:     s.uiBasePath() + uiCookiePath(runID, declared.Name),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.cfg.OIDCSecureCookies,
@@ -301,7 +301,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
 		map[string]any{"app": declared.Name, "port": declared.Port})
-	http.Redirect(w, r, uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
+	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
 }
 
 // uiRunOrigin returns the host this run's apps must be served on in HOST mode

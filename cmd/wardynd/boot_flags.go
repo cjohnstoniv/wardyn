@@ -86,6 +86,7 @@ type bootFlags struct {
 	// cannot work.
 	ssoOnly   *bool
 	uiDir     *string
+	basePath  *string
 	runnerSel *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
@@ -370,6 +371,8 @@ func resolveDeprecatedEnvAliases() {
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
 // and parses the command line. Moved verbatim out of run(); the usage strings
 // carry the operator-facing documentation for each knob.
+//
+//nolint:funlen // A flat table, one line per knob: its length is the knob count, not complexity.
 func parseBootFlags() *bootFlags {
 	resolveDeprecatedEnvAliases()
 	f := &bootFlags{
@@ -401,6 +404,7 @@ func parseBootFlags() *bootFlags {
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
+		basePath:                flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate, e.g. "docker" in -tags docker builds`),
 		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name stored objects validate against when -runner is "none" ("docker" or "k8s"); test harnesses only, ignored whenever a runner is configured. Empty (default) refuses every drive backend`),
 		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),

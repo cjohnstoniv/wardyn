@@ -485,7 +485,7 @@ func (s *Server) adoCookie(name, value string) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     "/",
+		Path:     s.cookiePath(),
 		MaxAge:   adoCookieMaxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -493,9 +493,9 @@ func (s *Server) adoCookie(name, value string) *http.Cookie {
 	}
 }
 
-func clearADOCookie(w http.ResponseWriter, name string) {
+func (s *Server) clearADOCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: "", Path: "/", MaxAge: -1,
+		Name: name, Value: "", Path: s.cookiePath(), MaxAge: -1,
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -512,7 +512,7 @@ func clearADOCookie(w http.ResponseWriter, name string) {
 // The state comparison is CONSTANT TIME and stays first: a callback whose state
 // does not match a cookie this server set is not a sign-in this browser began,
 // and nothing else about the request is worth reading until that holds.
-func consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
+func (s *Server) consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(adoStateCookieName)
 	if err != nil || stateCookie.Value == "" || stateParam == "" ||
@@ -530,9 +530,9 @@ func consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier 
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
 		return "", "", false
 	}
-	clearADOCookie(w, adoStateCookieName)
-	clearADOCookie(w, adoNonceCookieName)
-	clearADOCookie(w, adoPKCECookieName)
+	s.clearADOCookie(w, adoStateCookieName)
+	s.clearADOCookie(w, adoNonceCookieName)
+	s.clearADOCookie(w, adoPKCECookieName)
 	return nonceCookie.Value, pkceCookie.Value, true
 }
 
@@ -553,7 +553,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nonce, verifier, ok := consumeADOCookies(w, r)
+	nonce, verifier, ok := s.consumeADOCookies(w, r)
 	if !ok {
 		return
 	}
@@ -565,7 +565,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": reason, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
 	code := r.URL.Query().Get("code")
@@ -587,7 +587,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": reason, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
 	// Mask BEFORE anything can log or persist either value. Merge, not replace:
@@ -651,7 +651,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	// After the capture row, never before: captured -> resolved -> retry.
 	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
-	http.Redirect(w, r, adoSignInDonePath, http.StatusFound)
+	http.Redirect(w, r, s.cfg.BasePath+adoSignInDonePath, http.StatusFound)
 }
 
 // adoCaptureErrorCode names a CAPTURE failure for the console, which is not the

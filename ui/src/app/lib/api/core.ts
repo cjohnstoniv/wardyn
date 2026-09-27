@@ -10,8 +10,8 @@
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
 import { CC_ORDER, type ConfinementClass } from "../types";
+import { apiURL } from "../base-path";
 
-const BASE = "/api/v1";
 const TOKEN_KEY = "wardyn_admin_token";
 
 // Auth token + 401 handling
@@ -237,7 +237,7 @@ export async function wfetch(
 
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, {
+    res = await fetch(apiURL(path), {
       ...init,
       headers,
       credentials: "include",

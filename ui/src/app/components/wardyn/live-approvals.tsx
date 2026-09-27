@@ -38,6 +38,7 @@ import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, rea
 import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
 import { resolveDoor } from "../../lib/model-access";
 import { OpenInUserView, viewOfPath } from "./console-view";
+import { routerPath } from "../../lib/base-path";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -888,7 +889,7 @@ function ReauthRow({
     principal: door.principal,
     // The path, not useLocation(), as the door's own context reads it: this
     // row is mounted without a router in its suites.
-    view: viewOfPath(window.location.pathname),
+    view: viewOfPath(routerPath()),
   });
   // M-7 narrows who is offered a door, and so which sentence the row reads.
   const mayAct = adminView && !audience.shared ? false : audience.canAct;

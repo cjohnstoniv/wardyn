@@ -93,6 +93,9 @@ var envDocAllow = map[string]bool{
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
 	// its ENV.md row honest.
 	"WARDYN_E2E_LIVE_BASE_URL": true,
+	// #1154: run-ui-e2e.sh's base-path mode (the backend behind a reverse proxy
+	// at a sub-path). Shell-only, so the E2E-shell ratchet keeps its row honest.
+	"WARDYN_E2E_BASE_PATH": true, "WARDYN_E2E_PROXY_ADDR": true,
 	// The live-local harness (internal/testlive, ui/playwright.live-local.config.ts;
 	// docs/LIVE-TESTS.md): opt-in suites against a real tenant, never CI or
 	// operator config. Documented in ENV.md's "Live-local harness" table.

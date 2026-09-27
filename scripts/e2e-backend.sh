@@ -34,6 +34,8 @@
 #   WARDYN_E2E_AGE_KEY       pinned age identity (default: unset, mint a fresh one per `up`)
 #   WARDYN_E2E_SKIP_BUILD    1 reuses the built .e2e-bin/wardynd instead of rebuilding it
 #   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist instead of rebuilding it
+#   WARDYN_E2E_BASE_PATH     serve under this WARDYN_BASE_PATH (e.g. /wardyn) behind test/basepathproxy
+#   WARDYN_E2E_PROXY_ADDR    that proxy's listen address (default: :8090); only with WARDYN_E2E_BASE_PATH
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,12 +79,20 @@ PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 # -> 80. (The old ${ADDR#*:} stripped through the FIRST colon and never inserted
 # the ':' separator for non-':PORT' shapes, e.g. 'http://localhost9000'.)
 BASE_URL="http://localhost:${ADDR##*:}"
+# Base-path mode (#1154): wardynd serves under WARDYN_BASE_PATH, so every call
+# this script makes to it carries the prefix, and test/basepathproxy fronts it
+# the way an operator's reverse proxy would. Empty = the default, unchanged.
+BASE_PATH="${WARDYN_E2E_BASE_PATH:-}"
+PROXY_ADDR="${WARDYN_E2E_PROXY_ADDR:-:8090}"
+DAEMON_URL="${BASE_URL}${BASE_PATH}"
 BIN_DIR="${REPO_ROOT}/.e2e-bin"
 # PID/log keyed by listen port so multiple isolated instances (the per-screen e2e
 # fanout: own port + own DB each) never kill or clobber each other.
 _PORT="${ADDR#*:}"
 PID_FILE="${BIN_DIR}/wardynd-${_PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${_PORT}.log"
+PROXY_PID_FILE="${BIN_DIR}/basepathproxy-${_PORT}.pid"
+PROXY_LOG_FILE="${BIN_DIR}/basepathproxy-${_PORT}.log"
 
 # log() uses WARDYN_LOG_TAG="[e2e]" set before sourcing common.sh above.
 die()  { printf '\033[1;31m[e2e:err]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -94,9 +104,9 @@ api() {  # api METHOD PATH [JSON_BODY]
   local method="$1" path="$2" body="${3:-}"
   if [[ -n "${body}" ]]; then
     curl -fsS -X "${method}" -H "Authorization: Bearer ${TOKEN}" \
-      -H 'Content-Type: application/json' -d "${body}" "${BASE_URL}${path}"
+      -H 'Content-Type: application/json' -d "${body}" "${DAEMON_URL}${path}"
   else
-    curl -fsS -X "${method}" -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}${path}"
+    curl -fsS -X "${method}" -H "Authorization: Bearer ${TOKEN}" "${DAEMON_URL}${path}"
   fi
 }
 
@@ -111,6 +121,9 @@ cmd_build() {
   log "Building wardynd (none runner; no -tags docker needed) + wardyn CLI"
   go build -o "${BIN_DIR}/wardynd" ./cmd/wardynd
   go build -o "${BIN_DIR}/wardyn"  ./cmd/wardyn
+  if [[ -n "${BASE_PATH}" ]]; then
+    go build -o "${BIN_DIR}/basepathproxy" ./test/basepathproxy
+  fi
   # Always rebuild the UI bundle on a non-skip build so the served app reflects
   # the current ui/src (reusing a stale ui/dist silently serves old UI — a real
   # footgun when iterating on the composer). Set WARDYN_E2E_NO_UI_BUILD=1 to reuse
@@ -141,8 +154,8 @@ cmd_build() {
 }
 
 cmd_wait() {
-  log "Waiting for ${BASE_URL}/healthz"
-  if ! wait_healthy "${BASE_URL}" 60 0.5; then
+  log "Waiting for ${DAEMON_URL}/healthz"
+  if ! wait_healthy "${DAEMON_URL}" 60 0.5; then
     cat "${LOG_FILE}" 2>/dev/null | tail -30
     die "wardynd did not become healthy"
   fi
@@ -217,6 +230,9 @@ cmd_up() {
   # skips. The fake account (222222222222) never needs to be real: no bearer
   # key/SSO session/host dir is configured either, so every OTHER Bedrock
   # credential path here is still "not configured", unchanged.
+  if [[ -n "${BASE_PATH}" ]]; then
+    export WARDYN_BASE_PATH="${BASE_PATH}"
+  fi
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     WARDYN_RUNNER_TARGET=docker \
     WARDYN_BEDROCK_REGION="us-east-1" \
@@ -232,13 +248,27 @@ cmd_up() {
       >"${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"
   cmd_wait
+  if [[ -n "${BASE_PATH}" ]]; then
+    "${BIN_DIR}/basepathproxy" -listen "${PROXY_ADDR}" -target "${BASE_URL}" -prefix "${BASE_PATH}" \
+      >"${PROXY_LOG_FILE}" 2>&1 &
+    echo $! > "${PROXY_PID_FILE}"
+    log "Waiting for the base-path proxy on ${PROXY_ADDR}"
+    wait_healthy "http://localhost:${PROXY_ADDR##*:}${BASE_PATH}" 40 0.25 || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
+  fi
   cmd_seed
   log "Seeded backend ready:"
-  log "  URL:   ${BASE_URL}"
+  log "  URL:   ${DAEMON_URL}"
+  if [[ -n "${BASE_PATH}" ]]; then
+    log "  proxy: http://localhost:${PROXY_ADDR##*:}${BASE_PATH}/"
+  fi
   log "  logs:  ${LOG_FILE}"
 }
 
 cmd_down_quiet() {
+  if [[ -f "${PROXY_PID_FILE}" ]]; then
+    kill "$(cat "${PROXY_PID_FILE}")" >/dev/null 2>&1 || true
+    rm -f "${PROXY_PID_FILE}"
+  fi
   [[ -f "${PID_FILE}" ]] || return 0
   local pid; pid="$(cat "${PID_FILE}")"
   rm -f "${PID_FILE}"

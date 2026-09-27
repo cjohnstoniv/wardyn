@@ -454,7 +454,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The split point: the run row exists and every refusal above has answered.
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
-	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
+	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,

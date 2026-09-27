@@ -9,6 +9,7 @@ import { Button } from "../ui/button";
 import { health } from "../../lib/api/health";
 import { useRoleResolved } from "./operator-context";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
+import { appURL } from "../../lib/base-path";
 import {
   CONSOLE_VIEW,
   OPEN_IN_USER_VIEW,
@@ -165,7 +166,7 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
     throw e;
   }
   viewChannel()?.postMessage(to);
-  window.location.assign(target);
+  window.location.assign(appURL(target));
 }
 
 /** M-7 (§4.6, QM-7): what the Admin view gives in place of a personal door on

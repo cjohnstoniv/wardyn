@@ -8,6 +8,7 @@
 import { SERVER_OWNED_SITE_CONFIG_KEYS, type SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
 import { WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
+import { appURL } from "../base-path";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
 // if they asked for it on their next run, or null when they would mount
@@ -375,7 +376,7 @@ export const health = {
       // every route is gated behind that (app-shell.tsx:128-158, App.tsx's
       // roleResolved). The catch below already turns a failure into {}, which
       // is exactly how the shell reads "control plane unreachable".
-      const res = await fetch("/healthz", {
+      const res = await fetch(appURL("/healthz"), {
         credentials: "include",
         signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
       });
@@ -415,7 +416,7 @@ export const health = {
       // would freeze at its LAST known value forever instead of degrading.
       // The signal alone suffices: readyz's own catch below already turns an
       // aborted fetch into {}, which is exactly the not-ready verdict.
-      const res = await fetch("/readyz", { credentials: "include", signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS) });
+      const res = await fetch(appURL("/readyz"), { credentials: "include", signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS) });
       if (!res.ok) return {};
       return (await res.json()) as { status?: string; postgres?: string };
     } catch {

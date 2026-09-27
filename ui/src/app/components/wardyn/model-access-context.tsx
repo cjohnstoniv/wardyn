@@ -49,6 +49,7 @@ import {
 } from "../../lib/model-access";
 import type { SetupStatus } from "../../lib/types";
 import { viewOfPath } from "./console-view";
+import { routerPath } from "../../lib/base-path";
 import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
 
 /** How an entrance opens the door. */
@@ -226,7 +227,7 @@ export function ModelAccessProvider({
     const next = resolveDoor(
       statusRef.current,
       options.for ?? { login: "aws" },
-      viewOfPath(typeof window === "undefined" ? "/" : window.location.pathname),
+      viewOfPath(typeof window === "undefined" ? "/" : routerPath()),
     );
     if (!next) return;
     opener.current = options.returnTo ?? (typeof document === "undefined" ? null : document.activeElement);
