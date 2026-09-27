@@ -7,11 +7,11 @@
 # trailer, with exactly one exemption — a 2+-parent merge commit whose
 # committer is EXACTLY GitHub <noreply@github.com>, and only when the
 # caller opts in with DCO_ALLOW_GITHUB_MERGES=1. That exemption models
-# push/merge_group's own "Merge pull request" commits AND a GitHub
-# "Update branch" merge landed on a PR branch itself (branch protection
-# can force that update) — PR ranges end at the PR head, so only the
-# synthetic refs/pull/N/merge test-merge tip is excluded, never a real
-# merge already on the branch.
+# push/merge_group only, where GitHub itself makes such merges — PR ranges
+# end at the PR head and never pass this flag, so every commit in a PR's
+# own range, merges included, must carry Signed-off-by, even a
+# GitHub-committed merge (e.g. from "Update branch") landed on the branch
+# itself (#1070).
 #
 # Each case builds its own throwaway repo under mktemp, with local (not
 # global) user.name/user.email, then runs the REAL repo Makefile's `dco`
@@ -31,6 +31,11 @@
 #        (a) an unsigned merge committed as an impersonating identity,
 #            Mallory <evil-noreply@github.com>              -> non-zero
 #        (b) an unsigned plain human merge                   -> non-zero
+#   6. ci.yml's own PR-range invocation (extracted from the workflow file,
+#      not reimplemented) run against an unsigned GitHub-committed merge on
+#      the branch (e.g. from "Update branch")                -> non-zero
+#      (pins that the PR-range branch of ci.yml never carries
+#      DCO_ALLOW_GITHUB_MERGES — that exemption is push/merge_group only)
 #
 # Daemon-free, network-free.
 set -euo pipefail
@@ -164,6 +169,41 @@ git -C "$r5b" checkout -q main
 git -C "$r5b" merge -q --no-ff -m "Merge branch 'feature' (unsigned, plain human)" feature
 if run_dco "$r5b" "$base5b" DCO_ALLOW_GITHUB_MERGES=1; then
 	fail "case 5b (unsigned plain human merge, ALLOW=1) expected non-zero exit, got 0"
+fi
+
+# ── case 6: ci.yml's PR-range dco invocation must not carry the exemption ──
+# Extracts the literal `make dco ...` line ci.yml runs inside the
+# `if [ -n "$PR_HEAD" ]; then ... elif` branch (the PR-range branch) and
+# asserts it carries no DCO_ALLOW_GITHUB_MERGES flag — that exemption models
+# push/merge_group only, where GitHub itself makes the merge (#1070). Then
+# runs the same shape of call (no ALLOW flag) against a throwaway repo whose
+# HEAD is an unsigned merge committed by GitHub <noreply@github.com>, as
+# "Update branch" would land on a PR branch under branch protection — it
+# must still fail closed.
+CI_YML="$ROOT/.github/workflows/ci.yml"
+pr_branch="$(awk '/if \[ -n "\$PR_HEAD" \]; then/{f=1;next} f && /elif \[ -n "\$BASE" \]; then/{exit} f' "$CI_YML")"
+[ -n "$pr_branch" ] || fail "case 6: could not find ci.yml's PR-range branch (if [ -n \"\$PR_HEAD\" ]; then ... elif)"
+pr_cmd="$(printf '%s\n' "$pr_branch" | grep 'make dco')"
+[ -n "$pr_cmd" ] || fail "case 6: no 'make dco' invocation found in ci.yml's PR-range branch"
+case "$pr_cmd" in
+	*DCO_ALLOW_GITHUB_MERGES*)
+		fail "case 6: ci.yml's PR-range dco invocation carries DCO_ALLOW_GITHUB_MERGES — that exemption must apply only on push/merge_group (#1070): $pr_cmd" ;;
+esac
+
+r6="$TMP/case6"
+mkrepo "$r6"
+base6="$(git -C "$r6" rev-parse HEAD)"
+echo main1 >>"$r6/f.txt"
+git -C "$r6" commit -q -am "main: signed change" -s
+git -C "$r6" checkout -q -b feature
+echo feat1 >"$r6/g.txt"
+git -C "$r6" add g.txt
+git -C "$r6" commit -q -m "feature: signed change" -s
+git -C "$r6" checkout -q main
+GIT_COMMITTER_NAME="GitHub" GIT_COMMITTER_EMAIL="noreply@github.com" \
+	git -C "$r6" merge -q --no-ff -m "Merge pull request (unsigned, GitHub, landed on the PR branch)" feature
+if run_dco "$r6" "$base6"; then
+	fail "case 6 (PR-range GitHub merge, no ALLOW flag, as ci.yml runs it) expected non-zero exit, got 0"
 fi
 
 echo "All DCO cases behaved as expected."
