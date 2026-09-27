@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197 L1a: migration 0091's ended_at column — the three state writers that
+// #1197 L1a: migration 0092's ended_at column — the three state writers that
 // stamp it, and the historical backfill. Guarded by WARDYN_TEST_PG, same as
 // every other store_*_pg_test.go file.
 package store_test
@@ -105,17 +105,17 @@ func TestPG_StopKeptRunIf_StampsEndedAt(t *testing.T) {
 	}
 }
 
-// TestPG_Migration0091_BackfillsEndedAt replays 0091's backfill UPDATE (the
+// TestPG_Migration0092_BackfillsEndedAt replays 0092's backfill UPDATE (the
 // exact statement the migration itself runs, verbatim) against a row this
-// test puts into the PRE-0091 shape it describes — ended_at NULL, a terminal
+// test puts into the PRE-0092 shape it describes — ended_at NULL, a terminal
 // state, a real updated_at — and asserts the same outcome the migration's own
 // one-time run already gave every such row in this pool: ended_at =
 // updated_at. Re-running the live migration file itself is not possible here
-// (runsPGPool already applied every migration, including 0091, before this
+// (runsPGPool already applied every migration, including 0092, before this
 // test starts — db.Migrate is all-or-nothing), so this proves the backfill
 // STATEMENT is correct rather than proving migration ORDERING; ordering is
 // covered by the plain fact that runsPGPool's own Migrate call succeeds.
-func TestPG_Migration0091_BackfillsEndedAt(t *testing.T) {
+func TestPG_Migration0092_BackfillsEndedAt(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 
@@ -123,13 +123,13 @@ func TestPG_Migration0091_BackfillsEndedAt(t *testing.T) {
 	backdated := time.Now().UTC().Add(-72 * time.Hour)
 	if _, err := pool.Exec(ctx,
 		`UPDATE agent_runs SET ended_at = NULL, updated_at = $2 WHERE id = $1`, r.ID, backdated); err != nil {
-		t.Fatalf("reset to pre-0091 shape: %v", err)
+		t.Fatalf("reset to pre-0092 shape: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx, `
 		UPDATE agent_runs SET ended_at = updated_at
 		 WHERE ended_at IS NULL AND state IN ('COMPLETED', 'FAILED', 'KILLED', 'STOPPED', 'ARCHIVED')`); err != nil {
-		t.Fatalf("replay 0091 backfill: %v", err)
+		t.Fatalf("replay 0092 backfill: %v", err)
 	}
 
 	got, err := store.NewPG(pool).GetRun(ctx, r.ID)

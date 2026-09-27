@@ -277,7 +277,7 @@ type AgentRun struct {
 	// terminal RunState, at the same transition, never touched otherwise (a
 	// terminal->live transition does not exist, so it is never cleared). Nil
 	// for a live run and for a legacy row the backfill could not date exactly
-	// (migration 0091 backfills from updated_at, approximate for history). A
+	// (migration 0092 backfills from updated_at, approximate for history). A
 	// lease-ended run (LostReason ended) stays RUNNING until the ended-run
 	// grace makes it terminal, so ITS end time is LostAt, not EndedAt — the
 	// landing page's end-time reader always picks between the two on

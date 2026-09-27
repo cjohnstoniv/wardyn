@@ -155,7 +155,7 @@ func ageWindowSQL(nonTerminal, secsParam string) string {
 // killedVisibleSQL is TRUE for a row killedVisibleFor's default does not hide:
 // anything but a KILLED row, or include_killed=1, or a KILLED row that ended
 // within killedVisibleFor (killedSecsParam). A KILLED row with no ended_at
-// (should not happen past migration 0091 — every terminal transition stamps
+// (should not happen past migration 0092 — every terminal transition stamps
 // it — but a defensive read, not an assumed invariant) is treated as too old
 // to show.
 func killedVisibleSQL(includeParam, killedSecsParam string) string {
@@ -209,7 +209,7 @@ var _ RunsFilteredPager = PG{}
 // (EXPLAIN ANALYZE against a 200k-row seed: a bitmap index scan there, then
 // an in-memory filter and sort); an org-wide read is a parallel sequential
 // scan with a top-N heapsort. Both are linear in the caller's history, which
-// the spec accepted — see migration 0091's own doc for why no ended_at index
+// the spec accepted — see migration 0092's own doc for why no ended_at index
 // backs the CASE-expression ordering/window this function builds.
 func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.AgentRun, error) {
 	var args []any
