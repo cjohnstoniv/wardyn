@@ -222,15 +222,12 @@ export interface PushRulesSpec {
   hold_seconds?: number;
 }
 
-// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
-// EXACTLY: what "the policy has push rules" means everywhere it's asked,
-// which is NOT a bare truthiness check on the field. An all-zero-but-present
-// {} (a literal `push_rules: {}`) carries no actual rule and must read like
-// an absent field, same as the Go reader — a policy stored before this field
-// existed, and one that sets it to nothing, look identical.
-export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
-  return !!s && ((s.deny_paths?.length ?? 0) > 0 || (s.require_review_paths?.length ?? 0) > 0 || (s.max_inspect_pack_mib ?? 0) > 0);
-}
+// pushRulesIsSet moved to new-run-rail.tsx (bundle-split fix, #181): its only
+// caller is that lazy screen's own RunRail, and this module is eager (some
+// of policy.ts's other exports reach the runs board), so a runtime function
+// living here bundled into the entry chunk for a reader that never runs
+// there — same pattern push-content-card.tsx's isPushContentRequest and
+// audit-decision.tsx's ruleSourceLabel document.
 
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on

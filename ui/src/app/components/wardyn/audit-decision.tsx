@@ -19,7 +19,7 @@
 // page's Audit tab.
 import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
-import { ruleSourceLabel, toolRuleDecision, type AuditEvent } from "../../lib/types";
+import { toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { Chip } from "./primitives";
 import { PUSH } from "./copy/push";
 
@@ -48,6 +48,86 @@ export function AuditDecision({ event, className }: { event: AuditEvent; classNa
       </Chip>
     </span>
   );
+}
+
+// ruleSourceLabel and RuleSourceLabel moved here from lib/types/audit.ts
+// (bundle-split fix, #181): RuleSourceChip below is this function's ONLY
+// reader — lib/api/audit.ts's egress projection keys on toolRuleDecision
+// alone, never on this — so unlike toolRuleDecision it carries no
+// lib-must-not-import-components constraint, and living in the eager
+// lib/types/audit.ts module hoisted an always-lazy label table into the
+// entry chunk for nothing (same pattern push-content-card.tsx's
+// isPushContentRequest documents).
+//
+// ruleSourceLabel translates a wire rule_source value into console copy.
+// Unknown-but-present values fall back to the raw string rather than invented
+// copy (CONSOLE-RULES §10: never overclaim); callers pass "" or omit the field
+// entirely for "no rule_source" and get null either way.
+interface RuleSourceLabel {
+  label: string;
+  tone: "neutral" | "info" | "danger";
+}
+
+export function ruleSourceLabel(source: string): RuleSourceLabel | null {
+  if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
+  if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
+  // Every other policy:* value the proxy emits is a refusal (denied,
+  // default-deny, method, evaluator-error) — the row's outcome column already
+  // says deny; this names WHY at the same weight as the builtin refusals.
+  if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
+  if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
+  // #181 — a push_rules refusal (never a held request: deny_paths refuses
+  // synchronously, before any approval row exists — push_rules.go), named
+  // distinctly rather than falling into the generic "Brokered" label every
+  // OTHER brokered:* source gets below.
+  //
+  // DRAFT (canon pending owner approval, packet 7b) — review finding 4: these
+  // five labels are the packet-7b proposal, not yet owner-frozen the way the
+  // rest of this function's strings are.
+  if (source === "brokered:git:push-rules") return { label: "Push refused — a denied path", tone: "danger" };
+  if (source === "brokered:git:push-held-unattended") {
+    return { label: "Push refused — needs a review nobody can give", tone: "danger" };
+  }
+  if (source === "brokered:git:push-held") return { label: "Push refused — not approved", tone: "danger" };
+  if (source === "brokered:git:push-too-large") return { label: "Push refused — too large to inspect", tone: "danger" };
+  if (source === "brokered:git:push-uninspectable") {
+    return { label: "Push refused — couldn't be inspected", tone: "danger" };
+  }
+  // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
+  // refusal: recorded once per run, at proxy construction, to audit the
+  // deliberate SSRF-guard relaxation for the operator's own configured
+  // upstream hop — never a per-request decision. Named BEFORE the generic
+  // builtin:* bucket below (which is refusals only), so it cannot fall into
+  // it and read as a denial that never happened.
+  if (source === "builtin:upstream-proxy") {
+    return { label: "Corp upstream proxy in path", tone: "info" };
+  }
+  // builtin:private-ip is the address-range floor, and it is the one guard an
+  // operator reliably misreads: a private endpoint (a VPC endpoint, an internal
+  // gateway) refused here looks exactly like a policy or an entitlement gap, so
+  // the operator goes to their IAM team about a permission that is fine. Name
+  // the cause on the row — the rest of the family stays generic.
+  if (source === "builtin:private-ip") {
+    return { label: "Refused by a built-in address-range rule, not your policy", tone: "danger" };
+  }
+  // builtin:resolve-failed is the SAME misreading one step earlier: the proxy
+  // never learned an address at all (resolver outage, no such name, no address
+  // records). Under the generic builtin label it reads as a guard hit, and the
+  // operator widens an SSRF control over a DNS outage — so this one names its
+  // cause too, and points at the resolver instead.
+  if (source === "builtin:resolve-failed") {
+    return { label: "Refused because the name did not resolve, not by policy or the address rule", tone: "danger" };
+  }
+  // builtin:* is the proxy's own guard family (dial-failed, gateway-vet-failed,
+  // …) — every remaining value here is a refusal (builtin:upstream-proxy, the
+  // one ALLOW in the family, is handled above and never reaches this line).
+  if (source.startsWith("builtin:")) return { label: "Refused by the built-in guard", tone: "danger" };
+  // brokered:* is every proxy-side brokered lane (git, mint, approvals,
+  // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).
+  if (source.startsWith("brokered:")) return { label: "Brokered", tone: "neutral" };
+  if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
+  if (source.startsWith("egress:dropped-decisions-")) return { label: "Decisions dropped", tone: "neutral" };
+  return { label: source, tone: "neutral" };
 }
 
 // RuleSourceChip is ruleSourceLabel's renderer, for every NON-tool-rule row

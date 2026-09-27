@@ -12,8 +12,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
-import { ruleSourceLabel } from "../../lib/types";
-import { AuditDecision, RuleSourceChip, toolRuleDecision } from "./audit-decision";
+import { AuditDecision, ruleSourceLabel, RuleSourceChip, toolRuleDecision } from "./audit-decision";
 import { aheadByHours } from "../../lib/test-clock";
 import { PUSH } from "./copy/push";
 

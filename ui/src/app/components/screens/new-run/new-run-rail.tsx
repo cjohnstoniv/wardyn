@@ -27,7 +27,6 @@ import type {
   SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
-import { pushRulesIsSet } from "../../../lib/types";
 import { PUSH } from "../../wardyn/copy/push";
 import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
@@ -347,6 +346,21 @@ function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
       <span>{ADO.PREFLIGHT_MISSING}</span> <span>{ADO.PREFLIGHT_MISSING_SUB}</span>
     </p>
   );
+}
+
+// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
+// EXACTLY: what "the policy has push rules" means everywhere it's asked,
+// which is NOT a bare truthiness check on the field. An all-zero-but-present
+// {} (a literal `push_rules: {}`) carries no actual rule and must read like
+// an absent field, same as the Go reader — a policy stored before this field
+// existed, and one that sets it to nothing, look identical.
+//
+// Lives here, not in lib/types/policy.ts, because RunRail below is this
+// function's only caller: policy.ts is eager (other exports there reach the
+// runs board) and this screen is lazy — bundle-split fix, #181, same pattern
+// push-content-card.tsx's isPushContentRequest documents.
+export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
+  return !!s && ((s.deny_paths?.length ?? 0) > 0 || (s.require_review_paths?.length ?? 0) > 0 || (s.max_inspect_pack_mib ?? 0) > 0);
 }
 
 export function RunRail({

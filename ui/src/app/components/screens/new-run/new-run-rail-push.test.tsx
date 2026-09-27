@@ -8,7 +8,7 @@
 // bigger describe block there — split by seam, per AGENTS.md.
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { RunRail } from "./new-run-rail";
+import { pushRulesIsSet, RunRail } from "./new-run-rail";
 import { PUSH } from "../../wardyn/copy/push";
 import type { PushRulesSpec } from "../../../lib/types";
 
@@ -102,5 +102,28 @@ describe("New run rail — Push rules section (#181)", () => {
     renderRail({ deny_paths: [".github/workflows/**"] }, true);
     expect(screen.getByText(PUSH.RAIL_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(PUSH.RAIL_UNATTENDED)).toBeNull();
+  });
+});
+
+// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
+// exactly — pinned so the client's "does the policy have push rules" question
+// can never drift from the server's.
+describe("pushRulesIsSet (#181)", () => {
+  it("is false for undefined and for an all-zero-but-present {}", () => {
+    expect(pushRulesIsSet(undefined)).toBe(false);
+    expect(pushRulesIsSet({})).toBe(false);
+    expect(pushRulesIsSet({ deny_paths: [], require_review_paths: [] })).toBe(false);
+  });
+
+  it("is true when deny_paths has an entry", () => {
+    expect(pushRulesIsSet({ deny_paths: [".github/workflows/**"] })).toBe(true);
+  });
+
+  it("is true when require_review_paths has an entry", () => {
+    expect(pushRulesIsSet({ require_review_paths: ["infra/**"] })).toBe(true);
+  });
+
+  it("is true when only max_inspect_pack_mib is set", () => {
+    expect(pushRulesIsSet({ max_inspect_pack_mib: 16 })).toBe(true);
   });
 });

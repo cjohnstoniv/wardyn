@@ -8,7 +8,6 @@ import {
   asFirstUseMode,
   firstUseRaisesApproval,
   firstUseLabel,
-  pushRulesIsSet,
   toolRulesProblem,
   MAX_TOOL_RULES,
   MAX_TOOL_RULE_NAME_LEN,
@@ -203,25 +202,6 @@ describe("toolRulesProblem — malformed documents refuse, never throw", () => {
   });
 });
 
-// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
-// exactly — pinned so the client's "does the policy have push rules" question
-// can never drift from the server's.
-describe("pushRulesIsSet (#181)", () => {
-  it("is false for undefined and for an all-zero-but-present {}", () => {
-    expect(pushRulesIsSet(undefined)).toBe(false);
-    expect(pushRulesIsSet({})).toBe(false);
-    expect(pushRulesIsSet({ deny_paths: [], require_review_paths: [] })).toBe(false);
-  });
-
-  it("is true when deny_paths has an entry", () => {
-    expect(pushRulesIsSet({ deny_paths: [".github/workflows/**"] })).toBe(true);
-  });
-
-  it("is true when require_review_paths has an entry", () => {
-    expect(pushRulesIsSet({ require_review_paths: ["infra/**"] })).toBe(true);
-  });
-
-  it("is true when only max_inspect_pack_mib is set", () => {
-    expect(pushRulesIsSet({ max_inspect_pack_mib: 16 })).toBe(true);
-  });
-});
+// pushRulesIsSet's own tests moved to new-run-rail-push.test.tsx (bundle-split
+// fix, #181): the function now lives in new-run-rail.tsx, not here — see its
+// own doc for why.
