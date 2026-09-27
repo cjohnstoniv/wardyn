@@ -11,7 +11,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Added
 
 - **A run's title is now renameable, and no longer required to launch one (#1197 L2).**
-  `PATCH /runs/{id}/title` lets the run's owner (or an admin) change its title in any run state,
+  `PATCH /runs/{id}/title` lets the run's owner change its title in any run state — owner only,
   audited as `run.title.set` with the old and new values. New Run's Title field is optional and
   prefills from the task's own first line (up to 80 characters, cut at a word boundary) until the
   operator edits it by hand; the "Runs that share a title are grouped together" hint is gone, since

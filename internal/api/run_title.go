@@ -13,12 +13,14 @@ import (
 )
 
 // PATCH /runs/{id}/title: the owner renames a run (#1197 L2, design.md
-// §3.4). Deliberately its own route rather than a widened
-// handleSetRunEndAndWait: that handler refuses a terminal run and admits a
-// SUPER admin only (ownsRunOrSuperAdmin) — a rename is allowed in ANY run
-// state and follows the wider owner-or-admin predicate every other run-detail
-// read/write uses (getRunAuthorized), so folding it in would either narrow
-// this route or widen that one.
+// §3.4, packet H-5 = A: "Rename on the run page (owner only)"). OWNER
+// ONLY — unlike every other /runs/{id} route, an admin or a security_admin
+// on a foreign run gets the byte-identical 404 a non-owner gets (ownsRun,
+// helpers.go — no admin bypass at all). Deliberately its own route rather
+// than a widened handleSetRunEndAndWait: that handler refuses a terminal run
+// and admits a SUPER admin (ownsRunOrSuperAdmin) — a rename is allowed in ANY
+// run state and follows the STRICTER owner-only predicate, so folding it in
+// would either narrow that route's admin bypass or widen this one's.
 type runTitleRequest struct {
 	Title string `json:"title"`
 }
@@ -28,9 +30,12 @@ func (s *Server) handleSetRunTitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Owner-or-admin (getRunAuthorized): a foreign run gets the byte-identical
-	// 404 a truly-missing run would, same gate as GET /runs/{id}.
-	run, ok := s.getRunAuthorized(w, r, id)
+	// Owner ONLY (ownsRun, via getRunAuthorizedBy) — deliberately NOT
+	// getRunAuthorized's own default (owner-or-admin) predicate: a foreign
+	// run gets the byte-identical 404 a truly-missing run would, the same
+	// 404 shape GET /runs/{id} answers, just with no admin/security_admin
+	// door through.
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRun)
 	if !ok {
 		return
 	}

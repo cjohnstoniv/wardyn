@@ -154,6 +154,31 @@ func TestSetRunTitle_MemberOnForeignRunGets404(t *testing.T) {
 	}
 }
 
+// TestSetRunTitle_AdminOnForeignRunGets404: OWNER ONLY (design.md §3.4,
+// packet H-5 = A) — unlike every other /runs/{id} route, neither a SUPER
+// admin nor a security_admin bypasses ownership here. Both get the same
+// byte-identical 404 a non-owner member gets, and the store is untouched.
+func TestSetRunTitle_AdminOnForeignRunGets404(t *testing.T) {
+	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin} {
+		t.Run(role, func(t *testing.T) {
+			srv, st, audit := newRunTitleFixture(t, types.RunRunning)
+			id := st.dispatchTestStore.run.ID.String()
+			admin := ssoSession(t, "sub-some-admin", "admin@corp.example", role)
+
+			code, _ := runTitlePatch(t, srv, admin, id, `{"title":"admin rename"}`)
+			if code != http.StatusNotFound {
+				t.Fatalf("%s renaming a foreign run = %d, want 404 (owner only, no admin bypass)", role, code)
+			}
+			if got := st.storedTitle(); got != "original title" {
+				t.Errorf("stored title changed to %q after an %s rename; a refused rename must write nothing", got, role)
+			}
+			if rows := titleAuditRows(audit); len(rows) != 0 {
+				t.Errorf("run.title.set rows = %d on a refused %s rename, want 0", len(rows), role)
+			}
+		})
+	}
+}
+
 // TestSetRunTitle_TooLong: 201 characters is refused with the same
 // too-long shape create-run's title gets, and the store is untouched.
 func TestSetRunTitle_TooLong(t *testing.T) {

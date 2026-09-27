@@ -289,4 +289,20 @@ describe("titleFromTask", () => {
   it("is empty for an empty task, same as an untouched title", () => {
     expect(titleFromTask("")).toBe("");
   });
+
+  // F4 (#1197 L2 review): the task field tolerates tab/CR (the multiline
+  // exemption), but a title does not — an interior control character
+  // surviving into the prefill got the operator refused on Launch for a
+  // title they never typed.
+  it("collapses an interior tab into a space", () => {
+    expect(titleFromTask("Fix\tthe build")).toBe("Fix the build");
+  });
+
+  it("collapses a run of control characters (NUL, tab) into one space", () => {
+    expect(titleFromTask("Fix\tthe\u0000build")).toBe("Fix the build");
+  });
+
+  it("collapses an interior carriage return the same way", () => {
+    expect(titleFromTask("Fix\rthe build")).toBe("Fix the build");
+  });
 });

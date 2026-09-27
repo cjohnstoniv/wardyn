@@ -59,7 +59,11 @@ test.describe("Run rename", () => {
     expect(killed.status, killed.text).toBe(202);
 
     await navToRoute(page, `/runs/${id}`);
-    await expect(page.getByText("Killed", { exact: true })).toBeVisible();
+    // Scoped to the header: a killed run's Overview tab also renders its own
+    // "Killed" state chip in the failure block below, so an unscoped
+    // getByText matches two elements (strict-mode violation, caught once as
+    // a flake below).
+    await expect(page.getByTestId("run-summary-header").getByText("Killed", { exact: true })).toBeVisible();
     // A terminal run's Kill button is disabled, but Rename is not — a title
     // is a display field, not part of the lease (design.md §3.4).
     await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeDisabled();
@@ -74,6 +78,47 @@ test.describe("Run rename", () => {
     const stored = await consoleAPI(page, "GET", `/api/v1/runs/${id}`);
     expect(JSON.parse(stored.text).title).toBe("Renamed after ending");
     expect(JSON.parse(stored.text).state).toBe("KILLED");
+  });
+
+  // Review round 2, D2: the edit row used to sit INSIDE the summary bar's
+  // own 52px, overflow-hidden, xl:flex-nowrap row (an input at :458 beside
+  // the Save/Cancel buttons), which measured Kill's right edge at 1530.4px
+  // at a 1280 viewport and 1659.4px at 1536 — both off-screen. The fix
+  // renders the edit form as its own full-width row BELOW the bar instead
+  // (matching the mock's own layout), so it never competes with Kill for
+  // the bar's own tight width budget at any tested width.
+  test("the open edit row never pushes Kill off-screen, at 1280 and 1536", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-rename e2e width " + randomUUID().slice(0, 8));
+    // A TERMINAL run, not a live one: the Clone button (RUN.CLONE_CTA, "Start
+    // a run like this one") joins Kill in the action cluster then, the same
+    // worst-case combination the review measured Kill's right edge under.
+    const killed = await consoleAPI(page, "POST", `/api/v1/runs/${id}/kill`, {});
+    expect(killed.status, killed.text).toBe(202);
+    await navToRoute(page, `/runs/${id}`);
+    // Scoped to the header: a killed run's Overview tab also renders its own
+    // "Killed" state chip in the failure block below, so an unscoped
+    // getByText matches two elements (strict-mode violation).
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText("Killed", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(page.getByLabel("Title")).toBeVisible();
+
+    for (const width of [1280, 1536]) {
+      await page.setViewportSize({ width, height: 720 });
+      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      await expect(killBtn, `Kill visible at ${width}px with the editor open`).toBeVisible();
+      const killBox = await killBtn.boundingBox();
+      expect(killBox, `Kill boundingBox at ${width}px`).not.toBeNull();
+      expect(
+        killBox!.x + killBox!.width,
+        `Kill right edge at ${width}px with the editor open`,
+      ).toBeLessThanOrEqual(width);
+      // The editor itself is still open, on-screen and usable — the fix
+      // must not have hidden it to make Kill fit.
+      await expect(page.getByLabel("Title"), `Title input visible at ${width}px`).toBeVisible();
+    }
   });
 
   test("a member cannot rename someone else's run", async ({ page }) => {

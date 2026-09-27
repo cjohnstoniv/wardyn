@@ -10,8 +10,9 @@
 // red "requires the admin role" error the instant they open the terminal
 // below it (OverviewTab renders <AttachTerminal> whenever `attachable`).
 import type { ReactElement } from "react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -595,5 +596,76 @@ describe("SummaryHeader — the run's model provider chip", () => {
   it("a run under no provider block has no chip", () => {
     withStatus(providerStatus([{ provider: gateway }]), runningInteractive);
     expect(screen.queryByText(/^Model provider · /)).toBeNull();
+  });
+});
+
+// #1197 L2, review round 2 (F3/F5): what the Rename draft is seeded with,
+// and what happens when it is submitted empty.
+describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
+  const user = userEvent.setup();
+  const ownedRun: AgentRun = { ...runningInteractive, created_by: "me" };
+
+  // F3: an untitled run must not seed the draft from the WHOLE task —
+  // runHeadline's own fallback (title, then task, then "—") would seed a
+  // multi-line or 200+-char task verbatim, which the server refuses on
+  // Save, or the literal "—" for a task-less run.
+  it("seeds the draft from the task's first line (word-boundary, 80 chars) for an untitled run", async () => {
+    const run: AgentRun = {
+      ...ownedRun,
+      title: undefined,
+      task: "Fix the flaky test\nSee the CI log for the full stack trace",
+    };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={() => {}} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    expect(screen.getByLabelText("Title")).toHaveValue("Fix the flaky test");
+  });
+
+  it("seeds the draft from the run's own trimmed title when it has one", async () => {
+    const run: AgentRun = { ...ownedRun, title: "  My saved title  ", task: "irrelevant task text" };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={() => {}} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    expect(screen.getByLabelText("Title")).toHaveValue("My saved title");
+  });
+
+  // F5: an emptied draft is Cancel, not a "renamed to blank" success.
+  it("treats an empty draft as Cancel — onRename is never called, and the toast never fires", async () => {
+    const onRename = vi.fn();
+    const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={onRename} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const input = screen.getByLabelText("Title");
+    await user.clear(input);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onRename).not.toHaveBeenCalled();
+    // The form closes like a Cancel would — no lingering edit row.
+    expect(screen.queryByLabelText("Title")).toBeNull();
+  });
+
+  it("still submits a non-empty edited draft", async () => {
+    const onRename = vi.fn();
+    const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={onRename} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const input = screen.getByLabelText("Title");
+    await user.clear(input);
+    await user.type(input, "A real new title");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onRename).toHaveBeenCalledWith("A real new title");
   });
 });

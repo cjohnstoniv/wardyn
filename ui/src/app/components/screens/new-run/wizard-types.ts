@@ -413,9 +413,18 @@ export function cloneFromAudit(run: ClonableRun, events: AuditEvent[]): RunPrefi
 const MAX_PREFILLED_TITLE_LEN = 80;
 
 export function titleFromTask(task: string): string {
-  const firstLine = task.split("\n", 1)[0].trim();
-  if (firstLine.length <= MAX_PREFILLED_TITLE_LEN) return firstLine;
-  const cut = firstLine.slice(0, MAX_PREFILLED_TITLE_LEN);
+  const firstLine = task.split("\n", 1)[0];
+  // F4 (#1197 L2 review): the task field tolerates tab/CR (the multiline
+  // exemption, runFieldCharsAllowed's `multiline` arg) but a title does not
+  // (it is validated non-multiline both here and server-side), so an
+  // interior tab or other control character surviving into the prefill would
+  // get the operator refused on Launch for a title they never typed. Collapse
+  // every run of control characters and whitespace into one space BEFORE the
+  // length/word-boundary cut, so the prefilled title always passes the same
+  // check a hand-typed one does.
+  const collapsed = firstLine.replace(/[\p{Cc}\s]+/gu, " ").trim();
+  if (collapsed.length <= MAX_PREFILLED_TITLE_LEN) return collapsed;
+  const cut = collapsed.slice(0, MAX_PREFILLED_TITLE_LEN);
   const wordBoundary = cut.lastIndexOf(" ");
   return (wordBoundary > 0 ? cut.slice(0, wordBoundary) : cut).trim();
 }

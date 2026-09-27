@@ -281,11 +281,11 @@ export const runs = {
     return asJson<ProfileProposal>(res);
   },
 
-  // PATCH /api/v1/runs/{id}/title — owner-or-admin, any run state (#1197 L2).
-  // Deliberately its own call rather than folded into setEndAndWait: the two
-  // PATCH doors have different authorization tiers (this one owner-or-admin,
-  // that one owner-or-SUPER) and different state rules (this one works on a
-  // terminal run, that one refuses).
+  // PATCH /api/v1/runs/{id}/title — OWNER ONLY, no admin bypass, any run
+  // state (#1197 L2). Deliberately its own call rather than folded into
+  // setEndAndWait: the two PATCH doors have different authorization tiers
+  // (this one owner only, that one owner-or-SUPER) and different state rules
+  // (this one works on a terminal run, that one refuses).
   async setTitle(id: string, title: string): Promise<{ id: string; title: string }> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}/title`, {
       method: "PATCH",

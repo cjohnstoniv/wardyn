@@ -473,7 +473,8 @@ export function NewRunScreen() {
         {/* Left: the form */}
         <div className="min-w-0 space-y-4">
           {/* Identity first: the one thing that makes this run findable a week
-              from now, and the only field on the page that is always required. */}
+              from now. Title is optional (#1197 L2) — it defaults from the
+              task's own first line and stays editable. */}
           <SectionCard title="This run">
             <div className="space-y-4">
               <Field label="Title" htmlFor="nr-title">
