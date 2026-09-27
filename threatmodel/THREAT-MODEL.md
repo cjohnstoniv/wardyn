@@ -1317,8 +1317,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     it.** An admin reaching a member's owned workspace is authorized by design
     (`ownsWorkspaceOrAdmin` short-circuits on `isOperator`) — support and
     offboarding need it. v0.6 adds attribution, not separation of duties: the audit
-    actor stays the ADMIN's own principal (never the member's — no impersonation,
-    pinned by `TestWorkspaceOwner_NoImpersonation`) and every such event carries
+    actor stays the ADMIN's own principal (never the member's — no impersonation;
+    delegation is recorded as delegation, pinned by
+    `TestWorkspaceOwner_NoImpersonation`) and every such event carries
     `workspace_owner`. Nothing asks a second human to approve it, nothing notifies
     the member, and an admin who can rewrite the audit store at the database level
     is bounded only by the hash chain's tamper-EVIDENCE (§4.5). The workspace-noun
@@ -2232,6 +2233,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     stored keys, about thirty for a model-provider key's fifteen-minute TTL —
     not the ten minutes alone, and a store outage that outlasts the grace
     fails CLOSED (no header) rather than open.
+
+61. **A registered portal acts for anyone in its group whose live
+    identity-provider token it holds, for up to ten minutes per exchange
+    (#1142).** The portal's own credential (`wdp_`) plus the person's token
+    buys a delegated token (`wdg_`); a stolen portal credential alone mints
+    nothing, but the portal already sees its signed-in people's tokens, so a
+    compromised portal reaches every such person in its registered group —
+    at user reach only, on the delegation allow-list only (`delegationAllowed`
+    in `internal/api/delegation.go`; every other route is 403
+    `delegation_scope`), and recorded as `data.via` on every row. Bounds:
+    revoking the portal, or `POST /sessions/revoke` for the person, ends its
+    outstanding tokens on their next request (the lookup joins the portal's
+    `revoked_at`; the person's cutoff is `IsSessionRevoked`); a disable made
+    ONLY at the identity provider is seen at the next exchange, so it lags by
+    at most the ten-minute token lifetime (`delegatedTokenTTL`), not the
+    subject token's own. A portal registered under the wrong identity-provider
+    client id acts for whoever that client's tokens name, which is why only a
+    super admin registers one and why it may never be Wardyn's own client id.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

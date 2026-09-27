@@ -389,6 +389,8 @@ type Authenticator struct {
 	hmacKey    []byte
 	httpClient *http.Client // nil means http.DefaultClient; stored for test injection
 
+	subjectVerifier *gooidc.IDTokenVerifier // any audience: VerifySubjectToken checks it
+
 	// groupsScopeUnrequested records the one fact about this provider that the
 	// LOGIN-TIME half of the groups-scope warning needs and cannot recompute:
 	// the discovery document advertises a `groups` scope the authorization
@@ -502,6 +504,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		cfg:                    cfg,
 		oauth2:                 oa,
 		verifier:               verifier,
+		subjectVerifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
 		hmacKey:                hmacKey,
 		httpClient:             httpClient,
 		groupsScopeUnrequested: groupsScopeUnrequested,

@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -437,6 +438,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	finishCtx := s.cfg.BaseCtx
 	if finishCtx == nil {
 		finishCtx = context.Background()
+	}
+	if via, ok := audit.DelegationFrom(ctx); ok {
+		finishCtx = audit.WithDelegation(finishCtx, via) // the close rows name the portal too (#1142)
 	}
 	finishRecording(finishCtx, principalType, principal)
 

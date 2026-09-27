@@ -35,3 +35,4 @@ reason user_view_type_deleted
 reason admin_view
 reason model_provider_unavailable
 reason run_kept
+reason delegation_scope

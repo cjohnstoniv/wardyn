@@ -341,6 +341,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		Preset:          req.Preset,
 		PresetVersion:   req.PresetVersion,
 		OperatorOwned:   operatorOwned,
+		CreatedVia:      createdVia(ctx),
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)

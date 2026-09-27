@@ -251,7 +251,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// authorization signal, exactly as in handleAttachWS.
 	if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
-			map[string]any{"reason": "not the run owner"})
+			ta.withVia(map[string]any{"reason": "not the run owner"}))
 		writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
 		return
 	}
@@ -262,7 +262,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// A kept run is RUNNING with its agent stopped: nothing to open.
 	if runIsKept(run) {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
-			map[string]any{"reason": "run has ended"})
+			ta.withVia(map[string]any{"reason": "run has ended"}))
 		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
 		return
 	}
@@ -282,7 +282,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
-			map[string]any{"reason": "app not declared in the run's policy ui_apps"})
+			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
 		writeError(w, http.StatusForbidden, "no UI app named "+strconv.Quote(app)+" is declared in this run's policy ui_apps")
 		return
 	}
@@ -303,7 +303,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		Expires:  now.Add(ttl),
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		map[string]any{"app": declared.Name, "port": declared.Port})
+		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
 }
 

@@ -52,6 +52,9 @@ const (
 	// the view looks through was deleted. Not audited on its own — the cause
 	// row is ReasonUserViewTypeDeleted, which the launch response answered.
 	ReasonAdminView Reason = "admin_view"
+	// ReasonDelegationScope: a portal's delegated token asked for a route
+	// outside the delegation allow-list (#1142).
+	ReasonDelegationScope Reason = "delegation_scope"
 )
 
 // Refusal is one reason's registry row.
@@ -99,6 +102,7 @@ var refusals = map[Reason]Refusal{
 	ReasonUserTypeUnknown:                {Effect: EffectDeny, Audit: true},
 	ReasonUserViewTypeDeleted:            {Effect: EffectDeny, Audit: true},
 	ReasonAdminView:                      {Effect: EffectConflict},
+	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,
