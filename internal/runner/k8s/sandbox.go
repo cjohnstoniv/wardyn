@@ -24,8 +24,67 @@ import (
 )
 
 // proxyConfigSecretKey is the Secret data key CreateSandbox writes the proxy
-// config JSON under, and secretKeyRef reads it back from.
+// config JSON under.
 const proxyConfigSecretKey = "config.json"
+
+// The proxy config reaches the main wardyn-proxy container as a FILE, never
+// as a secret-backed environment variable (T-28, issue #688): an env var
+// resolved via secretKeyRef still lands in the container's own process
+// environment, where `kubectl exec ... env`, /proc/<pid>/environ, a core
+// dump, or any of the env-var credential scanners enterprise security teams
+// run all see it — the pod SPEC being API-unreadable (the property
+// secretKeyRef alone bought) does not help once the process is actually
+// running. Two volumes and a nonroot init container close that gap:
+//
+//  1. proxyConfigSecretVolumeName projects ONLY proxyConfigSecretKey out of
+//     the per-run Secret (never the agent's SecretEnv or managed-file
+//     entries that share the same Secret object) into the INIT container
+//     alone, at proxyConfigSecretFileMode.
+//  2. The init container (the SAME wardyn-proxy image, run with
+//     -stage-config-src/-stage-config-dst — cmd/wardyn-proxy's
+//     StageProxyConfig) copies that file into proxyConfigStagedVolumeName,
+//     an in-memory (Medium: Memory) emptyDir, as an owner-only 0400 file,
+//     then exits.
+//  3. The MAIN container mounts ONLY the staged emptyDir, read-only, and is
+//     launched with `-config <path>` — no Env entry for the config at all,
+//     so no secret-backed (or any) environment variable carries it.
+const (
+	proxyConfigSecretVolumeName = "wardyn-proxy-config-secret"
+	proxyConfigSecretMountDir   = "/var/run/wardyn-proxy-secret"
+	proxyConfigStagedVolumeName = "wardyn-proxy-config-staged"
+	proxyConfigStagedMountDir   = "/var/run/wardyn-proxy"
+	proxyConfigFileName         = "config.json"
+	stageProxyConfigInitName    = "stage-proxy-config"
+)
+
+// proxyConfigSecretFileMode is the Secret volume projection's file mode —
+// the plan's "project only the config JSON into a nonroot init container at
+// file mode 0440". A Secret-projected file is always OWNED by root:root
+// regardless of Mode (Mode sets permission bits only), so 0440's group-read
+// bit is what actually lets the init container's nonroot uid (65532) read
+// it — which requires proxyNonrootGID below on the POD's FSGroup, confirmed
+// empirically against a real cluster: without it the kubelet leaves the
+// file's group at root(0), a uid-65532 process is in neither root nor any
+// group that grants it, and the init container fails closed on "permission
+// denied" reading its own Secret volume.
+var proxyConfigSecretFileMode = int32(0o440)
+
+// proxyNonrootGID is the wardyn-proxy image's nonroot distroless GID (same
+// numeric value as its uid, 65532 — Google's documented convention). Set as
+// the proxy pod's FSGroup so the kubelet chowns the Secret-projected config
+// file's GROUP to it, making proxyConfigSecretFileMode's group-read bit
+// actually effective for the init container that reads it. It does NOT
+// widen who can read the STAGED file: that one is created by the init
+// container itself at mode 0400 (StageProxyConfig, owner-only — no group or
+// other bit at all), so FSGroup membership on every container in this pod
+// (fsGroup is pod-wide, not per-container) never lets the main container, or
+// anything else, read it by a group path that does not exist.
+var proxyNonrootGID = int64(65532)
+
+// proxyConfigSecretPath and proxyConfigStagedPath are the config file's full
+// path on each side of the staging copy.
+func proxyConfigSecretPath() string { return proxyConfigSecretMountDir + "/" + proxyConfigFileName }
+func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + proxyConfigFileName }
 
 // CreateSandbox provisions the run's Secret, NetworkPolicies, proxy pod, and
 // agent pod, in that order, fail-closed with full rollback on any error —
@@ -85,7 +144,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// ISSUED, not once it's actually gone — a pod mid-Terminating is
 	// unselected by any policy and so default-allow, reopening unconfined
 	// egress on a pod that already holds this run's live MITM CA key and
-	// RunToken (WARDYN_PROXY_CONFIG_JSON) for up to its full grace period.
+	// RunToken (the staged proxy config file) for up to its full grace period.
 	// Zero grace period: a partially-created sandbox was never handed to a
 	// caller, so there is no in-flight work to let drain gracefully.
 	fail := func(err error) (runner.Sandbox, error) {
@@ -204,6 +263,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
 		Spec: corev1.PodSpec{
 			AutomountServiceAccountToken: boolPtr(false),
+			// FSGroup makes proxyConfigSecretFileMode's group-read bit
+			// effective for the init container reading the Secret-projected
+			// config (see that var's doc — a Secret volume file is always
+			// root:root-owned regardless of Mode). Confirmed empirically: the
+			// init container fails closed on "permission denied" without this.
+			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID},
 			// The kubelet injects a <SVC>_SERVICE_HOST/<SVC>_PORT pair for EVERY
 			// Service in the namespace into every container when this is left at
 			// its default true. Nothing in any Wardyn image reads them — the agent
@@ -212,22 +277,57 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			// is hand untrusted code a free enumeration of the operator's service
 			// topology. Off, for the same reason as the line above it.
 			EnableServiceLinks: boolPtr(false),
-			Containers: []corev1.Container{{
-				Name:  proxyContainerName,
+			// InitContainers stages the proxy config JSON from the per-run
+			// Secret into an in-memory emptyDir as an owner-only 0400 file —
+			// see the doc comment on proxyConfigSecretVolumeName above. Runs
+			// the SAME image as the main container; restrictedSecurityContext
+			// (not agentSecurityContext) because that image, like the proxy's,
+			// runs as the distroless nonroot uid by default.
+			InitContainers: []corev1.Container{{
+				Name:  stageProxyConfigInitName,
 				Image: d.cfg.ProxyImage,
-				Env: []corev1.EnvVar{
-					{Name: "WARDYN_PROXY_CONFIG_JSON", ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{Name: secretName(spec.RunID)},
-							Key:                  proxyConfigSecretKey,
-						},
-					}},
-					{Name: "WARDYN_RUN_ID", Value: spec.RunID.String()},
-					{Name: "WARDYN_CONTROL_PLANE_URL", Value: spec.ProxyConfig.ControlPlaneURL},
+				Args:  []string{"-stage-config-src", proxyConfigSecretPath(), "-stage-config-dst", proxyConfigStagedPath()},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: proxyConfigSecretVolumeName, MountPath: proxyConfigSecretMountDir, ReadOnly: true},
+					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir},
 				},
 				SecurityContext: restrictedSecurityContext(),
 				Resources:       proxyResources(),
 			}},
+			Containers: []corev1.Container{{
+				Name:  proxyContainerName,
+				Image: d.cfg.ProxyImage,
+				// -config, not WARDYN_PROXY_CONFIG_JSON: the config now reaches
+				// this container only via the read-only staged-file mount below,
+				// never as a secret-backed environment variable (T-28, #688).
+				Args: []string{"-config", proxyConfigStagedPath()},
+				Env: []corev1.EnvVar{
+					{Name: "WARDYN_RUN_ID", Value: spec.RunID.String()},
+					{Name: "WARDYN_CONTROL_PLANE_URL", Value: spec.ProxyConfig.ControlPlaneURL},
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
+				},
+				SecurityContext: restrictedSecurityContext(),
+				Resources:       proxyResources(),
+			}},
+			Volumes: []corev1.Volume{
+				{
+					Name: proxyConfigSecretVolumeName,
+					VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+						SecretName: secretName(spec.RunID),
+						Items: []corev1.KeyToPath{{
+							Key:  proxyConfigSecretKey,
+							Path: proxyConfigFileName,
+							Mode: &proxyConfigSecretFileMode,
+						}},
+					}},
+				},
+				{
+					Name:         proxyConfigStagedVolumeName,
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory}},
+				},
+			},
 		},
 	}
 	// Operator knobs the sidecar reads from ITS OWN environment. A pod inherits
