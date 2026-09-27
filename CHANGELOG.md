@@ -108,6 +108,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   signatures are unchanged); `wardyn secret list` now prints the union of both lists with each
   name's scope, and **`--json` now emits the server's `{"names":[...],"mine":[...]}` object
   instead of a bare array of names** — a breaking change to that flag's output shape.
+- **Revive, admin restart and extension work on runs dispatched before the TLS control-plane hop
+  (#994).** Those runs' rendered proxy config names an `http://` control plane that the proxy's
+  config loader now refuses, so all three answered 409 "the run's proxy config does not load" for
+  exactly the standing runs "Restart with current limits" exists for. The config's control-plane
+  URL and CA are now set to the deployment's current pair before it is loaded; every other field
+  is loaded as rendered, so an unknown field, another run's config or an invalid current hop is
+  still refused before anything is minted or replaced.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
