@@ -28,6 +28,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [State stores](#state-stores)
 - [Monitoring](#monitoring)
 - [Multi-user: who can change what](#multi-user-who-can-change-what)
+- [Run lifetime: lease, extend, revive, ends](#run-lifetime-lease-extend-revive-ends)
 - [Exercising member mode as an admin](#exercising-member-mode-as-an-admin)
 - [Second user, same host](#second-user-same-host)
 - [Workspaces: three tiers](#workspaces-three-tiers)
@@ -2631,6 +2632,108 @@ classified admin/member/owner/anonymous/internal before it can ship;
 `internal/api/rbac_test.go` then proves the widest admin-gated routes really do
 403 a member. What Wardyn gives up is *breadth* — a deliberate two-tier split, not
 per-user roles or multi-org depth — not the governance itself.
+
+## Run lifetime: lease, extend, revive, ends
+
+*The long-holds design (RL-0..RL-11) landed across 0.8; this section covers what
+is actually wired today — the full audit contract for every event named here is
+`docs/AUDIT-ACTIONS.md`'s `run.end.set`, `run.wait_budget.set`, `run.ended`,
+`run.ended.expired`, `run.lost`, `run.lost.expired` and `run.revive` rows, which
+this section does not repeat.*
+
+Every run captures a **lease** at create: its owner's per-user-type run limits
+(resolved off the owner's user, groups and user type through the same
+governance-profile resolution "[Multi-user](#multi-user-who-can-change-what)"
+describes), an end (`ends_at`; `null` is "no end," only where the ceiling
+allows it) and a decision-wait budget (`wait_budget_sec`). A run keeps the
+limits it captured at create even if the profile that produced them changes
+later — extending or shortening the lease is bounded by what was captured, not
+by the profile's current shape.
+
+**Extend.** `PATCH /runs/{id}` moves a run's `ends_at` and `wait_budget_sec` —
+the run's owner, or a super admin acting with the owner's own authority, never
+a security admin's own ceiling. Moving the end LATER, within the captured
+maximum, is always allowed — that is what makes the lease extendable.
+Shortening it, granting "No end," or changing the wait needs the captured
+`user_changes_limits` gate; an over-ask is capped at the limit and the response
+says so. Every extend also re-checks the owner's CURRENT authority over the
+run's agent, workspaces, model provider, stored policy and git provider — an
+owner who has since lost one of those gets the extend refused, naming the
+capability, exactly as a revive does (below). A run already kept by its own
+end refuses the extend outright: its lease is over, and reviving from that
+state does not exist yet (see "What's not here" below).
+
+**End.** A run's own lease is what ends it — there is no separate "end now"
+action. Ending it immediately, with no grace, is a KILL (`POST
+/runs/{id}/kill`): a different, faster and more forceful path available to any
+admin (not just the owner or a super admin), tearing down broker credentials,
+identity and the sandbox all at once. When `ends_at` passes instead, the
+periodic lease sweep stops the run and, substrate and grace allowing, KEEPS it:
+the agent container is stopped (not removed), the proxy sidecar is stopped so
+the run has no network, its pending approvals are cancelled and its broker
+credentials get a best-effort, audit-only revoke — but the run's own identity
+is NOT revoked, so the run stays `RUNNING` and holds its quota slot until
+`WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or a
+kill. `run.ending_soon` warns at 24h, 1h and 10m before the end.
+
+A stopped-but-kept container is not an empty one: the proxy's own rendered
+configuration — its per-run TLS-MITM CA private key and its run token, still
+unrevoked and valid until its ≤1h TTL lapses from its last renewal (see
+#1176), included — sits in that container's own environment for the whole
+grace window, specifically so a revive (below) can read it back. Sizing
+`WARDYN_ENDED_RUN_GRACE` is therefore also sizing the exposure window of that
+container's own state to whoever already has host or Docker-daemon access —
+see the threat model's residual on kept-proxy-state. The same "kept, not
+removed" container also holds whatever the agent wrote to its own writable
+layer for that entire window, with nothing on the run's page or in the admin
+runs list reporting how much that is today.
+
+**Revive.** `POST /runs/{id}/revive` gives a run a NEW proxy sidecar under the
+OWNER's current governance-profile denies, without touching a running agent (a
+"proxy-only" revive, for a run lost to a control-plane outage) — or, for a run
+lost to a reboot, also restarts the kept agent container behind that new proxy
+so Claude Code can continue its conversation. Authority is always the owner's:
+an admin's click re-asserts the owner's own ceiling, never the caller's, so
+revive cannot hand a member's run limits it does not itself hold — but nothing
+scopes WHO may click it beyond "any super admin," over any run in the
+deployment (see the threat model). Revive is refused, nothing changed, when
+the run's captured profile no longer exists or now denies a host its git
+broker needs, the model credential its proxy would inject has been erased or
+its provider disabled, the run is past its end, or — this is the gap an open
+PR targets — **the run is already kept by its own end**; a live run, or one
+lost to an `outage` or a `reboot`, is revivable today. Admins get the same
+path in bulk over LIVE runs only: `POST /admin/runs/restart` ("Restart with
+current limits") and `GET /admin/runs/proxy-window` (listing runs on an
+out-of-window proxy release) — see the admin-routes table above.
+
+A revived run keeps its ORIGINAL agent image: a reboot revive restarts the
+same, already-created agent container rather than recreating it from the
+agent image an operator may since have patched. The only way onto a newer
+image is to end the run and start a new one.
+
+**Kubernetes cannot keep, revive, restart or pause a run.** The k8s runner
+substrate does not implement the optional runner capabilities the docker
+driver does (a k8s agent pins its sidecar proxy's pod IP, so there is no "same
+address, new container" to replace, and a stopped pod is gone, not kept). A
+k8s run's end and limits still fire on schedule — that half is NOT a gap — but
+ending, losing its sandbox, or (once it ships) being idle all degrade to an
+immediate, non-resumable teardown rather than a grace window. See
+[Kubernetes: known gaps](#kubernetes-known-gaps).
+
+**What's not here: pause.** The run-limits schema already carries a
+`pause_idle_after_sec` field (validated at write, like every other limit), and
+the runner layer already has a Freeze/Thaw primitive — the docker driver
+pauses the AGENT container only (`ContainerPause`/`ContainerUnpause`) while
+its proxy sidecar keeps running, so it keeps renewing its token and answering
+egress decisions while the agent is frozen. Neither is wired to anything on
+main today: no reaper reads `pause_idle_after_sec`, and nothing calls Freeze
+or Thaw outside a test. The run-facing behaviour is unchanged from before this
+release: an idle run is STOPPED — a terminal, full-teardown action, never a
+pause — by the same idle reaper `docs/POLICIES.md`'s `auto_stop_after_sec`
+already describes. Pause-and-resume is tracked as a follow-up and is not part
+of this release; when it ships, "paused" will mean the agent's processes are
+frozen, not that the run is any more contained than a running one — see the
+threat model.
 
 ## Exercising member mode as an admin
 
