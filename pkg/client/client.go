@@ -28,11 +28,11 @@
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
-//     ListSSHKeysPage/AddSSHKey (/api/v1/me/ssh-keys). The rest of /api/v1/me is
-//     NOT wrapped: see below.
+//     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
+//     /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
-//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDevices, RevokeDevice
+//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -46,12 +46,14 @@
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
+//   - /api/v1/people         — erasing a person's stored credentials (0.8, offboarding)
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
+//   - /api/v1/model-providers — the org's model-provider records (0.8). Admin-only
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
@@ -305,6 +307,13 @@ type CreateRunRequest struct {
 	// corporate-network id — those apply operator-wide already, and are never
 	// run-selectable) is a 400.
 	IntegrationID string `json:"integration_id,omitempty"`
+	// ModelProvider chooses this run's model provider (GET /model-providers,
+	// by id), ahead of a workspace's provider pin and the agent's default. It
+	// must be one the caller is granted, that is on and that serves Agent —
+	// otherwise the run is refused, never moved to another provider. Named on a
+	// deployment with no model providers, or on a run that calls no model, it
+	// is refused rather than ignored.
+	ModelProvider string `json:"model_provider,omitempty"`
 	// Drive opts this run into the member's USER DRIVE — the per-user storage
 	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
 	// today. Nothing here names a path or a drive: the server resolves which
@@ -372,8 +381,8 @@ type CreateRunResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// CreateRun submits a new agent run to the control plane.
-// Returns the created run (state PENDING or RUNNING) plus any advisory warnings.
+// CreateRun submits a new agent run and answers once the run row exists (state
+// PENDING, never RUNNING) plus any advisory warnings; build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
@@ -571,70 +580,6 @@ func (c *Client) Deny(ctx context.Context, id uuid.UUID, reason string, opts ...
 	}
 	err := c.do(ctx, http.MethodPost, "/api/v1/approvals/"+id.String()+"/deny", body, &out)
 	return out, err
-}
-
-// PolicyRequest is the body for POST/PUT /api/v1/policies. Name is required;
-// Spec is validated server-side before persistence (a bad spec is rejected
-// with 400, fail closed).
-type PolicyRequest struct {
-	Name string              `json:"name"`
-	Spec types.RunPolicySpec `json:"spec"`
-}
-
-// ListPoliciesPage is ListPolicies plus the server's X-Wardyn-Truncated signal:
-// truncated=true means a further page exists.
-func (c *Client) ListPoliciesPage(ctx context.Context, opts ...ListOpts) (policies []types.RunPolicy, truncated bool, err error) {
-	var hdr http.Header
-	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/policies", opts), nil, &policies, &hdr)
-	return policies, hdr.Get("X-Wardyn-Truncated") == "true", err
-}
-
-// ListPolicies returns run policies in reverse creation order. Pass a ListOpts to page.
-// Prefer ListPoliciesPage, which also returns the server's truncation signal.
-func (c *Client) ListPolicies(ctx context.Context, opts ...ListOpts) ([]types.RunPolicy, error) {
-	policies, _, err := c.ListPoliciesPage(ctx, opts...)
-	return policies, err
-}
-
-// GetPolicy fetches a single RunPolicy by its UUID.
-// Returns 404/APIError when the policy does not exist.
-func (c *Client) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error) {
-	var out types.RunPolicy
-	err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id.String(), nil, &out)
-	return out, err
-}
-
-// GetDefaultPolicy fetches the control plane's configured default policy
-// spec — the ceiling every run created without a policy_id gets, and the
-// ceiling composer.Clamp bounds a member-authored inline policy against
-// (W14-S1-6: previously unexposed by UI, CLI or API).
-func (c *Client) GetDefaultPolicy(ctx context.Context) (types.RunPolicySpec, error) {
-	var out types.RunPolicySpec
-	err := c.do(ctx, http.MethodGet, "/api/v1/policies/default", nil, &out)
-	return out, err
-}
-
-// CreatePolicy validates and persists a new policy.
-// Returns the created RunPolicy (status 201) on success; 400 on an invalid
-// name or spec.
-func (c *Client) CreatePolicy(ctx context.Context, req PolicyRequest) (types.RunPolicy, error) {
-	var out types.RunPolicy
-	err := c.do(ctx, http.MethodPost, "/api/v1/policies", req, &out)
-	return out, err
-}
-
-// UpdatePolicy validates and replaces an existing policy's name and spec.
-// Returns the updated RunPolicy on success; 404 when unknown; 400 when invalid.
-func (c *Client) UpdatePolicy(ctx context.Context, id uuid.UUID, req PolicyRequest) (types.RunPolicy, error) {
-	var out types.RunPolicy
-	err := c.do(ctx, http.MethodPut, "/api/v1/policies/"+id.String(), req, &out)
-	return out, err
-}
-
-// DeletePolicy removes a policy by id.
-// Returns nil on success (204); 404/APIError when the policy does not exist.
-func (c *Client) DeletePolicy(ctx context.Context, id uuid.UUID) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/policies/"+id.String(), nil, nil)
 }
 
 // AuditFilter narrows an audit query by the server's optional predicates —

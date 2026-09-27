@@ -354,10 +354,9 @@ func TestIntegrationFold_NewShapeRowsPassThrough(t *testing.T) {
 	if len(sc.Integrations) != 2 {
 		t.Fatalf("rows = %d, want 2 (a new-shape row is never dropped, whatever its slug)", len(sc.Integrations))
 	}
-	// The `probe` key in the fixture below is simply ignored now: the
-	// verification-probe framework went with the integration catalog it served
-	// (see the note where IntegrationProbe used to live). An unknown key must
-	// not fail the decode — a row stored under the old release still loads.
+	// The `probe` key in the fixture below is simply ignored: there is no
+	// verification-probe framework. An unknown key must not fail the decode — a
+	// row stored by an older release still loads.
 	mirror := fixtureRow(t, sc, "my-mirror")
 	if mirror.Kind != "artifact_mirror" {
 		t.Errorf("mirror row = %+v", mirror)

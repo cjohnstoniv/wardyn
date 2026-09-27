@@ -73,28 +73,29 @@ var bootEgressUnwantedScreens = []string{"Security notes", "Choose the text styl
 // Built by `make agent-images` / compose, same as every other :local tag.
 const bootEgressProxyImage = "wardyn/wardyn-proxy:local"
 
-// TestBootEgress_NoFirstUseApproval — finding 5, measured rather than argued.
+// TestBootEgress_NoFirstUseApproval — measured rather than argued.
 //
 // Boots the claude-code image as a real INTERACTIVE run behind a real
 // wardyn-proxy carrying a model-host-only allowlist with
 // first_use_approval=deny_with_review, attaches the way the console does, and
-// walks the run the way a human does: the workspace-trust prompt (the one screen
-// a human is meant to answer, and NOT the theme picker or "Security notes"),
-// then the single Enter that prompt's default invites, then the REPL — asserting
-// throughout that no first-use approval was raised and no host denied. A third
-// arm runs the AUTONOMOUS `claude -p` shape, which meets no dialog at all.
+// walks the run the way a human does: the workspace-trust prompt (the one
+// screen a human is meant to answer, and not the theme picker or "Security
+// notes"), then the single Enter that prompt's default invites, then the REPL —
+// asserting throughout that no first-use approval was raised and no host
+// denied. A third arm runs the autonomous `claude -p` shape, which meets no
+// dialog at all.
 //
-// RED at d8f26511: the boot parks on `downloads.claude.ai` and `github.com` —
-// the field report's pair — and the first screen is the theme picker. Those two
-// are the CLI auto-installing the OFFICIAL PLUGIN MARKETPLACE on first REPL
-// start (GCS fetch, git fallback), NOT the updater: on this image's npm install
-// the update check dials registry.npmjs.org, which the default policy already
-// allows, so it never parked.
+// The hosts at stake are downloads.claude.ai and github.com: the CLI
+// auto-installing the official plugin marketplace on first REPL start (GCS
+// fetch, git fallback), not the updater — on this image's npm install the
+// update check dials registry.npmjs.org, which the default policy already
+// allows. Without the onboarding seed the boot parks on that pair, and the
+// first screen is the theme picker.
 //
-// Which is why this test presses Enter and keeps measuring. An earlier revision
-// stopped at the trust prompt and reported "zero approvals" while the product
-// was one keystroke away from dialling both — a measurement that agreed with a
-// wrong explanation because it never reached the code that fetches.
+// Which is why this test presses Enter and keeps measuring: stopping at the
+// trust prompt would report "zero approvals" while the product is one keystroke
+// away from dialling both — a measurement that never reaches the code that
+// fetches.
 //
 // The host list and the raw decision rows are logged on every run, pass or fail:
 // the measurement is the point, not just the verdict.
@@ -198,10 +199,9 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 		t.Logf("%s is not the claude-code image; screen assertions skipped (the host measurement still applies)", image)
 	}
 
-	// PHASE 2 — PAST the dialog, which is where this test used to be blind. The
-	// hosts that matter are fetched once the REPL is actually up, so a run that
-	// stops at a pre-REPL prompt can report "zero approvals" while the product is
-	// about to dial two.
+	// Phase 2 — past the dialog. The hosts that matter are fetched once the REPL
+	// is actually up, so a run that stops at a pre-REPL prompt can report "zero
+	// approvals" while the product is about to dial two.
 	//
 	// Press the one key the human presses (the default option is already "Yes, I
 	// trust this folder") and wait for the prompt. Then keep pressing, bounded:

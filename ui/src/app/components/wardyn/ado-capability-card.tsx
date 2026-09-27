@@ -39,7 +39,7 @@
 //
 // WHO MAY DECIDE (round-2 fix): canDecideAdoCapability(securityOperator,
 // isRunOwner) — the run's OWNER or a security operator, mirroring
-// authorizeMemberDecision/ownsRunOrAdmin exactly. securityOperator already
+// authorizeUserDecision/ownsRunOrAdmin exactly. securityOperator already
 // INCLUDES a plain admin: isSecurityOperator (internal/api/http.go) is true
 // for oidc.RoleAdmin as well as oidc.RoleSecurityAdmin ("a super admin is a
 // security admin too — the tiers overlap on this surface"). There is no
@@ -50,7 +50,13 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
-import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, type AdoConsentScope } from "../../lib/types/approvals";
+import {
+  ADO_HOLD_WINDOW_MS,
+  canDecideAdoCapability,
+  isAdoConsentRequest,
+  type AdoCapabilityScope,
+  type AdoConsentScope,
+} from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
 import { Button } from "../ui/button";
@@ -123,11 +129,12 @@ const SCOPE_LABEL: Record<"once" | "run", string> = { once: "Once", run: "This r
 // names. No expiry timestamp reaches the client (unlike egress's
 // HOLD_TIMEOUT_MS), so this is derived from requested_at, exactly the way
 // isHeld (lib/types/approvals.ts) derives egress's own HOLD_TIMEOUT_MS check.
-const HOLD_WINDOW_MS = 240_000;
-
+// ADO_HOLD_WINDOW_MS is the SAME 240_000 isHeld itself now reads for this
+// exact row shape (#725/F1) — imported rather than redeclared so the two
+// never drift apart again.
 function stillHeld(requestedAt: string): boolean {
   const at = Date.parse(requestedAt);
-  return Number.isNaN(at) ? true : Date.now() - at < HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
+  return Number.isNaN(at) ? true : Date.now() - at < ADO_HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
 }
 
 // boldFirstWord — round-2 fix N2: REQ_APPROVING_ONCE/RUN and REQ_DENYING
@@ -221,7 +228,7 @@ export function AdoCapabilityCard({
     setHeld(stillHeld(item.requested_at));
     const at = Date.parse(item.requested_at);
     if (Number.isNaN(at)) return;
-    const msLeft = HOLD_WINDOW_MS - (Date.now() - at);
+    const msLeft = ADO_HOLD_WINDOW_MS - (Date.now() - at);
     if (msLeft <= 0) return; // already past the window — no timer to set
     const timer = setTimeout(() => setHeld(false), msLeft);
     return () => clearTimeout(timer);
@@ -458,7 +465,7 @@ function AdoScopeMenu({
 // (or "you allowed it") the wire scope cannot back on every path — see its
 // own doc note in ado-entra-copy.ts.
 //
-// REQ_CONSENT_CTA links to /settings#azure-devops, not a route of its own:
+// REQ_CONSENT_CTA links to /account#azure-devops, not a route of its own:
 // F9 (S10 round 3) pointed it at the same Azure DevOps connection surface
 // #415 built (screens/settings/ado-connection.tsx's AdoConnectionCard,
 // mounted unconditionally on the one settings-screen.tsx page — no tabs, no
@@ -466,7 +473,8 @@ function AdoScopeMenu({
 // label to that card's own CTA ("Connect Azure DevOps", CONNECT_ADO) — a
 // bare `<Link to="/settings">` landed at the top of a five-card page with
 // no way to find the one card this door is actually about, and the two CTAs
-// named the same act two different ways.
+// named the same act two different ways. M-1b: it's your own connection
+// (#386), so the anchor moved to /account when /settings was deleted.
 function AdoConsentCard({
   item,
   viewerPrincipal,
@@ -507,7 +515,7 @@ function AdoConsentCard({
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings#azure-devops">{copy.cta}</Link>
+            <Link to="/account#azure-devops">{copy.cta}</Link>
           </Button>
         </div>
       )}

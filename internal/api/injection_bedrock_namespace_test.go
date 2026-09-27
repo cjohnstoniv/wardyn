@@ -135,7 +135,7 @@ func dispatchBearerGrant(t *testing.T, h *harness, st *bearerGuardStore, injecti
 	defer func() { h.srv.cfg.Store = st }()
 	policy := types.RunPolicySpec{}
 	plan, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{},
-		&policy, map[string]string{}, injections, "", artifactRedirectPlan{}, false, st.site, true, false)
+		&policy, map[string]string{}, injections, "", artifactRedirectPlan{}, false, st.site, true, false, bedrockCredUngraded())
 	if !ok || !plan.llm.injectBedrockBearer || len(captured.grants) != 1 {
 		t.Fatalf("dispatch: ok=%v injectBedrockBearer=%v grants=%d, want a bearer run with exactly one grant",
 			ok, plan.llm.injectBedrockBearer, len(captured.grants))
@@ -219,7 +219,7 @@ func TestDispatch_BedrockBearerGrantIsTheOnlyOneNamingTheKey(t *testing.T) {
 		t.Fatalf("injections naming %s = %v, want only dispatch's own grant %s", bedrockAPIKeySecret, named, grant.ID)
 	}
 	// The drop is audited, naming the dropped grant and why.
-	ev := lastAuditEvent(t, h.audit.events, "run.injection.dropped")
+	ev := lastAuditEvent(t, h.audit.events, "run.injection.drop")
 	if ev.Target != stale.GrantID.String() || ev.Outcome != "denied" ||
 		!strings.Contains(string(ev.Data), "bedrock_bearer_not_dispatch_authored") {
 		t.Fatalf("drop audit = target %s outcome %s data %s, want the stale grant %s denied with its reason",
@@ -380,7 +380,7 @@ func assertBedrockBearerRefused(t *testing.T, rr *httptest.ResponseRecorder, h *
 		}
 	}
 	ev := lastAuditEvent(t, h.audit.events, "secret.read")
-	if !strings.Contains(string(ev.Data), wantReason) {
+	if !strings.Contains(string(ev.Data), `"reason":"`+wantReason+`"`) {
 		t.Fatalf("audit data = %s, want reason %q", ev.Data, wantReason)
 	}
 	// #656: the same machine reason now reaches the WIRE body, not just the

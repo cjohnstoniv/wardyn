@@ -70,7 +70,7 @@ $(printf '%b' "${missing}")"
 # deploy/compose/docker-compose.yaml, and compose passes a variable into the
 # container ONLY if that file's `environment:` block lists it. An envelope key
 # with no forward is silently inert — the file MDM ships says the posture is on
-# and wardynd never sees it. That is how WARDYN_MEMBER_MODE (every m' laptop
+# and wardynd never sees it. That is how WARDYN_USER_DESKTOP (every m' laptop
 # booting as the plain admin-token tier, every member host mount refused) and
 # WARDYN_EGRESS_SECOND_HUMAN (the four-eyes egress gate OFF where the envelope
 # claims it on) both shipped: two High config-drift findings, one missing
@@ -149,8 +149,8 @@ MPRIME="${DESK_DIR}/wardyn.env.m-prime.example"
 
 
 # (a) It is actually member mode, with SSO. Either half alone is not m'.
-[ "$(env_get "${MPRIME}" WARDYN_MEMBER_MODE)" = "true" ] \
-  || fail "m-prime envelope does not set WARDYN_MEMBER_MODE=true"
+[ "$(env_get "${MPRIME}" WARDYN_USER_DESKTOP)" = "true" ] \
+  || fail "m-prime envelope does not set WARDYN_USER_DESKTOP=true"
 [ "$(env_get "${MPRIME}" WARDYN_LOCAL_MODE)" = "false" ] \
   || fail "m-prime envelope must set WARDYN_LOCAL_MODE=false — a configured issuer plus explicit local mode is refused at boot, and would silently disable the SSO RBAC that makes this profile mean anything"
 [ -n "$(env_get "${MPRIME}" WARDYN_OIDC_ISSUER)" ] \
@@ -159,9 +159,9 @@ MPRIME="${DESK_DIR}/wardyn.env.m-prime.example"
 # (b) The member can actually mount their own project directory. Unset means
 #     "members may not mount host directories at all", which turns off the one
 #     power m' exists to add.
-roots="$(env_get "${MPRIME}" WARDYN_MEMBER_WORKSPACE_ROOTS)"
+roots="$(env_get "${MPRIME}" WARDYN_USER_WORKSPACE_ROOTS)"
 [ -n "${roots}" ] \
-  || fail "m-prime envelope leaves WARDYN_MEMBER_WORKSPACE_ROOTS unset — members may then mount NOTHING, which is the one power m' exists to add"
+  || fail "m-prime envelope leaves WARDYN_USER_WORKSPACE_ROOTS unset — members may then mount NOTHING, which is the one power m' exists to add"
 
 # (c) ...and those roots are NARROW. `/` or a home directory leaves the dotfile
 #     deny-list as the only thing between a member and the operator's ~/.ssh,
@@ -175,11 +175,11 @@ for r in "${_roots[@]}"; do
   [ -n "${r}" ] || continue
   case "${r}" in
     /|/root|/home|/Users|/home/|/Users/|'$HOME'|'~')
-      fail "m-prime WARDYN_MEMBER_WORKSPACE_ROOTS contains '${r}' — a root that wide leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials. MDM copies this file to every laptop." ;;
+      fail "m-prime WARDYN_USER_WORKSPACE_ROOTS contains '${r}' — a root that wide leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials. MDM copies this file to every laptop." ;;
   esac
   case "${r}" in
     /*) ;;
-    *) fail "m-prime WARDYN_MEMBER_WORKSPACE_ROOTS entry '${r}' is not an absolute path (docs/ENV.md: CSV of absolute paths)" ;;
+    *) fail "m-prime WARDYN_USER_WORKSPACE_ROOTS entry '${r}' is not an absolute path (docs/ENV.md: CSV of absolute paths)" ;;
   esac
 done
 
@@ -434,8 +434,8 @@ echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #
 # install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag
-# publish-image.yml pushes on every merge and never cosign-signs, and it runs
-# AS ROOT to mint the device's age identity. The envelope pins
+# publish-image.yml pushes after CI passes on main and never cosign-signs, and
+# it runs AS ROOT to mint the device's age identity. The envelope pins
 # WARDYN_WARDYND_IMAGE by digest, so a reader of DESKTOP.md would reasonably
 # assume the whole lane is pinned. scripts/check-image-pins.sh pins the console
 # warning; this pins the doc.

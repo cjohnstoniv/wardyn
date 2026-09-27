@@ -189,13 +189,14 @@ type Store interface {
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
-	// RefreshAPITokenIdentity re-stamps role AND the group snapshot (plus its
-	// completeness bit) on every unrevoked api_tokens row a principal holds.
+	// RefreshAPITokenIdentity re-stamps role, user type AND the group snapshot
+	// (plus its completeness bit) on every unrevoked api_tokens row a principal
+	// holds.
 	// Fired from the SAME OnLogin hook as RefreshSSHKeyRoles, because both
 	// credentials freeze an identity at issue time and neither had any way to
 	// learn about a demotion or a group change. See the implementation for the
 	// ceiling it does NOT remove.
-	RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error
+	RefreshAPITokenIdentity(ctx context.Context, principal, role, userType string, groups []string, truncated bool) error
 
 	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
@@ -242,15 +243,23 @@ type Store interface {
 	ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error)
 	// ListCapabilityGrantsFor returns the grants that could apply to one caller:
 	// the `all` rows plus the `user` rows naming any of users (sub AND email)
-	// plus the `group` rows naming any of groups. Not filtered by capability —
-	// see the implementation's doc comment.
-	ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error)
+	// plus the `group` rows naming any of groups plus the `user_type` rows
+	// naming userType ("" names none). Not filtered by capability — see the
+	// implementation's doc comment.
+	ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error)
 	// GetCapabilityEnforcement returns the sparse per-kind switch map; an absent
 	// key means NOT enforced, which is the zero-config back-compat default.
 	GetCapabilityEnforcement(ctx context.Context) (map[string]bool, error)
 	// PutCapabilityEnforcement replaces the WHOLE map (a capability the caller
 	// omits loses its row) and returns the stored result.
 	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
+	// ListCapabilityRestrictions returns the restricted values ("Available to:
+	// Only...", migration 0081) as kind -> set of values; an absent value is
+	// not restricted. Never nil.
+	ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error)
+	// SetCapabilityRestriction turns one value's restriction on or off
+	// (idempotent either way).
+	SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error
 
 	// Console-managed role mappings (migration 0051, store_role_mappings.go):
 	// the store half of internal/auth/oidc's RoleMappingSource, read once per
@@ -282,6 +291,8 @@ type Store interface {
 	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UserTypeReferences(ctx context.Context, id string) (int, error)
+	// UserTypeTokenStamps counts the unrevoked API tokens stamped with the type.
+	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
 	DeleteUserType(ctx context.Context, id string) error
 
 	// Governance profiles and their subject assignments (migration 0052,
@@ -311,7 +322,7 @@ type Store interface {
 	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error
 	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
 	// ResolveGovernanceProfile returns THE ONE profile that applies to a caller
-	// — user > group > all, sub over email within the user tier, then priority
+	// — user > group > user_type > all, sub over email within the user tier, then priority
 	// DESC and name ASC — as a single indexed read whose ORDER BY IS the whole
 	// precedence rule. ErrNotFound means "no assignment matched", which the
 	// caller reads as the deployment ceiling. userSubjects must arrive in the
@@ -332,7 +343,7 @@ type Store interface {
 	// folded into this statement: the case that needs it most is the one where
 	// this query matches NOTHING, and a zero-row result carries no EXISTS
 	// column with it.
-	ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error)
+	ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error)
 	// HasGroupTierAssignments gates the stale/truncated group-snapshot refusal:
 	// with no group-tier row there is nothing an unknown group could have
 	// matched, so a nil or truncated snapshot must fall through rather than
@@ -391,7 +402,7 @@ type Store interface {
 	DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error)
 	ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error)
 	// ResolveUserDrive returns THE ONE drive that applies to a caller — user >
-	// group > all, sub over email within the user tier, then priority DESC and
+	// group > user_type > all, sub over email within the user tier, then priority DESC and
 	// the drive's name ASC — as a single indexed read whose ORDER BY IS the
 	// whole precedence rule, the same one ResolveGovernanceProfile carries.
 	// DISABLED grants are IN the query: one that wins its tier comes back with
@@ -408,7 +419,7 @@ type Store interface {
 	// group snapshot the caller must resolve with NO groups and then tell a
 	// user-tier winner (serve it) from an all-tier one (refuse — a group row
 	// could have outranked it).
-	ResolveUserDrive(ctx context.Context, userSubjects, groups []string) (
+	ResolveUserDrive(ctx context.Context, userSubjects, groups []string, userType string) (
 		*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error)
 	// HasGroupTierDriveGrants gates the stale/truncated group-snapshot refusal:
 	// with no group-tier row there is nothing an unknown group could have

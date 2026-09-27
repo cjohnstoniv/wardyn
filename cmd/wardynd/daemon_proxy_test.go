@@ -425,7 +425,7 @@ func TestInstallBootTransport_MalformedProxyRefusesBoot(t *testing.T) {
 	}
 }
 
-// ─── WARDYN_DAEMON_PROXY_SECRET (credentialed file path) ────────────────────
+// WARDYN_DAEMON_PROXY_SECRET (credentialed file path)
 
 func TestInstallDaemonProxySecret_UnsetLeavesTransportUntouched(t *testing.T) {
 	tr := freshTransport()

@@ -158,7 +158,7 @@ export { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX, POLICY_UI_APPS } from ".
 export { YOUR_MODEL_KEY } from "./copy/model-key";
 export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY, RUNS_WAIT } from "./copy/getting-started";
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
-export { PEOPLE_STEP, SITE } from "./copy/setup-steps";
+export { PEOPLE_STEP, SETUP, SITE } from "./copy/setup-steps";
 export { SHELL, UNSAVED_GUARD } from "./copy/shell";
 export { RUN } from "./copy/run-clone";
 

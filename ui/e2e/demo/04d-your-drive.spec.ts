@@ -967,7 +967,7 @@ test("V04d act 5 — when someone leaves", async () => {
   await page.goto("/");
   await dexSignIn(page, ADMIN);
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
-  await page.goto("/drives");
+  await page.goto("/admin/drives");
   await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "Back to the admin — and the one thing this release does not do for you."); // C58
   await beat(page, PACE.read);

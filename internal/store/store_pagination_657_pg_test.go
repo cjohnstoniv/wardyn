@@ -15,6 +15,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestPG_ListSSHKeysByPrincipalPage_LimitOffset(t *testing.T) {
 			Principal:   principal,
 			Name:        "key",
 			PublicKey:   "ssh-ed25519 AAAAtest " + uuid.NewString(),
-			Role:        "member",
+			Role:        "user",
 		}
 		if _, err := pg.AddSSHKey(ctx, k); err != nil {
 			t.Fatalf("add ssh key %d: %v", i, err)
@@ -153,7 +154,7 @@ func TestPG_ListAPITokensByPrincipalPage_LimitOffset(t *testing.T) {
 	var ids []uuid.UUID
 	for i := 0; i < n; i++ {
 		tok := types.APIToken{
-			ID: uuid.New(), Principal: principal, Role: "member", Name: "ci",
+			ID: uuid.New(), Principal: principal, Role: "user", UserType: types.UserTypeStandard, Name: "ci",
 		}
 		created, err := pg.CreateAPIToken(ctx, tok, "wdn_"+uuid.NewString())
 		if err != nil {
@@ -219,7 +220,7 @@ func TestPG_ListCapabilityGrantsForPage_LimitOffset(t *testing.T) {
 	// unbounded baseline instead of an exact count — still a real end-to-end
 	// proof of the SQL window, just not dependent on this test owning the whole
 	// table the way the run- and principal-scoped pages above can.
-	all, err := pg.ListCapabilityGrantsForPage(ctx, users, nil, store.Page{})
+	all, err := pg.ListCapabilityGrantsForPage(ctx, users, nil, "", store.Page{})
 	if err != nil {
 		t.Fatalf("unbounded: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestPG_ListCapabilityGrantsForPage_LimitOffset(t *testing.T) {
 	}
 
 	limit := len(all) - 1
-	page1, err := pg.ListCapabilityGrantsForPage(ctx, users, nil, store.Page{Limit: limit})
+	page1, err := pg.ListCapabilityGrantsForPage(ctx, users, nil, "", store.Page{Limit: limit})
 	if err != nil {
 		t.Fatalf("limit page: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestPG_ListCapabilityGrantsForPage_LimitOffset(t *testing.T) {
 		}
 	}
 
-	page2, err := pg.ListCapabilityGrantsForPage(ctx, users, nil, store.Page{Limit: len(all), Offset: 1})
+	page2, err := pg.ListCapabilityGrantsForPage(ctx, users, nil, "", store.Page{Limit: len(all), Offset: 1})
 	if err != nil {
 		t.Fatalf("offset page: %v", err)
 	}
@@ -251,6 +252,63 @@ func TestPG_ListCapabilityGrantsForPage_LimitOffset(t *testing.T) {
 	for i := range page2 {
 		if page2[i].ID != all[i+1].ID {
 			t.Fatalf("page2[%d].ID = %s, want %s (offset mismatch)", i, page2[i].ID, all[i+1].ID)
+		}
+	}
+}
+
+// TestPG_ListCapabilityGrantsForPage_MatchesUnpaged: GET /me/capabilities
+// serves the paged read whenever the store has one, so it must return every
+// row ListCapabilityGrantsFor does for the same caller, a `user_type` grant
+// (#612) included. Train 17 merged #657's pager, written before user types,
+// beside #893's fourth subject arm, and the page silently dropped it.
+func TestPG_ListCapabilityGrantsForPage_MatchesUnpaged(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	user, group, userType := "cap-page-u-"+uuid.NewString(), "cap-page-g-"+uuid.NewString(), "cap-page-t-"+uuid.NewString()[:8]
+	// Another type's grant, which neither read may return for this caller.
+	otherType := "cap-page-other-" + uuid.NewString()[:8]
+	for _, g := range []types.CapabilityGrant{
+		{SubjectType: types.CapabilitySubjectUser, Subject: user},
+		{SubjectType: types.CapabilitySubjectGroup, Subject: group},
+		{SubjectType: types.CapabilitySubjectUserType, Subject: userType},
+		{SubjectType: types.CapabilitySubjectUserType, Subject: otherType},
+	} {
+		g.Capability, g.Value, g.Effect, g.CreatedBy = "egress_host", "example.com", types.CapabilityAllow, "test"
+		if _, err := pg.UpsertCapabilityGrant(ctx, g); err != nil {
+			t.Fatalf("upsert %s grant: %v", g.SubjectType, err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM capability_grants WHERE subject_type=$1 AND subject=$2`, string(g.SubjectType), g.Subject)
+		})
+	}
+
+	users, groups := []string{user}, []string{group}
+	want, err := pg.ListCapabilityGrantsFor(ctx, users, groups, userType)
+	if err != nil {
+		t.Fatalf("unpaged: %v", err)
+	}
+	got, err := pg.ListCapabilityGrantsForPage(ctx, users, groups, userType, store.Page{})
+	if err != nil {
+		t.Fatalf("paged: %v", err)
+	}
+	var ids []uuid.UUID
+	for _, g := range got {
+		ids = append(ids, g.ID)
+	}
+	for _, w := range want {
+		if !slices.Contains(ids, w.ID) {
+			t.Errorf("the page drops the %s grant %q that the unpaged read returns", w.SubjectType, w.Subject)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("paged %d rows, unpaged %d", len(got), len(want))
+	}
+	for name, rows := range map[string][]types.CapabilityGrant{"paged": got, "unpaged": want} {
+		for _, g := range rows {
+			if g.Subject == otherType {
+				t.Errorf("the %s read returns user type %q's grant to a caller of type %q", name, otherType, userType)
+			}
 		}
 	}
 }

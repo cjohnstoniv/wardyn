@@ -17,6 +17,10 @@ type Deps struct {
 	// ProxyImage is the wardyn-proxy sidecar image the substrate launches beside
 	// each agent (the sole egress path — L0).
 	ProxyImage string
+	// DriveProbeImage is the OCI image the docker substrate's host_path
+	// drive-readability probe (#165) runs in. Empty = the substrate's own
+	// pinned default; a non-OCI substrate with no such probe ignores it.
+	DriveProbeImage string
 	// ConfinementRuntimes are the operator's fail-closed per-class runtime pins
 	// (WARDYN_CONFINEMENT_MAP); nil = the substrate's built-in defaults.
 	ConfinementRuntimes map[types.ConfinementClass]string

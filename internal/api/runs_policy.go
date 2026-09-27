@@ -211,7 +211,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// the run payload — the console's UI-apps lane needs it, and the run row
 	// cannot answer it (agent_runs carries policy_id only, and an inline or
 	// default policy has no row to fetch). Resolved from the same
-	// run.policy.effective envelope the UI gateway itself trusts. A store
+	// run.policy.resolve envelope the UI gateway itself trusts. A store
 	// failure is logged and the field omitted rather than failing the whole run
 	// read: every other field is already loaded and correct, and a missing
 	// ui_apps renders the lane's "no apps declared" state, which is the
@@ -227,18 +227,20 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
-// scanned for its run.policy.effective envelope. Dispatch writes that event
+// scanned for its run.policy.resolve envelope. Dispatch writes that event
 // before the sandbox exists, so it is always among a run's first events; the
 // bound keeps a long-lived run's audit tail out of the query.
 const effectivePolicyAuditScan = 200
 
 // effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
-// authorization envelope dispatch recorded as run.policy.effective
-// (runs_dispatch.go), which is the ONLY post-hoc source of a run's real spec:
-// agent_runs.policy_id has no spec column, run_policies.spec is overwritten in
-// place, and an inline/default policy has no stored row at all. Resolving
-// through policy_id instead would hand a run created with an INLINE policy the
-// DEFAULT policy's apps — a widening this must never do.
+// authorization envelope dispatch recorded as run.policy.resolve
+// (runs_dispatch.go; canonicalAction also accepts a run dispatched before
+// 0.8, run.policy.effective — audit_legacy.go), which is the ONLY post-hoc
+// source of a run's real spec: agent_runs.policy_id has no spec column,
+// run_policies.spec is overwritten in place, and an inline/default policy has
+// no stored row at all. Resolving through policy_id instead would hand a run
+// created with an INLINE policy the DEFAULT policy's apps — a widening this
+// must never do.
 //
 // A run with no such event (never dispatched, or the audit store unavailable)
 // yields no apps, so every caller fails closed on it.
@@ -252,7 +254,7 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	}
 	var apps []types.UIApp
 	for _, ev := range events {
-		if ev.Action != "run.policy.effective" || len(ev.Data) == 0 {
+		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
 		var spec types.RunPolicySpec

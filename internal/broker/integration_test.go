@@ -54,7 +54,8 @@ func TestIntegration_MintWritesJTIInSameTx(t *testing.T) {
 		t.Fatalf("insert approval: %v", err)
 	}
 
-	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, &FakeGitHubMinter{Token: "ghs_int"})
+	sink := &recordingSink{}
+	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, &FakeGitHubMinter{Token: "ghs_int"}).WithSIEM(sink)
 
 	minted, err := b.MintForGrant(ctx, callerFor(runID), grantID)
 	if err != nil {
@@ -67,11 +68,23 @@ func TestIntegration_MintWritesJTIInSameTx(t *testing.T) {
 	if gotJTI != minted.JTI {
 		t.Fatalf("minted_jti = %q, want %q", gotJTI, minted.JTI)
 	}
+	assertSIEMMints(t, sink, minted.Token, minted.JTI)
+	// The fanned-out event is the committed row itself, not a second event.
+	var rowID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM audit_events WHERE run_id=$1 AND action='credential.mint' AND outcome='success'`,
+		runID).Scan(&rowID); err != nil {
+		t.Fatalf("read committed mint row: %v", err)
+	}
+	if events, _ := sink.snapshot(); events[0].ID != rowID {
+		t.Fatalf("SIEM event id = %s, want the committed row %s", events[0].ID, rowID)
+	}
 
 	// Double-mint blocked at the DB level.
 	if _, err := b.MintForGrant(ctx, callerFor(runID), grantID); !errors.Is(err, ErrAlreadyMinted) {
 		t.Fatalf("double mint: want ErrAlreadyMinted, got %v", err)
 	}
+	assertSIEMMints(t, sink, minted.Token, minted.JTI) // the refused re-mint adds nothing
 
 	// RevokeRun finds the minted jti and emits an audit revoke.
 	au := &fakeAudit{}

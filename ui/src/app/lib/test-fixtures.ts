@@ -13,7 +13,56 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { Me, MeUserDrive } from "./api/health";
-import type { SetupStatus } from "./types";
+import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
+
+// The multi-provider design's fixture providers (§5), as /setup/status
+// publishes them to one person — shared by the door, the strip and the
+// entrances that open it.
+export const MODEL_PROVIDERS = {
+  bedrock: {
+    id: "bedrock-prod",
+    name: "Bedrock (prod)",
+    kind: "bedrock_sso",
+    harnesses: ["claude-code"],
+    host: "bedrock-runtime.us-east-1.amazonaws.com",
+  },
+  claude: {
+    id: "claude-sub",
+    name: "Claude subscription",
+    kind: "anthropic_subscription",
+    harnesses: ["claude-code"],
+    host: "api.anthropic.com",
+  },
+  anthropicKey: {
+    id: "anthropic-key",
+    name: "Anthropic API key",
+    kind: "anthropic_api_key",
+    harnesses: ["claude-code"],
+    host: "api.anthropic.com",
+  },
+  gateway: {
+    id: "corp-gateway",
+    name: "Corp gateway",
+    kind: "custom_endpoint",
+    harnesses: ["claude-code", "codex-cli"],
+    host: "gateway.corp.example",
+  },
+} satisfies Record<string, SetupModelProvider>;
+
+/** A status carrying a provider block: each provider with the agents it is the
+ *  default for, and this person's state for it (not_configured when omitted). */
+export function providerStatus(
+  rows: { provider: SetupModelProvider; defaultFor?: string[]; state?: string; deadline?: string }[],
+  overrides: Partial<SetupStatus> = {},
+): SetupStatus {
+  return baseStatus({
+    model_providers: rows.map((r) => ({ ...r.provider, default_for: r.defaultFor })),
+    provider_access: rows.map(
+      (r): SetupProviderAccess => ({ provider: r.provider.id, state: r.state ?? "not_configured", deadline: r.deadline }),
+    ),
+    ...overrides,
+  });
+}
 
 export function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return {
@@ -44,7 +93,7 @@ export function baseMe(overrides: Partial<Me> = {}): Me {
     method: "sso",
     operator: false,
     security_operator: false,
-    role: "member",
+    role: "user",
     email: "alice@corp.example",
     user_drive: null,
     user_drive_denied_by_profile: "",

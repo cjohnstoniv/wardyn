@@ -28,7 +28,7 @@ import (
 // read.
 func TestAttachHolderRenamedPathMatchesAlias(t *testing.T) {
 	srv, _, _, _, run := holderTestServer(t)
-	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 	oldPath := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/attach-holder", owner, "")
 	newPath := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/attach/holder", owner, "")

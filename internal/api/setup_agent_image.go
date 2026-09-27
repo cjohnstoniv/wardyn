@@ -61,15 +61,12 @@ func agentImageCheck(images map[string]string) SetupCheck {
 // shipped convention images — the ones known, by construction, to carry a
 // limited toolchain, so a Go/Rust/Java workspace fails verify/record at exit 127.
 //
-// agent-base is in this set. It is reachable because the claude-code catalog
-// row's ImageKey points at `base` (agent-claude-code is not published), so the
-// ghcr fallback resolves here — and without this entry
-// the check silently downgraded from warn to info for the DEFAULT install,
-// which is exactly the configuration that most needs the warning. Verified
-// against ghcr.io/cjohnstoniv/agent-base:0.6.4: node, npm, python3 and git are
-// present; go, java and cargo are not.
-//
-// The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
+// agent-base is in this set: the claude-code catalog row's ImageKey points at
+// `base` (agent-claude-code is not published), so the DEFAULT install resolves
+// here and most needs the warning. Verified against
+// ghcr.io/cjohnstoniv/agent-base:0.6.4: node, npm, python3 and git are present;
+// go, java and cargo are not. The pre-rename :demo tag stays matched so holdout
+// boxes keep the accurate warn.
 func isConventionLimitedToolchainImage(ref string) bool {
 	// Prefix, not an exact tag: the ghcr convention carries the daemon's own
 	// version tag, not a fixed :latest — every published tag is the same

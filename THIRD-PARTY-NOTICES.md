@@ -69,7 +69,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/opencontainers/image-spec/specs-go` | Apache-2.0 | https://github.com/opencontainers/image-spec/blob/v1.1.1/LICENSE |
 | `github.com/spf13/cobra` | Apache-2.0 | https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt |
 | `github.com/spf13/pflag` | BSD-3-Clause | https://github.com/spf13/pflag/blob/v1.0.10/LICENSE |
-| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.8.1/LICENSE |
+| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.8.2/LICENSE |
 | `github.com/x448/float16` | MIT | https://github.com/x448/float16/blob/v0.8.4/LICENSE |
 | `go.opentelemetry.io/auto/sdk` | Apache-2.0 | https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/sdk/v1.2.1/sdk/LICENSE |
 | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | Apache-2.0 | https://github.com/open-telemetry/opentelemetry-go-contrib/blob/instrumentation/net/http/otelhttp/v0.69.0/instrumentation/net/http/otelhttp/LICENSE |
@@ -77,7 +77,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `go.opentelemetry.io/otel/metric` | Apache-2.0 | https://github.com/open-telemetry/opentelemetry-go/blob/metric/v1.44.0/metric/LICENSE |
 | `go.opentelemetry.io/otel/trace` | Apache-2.0 | https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.44.0/trace/LICENSE |
 | `go.yaml.in/yaml/v2` | Apache-2.0 | https://github.com/yaml/go-yaml/blob/v2.4.4/LICENSE |
-| `go.yaml.in/yaml/v3` | MIT | https://github.com/yaml/go-yaml/blob/v3.0.4/LICENSE |
+| `go.yaml.in/yaml/v3` | MIT | https://github.com/yaml/go-yaml/blob/v3.0.5/LICENSE |
 | `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.57.0:LICENSE |
 | `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.59.0:LICENSE |
 | `golang.org/x/oauth2` | BSD-3-Clause | https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE |
@@ -86,7 +86,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `golang.org/x/term` | BSD-3-Clause | https://cs.opensource.google/go/x/term/+/v0.46.0:LICENSE |
 | `golang.org/x/text` | BSD-3-Clause | https://cs.opensource.google/go/x/text/+/v0.42.0:LICENSE |
 | `golang.org/x/time/rate` | BSD-3-Clause | https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE |
-| `google.golang.org/protobuf` | BSD-3-Clause | https://github.com/protocolbuffers/protobuf-go/blob/f2248ac996af/LICENSE |
+| `google.golang.org/protobuf` | BSD-3-Clause | https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE |
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause | https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE |
 | `gopkg.in/inf.v0` | BSD-3-Clause | https://github.com/go-inf/inf/blob/v0.9.1/LICENSE |
 | `gopkg.in/yaml.v3` | MIT | https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE |
@@ -98,7 +98,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `k8s.io/kube-openapi/pkg` | Apache-2.0 | https://github.com/kubernetes/kube-openapi/blob/d427ff9ee9ad/LICENSE |
 | `k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json` | BSD-3-Clause | https://github.com/kubernetes/kube-openapi/blob/d427ff9ee9ad/pkg/internal/third_party/go-json-experiment/json/LICENSE |
 | `k8s.io/kube-openapi/pkg/validation/spec` | Apache-2.0 | https://github.com/kubernetes/kube-openapi/blob/d427ff9ee9ad/pkg/validation/spec/LICENSE |
-| `k8s.io/streaming/pkg` | Apache-2.0 | https://github.com/kubernetes/streaming/blob/v0.37.0/LICENSE |
+| `k8s.io/streaming/pkg` | Apache-2.0 | https://github.com/kubernetes/streaming/blob/v0.37.1/LICENSE |
 | `k8s.io/utils` | Apache-2.0 | https://github.com/kubernetes/utils/blob/be93311217bd/LICENSE |
 | `k8s.io/utils/internal/third_party/forked/golang/net` | BSD-3-Clause | https://github.com/kubernetes/utils/blob/be93311217bd/internal/third_party/forked/golang/LICENSE |
 | `sigs.k8s.io/json` | Apache-2.0 | https://github.com/kubernetes-sigs/json/blob/2d320260d730/LICENSE |
@@ -174,7 +174,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `get-nonce` | 1.0.1 | MIT |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
-| `lucide-react` | 1.46.0 | ISC |
+| `lucide-react` | 1.47.0 | ISC |
 | `object-assign` | 4.1.1 | MIT |
 | `prop-types` | 15.8.1 | MIT |
 | `react` | 18.3.1 | MIT |

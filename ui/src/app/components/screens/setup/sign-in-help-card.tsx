@@ -38,8 +38,10 @@ import { SignInHelp } from "../../wardyn/sign-in-help";
 // format characters (bidi overrides, zero-width spaces) are dropped.
 const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 const FORMAT = /\p{Cf}/gu;
-// A courtesy only: the server's validSiteURL is the gate.
-const HTTP_URL = /^https?:\/\/[^\s/?#]+/i;
+// A courtesy only: the server's validateSignInHelp is the gate. https only
+// (#489), except the link already stored, which the server lets through
+// unchanged and setup warns about.
+const HTTPS_URL = /^https:\/\/[^\s/?#]+/i;
 
 // Characters, not UTF-16 units — the server counts runes.
 export function helpTextLength(text: string): number {
@@ -88,7 +90,7 @@ export function SignInHelpCard() {
 
   const count = helpTextLength(text);
   const tooLong = count > SIGNIN_HELP_TEXT_MAX;
-  const badUrl = url.trim() !== "" && !HTTP_URL.test(url.trim());
+  const badUrl = url.trim() !== "" && url.trim() !== saved.url && !HTTPS_URL.test(url.trim());
   const dirty = text.trim() !== saved.text || url.trim() !== saved.url;
   const previewText = text.trim();
   const previewUrl = badUrl ? "" : url.trim();

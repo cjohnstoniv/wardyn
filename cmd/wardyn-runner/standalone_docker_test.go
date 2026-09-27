@@ -317,7 +317,7 @@ func TestStandalone_LifecycleEndToEnd(t *testing.T) {
 // invariant holds for a sandbox created via the standalone path: the agent has
 // NO default route. This is the binary-level analogue of the docker package's
 // network_test.go L0 probe — it guards against a standalone-specific
-// regression (e.g. a different Config that accidentally grants a route).
+// route leak (e.g. a different Config that accidentally grants a route).
 func TestStandalone_L0AfterStandaloneCreate(t *testing.T) {
 	sdSkipNoDocker(t)
 

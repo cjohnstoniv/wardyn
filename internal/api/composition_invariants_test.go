@@ -27,7 +27,7 @@ import (
 // un-onboarded third source still rejected" cases). Re-asserting the identical
 // fact here would be redundant coverage, not a new invariant.
 
-// ─── the ≥1-source floor ─────────────────────────────────────────────────────
+// the ≥1-source floor
 
 // createCaptureStore is a minimal store.Store for handleCreateWorkspace: it
 // embeds the interface (nil — any other method would panic if called) and
@@ -90,7 +90,7 @@ func TestWorkspaceComposition_EmptySourcesFloorsToEphemeral(t *testing.T) {
 	}
 }
 
-// ─── a migrated container-shaped workspace resolves its image ───────────────
+// a migrated container-shaped workspace resolves its image
 
 // TestSeedRequestWorkspace_MigratedContainerShapeResolvesImage is Task 1(c): a
 // workspace migration 0029 rewrote from the old "container" kind — an
@@ -153,7 +153,7 @@ func TestSeedRequestWorkspace_RecommendedBaseImageNeverOverridesImage(t *testing
 	}
 }
 
-// ─── one policy entry per local_dir/repo source, none for ephemeral ─────────
+// one policy entry per local_dir/repo source, none for ephemeral
 
 // TestSeedRequestWorkspace_OnePolicyEntryPerSource is Task 1(d): a mixed,
 // multi-source workspace folds into the resolved spec with exactly one

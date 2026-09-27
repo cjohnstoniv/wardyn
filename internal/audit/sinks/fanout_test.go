@@ -193,8 +193,8 @@ func TestFanout_CloseClosesChildren(t *testing.T) {
 	}
 }
 
-// TestFanout_DropsByName is the D2 regression: DropsByName is the prod caller
-// Drops() lacked — cmd/wardynd wires it to /metrics as wardyn_audit_sink_drops_total.
+// TestFanout_DropsByName: DropsByName is what production reads — cmd/wardynd wires it
+// to /metrics as wardyn_audit_sink_drops_total.
 // It must aggregate both loss sources per sink name: a synchronous Emit error
 // (fanout-local counter) and a buffering child's own async Drops().
 func TestFanout_DropsByName(t *testing.T) {

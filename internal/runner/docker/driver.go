@@ -73,7 +73,7 @@ type Config struct {
 	// the same operator-set list.
 	//
 	// It is DRIVER CONFIG rather than a SandboxSpec field — the opposite of
-	// MemberMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
+	// UserMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
 	// (a `_MAP` entry replaces the shared list for one member), so only the
 	// control plane knows which roots bound a given run. A drive's ceiling is
 	// per DEPLOYMENT: it says where this daemon's operator has mounted shares,
@@ -81,6 +81,9 @@ type Config struct {
 	// is. Empty — the zero value, and the default — refuses every host_path
 	// drive, which is the whole posture (see runner.UserDriveHostRootCheck).
 	UserDriveHostRoots []string
+	// DriveProbeImage is the OCI image ProbeDrive runs its short-lived
+	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
+	DriveProbeImage string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -183,6 +186,9 @@ const mainProcCastDir = "/tmp/wardyn-rec"
 // Driver is the OCI/Docker confinement substrate; the orchestrator wraps it to
 // present the runner.Runner surface to the control plane.
 var _ substrate.Substrate = (*Driver)(nil)
+var _ runner.SandboxEnder = (*Driver)(nil)
+var _ runner.ProxyStopper = (*Driver)(nil)
+var _ runner.Freezer = (*Driver)(nil)
 
 // New constructs a Driver against the host Docker daemon. API-version negotiation
 // with the server is on by default in the moby v29 client (forward/backward compat).
@@ -208,6 +214,8 @@ func newWithClient(cli dockerAPI, cfg Config) *Driver {
 		creating:   make(map[string]bool),
 	}
 }
+
+// PrewarmImages is defined in prewarm.go (SF-14).
 
 func (d *Driver) Name() string { return driverName }
 
@@ -239,6 +247,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// it cannot — which is EITHER warn-and-run-uncapped (vfs, fuse-overlayfs)
 		// OR create-refused (overlay2 over non-xfs); see capabilitiesForWith.
 		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
+		// Per-class Freeze/Thaw support (RL-6) — see capabilitiesForWith.
+		Freeze: c.Freeze,
 	}, nil
 }
 

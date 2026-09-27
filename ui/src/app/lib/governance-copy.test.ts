@@ -234,7 +234,7 @@ describe("governance-copy — the §7.3 {matched} vocabulary (ADDITION)", () => 
 
 describe("governance-copy — the reuse rules §7 spells out", () => {
   // §7.9: one string for the picker option, the table chip and the mapped-role
-  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_MEMBER. Two homes for one
+  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_USER. Two homes for one
   // frozen label is how they drift — this pins the reference, not a copy.
   it("DIRECTORY.ROLE_SECURITY_ADMIN IS PEOPLE.ROLE_SECURITY_ADMIN", () => {
     expect(DIRECTORY.ROLE_SECURITY_ADMIN).toBe(PEOPLE.ROLE_SECURITY_ADMIN);

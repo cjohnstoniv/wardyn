@@ -102,27 +102,27 @@ for e in ev:
     dd = e.get("data") or {}
     h = dd.get("host") or ""
     a = e.get("action", "")
-    # run.workspace.egress is the always write-back and does NOT start with
-    # egress/approval - collect it explicitly or the always beat reads as absent.
-    if a.startswith(("egress", "approval")) or a == "run.workspace.egress":
+    # run.egress.add kind=workspace is the always write-back and does NOT start
+    # with egress/approval - collect it explicitly or the always beat reads as absent.
+    if a.startswith(("egress", "approval")) or (a == "run.egress.add" and dd.get("kind") == "workspace"):
         seen[(h, a)] += 1
     if a == "approval.decide":
         scopes.append((h, dd.get("decision_scope", "(none)"), dd.get("decision", "?")))
 def has(host, action): return seen.get((host, action), 0) > 0
 print("MODEL_ALLOWED", has("api.anthropic.com", "egress.allow"))
-# NOT egress.pending. The ceiling clamp is member-only (inline_policy.go gates
+# NOT egress.hold. The ceiling clamp is member-only (inline_policy.go gates
 # it on !isOperator) and the demo runs as operator, so wait_for_review SURVIVES:
 # example.com is genuinely HELD, and an approved hold returns apApproved and
-# logs ONLY egress.allow. Requiring egress.pending therefore FAILS a correct
+# logs ONLY egress.allow. Requiring egress.hold therefore FAILS a correct
 # take and passes a degraded one — exactly backwards.
 # An always decision does NOT leave a run-scoped approval.decide - it lands as
-# run.workspace.egress (the write-back) plus the approved_egress row on the
+# run.egress.add kind=workspace (the write-back) plus the approved_egress row on the
 # workspace. Accept either, or a correct take fails on where the event is filed.
 # NOTE: no apostrophes in this block - it lives inside a single-quoted python -c.
-print("HELD_DECIDED", has("example.com", "approval.decide") or any(a == "run.workspace.egress" for (_h, a) in seen))
+print("HELD_DECIDED", has("example.com", "approval.decide") or any(a == "run.egress.add" for (_h, a) in seen))
 print("HELD_ALLOWED", has("example.com", "egress.allow"))
 # Informational: present only if the hold lapsed or a re-raise happened.
-print("HELD_PENDING_INFO", has("example.com", "egress.pending"))
+print("HELD_PENDING_INFO", has("example.com", "egress.hold"))
 # A deny is ALSO an approval.decide - the action name alone cannot tell approve
 # from deny (both log approval.decide). The demo DENIES the telemetry host on
 # camera, so only the decision field separates a correct take from the
@@ -140,7 +140,7 @@ print("SCOPES", json.dumps(scopes))
                           else bad "no egress.allow for api.anthropic.com"; fi ;;
       HELD_DECIDED)       [[ "$v" == True ]] && ok "example.com was decided on camera" || bad "example.com never decided — the approval beat did not happen" ;;
       HELD_ALLOWED)       [[ "$v" == True ]] && ok "example.com allowed (the held request completed)" || bad "example.com decided but never allowed" ;;
-      HELD_PENDING_INFO)  [[ "$v" == True ]] && printf '    note: an egress.pending exists — a hold lapsed or re-raised\n' || true ;;
+      HELD_PENDING_INFO)  [[ "$v" == True ]] && printf '    note: an egress.hold exists — a hold lapsed or re-raised\n' || true ;;
       TELEMETRY_APPROVED) [[ "$v" == False ]] && ok "telemetry host NOT approved (the .first() trap)" || bad "A TELEMETRY HOST WAS APPROVED — wrong host decided on camera" ;;
       SCOPES)             printf '    decision scopes: %s\n' "$v" ;;
     esac
@@ -531,7 +531,7 @@ print("V07_PROOF_ALLOWED", bool(acts("egress.allow")))
 # The whole beat is that NOTHING was raised: a pending decision (or a fresh
 # approval) here means the permanent grant never reached this run's allowlist,
 # and the outro's "the decision outlived the run that raised it" is false.
-print("V07_PROOF_SILENT", not acts("egress.pending", "approval.decide"))
+print("V07_PROOF_SILENT", not acts("egress.hold", "approval.decide"))
 PYEOF
   while read -r k v; do
     case "$k" in
@@ -666,7 +666,7 @@ fi
 # Video 10 · the finale. Same artifact-first shape as 09 — start from the file
 # the two lanes agreed on, not from "the newest run" — but the evidence lives on
 # the LIVE stack, not on disk: beats 1-3 are three real ssh sessions whose whole
-# durable trace is ssh.auth / session.attach / session.detach / session.recording
+# durable trace is ssh.authenticate / session.attach / session.detach / session.recording.write
 # on :8080, and unlike 09's KEEPed stack this one is still up when a take ends.
 #
 # The run's STATE is deliberately not asserted. An interactive run outlives the
@@ -721,7 +721,7 @@ print("V10_OWNER_OK", owner not in ("-", "admin-token") and owner == (me.get("pr
 print("V10_STATE", run.get("state") or "MISSING")
 
 def data(e): return e.get("data") or {}
-auth = [e for e in ev if e.get("action") == "ssh.auth"]
+auth = [e for e in ev if e.get("action") == "ssh.authenticate"]
 okfp = {e.get("target") for e in auth if e.get("outcome") == "success" and e.get("target")}
 # The registered-but-foreign branch (sshgateway.go:246). A key that was never
 # registered logs "unregistered key" with actor "unknown" instead, and the
@@ -750,7 +750,7 @@ print("V10_DETACH_RO", sum(1 for e in ev if e.get("action") == "session.detach"
 # recording.CastKey(run, "ssh-<uuid>") — the composite key beat 6's Session
 # picker lists and its player replays. Written at DETACH, so its absence also
 # means an ssh client was still connected when the browser half filmed.
-print("V10_REC_SSH", sum(1 for e in ev if e.get("action") == "session.recording"
+print("V10_REC_SSH", sum(1 for e in ev if e.get("action") == "session.recording.write"
                          and e.get("outcome") == "success"
                          and (e.get("target") or "").startswith(run_id + "~ssh-")))
 PYEOF
@@ -762,11 +762,11 @@ while read -r k v; do
                         || bad "the run's created_by is not this caller's principal — sshAuth is owner-only, so beat 1 could not have attached (see the two lines above)" ;;
     V10_STATE)        printf '    run state:      %s (not asserted — an interactive run may be stopped by verify time)\n' "$v" ;;
     V10_AUTH_OK_FPS)  [[ "$v" -ge 2 ]] && ok "${v} distinct fingerprints authenticated over ssh — the holder and the observer" \
-                        || bad "only ${v} distinct ssh.auth success fingerprint(s) — beats 1-2 film TWO keys of one person" ;;
+                        || bad "only ${v} distinct ssh.authenticate success fingerprint(s) — beats 1-2 film TWO keys of one person" ;;
     V10_AUTH_OK_ACTOR)[[ "$v" == True ]] && ok "both successes are attributed to the run's owner (two keys, one principal)" \
-                        || bad "an ssh.auth success is attributed to someone other than the run's owner — 'same person' is false" ;;
+                        || bad "an ssh.authenticate success is attributed to someone other than the run's owner — 'same person' is false" ;;
     V10_AUTH_FAIL)    case "$v" in
-                        0) bad "no ssh.auth failure with reason 'not the run owner' — beat 3's refusal never happened, or the key was UNREGISTERED and logged 'unregistered key' (the wrong branch, SV13)" ;;
+                        0) bad "no ssh.authenticate failure with reason 'not the run owner' — beat 3's refusal never happened, or the key was UNREGISTERED and logged 'unregistered key' (the wrong branch, SV13)" ;;
                         1) ok "exactly one refusal, reason 'not the run owner'" ;;
                         *) ok "${v} refusals with reason 'not the run owner' (>1 = earlier takes; audit is append-only and reset-all belongs to V01)" ;;
                       esac ;;
@@ -778,7 +778,7 @@ while read -r k v; do
     V10_DETACH_RO)    [[ "$v" -ge 1 ]] && ok "an ssh detach recorded read_only=true — the observer really was one" \
                         || bad "no read_only ssh session.detach — nothing in the trail says the second client was an observer, which is beat 2's whole claim" ;;
     V10_REC_SSH)      [[ "$v" -ge 1 ]] && ok "${v} session recording(s) keyed ${V10_RUN}~ssh-* — beat 6 has a tape to play" \
-                        || bad "no session.recording keyed ${V10_RUN}~ssh-* — beat 6's Session picker had no ssh session, or a client never detached" ;;
+                        || bad "no session.recording.write keyed ${V10_RUN}~ssh-* — beat 6's Session picker had no ssh session, or a client never detached" ;;
   esac
 done < /tmp/_demo_v10.$$
 rm -f /tmp/_demo_v10.$$

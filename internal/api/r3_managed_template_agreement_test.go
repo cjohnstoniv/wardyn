@@ -34,7 +34,7 @@ func TestManagedTemplateWriteAndResolveAgree(t *testing.T) {
 		for _, tmpl := range types.HomeTemplates {
 			name := string(backend) + "/" + string(tmpl)
 			t.Run(name, func(t *testing.T) {
-				// THE WRITE BOUNDARY's answer, taken from the shared predicate
+				// The write boundary's answer, taken from the shared predicate
 				// rather than from ValidateUserDrive's whole-row validation —
 				// the row also has to satisfy size/reclaim/host-root rules that
 				// have nothing to do with this question.

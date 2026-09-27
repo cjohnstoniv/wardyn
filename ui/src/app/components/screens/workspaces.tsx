@@ -47,6 +47,14 @@ export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: 
   ephemeral: { Icon: Hourglass, label: "ephemeral" },
 };
 
+// The one lookup every KIND_META[ws.kind] site goes through: `""` (a
+// multi-source workspace — see Workspace.kind's doc comment) has no entry, so
+// this returns undefined rather than failing to typecheck. Callers keep their
+// existing `?? KIND_META.local_dir` fallback.
+export function kindMetaOf(kind: Workspace["kind"]): { Icon: React.ElementType; label: string } | undefined {
+  return kind ? KIND_META[kind] : undefined;
+}
+
 // The list's "Source" column: a multi-source composition summary
 // ("2 dirs · 1 repo") or, for a single/pre-composition source, its mono path —
 // exported so the detail page's header renders a consistent line off the same
@@ -133,7 +141,7 @@ export function WorkspacesScreen() {
   // header can't claim "Your" without overclaiming exclusivity over rows that
   // are actually shared. See MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER.
   const description =
-    role === "member"
+    role === "user"
       ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER(workspaces.length)
       : "A repo or directory a run can attach. Runs can only attach what's listed here.";
 
@@ -144,12 +152,12 @@ export function WorkspacesScreen() {
         description={description}
         actions={
           <>
-            {/* The one door to /drives from a nav-less screen (user-drives §6).
-                `outline`: the teal stays on Add workspace, and a drive is
+            {/* The one door to /admin/drives from a nav-less screen (user-drives
+                §6). `outline`: the teal stays on Add workspace, and a drive is
                 allocated rather than onboarded. SUPER only — a member and a
                 security admin have nothing to act on there. */}
             {operator && (
-              <Button variant="outline" onClick={() => navigate("/drives")}>
+              <Button variant="outline" onClick={() => navigate("/admin/drives")}>
                 {DRIVES.TITLE}
               </Button>
             )}
@@ -220,7 +228,7 @@ export function WorkspacesScreen() {
             </TableHeader>
             <TableBody>
               {filtered.map((w) => {
-                const kindMeta = KIND_META[w.kind] ?? KIND_META.local_dir;
+                const kindMeta = kindMetaOf(w.kind) ?? KIND_META.local_dir;
                 const image = workspaceImage(w);
                 // A3's per-repo-source `admitted` flag (§5.3): the row present,
                 // dimmed, never removed — the `user_drive_unavailable`
@@ -242,7 +250,7 @@ export function WorkspacesScreen() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openDetail(w.id);
+                        void openDetail(w.id);
                       }
                     }}
                     className={notAdmitted ? "cursor-pointer opacity-70" : "cursor-pointer"}
@@ -309,7 +317,7 @@ export function WorkspacesScreen() {
           onClose={() => setAddOpen(false)}
           onCreated={(created) => {
             load();
-            openDetail(created.id);
+            void openDetail(created.id);
           }}
         />
       )}

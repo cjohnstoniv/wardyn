@@ -35,6 +35,7 @@ DOCTOR_SH="${REPO_ROOT}/scripts/lib/up-doctor.sh"
 . "${REPO_ROOT}/scripts/lib/common.sh"  # env_get / env_set
 
 fail() { echo "test-up-probes: FAIL: $*" >&2; exit 1; }
+pass() { echo "PASS  $*"; }
 
 dir="$(mktemp -d)"; trap 'rm -rf "${dir}"' EXIT
 
@@ -295,5 +296,144 @@ s.bind(sys.argv[1])
 PYEOF
 sock_mountable "${sockdir}/docker.sock" || fail "sock_mountable did not recognise a real unix socket the daemon can see — the probe lost its whole purpose (C5)"
 rm -f "${sockdir}/docker.sock"
+
+# ── C1: the probe container's own failure is reported, not discarded ────────
+# Moved here from scripts/test-claims-match-code.sh (#209 lane 2a): it drives
+# wardynd_probe() (already extracted above) against a stub, which is a
+# behaviour test, not a prose grep.
+#
+# `-m 5` bounds the CURL. It does not bound the image acquisition `docker run`
+# performs first on a box that has never run this probe, and docker reports
+# that acquisition — "Unable to find image … locally", a failed pull, "No such
+# image" — ONLY on stderr. With that stderr sent to /dev/null, an unbounded
+# registry fetch and an outright failure both arrived at the call sites as a
+# bare HTTP `000`, which they go on to report as a wardynd problem ("check
+# 'docker compose … logs wardynd'"). The operator is then reading daemon logs
+# for a container-image problem.
+#
+# The stub below is that failure: exit 125 with docker's own message on stderr
+# and nothing on stdout. The assertion is that the message SURVIVES.
+mkdir -p "${dir}/c1-bin"
+cat > "${dir}/c1-bin/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker: Error response from daemon: No such image: curlimages/curl:latest" >&2
+exit 125
+STUB
+chmod +x "${dir}/c1-bin/docker"
+
+: > "${dir}/c1.env"
+PATH="${dir}/c1-bin:${PATH}" wardynd_probe "${dir}/c1.env" /api/v1/setup/status \
+  >"${dir}/c1-probe.out" 2>"${dir}/c1-probe.err" || true
+
+# stdout is still the documented fallback the call sites parse with `tail -n1`.
+[ "$(tail -n1 "${dir}/c1-probe.out")" = "000" ] \
+  || fail "wardynd_probe stdout was '$(tr -d '\n' <"${dir}/c1-probe.out")', want '000' — llm_ready_from_probe and the gate smoke both read the last stdout line"
+
+# …and the CAUSE is no longer thrown away.
+grep -q 'No such image' "${dir}/c1-probe.err" \
+  || fail "wardynd_probe discarded the probe container's stderr — docker reports a missing/unfetchable curlimages/curl image ONLY there, so an unbounded pull and a failed one both reach cmd_up as a bare HTTP 000 it blames wardynd for (perf2-C3)"
+
+# Pin the mechanism too: a re-added 2>/dev/null on the probe's docker run puts
+# the whole defect straight back, and the behavioural case above would still
+# pass against a stub that wrote nothing.
+if printf '%s' "${probe_body}" | grep -q '2>/dev/null'; then
+  fail "wardynd_probe redirects the probe container's stderr to /dev/null again (perf2-C3)"
+fi
+pass "C1 wardynd_probe reports the probe container's own failure and still yields 000"
+
+# ── C4: the "cosign-signed, SBOM-attested" claim is made only when true ────
+# Moved here from scripts/test-claims-match-code.sh (#209 lane 2a) — it drives
+# up.sh's cosign_verify() against a stub `cosign`, a behaviour test. Security-
+# relevant: the pull-first path extracts a binary from one of the images it
+# checks and runs it ON THE HOST (seed_host_proxy).
+#
+# The pull-first path retagged five images fetched by TAG and then told the
+# operator they were "cosign-signed, SBOM-attested — see docs/VERIFY.md", while
+# that same page says "the installer verifies none of them". A binary is then
+# extracted from one of those images and executed ON THE HOST (seed_host_proxy),
+# so the claim is not decorative. Two halves, both asserted here: the check
+# EXISTS and does what VERIFY.md s1/s2 tell an operator to do, and the claim is
+# printed only where that check returned 0.
+cv_body="$(sed -n '/^cosign_verify() {/,/^}/p' "${UP_SH}")"
+[ -n "${cv_body}" ] || fail "scripts/up.sh has no cosign_verify() — the pull path announces 'cosign-signed, SBOM-attested' and nothing in the script verifies anything (F005/F100)"
+printf '%s' "${cv_body}" | grep -q 'certificate-identity-regexp' \
+  || fail "cosign_verify() does not pin the certificate IDENTITY — a keyless signature verified against no identity says only 'somebody signed this' (docs/VERIFY.md s1)"
+printf '%s' "${cv_body}" | grep -q 'verify-attestation' \
+  || fail "cosign_verify() checks the signature but not the SBOM attestation — 'SBOM-attested' is half the claim being made (docs/VERIFY.md s2)"
+
+# Drive it. cosign absent -> 2 (an ABSENT check, not a failed one); cosign
+# present and refusing -> 1; cosign present and happy -> 0.
+mkdir -p "${dir}/c4-cosign-bin"
+eval "${cv_body}"
+( PATH="${dir}/c4-empty"; export PATH; cosign_verify ghcr.io/x/y:1 ) && cv_rc=0 || cv_rc=$?
+[ "${cv_rc}" = 2 ] || fail "cosign_verify returned ${cv_rc} with no cosign on PATH, want 2 — a missing tool must be distinguishable from a passing check, or 'verified' is announced on every box that has no cosign"
+
+cat > "${dir}/c4-cosign-bin/cosign" <<'STUB'
+#!/usr/bin/env bash
+[ -f "$(dirname "$0")/refuse" ] && exit 1
+exit 0
+STUB
+chmod +x "${dir}/c4-cosign-bin/cosign"
+( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 ) && cv_rc=0 || cv_rc=$?
+[ "${cv_rc}" = 0 ] || fail "cosign_verify returned ${cv_rc} when cosign verified both the signature and the attestation, want 0"
+: > "${dir}/c4-cosign-bin/refuse"
+( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 ) && cv_rc=0 || cv_rc=$?
+[ "${cv_rc}" = 1 ] || fail "cosign_verify returned ${cv_rc} when cosign REFUSED the image, want 1 — a refusal that reads as success is worse than no check"
+
+# ...and the claim itself is inside the branch that check gates.
+claim_line="$(grep -n 'cosign-signed, SBOM-attested' "${UP_SH}" | head -1 | cut -d: -f1 || true)"
+[ -n "${claim_line}" ] || fail "the 'cosign-signed, SBOM-attested' claim is gone from scripts/up.sh — if it was reworded rather than made true, this guard is now pointing at nothing"
+guard_line="$(grep -n '^    if \$verified_all; then' "${UP_SH}" | head -1 | cut -d: -f1 || true)"
+[ -n "${guard_line}" ] && [ "${guard_line}" -lt "${claim_line}" ] \
+  || fail "scripts/up.sh prints 'cosign-signed, SBOM-attested' outside the \$verified_all branch — the claim is made again on boxes where cosign never ran (F005/F100)"
+pass "C4 up.sh verifies with cosign (identity + CycloneDX attestation) before it claims the images are signed"
+
+# ── C5: "Skipped the local build" means the pulled images are the ones used ──
+# Moved here from scripts/test-claims-match-code.sh (#209 lane 2a) — it reads
+# two lists straight out of up.sh's own source, which is extraction/derivation
+# rather than a prose grep.
+#
+# The pull-first block fetched five published images and retagged them to the
+# :local names compose uses, then unconditionally rebuilt four of them a few
+# hundred lines later — so only wardynd's build was actually skipped, and the
+# proxy and agent images an operator was told came from a signed release were
+# local compiles. Both lists are DERIVED from the script here; a hand-copied
+# second copy is what drifted in the first place.
+pulled_local="$(sed -n '/^      for pair in /,/; do$/p' "${UP_SH}" \
+                | grep -oE '"[a-z0-9-]+:wardyn/[a-z0-9-]+:local"' \
+                | sed -E 's/.*:(wardyn\/[a-z0-9-]+:local)"/\1/' | sort -u)"
+[ -n "${pulled_local}" ] || fail "could not derive the pull-first image list from scripts/up.sh — the 'for pair in' loop changed shape and this guard would check nothing"
+
+# What the run-components section builds WHEN the pull succeeded, derived from
+# the `if $pulled_all` arm itself.
+pulled_branch="$(awk '/^    if \$pulled_all; then$/{g=1;next} g&&/^    else$/{g=0} g' "${UP_SH}")"
+[ -n "${pulled_branch}" ] || fail "scripts/up.sh's run-components section is not gated on \$pulled_all at all — every image the pull-first block fetched is rebuilt over on the next \`make setup\` (F099)"
+built_when_pulled="$( { printf '%s\n' "${pulled_branch}" | grep -oE 'compose --profile build-only build [a-z0-9-]+' | awk '{print $NF}'
+                        printf '%s\n' "${pulled_branch}" | sed -nE 's/^ *_svcs="([a-z0-9 -]+)".*/\1/p' | tr ' ' '\n'; } | sort -u)"
+
+COMPOSE_YAML="${REPO_ROOT}/deploy/compose/docker-compose.yaml"
+svc_image() { awk -v s="  $1:" '$0==s{f=1;next} f&&/^  [a-z]/{f=0} f&&/^    image:/{print $2;exit}' "${COMPOSE_YAML}"; }
+for svc in ${built_when_pulled}; do
+  [ -n "${svc}" ] || continue
+  img="$(svc_image "${svc}")"
+  case "${img}" in \$\{*:-*\}) img="${img#*:-}"; img="${img%\}}" ;; esac
+  printf '%s\n' "${pulled_local}" | grep -qxF "${img}" \
+    && fail "scripts/up.sh pulls ${img} and then rebuilds service '${svc}' anyway — the published image is discarded and 'Skipped the local build' is false for it (F099)"
+done
+
+# The counterweight: the NOT-pulled arm must still build every one of them, or
+# this guard would be satisfied by simply building nothing.
+notpulled_branch="$(awk '/^    if \$pulled_all; then$/{g=1;next} g==1&&/^    else$/{g=2;next} g==2&&/^    fi$/{g=0} g==2' "${UP_SH}")"
+built_when_built="$( { printf '%s\n' "${notpulled_branch}" | grep -oE 'compose --profile build-only build [a-z0-9-]+' | awk '{print $NF}'
+                       printf '%s\n' "${notpulled_branch}" | sed -nE 's/^ *_svcs="([a-z0-9 -]+)".*/\1/p' | tr ' ' '\n'; } | sort -u)"
+for svc in proxy-image agent-base agent-claude-code agent-codex-cli agent-aws-sso; do
+  printf '%s\n' "${built_when_built}" | grep -qxF "${svc}" \
+    || fail "with no published images to pull, scripts/up.sh no longer builds '${svc}' — the air-gapped / pre-push / WARDYN_BUILD_LOCAL path needs all five (F099)"
+done
+# ...and agent-claude-code is built on BOTH arms: Wardyn publishes no image
+# carrying the vendor CLI, so there is nothing to pull for it (docs/VERIFY.md).
+printf '%s\n' "${built_when_pulled}" | grep -qxF agent-claude-code \
+  || fail "the pulled arm skips agent-claude-code, which is never published — the one agent that MUST be built locally would be missing after \`make setup\` (F099)"
+pass "C5 no service whose image the pull-first block retags is rebuilt unconditionally"
 
 echo "test-up-probes: self-test PASS"

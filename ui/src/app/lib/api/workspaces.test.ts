@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { workspaces } from "./workspaces";
 import type { Workspace } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // Workspace CRUD + scan client — mirrors the secrets/policies client methods
 // (listX/createX/updateX/deleteX + unwrapList). Only the wire shape and paths
@@ -27,8 +28,8 @@ describe("workspace client methods", () => {
     kind: "local_dir",
     source: "/home/me/payments",
     status: "pending_scan",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
   };
 
   it("listWorkspaces() GETs /workspaces and unwraps a bare array", async () => {

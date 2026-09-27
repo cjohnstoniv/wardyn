@@ -19,7 +19,7 @@ package api
 // (migration-free) and carries the grant it belongs to in grant_id, which the
 // sandbox's own approval route can never set. That column — not a key inside
 // the scope — is what makes the row decidable by the run's owner
-// (authorizeMemberDecision). kind `credential` is deliberately NOT used:
+// (authorizeUserDecision). kind `credential` is deliberately NOT used:
 // selectGrantApprovalForUpdate adopts the newest credential row for a grant as
 // that grant's own mint approval.
 //
@@ -48,6 +48,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -332,7 +333,7 @@ func (s *Server) raiseADOCapability(w http.ResponseWriter, r *http.Request, clai
 			path = path[:adoMaxAuditPath]
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-			"credential.capability.requested", created.ID.String(), "success",
+			"credential.capability.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
 				"approval_id": created.ID, "capability": c, "organisation": sn.Organisation,
 				"provider_row": sn.ProviderRowID, "owner": sn.OwnerSubject, "repo": scope.Repo,
@@ -400,7 +401,7 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-			"credential.reauth.requested", created.ID.String(), "success",
+			"credential.reauth.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
 				"approval_id": created.ID, "owner": sn.OwnerSubject, "provider": adoApprovalLane,
 				"reason": string(ADOEntraFailureConsentRequired), "detail": adoResolveConsentRequired,
@@ -426,16 +427,14 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	}
 	// Generation: only a sign-in captured AFTER the raise answers it, and only
 	// one no renewal has since found ended.
-	blob, found, err := s.readADOEntraBlob(ctx, sc.Owner, sc.ProviderID)
+	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc.Owner, sc.ProviderID)
 	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
 		return ap
 	}
-	for _, need := range sc.Scopes {
-		if !slices.Contains(blob.Scopes, need) {
-			return ap
-		}
+	if !subsetOf(sc.Scopes, blob.Scopes) {
+		return ap
 	}
-	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolved", ap.ID.String(), "success",
+	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolve", ap.ID.String(), "success",
 		mustJSON(map[string]any{
 			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": sc.Owner, "provider": adoApprovalLane,
 		}))
@@ -456,16 +455,6 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 // without it honours no `once` approval at all.
 type approvalOnceSpender interface {
 	SpendApprovalOnce(ctx context.Context, id uuid.UUID, jti string) (bool, error)
-}
-
-// adoScopesWithin reports whether every scope in need is in have.
-func adoScopesWithin(need, have []string) bool {
-	for _, n := range need {
-		if !slices.Contains(have, n) {
-			return false
-		}
-	}
-	return true
 }
 
 // adoEscalationWithinCeiling reports whether the escalation's capability is
@@ -563,7 +552,7 @@ func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, cla
 	// The authority's GRANTED set is the person's whole consent for the
 	// resource (measured), so a capability whose scope is missing from it is
 	// one they have not consented to — whoever approved it here.
-	if !adoScopesWithin(need, access.Scopes) {
+	if !subsetOf(need, access.Scopes) {
 		s.adoConsentRefused(cfg, snapshot.OwnerSubject, need)
 		return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
 	}

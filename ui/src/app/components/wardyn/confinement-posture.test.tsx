@@ -19,11 +19,11 @@ import {
 } from "./confinement-posture-copy";
 import type { ConfinementPosture } from "./operator-context";
 
-function renderBanner(posture: ConfinementPosture) {
+function renderBanner(posture: ConfinementPosture, view: "admin" | "user" = "admin", operator = true) {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator confinementPosture={posture}>
-        <ConfinementPostureBanner />
+      <OperatorProvider operator={operator} confinementPosture={posture}>
+        <ConfinementPostureBanner view={view} />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -31,7 +31,8 @@ function renderBanner(posture: ConfinementPosture) {
 
 // The mock-approval's five-case table (issue #162's comment) — "enforced" and
 // "" both render nothing, "acknowledged"/"unenforced"/"unknown" each render
-// their own frozen sentence, byte-for-byte.
+// their own frozen sentence, byte-for-byte. Rendered in the Admin view: §4.2
+// (M-3) makes the band Admin-view only, pinned in its own describe block below.
 describe("ConfinementPostureBanner", () => {
   it("renders nothing for an empty posture (Docker / not applicable)", () => {
     const { container } = renderBanner("");
@@ -63,6 +64,42 @@ describe("ConfinementPostureBanner", () => {
     expect(screen.getByText(POSTURE_UNKNOWN_BANNER.TITLE)).toBeInTheDocument();
     expect(screen.getByText(POSTURE_UNKNOWN_BANNER.BODY)).toBeInTheDocument();
     expect(screen.getByText(POSTURE_UNKNOWN_BANNER.ACTION)).toBeInTheDocument();
+  });
+
+  // #510-F7 — the action button sends /setup?step=environment, which a member
+  // cannot reach (App.tsx's SetupRoute renders MemberGettingStarted for a
+  // non-operator and ignores `step`). The strip stays informational for a
+  // member: title and body still show, the action does not.
+  it("drops the action button for a non-operator, keeps the strip informational", () => {
+    renderBanner("unenforced", "admin", false);
+    expect(screen.getByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_UNENFORCED_BANNER.BODY)).toBeInTheDocument();
+    expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.ACTION)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+// §4.2 (M-3) — the band is Admin-view only; the User view gets no band for any
+// posture, because ConfinementChip already carries it on the person's own runs
+// and the New Run rail.
+describe("ConfinementPostureBanner — view (§4.2, M-3)", () => {
+  it.each(["acknowledged", "unenforced", "unknown"] as ConfinementPosture[])(
+    "renders nothing in the User view for posture %s",
+    (posture) => {
+      const { container } = renderBanner(posture, "user");
+      expect(container).toBeEmptyDOMElement();
+    },
+  );
+
+  it("defaults to the User view (no band) when no view is passed", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <OperatorProvider operator confinementPosture="unenforced">
+          <ConfinementPostureBanner />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });
 

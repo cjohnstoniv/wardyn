@@ -40,7 +40,7 @@ import (
 // naming a pairing no ceiling entry carries is deliberately KEPT by the clamp
 // (bounded to the strictest same-kind entry) and REFUSED by the comparator, and
 // that asymmetry is by design: the clamp bounds, the pairing gate is
-// filterMemberGrants (stage 2 of boundMemberSpec), and composer/grantbound_test
+// filterUserGrants (stage 2 of boundUserSpec), and composer/grantbound_test
 // .go's TestClampGrantsBoundsByPairingNotKind pins it. Asserting D2 there would
 // be asserting the clamp took over another stage's job.
 func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {

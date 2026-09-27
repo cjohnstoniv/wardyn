@@ -107,23 +107,17 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 }
 
 // projectStatusDetail decides what a run's startup detail SAYS to a reader, on
-// every route that serves a run. It is a read-side projection, beside
-// projectRecordingMeta, because status_detail is never cleared by a write: the
-// column keeps the last reason for a postmortem, and honesty on the wire is this
-// function's job alone.
-//
+// every route that serves a run. It is a read-side projection because
+// status_detail is never cleared by a write (the column keeps the last reason for
+// a postmortem), so honesty on the wire is this function's job alone.
 //   - STARTING: the reason as stored, plus the derived token.
-//   - FAILED on a TERMINAL reason: kept. waitContainerRunning errors the instant
-//     the kubelet says ImagePullBackOff, and dispatch marks the run FAILED
-//     between two of the browser's 3–4 second polls, so a reader who never
-//     caught a STARTING poll would otherwise lose the one reason that names the
-//     fix. The reason is taken from the detail, or — when the detail never
-//     landed — from the canary's own "container stuck waiting (<Reason>)"
-//     sentence in failure_hint.
+//   - FAILED on a TERMINAL reason: kept — a run can fail between two browser
+//     polls, and a reader who never saw STARTING would lose the reason that names
+//     the fix. It comes from the detail or, when that never landed, from the
+//     canary's "container stuck waiting (<Reason>)" sentence in failure_hint.
 //   - anything else, including a FAILED run whose last wait was ordinary:
-//     blanked. The run did not fail BECAUSE it was creating a container, and
-//     presenting a stale wait as a cause is the misdiagnosis this whole field
-//     exists to end.
+//     blanked. Presenting a stale wait as the cause is the misdiagnosis this
+//     field exists to end.
 func projectStatusDetail(runs []types.AgentRun) {
 	projectFailureHint(runs) // every route that serves a run comes through here
 	for i := range runs {

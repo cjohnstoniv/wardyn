@@ -152,6 +152,86 @@ stateDiagram-v2
 `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
 forward-compatibility values; no transition produces them today.
 
+## Authorization kernel (`internal/authz`)
+
+Every authorization decision in `wardynd` — route tier, run/workspace
+ownership, a capability grant, a governance ceiling, an approval — used to
+answer through its own hand-rolled refusal. `internal/authz` (pure Go, no
+HTTP, no store) is the one **`Decision`** every door now answers with, and the
+one closed **registry** of the reasons an `authz.denied` audit row may carry.
+Design: the authorization-kernel design (owner-approved 2026-09-23, rev 3);
+issues AK-1..AK-9 (`#735`-`#741`, two 0.9 issues not yet filed).
+
+- **`Decision`** (`internal/authz/authz.go`) is schema `authz/v1`: an `Effect`
+  (`allow` / `deny` / `hidden` — the 404 twin, so a refusal is never an
+  existence oracle — / `unprocessable`), the HTTP `Status` it maps to, a
+  `Reason`, a `Target` (the request field, route, or resource refused),
+  `Obligations` (e.g. an inline-policy entry dropped rather than refused), and
+  a `Trace`. Every field is data — no funcs — so a `Decision` round-trips
+  through JSON unchanged; that is what lets it eventually cross a wire (0.9,
+  section 9 of the design) with no reshaping.
+- **The registry** (`internal/authz/registry.go`) is the audit contract a SIEM
+  rule is written against: `Reason -> {Effect, Audit, Sentence}` for every
+  reason that may appear on an `authz.denied` row. It is **append-only from the
+  0.8.0 tag** — a removal or rename after that is a major version. `docs/
+  OPERATIONS.md`'s "Every denial that isn't a 404" table and `docs/
+  AUDIT-ACTIONS.md`'s `authz.denied` row are checked against it (not
+  hand-copied) by `TestAuthzDeniedReasonsAreDocumented`.
+- **`(*Server).refuse`** (`internal/api/refusal.go`) is the one emitter: it
+  looks up the registry row for a `Decision`'s reason, writes the HTTP status
+  and sentence, and — when the registry says the reason is audited — writes
+  the `authz.denied` row through `authz.Datum`, so every row carries the same
+  shape (including the member-mode marker and, once the org control plane
+  lands in 0.9, the device-origin marker) instead of each of the 18 former
+  call sites building its own map. An unregistered reason fails closed: 500 in
+  production, a panic in this package's own tests (`internal/api/
+  refusal_test.go`'s `strictRefusals`) — the only way to ship a new reason is
+  to register it.
+- **Guardrails** (`internal/api/authz_kernel_guardrails_test.go`, `refusal_test.go`,
+  `authz_test.go`, `preflight_launch_gate_parity_test.go`) keep the kernel from
+  regressing:
+  - `TestNoAdHocAuthz` — no code outside `refuse`/`recordRefusal` writes an
+    `authz.denied` row, a registered reason, or a stamped-role comparison by
+    hand. The `authz.denied` literal is checked in every non-test file under
+    `cmd/` and `internal/` (outside `internal/authz`); the reason literals and
+    role comparisons only in `internal/api`'s top-level non-test files
+    (`parseAPISources`, `refusal_test.go`). `pkg/`, `test/` and `examples/`
+    are not scanned.
+  - `TestEveryRegisteredReasonIsEmitted` / `TestAuthzDeniedReasonsAreDocumented`
+    — the registry, the emit sites and the two docs agree, both ways.
+  - `TestAuthzMatrix` (route tier, chi.Walk-enumerated, with runtime
+    `ownerTier` probes) and `TestAuthzMatrixHandlersReachAuthz` (every
+    `classOwner` route's handler statically references its entity's ownership
+    check — run, workspace, approval — somewhere in its call graph). The
+    static check is a necessary condition, not a per-path proof: it catches a
+    check dropped outright, not a branch that skips it, and tier strictness
+    (owner-or-admin vs. owner-or-super-admin) stays with the `ownerTier`
+    probes. Its exception map may only shrink (asserted by length).
+  - `TestPreflightMirrorsLaunchGates` — a gate added to launch is either
+    reproduced by preflight or named in an exception map with why; that map
+    may only shrink (asserted by length).
+  - `TestCapResolverNonescapeTable` / `TestCapabilityResolutionIsMonotone` —
+    the capability resolver (`capBatch.decide`, `internal/api/capabilities.go`)
+    is exhaustively checked kind x tier x grant-state x store against a
+    seven-step oracle, and (property-tested) is monotone: adding an ALLOW
+    grant never turns an ALLOW into a DENY, adding a DENY never turns a DENY
+    into an ALLOW.
+  - `TestConsoleCapabilityKindsMatchGoTable` — the console's capability-kind
+    mirror (`ui/src/app/lib/permissions-copy.ts`) cannot silently drift from
+    the Go kind table.
+
+**Status (0.8).** K0 (one grant resolver) and K1 (`Decision`, the registry,
+`refuse`) are landed. K2 (`Filter` + list carriers), K3 (`SelectByTier` for
+ceilings/drives), K4 (an `Explain` grid) land beside their consumers. The
+kernel does **not** yet expose `Tier`/`Owns`/`Allowed`/`Ceiling` as named
+methods on a `Kernel` type — today's doors (`isOperator`, `ownsRunOrAdmin`,
+`capAllowed`, `effectiveCeiling`, …) stand in for them, and the guardrails
+above are written against those real names, not the design's target shape.
+**0.9** adds the remote control-plane decision API (`POST /authz/decide`
+etc.) and the signed policy snapshot for MDM-managed laptops; 0.8 carries only
+the seams that shape needs (`Decision` is already wire-serializable;
+`Principal.Origin` is zero until the org sets it).
+
 ## Security invariants (every contributor and subagent MUST preserve these)
 
 1. **Secrets never enter the sandbox — with named, bounded exceptions.**

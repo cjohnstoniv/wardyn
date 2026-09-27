@@ -135,7 +135,8 @@ describe("ConfinementChip tooltip honesty", () => {
     }
   });
 
-  it("keeps the internal wire class in the tooltip ONLY, never in accessible content (D4)", () => {
+  it("keeps the internal wire class in the tooltip ONLY, never in accessible content", () => {
+    // ticket: D4
     const { container } = render(<ConfinementChip value="CC2" />);
     // The tooltip carries the mechanism + internal class for a sighted power-user's hover…
     const title = container.querySelector("[title]")?.getAttribute("title") ?? "";
@@ -166,7 +167,8 @@ describe("AutonomyChip", () => {
     expect(screen.queryByText(level)).not.toBeInTheDocument();
   });
 
-  it("keeps the internal wire level in the tooltip ONLY, never in accessible content (D4)", () => {
+  it("keeps the internal wire level in the tooltip ONLY, never in accessible content", () => {
+    // ticket: D4
     const title = titleOf("L1");
     expect(title).toMatch(/\bL1\b/);
     expect(title).toMatch(AUTONOMY_META.L1.tagline);

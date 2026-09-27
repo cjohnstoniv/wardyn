@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, navToRoute } from "./fixtures";
 
 // E2E coverage for "Make a policy from this run" (X2-F6) — run-detail.tsx's
 // Audit tab button opens profile-review.tsx's ProfileReview sheet
@@ -14,7 +14,8 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
 const POLICY_NAME = `e2e-run-profile-${Date.now()}`;
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
-test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
+test.describe("Run detail — Make a policy from this run", () => {
+  // ticket: X2-F6
   // Fix pass (review F4): this file's own backend is fresh per run-ui-e2e.sh
   // invocation, but policies.spec.ts's file-wide invariant (a clean policy
   // table, so its empty-state specs hold) only survives a plain
@@ -32,7 +33,7 @@ test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
   });
 
   test("saves a real policy that appears on /policies", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Runs");
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
     await page.getByText("e2e fixture 4").click();
@@ -60,7 +61,9 @@ test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
     await expect(saveDialog).toHaveCount(0);
     await expect(sheet).toHaveCount(0);
 
-    await navTo(page, "Policies");
+    // A run row links its User-view path; the Admin view's own run links
+    // arrive with the admin run monitor (M-7), so reach Policies by its path.
+    await navToRoute(page, "/admin/policies");
     await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible();
     await expect(
       page.getByRole("table").getByRole("row").filter({ hasText: POLICY_NAME }),
