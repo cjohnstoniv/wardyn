@@ -46,13 +46,14 @@ import (
 // RECORD. Both halves matter — a new raising site is a silent denial, and a
 // deciding site that stops recording is the original finding.
 func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
-	// The two sites the design names, each of which emits authz.denied for the
-	// refusal it decides. An addition here is a claim that a THIRD place may
-	// decide this refusal, and it has to bring its own recordRefusal with it —
-	// which the second half of this test then checks.
+	// The one site the design names (K3): selectByTier decides this refusal for
+	// both precedence-selected answers and emits authz.denied at the target its
+	// entrance names (ceilingWithUnusableGroups -> governance.ceiling,
+	// driveWithUnusableGroups -> runs.drive). An addition here is a claim that a
+	// SECOND place may decide this refusal, and it has to bring its own
+	// recordRefusal with it — which the second half of this test then checks.
 	want := map[string]bool{
-		"ceilingWithUnusableGroups": true, // governance.go — target governance.ceiling
-		"driveWithUnusableGroups":   true, // user_drives_resolve.go — target runs.drive
+		"selectByTier": true, // select_by_tier.go
 	}
 
 	raisers, records := staleSentinelSites(t)
