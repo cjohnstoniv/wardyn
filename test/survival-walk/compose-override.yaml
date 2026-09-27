@@ -7,6 +7,15 @@
 # caller, and it always passes this file alongside the base one with a
 # dedicated `-p` project name.
 #
+# Lives under test/, not deploy/compose, on purpose: this file's own
+# WARDYN_AWS_SSO_ENDPOINT_OVERRIDE/WARDYN_ALLOW_TEST_ENDPOINTS lines are the
+# AWS SSO TEST-endpoint hatch (THREAT-MODEL residual #45), and
+# scripts/test-repo-guards.sh's guard 6 refuses either name in any file under
+# deploy/helm or deploy/compose — a SHIPPED deployment artifact must never be
+# one edit away from trusting an arbitrary server as AWS. test/sso-roles/
+# compose-override.yaml is the same precedent (a compose override that lives
+# beside the test fixture it serves, not beside the shipped compose file).
+#
 # It exists because the base docker-compose.yaml's `wardynd` service does NOT
 # reference WARDYN_ALLOW_TEST_ENDPOINTS, WARDYN_AWS_SSO_ENDPOINT_OVERRIDE,
 # WARDYN_BEDROCK_BASE_URL or WARDYN_CREDENTIAL_REAUTH_TIMEOUT anywhere in its
