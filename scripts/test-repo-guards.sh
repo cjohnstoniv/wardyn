@@ -61,8 +61,14 @@ ok()  { echo "ok: $*"; }
 # X and step summary are its signal, not a "Still failing" comment on the
 # shared e2e-lane issue, which would mask a real e2e regression as queue
 # hygiene noise.
+# daemon-proxy-secret-kind is exempt TEMPORARILY (PR #1245 review F2): it has
+# never run, so watching it (and therefore release.yml's watched=, which
+# guard 13 below keeps identical) from day one would block a release on a
+# job that might fail deterministically. Drop this exemption and add it to
+# notify-new-lanes.needs + release.yml's watched= together, once it has gone
+# green on a real nightly run.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check daemon-proxy-secret-kind"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"

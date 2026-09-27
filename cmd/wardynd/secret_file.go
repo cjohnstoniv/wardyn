@@ -86,8 +86,8 @@ func readSecretFile(fileVar, path string) (string, error) {
 	if strings.TrimSpace(v) == "" {
 		return "", fmt.Errorf("refusing to start: %s=%q is empty — the secret it names would silently fall back to unset", fileVar, path)
 	}
-	if strings.HasSuffix(v, "\n") {
-		return "", fmt.Errorf("refusing to start: %s=%q has more than one trailing line ending — only one (\\n or \\r\\n) is trimmed, and a value that still ends in a newline after that is almost always an accidental blank line, not part of the secret; fix the file so it ends in exactly one line ending", fileVar, path)
+	if strings.HasSuffix(v, "\n") || strings.HasSuffix(v, "\r") {
+		return "", fmt.Errorf("refusing to start: %s=%q has more than one trailing line ending — only one (\\n or \\r\\n) is trimmed, and a value that still ends in a newline or carriage return after that is almost always an accidental blank line, not part of the secret; fix the file so it ends in exactly one line ending", fileVar, path)
 	}
 	return v, nil
 }

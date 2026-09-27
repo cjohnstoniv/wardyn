@@ -772,6 +772,16 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "defaultMode: 288" || { echo "daemonProxySecret defaultMode did not render 0440 (288 decimal)"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set daemonProxySecret.defaultMode=0400); \
 	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "defaultMode: 0400" || { echo "daemonProxySecret.defaultMode=0400 did not render"; exit 1; }
+	@# A NON-default existingSecretKey/mountPath (PR #1245 review F6): the
+	@# assertions above only ever render the defaults, so a template that
+	@# hard-codes "proxy-url" for the ENV path while the volume item correctly
+	@# uses $$dps.existingSecretKey (or vice versa) passes every check above —
+	@# WARDYN_DAEMON_PROXY_SECRET would then name a file the projected volume
+	@# never writes, a boot refusal (missing file) no gate here catches.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set daemonProxySecret.existingSecretKey=url --set daemonProxySecret.mountPath=/mnt/dps); \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/mnt/dps/url"' || { echo "daemonProxySecret.existingSecretKey/mountPath did not reach the WARDYN_DAEMON_PROXY_SECRET env value"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /mnt/dps" || { echo "daemonProxySecret.mountPath did not reach the volumeMount"; exit 1; }; \
+	echo "$$out" | grep -A6 '^        - name: daemon-proxy-secret$$' | grep -A1 "key: url" | grep -q "path: url" || { echo "daemonProxySecret.existingSecretKey did not reach the projected volume's item key/path — the env value above would name a file this volume never writes"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set env.WARDYN_DAEMON_PROXY_SECRET=/mnt/csi/proxy-url); \
 	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/mnt/csi/proxy-url"' || { echo "env.WARDYN_DAEMON_PROXY_SECRET did not override the Secret-backed mount path"; exit 1; }
 	@# T-60/#720's third DSN mode (secret.yaml doc comment "your own file"): a

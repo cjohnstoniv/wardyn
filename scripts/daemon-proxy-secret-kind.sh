@@ -6,13 +6,20 @@
 # WARDYN_DAEMON_PROXY_SECRET (T-59, #719): a throwaway kind cluster, a
 # throwaway Postgres, and TWO helm installs of the SAME chart with
 # daemonProxySecret.existingSecret pointed at an operator-managed Secret —
-# once with the chart's own default defaultMode (0440, the kubelet's
-# fsGroup-added group-read shape) and once with defaultMode: 0400 (no group
-# bit, root-owned) — asserting both boot: the pod becomes Ready and its own
+# once with the chart's own default defaultMode (0440) and once with
+# defaultMode: 0400 — asserting both boot: the pod becomes Ready and its own
 # log names WARDYN_DAEMON_PROXY_SECRET as the source (installDaemonProxySecret,
 # cmd/wardynd/daemon_proxy.go, TestInstallDaemonProxySecret_GroupReadableUnderFsGroupAccepted
-# is this same rule's unit proof — this script proves the CHART wiring reaches
-# it end to end, not just the Go rule in isolation).
+# is this same rule's unit proof — this script proves the CHART's render->boot
+# path reaches it end to end, not just the Go rule in isolation).
+#
+# Kubelet Secret-volume files are always root-owned, and under this chart's
+# own podSecurityContext.fsGroup the kubelet ORs in group-read regardless of
+# defaultMode — so INSIDE the pod, 0400 and 0440 are the SAME file mode
+# (0440); this script's two legs exercise two different chart inputs
+# (daemonProxySecret.defaultMode), not two different modes wardynd actually
+# opens. That still catches a render regression in either value (a typo'd
+# defaultMode that renders as a string, or one an apiserver schema rejects).
 #
 # The Secret carries a syntactically valid but NEVER-DIALED proxy URL:
 # daemonProxySecretMode only inspects the mounted file's mode and parses the
@@ -85,14 +92,21 @@ for mode in 0440 0400; do
   if ! kubectl -n "$NS" rollout status "deployment/$release" --timeout=120s >/dev/null; then
     warn "mode $mode: rollout never converged — pod state + logs follow"
     kubectl -n "$NS" describe pod -l "app.kubernetes.io/instance=$release" || true
-    kubectl -n "$NS" logs -l "app.kubernetes.io/instance=$release" --tail=200 --all-containers || true
-    rc=1
-  elif ! kubectl -n "$NS" logs -l "app.kubernetes.io/instance=$release" --all-containers 2>/dev/null \
-      | grep -q "daemon egress proxy configured (WARDYN_DAEMON_PROXY_SECRET)"; then
-    warn "mode $mode: pod booted but never logged wiring WARDYN_DAEMON_PROXY_SECRET — the Secret may not have reached the mount"
+    kubectl -n "$NS" logs -l "app.kubernetes.io/instance=$release" --tail=-1 --all-containers || true
     rc=1
   else
-    log "mode $mode: booted and wired WARDYN_DAEMON_PROXY_SECRET"
+    # --tail=-1: with a label selector `kubectl logs` defaults to the LAST 10
+    # lines, and the proxy-configured line is the FIRST thing wardynd logs —
+    # a bare `--all-containers | grep -q` here would never see it. Captured
+    # into a variable (not piped) so a kubectl-side SIGPIPE under `set -o
+    # pipefail` can never masquerade as "line not found".
+    logs="$(kubectl -n "$NS" logs -l "app.kubernetes.io/instance=$release" --tail=-1 --all-containers 2>/dev/null)"
+    if ! grep -q "daemon egress proxy configured (WARDYN_DAEMON_PROXY_SECRET)" <<<"$logs"; then
+      warn "mode $mode: pod booted but never logged wiring WARDYN_DAEMON_PROXY_SECRET — the Secret may not have reached the mount"
+      rc=1
+    else
+      log "mode $mode: booted and wired WARDYN_DAEMON_PROXY_SECRET"
+    fi
   fi
   helm uninstall "$release" --namespace "$NS" >/dev/null 2>&1 || true
 done

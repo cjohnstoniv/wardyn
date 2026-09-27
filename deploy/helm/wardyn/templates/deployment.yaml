@@ -653,11 +653,15 @@ spec:
         {{- if $dps.existingSecret }}
         # An OPERATOR-owned Secret: never chart-created, never chart-read
         # (this chart neither renders nor otherwise references its content —
-        # only wardynd, at boot, through the mounted file). defaultMode
-        # governs what wardynd's own non-root uid can read; daemonProxySecretMode
-        # (cmd/wardynd/daemon_proxy.go) refuses a wider mode at boot regardless
-        # of what the volume renders here, so a misconfigured mode fails
-        # loudly rather than silently trusting a world-readable file.
+        # only wardynd, at boot, through the mounted file). defaultMode is a
+        # RENDER-time default, not a boot-time guarantee: daemonProxySecretMode
+        # (cmd/wardynd/daemon_proxy.go) refuses group- or world-WRITABLE modes
+        # regardless of what this renders, but a root-owned Secret-volume
+        # file that is wider than defaultMode's own default — e.g. 0644, from
+        # someone editing this field — is still ACCEPTED (the rule's
+        # other-readable refusal only fires on a file wardynd's own non-root
+        # uid owns, which a Secret volume never is). Values.yaml's own comment
+        # on daemonProxySecret has the full rule.
         - name: daemon-proxy-secret
           secret:
             secretName: {{ $dps.existingSecret }}

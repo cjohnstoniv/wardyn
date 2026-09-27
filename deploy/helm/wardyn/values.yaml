@@ -399,13 +399,17 @@ trustedCA: ""
 # env.WARDYN_DAEMON_PROXY_SECRET is already set (which always wins — the
 # escape hatch for a Vault Agent / CSI shape via extraVolumes instead). Empty
 # existingSecret (default) => no volume, no env — byte-identical to today.
-# defaultMode governs what wardynd's non-root uid can actually read: 0440
-# (the default, group-read added by the kubelet under podSecurityContext.fsGroup,
-# same shape as secretFiles' boot-secrets volume) and 0400 (no group bit, the
-# file's owning uid IS wardynd's) both satisfy daemonProxySecretMode's rule;
-# a wider mode (e.g. 0644) does not, since that rule refuses group- or
-# world-writable outright and other-readable as soon as the file is owned by
-# wardynd's own non-root uid. Setting both this and WARDYN_DAEMON_PROXY_URL
+# defaultMode is a RENDER-time default, not a boot-time guarantee — the mode
+# daemonProxySecretMode (cmd/wardynd/daemon_proxy.go) actually sees is
+# whatever the kubelet mounts. A Secret-volume file is ALWAYS root-owned,
+# never wardynd's own uid, so the rule's "other-readable when owned by
+# wardynd's own non-root uid" branch never fires here: 0440 (the default),
+# 0400 and even a wider 0644/0444 are all ACCEPTED. Only group- or
+# world-WRITABLE bits (e.g. 0660, 0666) are refused. Under this chart's own
+# podSecurityContext.fsGroup the kubelet additionally ORs in group-read
+# regardless of defaultMode, so 0400 and 0440 are the SAME mode wardynd
+# actually opens (0440) — 0400 only differs without an fsGroup of your own.
+# Setting both this and WARDYN_DAEMON_PROXY_URL
 # (env or extraEnv) renders fine but wardynd itself refuses to boot on it
 # (bootDaemonProxy, cmd/wardynd/daemon_proxy.go) — the two name one proxy two
 # ways, and Wardyn never picks one silently. See docs/ENV.md

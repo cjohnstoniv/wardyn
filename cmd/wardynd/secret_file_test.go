@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +79,10 @@ func TestSecretFile_TwoTrailingNewlinesRefuses(t *testing.T) {
 		testSecretValue + "\r\n\r\n",
 		testSecretValue + "\n\n\n",
 		"line1\n\nline3\n\n",
+		// A stray bare "\r" left over after the ONE full "\r\n"/"\n" trim
+		// (F7, PR #1245 review): the first trim removes the trailing "\n",
+		// the second removes only the LAST "\r", leaving one behind.
+		testSecretValue + "\r\r\n",
 	} {
 		p := writeSecret(t, content, 0o440)
 		_, err := resolveOne(t, "", p)
@@ -156,6 +162,58 @@ func TestSecretFile_OwnOtherReadableRefuses(t *testing.T) {
 	}
 	if v, err := resolveOne(t, "", writeSecret(t, testSecretValue, 0o640)); err != nil || v != testSecretValue {
 		t.Fatalf("own 0640: got (%q, %v), want the value", v, err)
+	}
+}
+
+// Not just the returned error (assertNoValue, above) — nothing resolveSecretFiles
+// or readSecretFile does anywhere along the way ever hands the secret value to
+// slog, success or refusal (PR #1245 review F4, #720's own "slog captured,
+// value never logged"). Captures the process's actual default logger, the
+// same one every real slog.Info/Warn call in this package writes through.
+func TestSecretFile_ValueNeverLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// One success (the value resolves) and every refusal shape this file
+	// covers.
+	resolveOne(t, "", writeSecret(t, testSecretValue+"\n", 0o440))
+	resolveOne(t, "", writeSecret(t, testSecretValue+"\n\n", 0o440)) // two trailing newlines
+	resolveOne(t, testSecretValue, writeSecret(t, "other\n", 0o400)) // both set
+	resolveOne(t, "", writeSecret(t, "", 0o400))                     // empty
+	resolveOne(t, "", writeSecret(t, testSecretValue, 0o666))        // world-writable
+	resolveOne(t, "", filepath.Join(t.TempDir(), "does-not-exist"))  // unreadable
+
+	if strings.Contains(buf.String(), testSecretValue) {
+		t.Fatalf("the secret value reached the log: %s", buf.String())
+	}
+}
+
+// Every secretFileSettings entry's boot-flag field starts empty in the state
+// a real, unconfigured boot reaches before resolveSecretFiles runs, and stays
+// empty through a resolveSecretFiles call with no _FILE var set (PR #1245
+// review F4, #720's own "every secretFileSettings default is empty").
+func TestSecretFileSettings_EveryDefaultIsEmpty(t *testing.T) {
+	f := &bootFlags{
+		dsn: new(string), migrateDSN: new(string), adminToken: new(string), ageKey: new(string),
+		oidcClientSecret: new(string), dirSecret: new(string), auditSinks: new(string),
+		orgEnrolToken: new(string),
+	}
+	settings := secretFileSettings(f)
+	for _, s := range settings {
+		t.Setenv(s.fileVar, "") // isolate from whatever the real process env holds
+		if *s.value != "" {
+			t.Errorf("%s starts %q, want empty", s.name, *s.value)
+		}
+	}
+	if err := resolveSecretFiles(settings); err != nil {
+		t.Fatalf("resolveSecretFiles with nothing configured: %v", err)
+	}
+	for _, s := range settings {
+		if *s.value != "" {
+			t.Errorf("%s = %q after resolveSecretFiles with no _FILE set, want still empty", s.name, *s.value)
+		}
 	}
 }
 

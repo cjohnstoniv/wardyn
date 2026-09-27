@@ -926,13 +926,17 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 ```
 
 `existingSecretKey` (default `proxy-url`) names the key inside it.
-`defaultMode` (default `0440`, octal) is what the kubelet renders the mounted
-file as — `wardynd`'s own `daemonProxySecretMode` rule (`cmd/wardynd/daemon_proxy.go`)
-independently refuses a group- or world-**writable** file at boot regardless
-of what this renders, and refuses **other**-readable only when the file is
-owned by `wardynd`'s own non-root uid; `0440` (group-read, the kubelet's own
-addition under `podSecurityContext.fsGroup`) and `0400` (no group bit, root-owned)
-both pass that rule. An operator-set `env.WARDYN_DAEMON_PROXY_SECRET` always
+`defaultMode` (default `0440`, octal) is a chart-render-time default, not a
+boot-time guarantee — `wardynd`'s own `daemonProxySecretMode` rule
+(`cmd/wardynd/daemon_proxy.go`) independently refuses only a group- or
+world-**writable** file at boot, and refuses **other**-readable only when the
+file is owned by `wardynd`'s own non-root uid. A Kubernetes Secret volume is
+always root-owned, never `wardynd`'s uid, so that second refusal never fires
+here: `0440`, `0400` and even a wider `0644`/`0444` all boot. Under this
+chart's own `podSecurityContext.fsGroup` the kubelet additionally ORs in
+group-read regardless of `defaultMode`, so `0400` and `0440` are the SAME
+mode `wardynd` actually opens (`0440`) — `0400` only differs without an
+`fsGroup` of your own. An operator-set `env.WARDYN_DAEMON_PROXY_SECRET` always
 wins over the Secret-backed path — the escape hatch for a Vault Agent / CSI
 shape via `extraVolumes` instead. Setting both `daemonProxySecret.existingSecret`
 and a `WARDYN_DAEMON_PROXY_URL` renders fine, but `wardynd` itself refuses to
