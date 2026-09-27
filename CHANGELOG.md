@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Key-encryption follow-ups from the Transit KEK review (#980).** An aborted `wardynd -rewrap`
+  now writes a `secret.rewrap` event (`outcome` `failure`, `reason` `aborted`, `secrets` 0, since
+  nothing is committed), even when the run was canceled — under Transit it has already made
+  decrypt calls Vault's audit device records. A Vault Transit error answer (a deleted key, a
+  revoked policy, a missing mount) is now reported as the key service's error with Vault's status
+  and message, not as a moved or forged row; an unreachable Vault stays transient. The Vault token
+  file and the Kubernetes service-account token file now get the `_FILE` mode rule on every read:
+  a group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
+  refused; root-owned Secret-volume and CSI files, and the 0644 file Vault Agent writes as its own
+  uid, are still read.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
