@@ -19,7 +19,7 @@ import (
 // A run's rendered proxy config at rest (#1176). It carries the run token, the
 // per-run MITM CA key and the operator's upstream-proxy credential, so it is
 // kept in exactly one place: sealed in the run_proxy_configs row (migration
-// 0090), under Config.RunConfigKey, bound to its run. The proxy gets it over
+// 0091), under Config.RunConfigKey, bound to its run. The proxy gets it over
 // stdin and holds it only in memory; a revive rebuilds the proxy from this row
 // and never reads the proxy container, which the driver removes when the run
 // is kept. The row is deleted when the run goes terminal (revokeRunCascade,
