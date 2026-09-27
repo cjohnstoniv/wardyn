@@ -33,6 +33,7 @@ import { SIGNIN_HELP_REFUSALS } from "../../lib/sign-in-copy";
 import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
 import { appURL } from "../../lib/base-path";
+import { BrandSlot } from "../wardyn/branding-context";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
 // shell's 5s health poll: nothing here is live data, this only has to notice a
@@ -262,19 +263,26 @@ export function SignIn({
       </Button>
 
       <div className="relative w-full max-w-[400px]">
-        <div className="mb-7 flex flex-col items-center gap-3 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full border border-primary/25 bg-primary/12">
-            <ShieldCheck className="size-6 text-primary" />
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Wardyn
-          </h1>
-          {/* No trust-domain / identity-provider chips here. Someone at a sign-in
-              form cannot act on either, has not been taught the vocabulary, and on
-              a default install both are constants (wardyn.local / embedded). The
-              app chrome surfaces them where they are NON-default, which is the only
-              case worth a reader's attention. */}
-        </div>
+        {/* #1125: a brand's logo (or monogram) and product name; unbranded,
+            exactly the shield and "Wardyn" as before. */}
+        <BrandSlot
+          part="gate"
+          fallback={
+            <div className="mb-7 flex flex-col items-center gap-3 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full border border-primary/25 bg-primary/12">
+                <ShieldCheck className="size-6 text-primary" />
+              </div>
+              <h1 className="text-xl font-semibold tracking-tight text-foreground">
+                Wardyn
+              </h1>
+              {/* No trust-domain / identity-provider chips here. Someone at a sign-in
+                  form cannot act on either, has not been taught the vocabulary, and on
+                  a default install both are constants (wardyn.local / embedded). The
+                  app chrome surfaces them where they are NON-default, which is the only
+                  case worth a reader's attention. */}
+            </div>
+          }
+        />
 
         <div className="rounded-xl border border-border bg-card p-6 shadow-floating">
           <div className="mb-4">

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -44,7 +45,10 @@ func TestBedrockPlainHTTPIsAudibleAtBoot(t *testing.T) {
 			allowTestEndpoints:     &ack,
 			awsSSOEndpointOverride: &override,
 		}
-		_, _, _, _, err := validateModelEndpoints(f)
+		// runnerTarget "none": these fixtures pin the plaintext-hatch WARN, not
+		// the #1198 proxy-subnet check (bedrock_subnet_guard_test.go), and "none"
+		// keeps that check a no-op regardless of the endpoint under test here.
+		_, _, _, _, err := validateModelEndpoints(context.Background(), f, "none")
 		return buf.String(), err
 	}
 

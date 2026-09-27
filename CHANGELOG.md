@@ -24,6 +24,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`WARDYN_BEDROCK_BASE_URL` on a wardyn-proxy sidecar's own subnet now refuses boot instead of
+  denying every model call (#1198).** The proxy's SSRF guard never lifts an address on any subnet
+  its own interfaces sit on, so a Bedrock PrivateLink endpoint resolving onto the docker
+  control-plane network's subnet used to have every model call denied at dispatch time, with the
+  SDK misreading the denial as a malformed Bedrock response. `wardynd` now resolves the
+  variable's host once, at boot, and refuses to start when the resolved address falls inside the
+  control-plane network's subnet, naming the variable, the address, the subnet and a remedy. The
+  same failure can also land on a run's own per-run network — that subnet is allocated fresh per
+  run and can't be predicted at boot, so an address inside Docker's own built-in
+  default-address-pools instead logs a WARN naming the `daemon.json` remedy. Kubernetes logs a
+  WARN too (the per-run proxy pod's CIDR is not reliably known at boot); an unresolvable host
+  also WARNs and proceeds.
+
 - **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
   run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
   answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the
@@ -948,6 +961,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the organisation skips the rows it already holds.
 
 ### Added
+
+- **Console branding (#1125).** A super admin sets the organisation's name, how the product name
+  reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an
+  optional dark-mode pair (derived when unset), a logo (SVG or PNG, at most 512 KB) and an optional
+  https Support link from a new Branding card in Admin view Settings. The sign-in page, the top bar,
+  the browser tab title and the tab icon follow it; the danger, warning, success and info colours
+  and the Admin view cue are never brandable. wardynd stores the record (migration
+  `0091_branding`), validates every save server-side with a named reason (`invalid_colour`,
+  `low_contrast` with the ratio, `link_not_https`, `logo_too_large`, `invalid_logo`, …), rebuilds
+  an uploaded SVG from an allowlist and refuses one that can run script or fetch, serves the logo
+  from `'self'` with its validated type and `nosniff`, and audits `branding.write` /
+  `branding.delete`. The Content-Security-Policy is unchanged, and an unbranded console renders
+  exactly as before. New routes: `GET /api/v1/branding` and `/branding/logo` (anonymous, the
+  public subset), `GET /branding/settings` (signed in), `PUT`/`DELETE /branding/settings` (admin).
 
 - **Admin-minted API tokens and people set up before their first sign-in (#1157).** An admin or
   `security_admin` can create a person keyed by their identity provider's `sub` (`POST /people`),
