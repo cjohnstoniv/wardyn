@@ -55,20 +55,31 @@ async function asViewer(page: Page, principal: string, admin = false): Promise<v
 }
 
 /** /setup/status with the provider block, fetched once and served from cache
- *  (one-door.spec.ts's reason). */
+ *  (one-door.spec.ts's reason). The failure block re-reads this on its own
+ *  mount effect (run-detail/failure-block.tsx's ONCE-per-mount refresh), so a
+ *  test that reaches a failed run always sends a SECOND request here close on
+ *  the first's heels — before it, on a slow run, the two could each see no
+ *  cached value yet (check-then-fetch is not atomic across the `await`) and
+ *  both hit the real backend, doubling this handler's exposure to exactly the
+ *  daemon latency a loaded CI host adds. Caching the in-flight PROMISE rather
+ *  than its result closes that window: a second request arriving before the
+ *  first resolves awaits the same promise instead of starting its own fetch. */
 async function withProviders(page: Page): Promise<void> {
-  let cached: Record<string, unknown> | null = null;
+  let cachedPromise: Promise<Record<string, unknown>> | null = null;
   await page.route("**/api/v1/setup/status*", async (route: Route) => {
-    if (!cached) {
-      cached = (await (await route.fetch()).json()) as Record<string, unknown>;
-      cached.model_providers = Object.values(P).map((p) => ({
-        ...p,
-        harnesses: ["claude-code", "codex-cli"],
-        default_for: p.id === P.bedrockDev.id ? ["claude-code"] : [],
-      }));
-      cached.provider_access = Object.values(P).map((p) => ({ provider: p.id, state: "not_configured" }));
+    if (!cachedPromise) {
+      cachedPromise = (async () => {
+        const json = (await (await route.fetch()).json()) as Record<string, unknown>;
+        json.model_providers = Object.values(P).map((p) => ({
+          ...p,
+          harnesses: ["claude-code", "codex-cli"],
+          default_for: p.id === P.bedrockDev.id ? ["claude-code"] : [],
+        }));
+        json.provider_access = Object.values(P).map((p) => ({ provider: p.id, state: "not_configured" }));
+        return json;
+      })();
     }
-    await route.fulfill({ json: cached });
+    await route.fulfill({ json: await cachedPromise });
   });
   // The AWS and Claude doors start their sign-in at once; nothing here signs in.
   await page.route("**/api/v1/model-providers/*/sign-in", (route) =>
