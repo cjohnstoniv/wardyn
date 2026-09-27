@@ -184,23 +184,9 @@ func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error 
 // order that an admin then has to re-sort in their head.
 func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error) {
 	const q = `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments
-		ORDER BY ` + governanceTierOrder + `, priority DESC, subject`
+		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
 	return collect(ctx, s.Pool, "list", "governance assignments", q, nil, scanGovernanceAssignment)
 }
-
-// governanceTierOrder ranks the four subject tiers MOST SPECIFIC FIRST —
-// user > group > user_type > all. A person's type sits below their groups so
-// a group assignment overrides the type's profile, and above `all` so a type
-// with a profile binds everyone of that type. Written once, as SQL, and spliced into BOTH the resolver
-// and the console listing so the two can never disagree about what "most
-// specific" means.
-//
-// subject_type is deliberately UNQUALIFIED so the one string works in the
-// resolver's JOIN as well as the single-table listing. That is safe because
-// governance_profiles has no subject_type column (migration 0052) — the only
-// other table in that JOIN. A migration that added one would make this
-// ambiguous, and Postgres would say so loudly rather than silently re-rank.
-const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 WHEN 'user_type' THEN 2 ELSE 3 END`
 
 // ResolveGovernanceProfile returns THE ONE profile that applies to a caller, or
 // ErrNotFound when no assignment matches (which the caller reads as "fall
@@ -208,47 +194,10 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 //
 // The whole precedence rule is the ORDER BY, and that is deliberate: it is one
 // indexed read on the UNIQUE(subject_type, subject) btree, so there is no
-// second implementation in Go for a caller to skip, mis-order, or forget.
-// Ranked, in order:
-//
-//  1. tier — user > group > user_type > all. An assignment is one admin
-//     explicitly naming one principal, so the more specific naming wins
-//     outright; no priority in the group tier can beat a user-tier row. A
-//     person holds one type, so the type tier matches at most one row.
-//
-//  2. within the user tier, a sub-keyed match beats an email-keyed one.
-//     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
-//     email) and an admin may legitimately have written an assignment against
-//     either, so dueling rows on the two are reachable and LIMIT 1 must not
-//     pick arbitrarily. Sub wins because it is the stable identifier — an email
-//     is reassignable, and inheriting a departed colleague's ceiling by taking
-//     their address is not a thing this should permit. Encoded as the MATCH
-//     POSITION in the caller's own userSubjects slice (array_position), so the
-//     caller's documented ordering IS the precedence and this query needs no
-//     opinion about which identity kind sits at which index.
-//
-//  3. priority DESC — the admin's explicit tie-break, and the group tier's
-//     working lever (a member is usually in several groups at once).
-//
-//  4. profiles.name ASC — applied in EVERY tier. Without it two same-priority
-//     rows make LIMIT 1 depend on the plan, and "why did Bob get profile B
-//     today" has no answer.
-//
-//  5. assignments.subject ASC — the deterministic total-order FLOOR, and the
-//     same last key ListGovernanceAssignments already ends on (:182), so the
-//     two orderings in this file now agree.
-//
-//     It changes no answer today, and the reason is worth writing down because
-//     it is a DEPENDENCY rather than a coincidence: the tier is the first key,
-//     so two rows still tied after (4) necessarily share a tier AND a profile,
-//     and this SELECT returns profile columns plus a.subject_type and nothing
-//     else per assignment — so LIMIT 1 picking either row yields byte-identical
-//     output. That held only while the projection carried no per-assignment
-//     column. The moment anyone adds a.subject, a.priority or a new assignment
-//     field to the SELECT (an audit line naming WHICH assignment matched is the
-//     obvious next ask), the tie becomes observable and the answer starts
-//     depending on the plan. One key removes the dependency instead of
-//     documenting it, so nothing has to notice when that day comes.
+// second implementation in Go for a caller to skip, mis-order, or forget. The
+// match and the ranking are subjectMatch and subjectPrecedence, the same
+// fragments ResolveUserDrive splices, so the ceiling and the drive cannot
+// disagree about what "most specific" means.
 //
 // users/groups are normalized from nil to empty for the same reason
 // ListCapabilityGrantsFor normalizes them: a nil Go slice binds as SQL NULL and
@@ -264,21 +213,11 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 	if groups == nil {
 		groups = []string{}
 	}
-	const q = `SELECT p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, a.subject_type
+	q := `SELECT p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, a.subject_type
 		FROM governance_assignments a
 		JOIN governance_profiles p ON p.id = a.profile_id
-		WHERE a.subject_type = 'all'
-		   OR (a.subject_type = 'user'  AND a.subject = ANY($1::text[]))
-		   OR (a.subject_type = 'group' AND a.subject = ANY($2::text[]))
-		   OR (a.subject_type = 'user_type' AND a.subject = $3)
-		ORDER BY
-			` + governanceTierOrder + `,
-			CASE a.subject_type WHEN 'user'
-				THEN COALESCE(array_position($1::text[], a.subject), 2147483647)
-				ELSE 0 END,
-			a.priority DESC,
-			p.name ASC,
-			a.subject ASC
+		WHERE ` + subjectMatch("a") + `
+		ORDER BY ` + subjectPrecedence("a", "p") + `
 		LIMIT 1`
 	var tier string
 	p, err := scanGovernanceProfileInto(s.Pool.QueryRow(ctx, q, userSubjects, groups, userType), &tier)
@@ -288,25 +227,10 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 	return &p, types.CapabilitySubjectType(tier), nil
 }
 
-// HasGroupTierAssignments reports whether ANY group-tier assignment exists.
-//
-// It is the gate on the stale/truncated-snapshot refusal, and it is a separate,
-// deliberately cheap read because that refusal must fire on exactly one
-// deployment shape. A caller whose group snapshot is missing or truncated
-// cannot have its group assignments evaluated — but on a deployment with NO
-// group-tier rows there is nothing an unknown group could have matched, so
-// refusing there would break "no assignment ⇒ byte-for-byte today" for every
-// pre-upgrade session and every deployment that never adopted group profiles.
-// EXISTS, not a count: the answer is a boolean and Postgres stops at the first
-// row.
+// HasGroupTierAssignments reports whether ANY group-tier assignment exists:
+// the gate on the stale-snapshot refusal (see hasGroupTierRows).
 func (s PG) HasGroupTierAssignments(ctx context.Context) (bool, error) {
-	var has bool
-	err := s.Pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM governance_assignments WHERE subject_type = 'group')`).Scan(&has)
-	if err != nil {
-		return false, fmt.Errorf("store: check group-tier governance assignments: %w", err)
-	}
-	return has, nil
+	return s.hasGroupTierRows(ctx, "governance_assignments", "governance assignments")
 }
 
 func scanGovernanceProfile(row pgx.Row) (types.GovernanceProfile, error) {
