@@ -31,8 +31,6 @@ function renderRail(pushRules: PushRulesSpec | undefined, unattended = false) {
         error: null,
         errorSeq: 0,
         credentialRefused: false,
-        warnings: [],
-        onOpenRun: null,
       }}
       preflight={{ error: null, errorSeq: 0, result: null }}
       adoDialog={{
