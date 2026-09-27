@@ -46,7 +46,7 @@
 #     proxy/sandbox-gated): WARDYN_ALLOW_TEST_ENDPOINTS=true,
 #     WARDYN_AWS_SSO_ENDPOINT_OVERRIDE / WARDYN_BEDROCK_BASE_URL both aimed at
 #     the fake by CONTAINER NAME on the project's own control-plane network
-#     (docker-compose.survival-walk.yaml) — never host.docker.internal (see
+#     (test/survival-walk/compose-override.yaml) — never host.docker.internal (see
 #     below). internal/api/awssso_refresh.go's createAWSSSOToken is wardynd's
 #     OWN outbound HTTP call, so this alone is enough for it.
 #  3. the org's agent standard declared bedrock_sso/shared (PUT
@@ -137,7 +137,7 @@ done
 # in a separate worktree) can run without colliding.
 PROJECT="${WARDYN_SURVIVAL_PROJECT:-cl-700-survival}"
 COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
-OVERRIDE_FILE="${ROOT}/deploy/compose/docker-compose.survival-walk.yaml"
+OVERRIDE_FILE="${ROOT}/test/survival-walk/compose-override.yaml"
 API_PORT="${WARDYN_SURVIVAL_API_PORT:-18180}"
 PG_PORT="${WARDYN_SURVIVAL_PG_PORT:-15532}"
 REGISTRY_PORT="${WARDYN_SURVIVAL_REGISTRY_PORT:-15110}"
@@ -174,8 +174,8 @@ TMPDIR="$(mktemp -d /tmp/wardyn-survival-walk.XXXXXX)"
 
 compose() {
   # WARDYN_SURVIVAL_FAKE_URL and WARDYN_CREDENTIAL_REAUTH_TIMEOUT are read by
-  # docker-compose.survival-walk.yaml's own environment: block (see that
-  # file's header for why: the base compose file's wardynd service does not
+  # test/survival-walk/compose-override.yaml's own environment: block (see
+  # that file's header for why: the base compose file's wardynd service does not
   # reference these at all, so it is the OVERRIDE file's job, not a bare
   # shell export, to get them into the container). WARDYN_BEDROCK_REGION/
   # AWS_SSO_REGION/MODEL, by contrast, the BASE file already forwards.
@@ -302,7 +302,7 @@ compose up -d postgres || die "compose up (postgres) failed for ${PROJECT}"
 step "building and starting the fake AWS SSO + Bedrock endpoint (container ${FAKE_CONTAINER})"
 CGO_ENABLED=0 go build -o "${TMPDIR}/awsssofake" ./test/awsssofake/cmd || die "build awsssofake failed"
 docker run -d --name "${FAKE_CONTAINER}" --network "${PROJECT}-internal" \
-  -p "127.0.0.1:${FAKE_PORT}:8090" \
+  -p 127.0.0.1:${FAKE_PORT}:8090 \
   -v "${TMPDIR}/awsssofake:/awsssofake:ro" \
   -e "AWSSSOFAKE_ADDR=0.0.0.0:8090" \
   -e "AWSSSOFAKE_ACCOUNTS=$(jq -nc --arg a "${PIN_ACCOUNT}" --arg r "${PIN_ROLE}" '[{account_id:$a,roles:[$r]}]')" \
