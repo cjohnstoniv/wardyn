@@ -46,6 +46,32 @@ func TestReadPlatformKey_RefusesAKeyThatSeparatesNothing(t *testing.T) {
 	}
 }
 
+// TestReadPlatformKey_RejectsUnsafeMode pins #1116: WARDYN_PLATFORM_KEY_FILE
+// is the platform secret identity and must go through the same cliutil mode
+// rule as every other _FILE setting — a group- or world-writable file lets a
+// local user substitute the key that (un)wraps wardynd's stored secrets.
+func TestReadPlatformKey_RejectsUnsafeMode(t *testing.T) {
+	ageID := mustAgeIdentity(t)
+	platform := mustAgeIdentity(t)
+	for _, mode := range []os.FileMode{0o666, 0o620, 0o602, 0o644} {
+		t.Run(mode.String(), func(t *testing.T) {
+			p := keyFile(t, platform.String())
+			if err := os.Chmod(p, mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := readPlatformKey(p, ageID.String())
+			if err == nil ||
+				!strings.Contains(err.Error(), "WARDYN_PLATFORM_KEY_FILE") ||
+				!strings.Contains(err.Error(), p) {
+				t.Fatalf("mode %04o: want a refusal naming the setting and path, got %v", mode, err)
+			}
+			if strings.Contains(err.Error(), platform.String()) {
+				t.Fatalf("mode %04o: refusal disclosed the key: %v", mode, err)
+			}
+		})
+	}
+}
+
 func mustAgeIdentity(t *testing.T) *age.X25519Identity {
 	t.Helper()
 	id, err := age.GenerateX25519Identity()

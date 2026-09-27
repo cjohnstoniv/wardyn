@@ -243,6 +243,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
   refused; root-owned Secret-volume and CSI files, and the 0644 file Vault Agent writes as its own
   uid, are still read.
+- **The Azure federated token file and the platform key file now get the same `_FILE` mode rule
+  (#1116).** `WARDYN_AZURE_FEDERATED_TOKEN_FILE` and `WARDYN_PLATFORM_KEY_FILE` were the two
+  remaining secret-file reads that bypassed it after #980's follow-ups; a group- or world-writable
+  file at either setting now refuses to boot with the same message as every other `_FILE` setting.
 - **Session revocation also removes registered SSH keys (#154).** Admins and security admins
   can remove a person's keys through `DELETE /people/{principal}/ssh-keys`. Deleted or changed
   keys cannot open new SSH channels on an existing connection; already-open channels continue
