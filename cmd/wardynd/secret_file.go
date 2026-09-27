@@ -66,8 +66,16 @@ func resolveSecretFiles(settings []secretFileSetting) error {
 
 // readSecretFile reads one _FILE value under the shared mode rule
 // (cliutil.ReadSecretFile). Exactly one trailing line ending is trimmed (what
-// `echo` and most secret writers append); any other whitespace is part of the
-// value, as it would be in the env var.
+// `echo` and most secret writers append); any other whitespace, INCLUDING an
+// internal blank line, is part of the value, as it would be in the env var
+// (a PEM or JSON body keeps its shape). A SECOND trailing line ending —
+// content that still ends in "\n" after the one trim — refuses rather than
+// silently keeping a hidden newline on the end of the value: every setting
+// here (a DSN, a token, an age key, a JSON audit-sinks blob) is a value whose
+// own shape never legitimately ends in a blank line, and a writer that
+// appended two (e.g. `cat one-line-file >> out; echo >> out`, or a doubled
+// heredoc) is a mistake this can catch instead of shipping a secret with an
+// invisible extra byte on the end.
 func readSecretFile(fileVar, path string) (string, error) {
 	raw, err := cliutil.ReadSecretFile(fileVar, path)
 	if err != nil {
@@ -77,6 +85,9 @@ func readSecretFile(fileVar, path string) (string, error) {
 	v = strings.TrimSuffix(v, "\r")
 	if strings.TrimSpace(v) == "" {
 		return "", fmt.Errorf("refusing to start: %s=%q is empty — the secret it names would silently fall back to unset", fileVar, path)
+	}
+	if strings.HasSuffix(v, "\n") || strings.HasSuffix(v, "\r") {
+		return "", fmt.Errorf("refusing to start: %s=%q has more than one trailing line ending — only one (\\n or \\r\\n) is trimmed, and a value that still ends in a newline or carriage return after that is almost always an accidental blank line, not part of the secret; fix the file so it ends in exactly one line ending", fileVar, path)
 	}
 	return v, nil
 }

@@ -191,6 +191,10 @@ jobs:
           # API job name is "multi-arch build (<matrix.name>)"
           # (nightly.yml:444), never the literal YAML key "buildx-smoke", so it
           # cannot be matched by name the way the other thirteen are.
+          # daemon-proxy-secret-kind (T-59, #719) is NOT in this list yet — it
+          # has never passed a real nightly run (PR #1245 review F2); add it
+          # here and to nightly.yml's notify-new-lanes.needs together (guard
+          # 13 requires both change at once) once it has gone green once.
           watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles"
           # Exact commit match ONLY (R2-1) — no ancestor walk, no branch
           # filter. nightly.yml runs on schedule against whatever commit is

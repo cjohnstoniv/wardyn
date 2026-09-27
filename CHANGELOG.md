@@ -44,6 +44,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
   owner, showing a "Renamed" toast and the new title in place, with no reload.
 
+- **Helm: `WARDYN_DAEMON_PROXY_SECRET` from an operator-managed Secret (#719).** New chart value
+  `daemonProxySecret.existingSecret` (+ `existingSecretKey`, `mountPath`, `defaultMode`) mounts a
+  Secret you manage yourself — never one this chart creates — read-only and points
+  `WARDYN_DAEMON_PROXY_SECRET` at the mounted file, the credentialed escape hatch for
+  `WARDYN_DAEMON_PROXY_URL`. Empty `existingSecret` (the default) renders no volume and no env —
+  byte-identical to before this existed. An `env.WARDYN_DAEMON_PROXY_SECRET` entry always overrides
+  (the Vault Agent / CSI path via `extraVolumes` instead). See the chart README, "Daemon egress
+  proxy".
+
 ### Changed
 
 - **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
@@ -73,6 +82,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   hidden auto-submitted form built from `enter_post_url` instead of `window.open`-ing a URL, so the
   single-use ticket never lands in a URL, browser history, or a reverse-proxy access log. `GET`
   stays for compatibility.
+- **`_FILE` boot secrets now refuse a second trailing line ending (#720).** `WARDYN_PG_DSN_FILE`,
+  `WARDYN_AGE_KEY_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`,
+  `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+  and `WARDYN_PG_MIGRATE_DSN_FILE` (introduced in 0.7.12) trimmed exactly one trailing line ending
+  and kept everything else verbatim — including a second one, silently left on the end of the
+  value. A file that now ends in two newlines (or a newline plus a bare `\r`) refuses boot instead,
+  naming the var. **Upgrade note:** if a 0.7.12+ install's `_FILE` source ever picked up a doubled
+  trailing newline (e.g. a Vault Agent template appending one to a value that already ends in one),
+  it booted before and refuses now; trim the file to end in exactly one line ending.
 
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
