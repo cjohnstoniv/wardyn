@@ -144,6 +144,8 @@ jobs:
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        run: make build-conformance-agent-image
       - name: Docker conformance at CC2 (runsc)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -304,6 +306,8 @@ jobs:
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        run: make build-conformance-agent-image
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
