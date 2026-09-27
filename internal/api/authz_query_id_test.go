@@ -100,6 +100,16 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityRun, readers: []string{"handleUIEnter"},
 		pinnedBy: "TestUIGateway_EnterRejectsNonOwnerTicket",
 	},
+	// #1197: ?owner=me|all resolves WHICH principal's runs the filtered
+	// listing is scoped to, but it is a closed enum (parseRunsListParams 400s
+	// anything else) — there is no arbitrary foreign PRINCIPAL a caller can
+	// name through it the way ?owner= on the secrets route can, so foreign is
+	// 0 and the owner-forcing scoping (view=user forces "me" for every caller)
+	// is proven in depth by the dedicated test instead of the matrix's probe.
+	"GET /api/v1/runs?owner": {
+		entity: entityPrincipal, readers: []string{"parseRunsListParams", "hasRunsListFilterParams"},
+		ownAdmitted: true, pinnedBy: "TestHandleListRuns_H4_ViewUserForcesOwnerMe",
+	},
 }
 
 // queryParamNotAnID names every query parameter this package reads that does
@@ -126,7 +136,7 @@ var queryParamNotAnID = map[string]string{
 	"rows":                      "terminal geometry",
 	"cols":                      "terminal geometry",
 	"type":                      "directory search kind (security tier route)",
-	"q":                         "directory search text (security tier route)",
+	"q":                         "free-text search over an already-scoped listing: directory search (security tier route) and #1197's run list (every tier)",
 	"ticket":                    "single-use attach ticket: the credential itself, redeemed against the run it was minted for",
 	"app":                       "UI gateway app name, checked against the run's effective policy",
 	"code":                      "OAuth authorization code, bound to the caller's signed state",
@@ -142,9 +152,18 @@ var queryParamNotAnID = map[string]string{
 	"path":                      "internal route: the proxy describing the agent's own request, under the run token",
 	"repo":                      "internal route: the proxy describing the agent's own request, under the run token",
 	"ref_class":                 "internal route: the proxy describing the agent's own request, under the run token",
-	"subject_type":              "Explain grid (security tier route): the grant subject kind asked about",
-	"subject":                   "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
-	"kinds":                     "Explain grid (security tier route): capability kind names, a closed set",
+	// #1197 L1a: none of these five names another principal's run, approval,
+	// workspace or namespace — each is a closed enum or a value filter that
+	// only narrows what ?owner=/?view= (queryIDMatrix's own "GET
+	// /api/v1/runs?owner" row) already scoped the listing to.
+	"view":           "run/approval list scope switch (user|admin); the owner it resolves to is scoped separately (queryIDMatrix's ?owner row)",
+	"status":         "run list state filter (active|ended|failed|killed), a closed enum; narrows an already-scoped listing",
+	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
+	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
+	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
+	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
+	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
+	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
 }
 
 // queryParamDynamicReads names the parameters a function reads through a
