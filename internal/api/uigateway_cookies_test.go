@@ -200,4 +200,7 @@ func TestUIGateway_InterimResponseSetCookieRules(t *testing.T) {
 	if hints[0].Get("Link") == "" {
 		t.Fatal("103 lost its Link header")
 	}
+	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("final response after a 103: Referrer-Policy = %q, want no-referrer", got)
+	}
 }

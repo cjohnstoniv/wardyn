@@ -375,6 +375,10 @@ type uiInterimWriter struct{ http.ResponseWriter }
 func (w uiInterimWriter) WriteHeader(code int) {
 	if code >= 100 && code < 200 {
 		uiFilterSetCookie(w.Header())
+	} else {
+		// ReverseProxy clears the header map after each 1xx, which takes the
+		// gateway's own Referrer-Policy with it; put it back on the final response.
+		w.Header().Set("Referrer-Policy", "no-referrer")
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
