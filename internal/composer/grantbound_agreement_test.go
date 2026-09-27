@@ -285,7 +285,7 @@ func TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum(t *testing.T) {
 }
 
 // TestClampApprovalAxisThroughTheExportedClamp runs the approval shape through
-// Clamp itself, the entry point boundMemberSpec calls, so the axis is pinned at
+// Clamp itself, the entry point boundUserSpec calls, so the axis is pinned at
 // the boundary a caller actually reaches and not only at the helper.
 func TestClampApprovalAxisThroughTheExportedClamp(t *testing.T) {
 	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{

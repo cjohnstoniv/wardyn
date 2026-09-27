@@ -154,6 +154,9 @@ spec:
       # serviceAccount.create=false points at an SA whose own automount default
       # is true, and the pod-level field wins over the SA-level one.
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      # `default 70` carries a --reuse-values upgrade from a chart that had no
+      # such value; see values.yaml for why 70.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 70 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.image.pullSecrets }}
@@ -294,6 +297,20 @@ spec:
               value: {{ .vault.kvPrefix | default $.Release.Namespace | quote }}
             - name: WARDYN_VAULT_KV_MAX_VERSIONS
               value: {{ .vault.maxVersions | quote }}
+            {{- end }}
+            {{- with $.Values.kek }}
+            {{- if eq .provider "transit" }}
+            # Data keys wrapped by Vault Transit (docs/OPERATIONS.md "Key
+            # service: Vault Transit").
+            - name: WARDYN_KEK
+              value: "transit"
+            {{- end }}
+            {{- if and .transit .transit.key }}
+            - name: WARDYN_VAULT_TRANSIT_MOUNT
+              value: {{ .transit.mount | quote }}
+            - name: WARDYN_VAULT_TRANSIT_KEY
+              value: {{ .transit.key | quote }}
+            {{- end }}
             {{- end }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/OPERATIONS.md "Store mode:

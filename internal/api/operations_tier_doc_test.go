@@ -70,6 +70,9 @@ var docTierRows = []struct{ route, token string }{
 	// could widen, and that must red here rather than pass on the write's row.
 	{"GET /api/v1/agent-providers", "`GET /agent-providers`"},
 	{"PUT /api/v1/agent-providers", "`PUT /agent-providers`"},
+	// Model providers (0.8), per verb for the same reason.
+	{"GET /api/v1/model-providers", "`GET /model-providers`"},
+	{"PUT /api/v1/model-providers", "`PUT /model-providers`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
@@ -85,6 +88,8 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/site-config/test-redirect", "`/test-redirect`"},
 	{"GET /api/v1/permissions", "the `/permissions` routes below"},
 	{"PUT /api/v1/permissions/enforcement", "the `/permissions` routes below"},
+	{"GET /api/v1/permissions/availability/{kind}/*", "the `/permissions` routes below"},
+	{"PUT /api/v1/permissions/availability/{kind}/*", "the `/permissions` routes below"},
 	{"GET /api/v1/tokens", "`GET`/`DELETE /tokens`"},
 	{"POST /api/v1/sessions/revoke", "`POST /sessions/revoke`"},
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
@@ -153,6 +158,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
 	{"DELETE /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
+	{"GET /api/v1/admin/runs/proxy-window", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
+	{"POST /api/v1/admin/runs/restart", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
 	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
@@ -162,6 +169,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

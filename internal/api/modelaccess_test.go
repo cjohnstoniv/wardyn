@@ -114,6 +114,35 @@ func (s *scopedSecrets) List(context.Context) ([]string, error) {
 	return out, nil
 }
 
+func (s *scopedSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, rows := range s.rows {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *scopedSecrets) Holders(_ context.Context, names []string) (map[string][]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string][]string{}
+	for owner, rows := range s.rows {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				out[name] = append(out[name], owner)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *scopedSecrets) For(owner string) secretstore.Store {
 	return &scopedSecrets{owner: owner, mu: s.mu, reads: s.reads, rows: s.rows}
 }
@@ -300,12 +329,12 @@ func TestResolveRunLLMAccess_AdminsOwnPerUserCaptureResolvesAtCreate(t *testing.
 	s := New(cfg)
 
 	req := createRunRequest{Agent: "claude-code", Task: "ship it"}
-	la := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, admin)
+	la := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, admin, runProviderChoice{})
 	if la == nil || !la.Provisioned {
 		t.Fatalf("the admin's OWN per_user capture must resolve at create, got %+v", la)
 	}
 	// …and the same call for somebody with no capture must not borrow it.
-	if other := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, "member@corp.example"); other != nil && other.Provisioned {
+	if other := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, "member@corp.example", runProviderChoice{}); other != nil && other.Provisioned {
 		t.Errorf("a member with no capture resolved provisioned: %+v", other)
 	}
 }
@@ -389,6 +418,25 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 	noRefresh := live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(2 * time.Hour) })
 	if got := awsSSOCredentialCause(noRefresh, false, now); got != causeTokenExpiring {
 		t.Errorf("cause = %q, want %q", got, causeTokenExpiring)
+	}
+}
+
+// TestAWSSSOCredentialState_FixtureBlobReadsLive pins the bug the review
+// found: ssoBlobFor/ssoBlobBody carry no refresh_token, so their blob's state
+// depends entirely on ExpiresAt clearing modelAccessExpiringWindow (24h,
+// see awssoCredentialState's default arm). A fixture minted only
+// testutil.FutureRFC3339(24) ahead is exactly AT that window and grades
+// `expiring`, not `live` — the fixture READ "not yet expired", not "live",
+// which is why every AWS SSO blob site now mints 24*30 hours out (see
+// internal/testutil/clock.go's doc comment). This parses the real blob JSON
+// ssoBlobFor produces, the same way production code would.
+func TestAWSSSOCredentialState_FixtureBlobReadsLive(t *testing.T) {
+	var b awsSSOBlob
+	if err := json.Unmarshal([]byte(ssoBlobFor("123456789012", "WardynBedrockRole")), &b); err != nil {
+		t.Fatalf("unmarshal fixture blob: %v", err)
+	}
+	if got := awsSSOCredentialState(b, true, true, false, time.Now()); got != modelAccessLive {
+		t.Errorf("state = %q, want %q — the fixture must clear modelAccessExpiringWindow", got, modelAccessLive)
 	}
 }
 
@@ -621,13 +669,13 @@ func TestSetupModelAccess_LocalOperatorIsAPerson(t *testing.T) {
 }
 
 // TestMemberModelAccess_NotApplicablePassesThrough: not_applicable must survive
-// memberModelAccess unchanged. Fail-safe — the mechanism principal is never a
+// userModelAccess unchanged. Fail-safe — the mechanism principal is never a
 // real human member today — but without an explicit early return the default
 // arm below rewrites any unrecognized state to `live`, which is a worse lie.
 func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 	in := SetupModelAccess{State: modelAccessNotApplicable, Mechanism: string(types.AgentMechanismBedrockSSO)}
-	if got := memberModelAccess(in); got != in {
-		t.Errorf("memberModelAccess(%+v) = %+v, want it passed through unchanged", in, got)
+	if got := userModelAccess(in); got != in {
+		t.Errorf("userModelAccess(%+v) = %+v, want it passed through unchanged", in, got)
 	}
 }
 
@@ -638,7 +686,7 @@ func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 // would land in the SAME namespace (owner == "admin-token") and overwrite the
 // last person's session. A shared row is unaffected: the admin token still
 // may connect it. S-07: the refusal is an authz.denied row — the sibling
-// refusals in authorizeHarnessLogin (refuse/denyMemberCapability)
+// refusals in authorizeHarnessLogin (refuse/denyUserCapability)
 // both audit, and this is the one refusal on the credential-capture route an
 // operator's own CI job hits with no error budget to notice it by otherwise.
 func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
@@ -651,7 +699,7 @@ func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "shared credential") {
 		t.Errorf("body = %s, want the mechanism-principal refusal sentence", w.Body.String())
 	}
-	if len(audit.find("harness.login.started")) != 0 {
+	if len(audit.find("harness.login.start")) != 0 {
 		t.Error("a refused sign-in launched a sandbox anyway")
 	}
 	rows := audit.find("authz.denied")
@@ -746,7 +794,7 @@ func TestHandleHarnessLogin_LocalDevHeaderDoesNotTripTheRefusal(t *testing.T) {
 // PerUser, because `expired_signin` + "Sign in to AWS" is an answer only a
 // principal who OWNS the credential may be given: under `shared` it is the
 // operator's lifecycle and an instruction the server then refuses, and
-// memberModelAccess collapses it. See modelaccess_member_redaction_test.go.
+// userModelAccess collapses it. See modelaccess_member_redaction_test.go.
 func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 	in := SetupStatus{
 		ModelAccess: SetupModelAccess{
@@ -756,7 +804,7 @@ func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 		Checks:  []SetupCheck{{ID: "runner", Detail: "operator detail"}},
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 	}
-	out := redactSetupStatusForMember(in, false, false)
+	out := redactSetupStatusForUser(in, false, false)
 	if out.ModelAccess != in.ModelAccess {
 		t.Fatalf("ModelAccess = %+v, want it kept verbatim (%+v)", out.ModelAccess, in.ModelAccess)
 	}
@@ -820,9 +868,9 @@ func perUserLoginSrvUnder(t *testing.T, cs *capStore, rnr runner.Runner, rows ..
 
 func loginStartURL(t *testing.T, audit *memAudit) string {
 	t.Helper()
-	rows := audit.find("harness.login.started")
+	rows := audit.find("harness.login.start")
 	if len(rows) != 1 {
-		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+		t.Fatalf("harness.login.start rows = %d, want 1", len(rows))
 	}
 	var data struct {
 		SSOStartURL string `json:"sso_start_url"`
@@ -880,7 +928,7 @@ func TestHandleHarnessLogin_MemberRefusedWithoutPerUserRow(t *testing.T) {
 			if len(audit.find("authz.denied")) != 1 {
 				t.Error("a refused sign-in must leave an authz.denied row")
 			}
-			if len(audit.find("harness.login.started")) != 0 {
+			if len(audit.find("harness.login.start")) != 0 {
 				t.Error("a refused sign-in launched a sandbox anyway")
 			}
 			// The admin still reaches it — this is the SHARED credential's own
@@ -940,7 +988,7 @@ func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	runID := uuid.New()
 	// mintRunToken mints the run identity with subject "alice@example.com" — the
 	// SUBJECT, not the attribution, and the namespace selector. It is also what
-	// launchHarnessLoginRun stamps onto harness.login.started as the launch-time
+	// launchHarnessLoginRun stamps onto harness.login.start as the launch-time
 	// owner, which is the value handleUploadSSOToken now reads back.
 	const subject = "alice@example.com"
 	st := ssoLoginRunStore{
@@ -981,9 +1029,9 @@ func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	}
 
 	// The capture row says WHOSE it is.
-	rows := audit.find("harness.credential.captured")
+	rows := audit.find("harness.credential.capture")
 	if len(rows) != 1 {
-		t.Fatalf("harness.credential.captured rows = %d, want 1", len(rows))
+		t.Fatalf("harness.credential.capture rows = %d, want 1", len(rows))
 	}
 	var data struct {
 		Owner            string `json:"owner"`
@@ -1021,6 +1069,12 @@ func (w wedgedSecrets) Get(context.Context, string) ([]byte, error) {
 func (w wedgedSecrets) Delete(context.Context, string) error   { return w.err }
 func (w wedgedSecrets) List(context.Context) ([]string, error) { return nil, w.err }
 func (w wedgedSecrets) For(string) secretstore.Store           { return w }
+func (w wedgedSecrets) DeleteEverywhere(context.Context, []string) (int, error) {
+	return 0, w.err
+}
+func (w wedgedSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, w.err
+}
 
 // TestSetupHarnessCreds_AWedgedStoreGradesNoState: an outage is not a credential
 // fact, and the probe must not turn one into the other.
@@ -1110,7 +1164,7 @@ func TestPerUserLoginRow_IsKeyedByAgentNotOnlyMechanism(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member status = %d, want 403; body=%s", w.Code, w.Body.String())
 	}
-	if len(audit.find("harness.login.started")) != 0 {
+	if len(audit.find("harness.login.start")) != 0 {
 		t.Error("a refused sign-in launched a sandbox anyway")
 	}
 }

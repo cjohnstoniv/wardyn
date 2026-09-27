@@ -332,9 +332,9 @@ func TestDispatch_BrokeredSSHDropIsAuditedAndNeverReachesTheSandbox(t *testing.T
 	if v, ok := fr.lastSpec.Env["WARDYN_SSH_GRANTS"]; ok {
 		t.Errorf("the sandbox was handed WARDYN_SSH_GRANTS=%q on a brokered run — agent-run will mint the key and write it 0400", v)
 	}
-	ev := findAudit(audit.events, run.ID, "run.ssh.brokered_forge", "failure")
+	ev := findAudit(audit.events, run.ID, "run.ssh.drop", "failure")
 	if ev == nil {
-		t.Fatalf("the ssh_key drop was SILENT: no run.ssh.brokered_forge event; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("the ssh_key drop was SILENT: no run.ssh.drop event; events=%s", auditDump(audit.events, run.ID))
 	}
 	if !strings.Contains(string(ev.Data), "github.com") {
 		t.Errorf("audit event does not name the dropped host: %s", ev.Data)

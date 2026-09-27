@@ -17,9 +17,9 @@
 //
 //	the profile's door is shut       403 + authz.denied   refuse
 //	the group snapshot is unreadable 403 groups_snapshot_stale
-//	everything else                  422, NO audit        denyMemberRunQuota
+//	everything else                  422, NO audit        denyUserRunQuota
 //
-// The 403/422 split is the one denyMemberRunQuota already draws and it is about
+// The 403/422 split is the one denyUserRunQuota already draws and it is about
 // the CALLER, not the severity: a door refusal says "you asked for something
 // you may not have", which is an authorization event a SIEM should see. "No
 // drive is allocated to you" says the caller is perfectly authorized and there
@@ -66,6 +66,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -89,7 +90,7 @@ import (
 var driveRefusalReasons = []string{
 	driveRefusalNoAllocation, driveRefusalPaused, driveRefusalRunnerCannotMount,
 	driveRefusalBackendElsewhere, driveRefusalCeilingMoved, driveRefusalHomeMissing,
-	driveRefusalShareUnreachable, driveRefusalReadOnly, driveRefusalDrivesDisabled,
+	driveRefusalHomeUnreadable, driveRefusalShareUnreachable, driveRefusalReadOnly, driveRefusalDrivesDisabled,
 }
 
 const (
@@ -99,8 +100,14 @@ const (
 	driveRefusalBackendElsewhere  = "backend_elsewhere"
 	driveRefusalCeilingMoved      = "ceiling_moved"
 	driveRefusalHomeMissing       = "home_missing"
-	driveRefusalShareUnreachable  = "share_unreachable"
-	driveRefusalReadOnly          = "read_only"
+	// driveRefusalHomeUnreadable is the #165 arm: the home directory EXISTS
+	// (driveRefusalHomeMissing's own check already passed) but the sandbox's
+	// own agent uid — not this daemon's root process — cannot read it. A
+	// distinct reason from home_missing because the remedy differs: an admin
+	// fixes permissions, not a directory that is already there.
+	driveRefusalHomeUnreadable   = "home_unreadable"
+	driveRefusalShareUnreachable = "share_unreachable"
+	driveRefusalReadOnly         = "read_only"
 	// driveRefusalDrivesDisabled is the ORG SWITCH, not a door: this install
 	// offers no drives at all, so nobody was denied by a profile. Counted like
 	// the rest, because an operator who turns the switch off wants to see how
@@ -114,7 +121,7 @@ const (
 //
 // It exists because five of the six arms recorded nothing. A refused drive was
 // a 422 to the member and silence everywhere else: no audit row (the profile
-// DOOR has one, denyMemberDrive's authz.denied, and it is the only arm that
+// DOOR has one, denyUserDrive's authz.denied, and it is the only arm that
 // did), no log line, no metric, and no request log either — routes.go wires
 // RequestID and Recoverer and no logger. So the failure mode the runbook itself
 // predicts — "Wardyn does not mkdir on a share, a missing home is a 422 at run
@@ -174,7 +181,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 			fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
 		return nil, false
 	}
-	if s.denyMemberDrive(w, r, ceiling) {
+	if s.denyUserDrive(w, r, ceiling) {
 		return nil, false
 	}
 	// The SAME resolver /me and the admin preview run. A store failure is an
@@ -202,15 +209,15 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
-// the enforcement path (denyMemberDrive's 403) and the display path
+// the enforcement path (denyUserDrive's 403) and the display path
 // (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
 // Keyed on ceiling.Profile != nil, the scoping rule every limit in
-// denyMemberGovernance follows: an UNASSIGNED member has no profile, so there
+// denyUserGovernance follows: an UNASSIGNED member has no profile, so there
 // is no door, and a deployment that has never authored one is unaffected.
 //
-// And on !isOperator, which is belt to that braces. denyMemberRequest already
+// And on !isOperator, which is belt to that braces. denyUserRequest already
 // short-circuits an operator before it resolves a ceiling at all, so the zero
 // governanceCeiling an operator carries here has a nil Profile — but the
 // operator exemption is the kind of property that should be readable at the
@@ -256,11 +263,11 @@ func driveDeniedByProfileMsg(profile string) string {
 	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
 }
 
-// denyMemberDrive is the DOOR at the enforcement site: 403 with an authz.denied
+// denyUserDrive is the DOOR at the enforcement site: 403 with an authz.denied
 // row, target `runs.drive`, reason `governance_profile` — the refuse
 // shape the two other profile refusals take, and no new value in the closed
 // reason enum.
-func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
+func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
 	profile, shut := s.driveDoorProfile(r.Context(), ceiling)
 	if !shut {
 		return false
@@ -594,7 +601,15 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 		if !st.IsDir() {
 			return fmt.Errorf("not a directory")
 		}
-		return nil
+		// The directory EXISTS — proven by the daemon's own os.Stat, which
+		// runs as root. That is exactly the fact it cannot prove: root can
+		// read almost anything the sandbox's own uid 1000 cannot, so a share
+		// readable only by root passed this check every day before #165 and
+		// only failed once the run was already inside the sandbox. Folded
+		// into the SAME bounded probe (rather than a second driveShareProbe
+		// call under the same "home:" key) so the two questions share one
+		// timeout and one strand entry.
+		return s.driveHomeReadableByAgent(ctx, resolved)
 	})
 	if !ok {
 		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalShareUnreachable,
@@ -604,11 +619,72 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 				slog.Duration("timeout", driveShareProbeTimeout)},
 			silent: ctx.Err() != nil} // the caller gave up, not the share — see the root arm above
 	}
+	if errors.Is(statErr, errDriveHomeUnreadableByAgent) {
+		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalHomeUnreadable,
+			member: fmt.Sprintf("directory %s exists but is not readable by your run — ask an admin to fix its permissions", resolved.HomeName),
+			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
+				slog.String("object", resolved.ObjectName)}}
+	}
 	if statErr != nil {
 		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalHomeMissing,
 			member: fmt.Sprintf("directory %s does not exist on the share — ask an admin to create it", resolved.HomeName),
 			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
 				slog.String("object", resolved.ObjectName), slog.String("err", statErr.Error())}}
+	}
+	return nil
+}
+
+// errDriveHomeUnreadableByAgent marks a home directory that EXISTS (the
+// os.Stat above already succeeded) but that the sandbox's own agent uid could
+// not read — told apart from a MISSING home so the refusal names the real
+// remedy (fix permissions, not "create the directory").
+var errDriveHomeUnreadableByAgent = errors.New("not readable by the agent user")
+
+// driveHomeReadableByAgent asks the wired Runner — if it can answer at all —
+// whether the agent's own uid, not this daemon's root process, can actually
+// read resolved's home directory. See runner.DriveProber for why this is an
+// OPTIONAL capability rather than a Runner-interface widening.
+//
+// A Runner that does not implement it, or whose probe itself could not run
+// (a transient docker/apiserver error), answers exactly what the code
+// answered before this existed: the os.Stat above already proved the
+// directory is there, and that stays the only fact available — fail open,
+// the same posture cachedImageStillPresent takes on an ImageChecker error.
+// DriveProbeUnknown takes the same path for the identical reason: a probe
+// that cannot see the storage must never be read as a refusal any more than
+// as a pass.
+func (s *Server) driveHomeReadableByAgent(ctx context.Context, resolved types.ResolvedDrive) error {
+	prober, ok := s.cfg.Runner.(runner.DriveProber)
+	if !ok {
+		return nil
+	}
+	// The Docker probe spins up and waits on a whole container, which shares
+	// this call's slot inside driveShareProbe's outer 5s budget with the
+	// os.Stat that runs beside it (the "home:" closure, above) — an inner
+	// bound well short of that budget so a slow probe cannot spend the
+	// WHOLE thing and starve the stat of its own share. A probe that blows
+	// this bound returns context.DeadlineExceeded, which is just another
+	// probe error below: fail open, same as any transient docker/apiserver
+	// failure.
+	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	probe, err := prober.ProbeDrive(pctx, types.DriveMount{
+		Backend:    resolved.Drive.Backend,
+		ObjectName: resolved.ObjectName,
+		HostRoot:   resolved.Drive.HostRoot,
+		Target:     runner.DriveTarget,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: user drive: the agent-readability probe did not run",
+			slog.String("drive", resolved.Drive.Name), slog.String("err", err.Error()))
+		// SF-14: a probe that could not run is a silent fail-open (the log
+		// line above is easy to miss); this is the graphable signal that a
+		// host_path drive's readability check is going unanswered.
+		s.metrics.driveProbeErrorInc()
+		return nil
+	}
+	if probe.Result == runner.DriveProbeUnreadable {
+		return errDriveHomeUnreadableByAgent
 	}
 	return nil
 }

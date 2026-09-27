@@ -55,6 +55,7 @@ const (
 	mp400Model        = "model_providers: %q: %s: model %q is not a model id — letters, digits and ._:/@+[]- , at most 256 characters"
 	mp400EndpointOnly = "model_providers: %q: %s: path, auth_header and auth_format apply only to a custom_endpoint provider"
 	mp400Path         = "model_providers: %q: %s: path %q must start with a single / and carry no query, fragment, backslash, whitespace or .. segment"
+	mp400SignInImage  = "model_providers: %q: Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
 )
 
 // Name is the one free-text field on a record a member reads; bounded so a
@@ -199,7 +200,9 @@ func assignModelProviderUIDs(block, stored *types.ModelProviders) {
 
 // validateModelProviders is the ONE write-boundary gate every door runs. A nil
 // block is valid (today's behaviour), so the unconfigured case costs nothing.
-func validateModelProviders(p *types.ModelProviders) error {
+// allowTestEndpoints is Config.AllowTestEndpoints, the only server state it
+// reads (validateProviderBedrock's base URL).
+func validateModelProviders(p *types.ModelProviders, allowTestEndpoints bool) error {
 	if p == nil {
 		return nil
 	}
@@ -219,14 +222,54 @@ func validateModelProviders(p *types.ModelProviders) error {
 			return fmt.Errorf(mp400Name, mp.ID, maxModelProviderName)
 		}
 		for _, check := range []func(types.ModelProvider) error{
-			validateProviderAddress, validateProviderAuth, validateProviderBedrock, validateProviderHarnesses,
+			validateProviderAddress, validateProviderAuth, validateProviderHarnesses,
 		} {
 			if err := check(mp); err != nil {
 				return err
 			}
 		}
+		if err := validateProviderBedrock(mp, allowTestEndpoints); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validateModelProviderImagePrereqs is the E4 refusal (multi-provider design
+// 2.2, 5.2 E4): a write that introduces an anthropic_subscription provider is
+// refused while the Claude sign-in image does not resolve
+// (setup_claude_signin_image.go). Only introducing one is refused — see
+// introducedSubscription. Kept OUT of validateModelProviders, which stays pure
+// and needs no server state: this check needs the stored block and the image
+// answer, which each door takes itself (Server.claudeSignInImageOK).
+func validateModelProviderImagePrereqs(block, stored *types.ModelProviders, imageResolves bool) error {
+	if id := introducedSubscription(block, stored); id != "" && !imageResolves {
+		//lint:ignore ST1005 E4's member-facing sentence, pointing at the Operations section; it ends the way the doc writes it
+		return fmt.Errorf(mp400SignInImage, id)
+	}
+	return nil
+}
+
+// introducedSubscription names the first anthropic_subscription provider in
+// block that is on and was not already stored on with that kind; "" when there
+// is none. Turning a stored-off one back on adds it. A provider that is off, and
+// one already stored on, are never E4's: turning one off is the incident switch,
+// and a stored one must not wedge every later
+// save of this document (an edit to another provider, a console save, the MDM
+// file deploy/desktop re-applies on every boot) once the image goes missing.
+func introducedSubscription(block, stored *types.ModelProviders) string {
+	if block == nil {
+		return ""
+	}
+	for _, p := range block.Providers {
+		if p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled {
+			continue
+		}
+		if prior, ok := modelProviderByID(stored, p.ID); !ok || prior.Kind != p.Kind || prior.Disabled {
+			return p.ID
+		}
+	}
+	return ""
 }
 
 // validateProviderAddress holds BaseURL to the seven rules the boot gateway
@@ -276,8 +319,10 @@ func validateHeaderScheme(id, where, header, format string) error {
 
 // validateProviderBedrock: a Bedrock kind needs a region (it names the hosts a
 // run reaches); bedrock_sso alone needs the start URL and may carry the pin,
-// held to the same grammars the agent roster's own pin is.
-func validateProviderBedrock(mp types.ModelProvider) error {
+// held to the same grammars the agent roster's own pin is. The base URL takes
+// ValidateBedrockBaseURL's rule — the seven gateway rules, plain http:// only
+// under WARDYN_ALLOW_TEST_ENDPOINTS — with this door's own refusal wording.
+func validateProviderBedrock(mp types.ModelProvider, allowTestEndpoints bool) error {
 	b := mp.Bedrock
 	if !mp.Kind.IsBedrock() {
 		if b != nil {
@@ -292,7 +337,7 @@ func validateProviderBedrock(mp types.ModelProvider) error {
 		return fmt.Errorf(mp400Region, mp.ID, b.Region)
 	}
 	if b.BaseURL != "" {
-		if _, err := validateOneLLMGateway(bedrockRuntimeHost(b.Region), b.BaseURL, false); err != nil {
+		if _, err := validateOneLLMGateway(bedrockRuntimeHost(b.Region), b.BaseURL, allowTestEndpoints); err != nil {
 			return fmt.Errorf(mp400BRBaseURL, mp.ID, err)
 		}
 	}

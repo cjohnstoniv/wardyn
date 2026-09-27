@@ -529,8 +529,14 @@ func TestMigrateKeepsAnAlwaysTriggerAcrossAnUpgrade(t *testing.T) {
 // on its owner's behalf would be its own surprise (an ALWAYS trigger fires under
 // session_replication_role = replica, which is exactly what a restore/replication
 // tool sets to load rows).
+//
+// Runs on its own throwaway schema (probeSchemaPool), not the lane's shared
+// default one: its precondition reads the shipped trigger state before the
+// test even starts, which a concurrent package hardening the SAME table in
+// the SAME database (WARDYN_TEST_PG is one DB for the whole `go test ./...`
+// run) would otherwise fail underneath it.
 func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
-	pool := pgPool(t)
+	pool, _ := probeSchemaPool(t)
 	ctx := context.Background()
 	pending := chainTriggerMigrations(t)
 

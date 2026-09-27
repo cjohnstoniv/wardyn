@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -101,6 +103,38 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(_ context.Context, names []string) (map[string][]string, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	out := map[string][]string{}
+	for _, name := range names {
+		if _, ok := s.m[name]; ok {
+			out[name] = append(out[name], "")
+		}
+		for owner, rows := range s.owned {
+			if _, ok := rows[name]; ok {
+				out[name] = append(out[name], owner)
+			}
+		}
+	}
+	return out, nil
+}
+
 // For returns an owner-scoped view sharing the same backing maps as s — see
 // secretstore.Store.For's doc comment for the fallback/isolation contract
 // this mirrors.
@@ -187,8 +221,8 @@ func TestInternalInjection_RejectsSplittingHeaderName(t *testing.T) {
 				t.Errorf("header %q: secret was read despite the refusal", bad)
 			}
 		}
-		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid-header-name") {
-			t.Errorf("header %q: audit data = %s, want the invalid-header-name reason", bad, ev.Data)
+		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid_header_name") {
+			t.Errorf("header %q: audit data = %s, want the invalid_header_name reason", bad, ev.Data)
 		}
 	}
 }
@@ -215,8 +249,8 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), "wardyn secret set") {
 		t.Fatalf("missing secret: status = %d body=%s", rr.Code, rr.Body.String())
 	}
-	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not-found"`) {
-		t.Fatalf("missing secret: audit data = %s, want the not-found reason", ev.Data)
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not_found"`) {
+		t.Fatalf("missing secret: audit data = %s, want the not_found reason", ev.Data)
 	}
 
 	// No auth => 401.
@@ -260,10 +294,10 @@ func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
 		t.Fatal(err)
 	}
-	if ev.Outcome != "failure" || d["reason"] != "store-unavailable" || d["purpose"] != "proxy-injection" ||
+	if ev.Outcome != "failure" || d["reason"] != "store_unavailable" || d["purpose"] != "proxy-injection" ||
 		d["owner"] != "alice@example.com" || d["store"] != "vaultkv" || d["row_owner"] != "" ||
 		d["ref"] != "vaultkv:ns1/operator/anthropic-api-key" {
-		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store-unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
+		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store_unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
 	}
 }
 
@@ -550,11 +584,13 @@ func (p liveOAuthProvider) Peek() (subscription.Token, error) {
 }
 
 // sentinelHarness wires a harness whose sentinel resolve WOULD succeed: posture
-// ok, both providers live, a mask registry to observe. Only the injection rule
-// differs per case.
+// ok, both providers live, no provider block, a mask registry to observe. Only
+// the injection rule differs per case.
 func sentinelHarness(t *testing.T, tok liveOAuthProvider) *harness {
 	t.Helper()
 	h, _ := newSecretsHarness(t)
+	h.srv.cfg.Store = &bearerGuardStore{}
+	h.srv.router = h.srv.routes()
 	h.srv.cfg.SubscriptionPostureOK = true
 	h.srv.cfg.SubscriptionPostureReason = ""
 	h.srv.cfg.SubscriptionToken = tok
@@ -594,8 +630,8 @@ func TestInternalInjection_RefusesSentinelForNonAnthropicHost(t *testing.T) {
 					t.Fatalf("%s -> host %q: a successful secret.read was recorded for a refused injection", sentinel, host)
 				}
 			}
-			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth-host-not-anthropic") {
-				t.Fatalf("%s -> host %q: audit data = %s, want the oauth-host-not-anthropic reason", sentinel, host, ev.Data)
+			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth_host_not_anthropic") {
+				t.Fatalf("%s -> host %q: audit data = %s, want the oauth_host_not_anthropic reason", sentinel, host, ev.Data)
 			}
 			// The token must not have been resolved (provider.Current rotates the
 			// operator's own resident credentials) nor registered for masking.
@@ -654,7 +690,8 @@ func TestValidateInlineSecretRefs_SentinelHostPin(t *testing.T) {
 // were both uncovered.
 func TestInternalInjection_SentinelSuccessForcesBearerAndMasks(t *testing.T) {
 	const live = "oauth-live-token-value"
-	exp := time.Now().Add(30 * time.Minute).UTC().Truncate(time.Millisecond)
+	// Sooner than the stored-key lease, so it is the one advertised (subscriptionLease).
+	exp := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Millisecond)
 
 	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
 		h := sentinelHarness(t, liveOAuthProvider{value: live, expires: exp})

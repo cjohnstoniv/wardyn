@@ -122,7 +122,7 @@ export const GOVERNANCE = {
   ASSIGNED_COUNT: (n: number) => `${n} subject${n === 1 ? "" : "s"}`,
   // ADDITION to §7.2 (R4/F032): the Limits cell must also account for a run
   // quota, not just the three BOOLEAN doors — otherwise a profile whose one
-  // limit is a run quota reads "None" while denyMemberRunQuota (internal/api/
+  // limit is a run quota reads "None" while denyUserRunQuota (internal/api/
   // runs_create_validate.go) still refuses that member's fourth run with a
   // 422. Same inline pluralisation as ASSIGNED_COUNT; the wording tracks the
   // server's own "too many runs at once".
@@ -223,6 +223,9 @@ export const GOVERNANCE = {
   // ENFORCE_OFF_TITLE was.
   MATCHED_USER: "a user assignment",
   MATCHED_GROUP: "a group assignment",
+  // 0.8: the user type tier (user > group > user type > all), in the same
+  // shape as its neighbours. Not in §7.3's prose, which predates user types.
+  MATCHED_USER_TYPE: "a user type assignment",
   MATCHED_ALL: "the everyone assignment",
   PREVIEW_RESULT_DEFAULT: "These claims resolve to the deployment ceiling — no assignment matches them.",
   PREVIEW_RESULT_UNKNOWN: "Couldn't resolve this — try again.",
@@ -315,7 +318,7 @@ export const MEMBER = {
   // The two CAPABILITY refusals, which is why — alone in this group — they name
   // no profile: they fire whether or not the caller has one. Both close a door a
   // member could otherwise walk through AFTER the explicit check had already run
-  // (denyMemberSeededImage, runs_create_validate.go; handleCreateWorkspace,
+  // (denyUserSeededImage, runs_create_validate.go; handleCreateWorkspace,
   // workspaces.go). The `{id}` below is a literal route segment, not a parameter.
   DENIED_SEEDED_IMAGE: (image: string) =>
     `image ${image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image`,

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -325,7 +326,7 @@ func withFakeDocker(t *testing.T, out string) {
 }
 
 func TestExecutePlan_UnsupportedIsNonZero(t *testing.T) {
-	err := executePlan("wall", plan{action: actUnsupported, title: "t", why: "w"}, false, false)
+	err := executePlan(io.Discard, "wall", plan{action: actUnsupported, title: "t", why: "w"}, false, false)
 	if err == nil {
 		t.Fatal("expected a non-nil error for an unsupported host")
 	}
@@ -335,7 +336,7 @@ func TestExecutePlan_UnsupportedIsNonZero(t *testing.T) {
 }
 
 func TestExecutePlan_PlanOnlyWithoutRunIsNonZero(t *testing.T) {
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, false, false)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, false, false)
 	if err == nil {
 		t.Fatal("expected a non-nil error when --run was not passed")
 	}
@@ -357,7 +358,7 @@ func TestExecutePlan_DeclinedConfirmIsNonZero(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = origStdin }()
 
-	err = executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, false)
+	err = executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, false)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the confirm prompt is declined/EOF")
 	}
@@ -372,7 +373,7 @@ func TestExecutePlan_RunSucceedsButRuntimeMissingIsNonZero(t *testing.T) {
 	// as a Wall install whose daemon reload didn't take.
 	withFakeDocker(t, `{"OperatingSystem":"Ubuntu","OSType":"linux","Runtimes":{"runc":{}}}`)
 
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the runtime never shows up in `docker info`")
 	}
@@ -384,14 +385,14 @@ func TestExecutePlan_RunSucceedsButRuntimeMissingIsNonZero(t *testing.T) {
 func TestExecutePlan_RunSucceedsAndRuntimeRegisteredIsNil(t *testing.T) {
 	withFakeDocker(t, `{"OperatingSystem":"Ubuntu","OSType":"linux","Runtimes":{"runc":{},"runsc":{}}}`)
 
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
 	if err != nil {
 		t.Errorf("expected nil once docker info reports the runsc runtime, got %v", err)
 	}
 }
 
 func TestExecutePlan_ScriptFailureIsAnError(t *testing.T) {
-	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "exit 7"}, true, true)
+	err := executePlan(io.Discard, "wall", plan{action: actPrint, title: "t", why: "w", script: "exit 7"}, true, true)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the install script itself fails")
 	}

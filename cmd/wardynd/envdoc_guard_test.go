@@ -29,13 +29,13 @@ var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
 	"WARDYN_TEST_PG": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
-	"WARDYN_TEST_AZURE_KV":  true,
-	"WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
+	"WARDYN_TEST_AZURE_KV":   true,
+	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
 	// internal/testfloor.Marker: the skip-floor probe sentinel scripts/test-report.sh
 	// greps from `go test -json` log output — never read via os.Getenv, so it is
 	// scaffolding, not operator configuration.
-	"WARDYN_FLOOR_PROBE": true,
+	"WARDYN_FLOOR_PROBE":  true,
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
@@ -52,6 +52,10 @@ var envDocAllow = map[string]bool{
 	// never walks test/, but the REVERSE one reads every ENV.md row, so without
 	// this entry a documented var reads as a stale row.
 	"WARDYN_TEST_AGENT_IMAGE": true,
+	// Same situation again: the strongest-confinement-class gate
+	// test/conformance/conformance_docker_test.go and test/e2e/live/live_test.go
+	// both read (#702's nightly gvisor-cc2-live leg).
+	"WARDYN_TEST_REQUIRE_CLASS": true,
 	// The Playwright e2e backend's two listen addresses (scripts/e2e-backend.sh):
 	// the console's and the UI-sandbox gateway's, which must differ. Shell-only,
 	// so — unlike the pair above — TestEnvDoc_E2EShellVarsAreDocumented DOES
@@ -106,8 +110,9 @@ var envDocShellOnly = map[string]bool{
 	// sibling, and a mapping only: what enables the gateway is
 	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
 	"WARDYN_UI_SANDBOX_PORT": true,
-	// The store-mode compose overlay's host directory holding the Vault token
-	// (deploy/compose/docker-compose.vault.yaml); Go reads the mounted file.
+	// The store-mode and Transit compose overlays' host directory holding the
+	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
+	// the mounted file.
 	"WARDYN_VAULT_TOKEN_DIR": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
@@ -194,6 +199,7 @@ var envDocShellOnly = map[string]bool{
 	// The chart render ui/e2e/live/sso-roles.spec.ts runs on, set per leg by
 	// the walk — another walk output, read only via process.env.
 	"WARDYN_LIVE_ROLES_RENDER": true,
+	"WARDYN_LIVE_ADO_MEMBER_EMAIL": true, "WARDYN_LIVE_ADO_PROXY_URL": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

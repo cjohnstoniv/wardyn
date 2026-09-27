@@ -141,14 +141,14 @@ func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 	}
 	// The launch-time stamp is written BEFORE the answer: the upload binds to
 	// it, so it can never be a thing the goroutine might not get to.
-	if n := len(audit.find("harness.login.started")); n != 1 {
-		t.Fatalf("harness.login.started rows = %d at response time, want 1", n)
+	if n := len(audit.find("harness.login.start")); n != 1 {
+		t.Fatalf("harness.login.start rows = %d at response time, want 1", n)
 	}
 
 	released = true
 	close(gr.gate)
-	waitForAuditRows(t, audit, "run.interactive", 1)
-	waitForAuditRows(t, audit, "harness.login.started", 1)
+	waitForAuditRows(t, audit, "run.interactive.start", 1)
+	waitForAuditRows(t, audit, "harness.login.start", 1)
 }
 
 // ceilingBlipStore is integStore with two additions the ceiling arm below needs:
@@ -163,11 +163,11 @@ type ceilingBlipStore struct {
 	hint map[uuid.UUID]string
 }
 
-func (s *ceilingBlipStore) ResolveGovernanceProfile(ctx context.Context, users, groups []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *ceilingBlipStore) ResolveGovernanceProfile(ctx context.Context, users, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.fail.Load() {
 		return nil, "", errors.New("governance store unavailable")
 	}
-	return s.integStore.ResolveGovernanceProfile(ctx, users, groups)
+	return s.integStore.ResolveGovernanceProfile(ctx, users, groups, userType)
 }
 
 func (s *ceilingBlipStore) SetRunFailureHint(_ context.Context, id uuid.UUID, hint string) error {
@@ -224,7 +224,7 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}

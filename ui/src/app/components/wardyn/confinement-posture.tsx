@@ -27,7 +27,8 @@ import { AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import type { ConfinementPosture } from "./operator-context";
-import { useConfinementPosture } from "./operator-context";
+import { useConfinementPosture, useOperator } from "./operator-context";
+import type { ConsoleView } from "./console-view";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
   POSTURE_UNENFORCED_BANNER,
@@ -69,11 +70,19 @@ const BANNER_BY_POSTURE: Partial<
 // mounts that region eagerly around this component (and ModelAccessBanner
 // beside it), so a state that arrives later is a text change inside a region
 // that was already there.
-export function ConfinementPostureBanner() {
+//
+// `view` (admin-member-modes-design.md §4.2, M-3): the band is Admin-view
+// only — a cluster-wide posture nobody but an admin can act on. The User view
+// gets no band; `ConfinementChip` already carries the same posture on the
+// person's own runs and the New Run rail. Defaults to "user" (no band) so a
+// caller that mounts this directly, with no shell above it, stays silent
+// exactly as it would off any unrecognised view.
+export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView } = {}) {
   const posture = useConfinementPosture();
+  const operator = useOperator();
   const navigate = useNavigate();
   const spec = BANNER_BY_POSTURE[posture];
-  if (!spec) return null;
+  if (!spec || view !== "admin") return null;
   return (
     <div
       className={
@@ -88,13 +97,20 @@ export function ConfinementPostureBanner() {
         <p className="font-medium text-foreground">{spec.title}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">{spec.body}</p>
       </div>
-      <button
-        type="button"
-        onClick={() => navigate("/setup?step=environment")}
-        className="shrink-0 font-medium underline underline-offset-2"
-      >
-        {spec.action}
-      </button>
+      {/* #510-F7 — the action opens the Admin view's setup funnel at its
+          environment step, which only a super admin may open: a security
+          admin in the Admin view would get a button whose only destination
+          refuses them. Informational-only there; the operator keeps the
+          action. */}
+      {operator && (
+        <button
+          type="button"
+          onClick={() => navigate("/admin/setup?step=environment")}
+          className="shrink-0 font-medium underline underline-offset-2"
+        >
+          {spec.action}
+        </button>
+      )}
     </div>
   );
 }

@@ -50,6 +50,7 @@ func TestPG_CreateAPITokenWritesCreatedAtOnTheDatabaseClock(t *testing.T) {
 			ID:        uuid.New(),
 			Principal: "auth0|" + uuid.NewString(),
 			Role:      "user",
+			UserType:  "standard",
 			Name:      name,
 			CreatedAt: createdAt,
 		}, "wdn_"+uuid.NewString())

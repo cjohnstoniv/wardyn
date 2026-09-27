@@ -618,7 +618,7 @@ func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
 
 // TestUIGateway_RefusedReassertIsAuditedWithItsReason: "someone is driving a
 // revoked relay credential" has to be visible. Each refusal arm writes one
-// ui.auth/denied naming which arm it was — the same shape every other refusal
+// ui.authorize/denied naming which arm it was — the same shape every other refusal
 // on this listener already uses.
 func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 	for _, tc := range []struct {
@@ -650,8 +650,8 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 			if rec := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/ide", cookie); rec.Code == http.StatusOK {
 				t.Fatalf("the refusal arm did not refuse: %d", rec.Code)
 			}
-			if got := strings.Join(h.audit.actions(), " "); !strings.Contains(got, "ui.auth/denied") {
-				t.Fatalf("audit %q has no ui.auth/denied row for a refused relay connection", got)
+			if got := strings.Join(h.audit.actions(), " "); !strings.Contains(got, "ui.authorize/denied") {
+				t.Fatalf("audit %q has no ui.authorize/denied row for a refused relay connection", got)
 			}
 			if !h.audit.hasDataValue("reason", tc.reason) {
 				t.Fatalf("no audit row carries reason=%q; rows: %s", tc.reason, h.audit.dataReasons())

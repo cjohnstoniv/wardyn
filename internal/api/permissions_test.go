@@ -161,6 +161,15 @@ func TestValidateCapabilityGrant(t *testing.T) {
 			g.Capability, g.Value = capEgressHost, capWildcard
 		}, ""},
 
+		// A model_provider value is a provider id; one no provider could carry
+		// matches nothing.
+		{"model_provider: a provider id", func(g *types.CapabilityGrant) {
+			g.Capability, g.Value = capModelProvider, "corp-gateway"
+		}, ""},
+		{"model_provider: not a provider id", func(g *types.CapabilityGrant) {
+			g.Capability, g.Value = capModelProvider, "corp gateway"
+		}, "not a model provider id"},
+
 		// A GROUP subject is matched by exact equality against the login-time
 		// snapshot, which carries printable ASCII only — so a subject that
 		// snapshot can never produce is a stored row that matches nobody: the

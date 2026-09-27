@@ -30,8 +30,9 @@ const (
 	Allow Decision = "allow"
 	Deny  Decision = "deny"
 	// Pending means the request was held and an egress_domain ApprovalRequest
-	// was raised (first-use approval flow).
-	Pending Decision = "pending"
+	// was raised (first-use approval flow). Its wire value is the verb the
+	// audit action carries (egress.hold), not the approval's state.
+	Pending Decision = "hold"
 )
 
 // Request is one normalized outbound attempt observed at the proxy.
@@ -84,7 +85,7 @@ type DecisionLog struct {
 	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
 	// LLM route decision (off-by-default; nil when inspection is disabled). It
 	// makes per-decision coverage honest: a tunneled-opaque LLM CONNECT is
-	// recorded as scanned=false ("blind") so audit cannot imply coverage it does
+	// recorded as scanned=false ("bypass") so audit cannot imply coverage it does
 	// not have. The control plane turns it into an llm.scan.* audit event.
 	Scan *ScanSummary `json:"scan,omitempty"`
 	// Repeat, when non-zero, marks this row as the SUMMARY of a streak of
@@ -108,7 +109,7 @@ type ScanSummary struct {
 	Scanned    bool          `json:"scanned"`
 	Coverage   string        `json:"coverage"`              // "inspectable" | "tunneled-opaque"
 	Mode       string        `json:"mode,omitempty"`        // "alert" | "block"
-	Action     string        `json:"action"`                // "alert" | "block" | "skipped" | "blind" | "error"
+	Action     string        `json:"action"`                // "alert" | "block" | "skip" | "bypass" | "fail"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
 	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"

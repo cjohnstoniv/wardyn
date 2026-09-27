@@ -400,6 +400,15 @@ func (a *Authenticator) DefaultRole() string {
 	return a.cfg.DefaultRole
 }
 
+// DefaultRoleIsAdmin reports whether Config.DefaultRole resolves to admin —
+// internal/api's ssoRBACCheck (#491) input, kept in the oidc package (rather
+// than a bare `== RoleAdmin` comparison in internal/api) so
+// internal/api/refusal_test.go's roleComparisons stays shrink-only: this
+// package, not a caller, owns what counts as "the admin role".
+func (a *Authenticator) DefaultRoleIsAdmin() bool {
+	return a.cfg.DefaultRole == RoleAdmin
+}
+
 // DefaultRoleOutcome reports what an UNMATCHED sign-in would actually derive
 // from Config.DefaultRole, validated against userTypes the same way
 // deriveRole validates a matched default (step 4's pickUserType, admin-tier

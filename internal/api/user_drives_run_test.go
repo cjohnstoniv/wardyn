@@ -198,7 +198,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 }
 
 // TestSeedRequestDriveOperatorSkipsTheDoor pins the exemption named in
-// denyMemberDrive: the DOOR does not apply to an operator, and RESOLUTION still
+// denyUserDrive: the DOOR does not apply to an operator, and RESOLUTION still
 // runs for them. An operator whose drive resolves gets it — drives are
 // per-principal, not per-tier.
 func TestSeedRequestDriveOperatorSkipsTheDoor(t *testing.T) {
@@ -638,6 +638,185 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 	})
 }
 
+// ─── #165: the agent-uid readability probe ────────────────────────────────────
+
+// driveProbeRunner is fakeRunner with ONE thing replaced: what ProbeDrive
+// answers, and whether it can answer at all — the DriveProber half of
+// driveCapsRunner above.
+type driveProbeRunner struct {
+	*fakeRunner
+	probe runner.DriveProbe
+	err   error
+}
+
+func (r driveProbeRunner) ProbeDrive(context.Context, types.DriveMount) (runner.DriveProbe, error) {
+	return r.probe, r.err
+}
+
+// driveProbeShare is a host_path share with one home directory ("bob") that
+// EXISTS host-side — the daemon's own os.Stat passes — so every case below
+// isolates the ONE new question: does the wired Runner's ProbeDrive say the
+// agent's own uid can read it.
+func driveProbeShare(t *testing.T) (root string, st *driveStore, ctx context.Context) {
+	t.Helper()
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bob"), 0o755); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	d := driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
+		d.Writable = true
+	})
+	st = &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+	ctx = withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleUser), nil)
+	return root, st, ctx
+}
+
+// TestSeedRequestDriveRefusesAnUnreadableHome is the #165 regression at the
+// API seam: a home directory that EXISTS (os.Stat, run by this daemon as
+// root, already says yes) but that the wired Runner's ProbeDrive says the
+// AGENT'S OWN UID cannot read must refuse the run — the exact gap an inline
+// root-run stat could not see. seedRequestDrive is the ONE function
+// handleCreateRun and handlePreflightRun both call for this seam (this
+// file's own header doc), so pinning it here pins both doors at once — the
+// same argument TestSeedRequestDriveGatesOnRunnerCapability already rests
+// on for the runner-capability gate.
+func TestSeedRequestDriveRefusesAnUnreadableHome(t *testing.T) {
+	root, st, ctx := driveProbeShare(t)
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, probe: runner.DriveProbe{Result: runner.DriveProbeUnreadable}}})
+
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	if ok || mount != nil {
+		t.Fatalf("mount = %+v; want a refusal for a home the agent uid cannot read", mount)
+	}
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
+	}
+	const want = "drive: directory bob exists but is not readable by your run — ask an admin to fix its permissions"
+	if got := refusalBody(t, w); got != want {
+		t.Errorf("body = %q\nwant BYTE-EXACT: %q", got, want)
+	}
+	if strings.Contains(w.Body.String(), root) {
+		t.Errorf("body = %q leaks the operator's host path to a member", w.Body.String())
+	}
+}
+
+// TestSeedRequestDriveProbeUnknownStillMounts pins DriveProbeUnknown's OTHER
+// half: a probe that could not tell must never become a REFUSAL either — only
+// DriveProbeUnreadable does. Reading "unknown" as a refusal would be exactly
+// as wrong as reading it as a pass (runner.DriveProbeUnknown's own doc), and
+// this is the arm that proves the caller does not make that mistake.
+func TestSeedRequestDriveProbeUnknownStillMounts(t *testing.T) {
+	_, st, ctx := driveProbeShare(t)
+	root2 := st.drive.HostRoot
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
+		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, probe: runner.DriveProbe{Result: runner.DriveProbeUnknown}}})
+
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	if !ok || mount == nil {
+		t.Fatalf("an unknown probe answer was refused: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSeedRequestDriveProbeErrorFailsOpen pins the SAME fail-open posture
+// cachedImageStillPresent takes on an ImageChecker error: a probe that could
+// not even RUN (a transient docker/apiserver error) must not become a
+// refusal — the os.Stat existence check already proved the directory is
+// there, and that stays the only fact available.
+func TestSeedRequestDriveProbeErrorFailsOpen(t *testing.T) {
+	_, st, ctx := driveProbeShare(t)
+	root2 := st.drive.HostRoot
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
+		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, err: errors.New("docker: no such host")}})
+
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	if !ok || mount == nil {
+		t.Fatalf("a probe transport error was refused rather than failed open: %d %s", w.Code, w.Body.String())
+	}
+	// SF-14: failing open must not also fail SILENT — the graphable signal.
+	if got := srv.metrics.driveProbeErrors; got != 1 {
+		t.Errorf("wardyn_drive_probe_errors_total = %d, want 1", got)
+	}
+}
+
+// driveProbeSleepsRunner is a DriveProber whose ProbeDrive blocks until its
+// OWN ctx ends — modelling the Docker driver's real ContainerWait select,
+// which honours whatever context ProbeDrive is given. Used to prove F1: the
+// probe shares driveShareProbe's outer 5s budget with the "home:" closure's
+// os.Stat, so driveHomeReadableByAgent bounds the probe with its own INNER
+// (3s) timeout rather than letting it spend the whole outer one.
+type driveProbeSleepsRunner struct{ *fakeRunner }
+
+func (r driveProbeSleepsRunner) ProbeDrive(ctx context.Context, _ types.DriveMount) (runner.DriveProbe, error) {
+	<-ctx.Done()
+	return runner.DriveProbe{}, ctx.Err()
+}
+
+// TestSeedRequestDriveSlowProbeDoesNotRefuseAHealthyShare is F1's regression:
+// a probe that outlives its own inner bound must fail open — same as any
+// other probe error — and must do so well short of driveShareProbeTimeout,
+// proving the inner bound fired rather than the probe silently consuming the
+// whole outer budget. A slow probe must never refuse a healthy share.
+func TestSeedRequestDriveSlowProbeDoesNotRefuseAHealthyShare(t *testing.T) {
+	root, st, ctx := driveProbeShare(t)
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+		Runner: driveProbeSleepsRunner{fakeRunner: &fakeRunner{}}})
+
+	start := time.Now()
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	elapsed := time.Since(start)
+	if !ok || mount == nil {
+		t.Fatalf("a slow-but-healthy probe was refused: %d %s", w.Code, w.Body.String())
+	}
+	if elapsed >= driveShareProbeTimeout {
+		t.Errorf("elapsed = %s, want well under driveShareProbeTimeout (%s) — the probe's own inner bound should have fired first",
+			elapsed, driveShareProbeTimeout)
+	}
+}
+
+// TestSeedRequestDriveNoProberIsUnchanged is the upgrade-day pin: a Runner
+// that does not implement DriveProber (every Runner before #165, and any
+// future one with no readability answer) must mount EXACTLY as it did before
+// this interface existed — the os.Stat existence check is the only fact
+// available, and it already passed.
+func TestSeedRequestDriveNoProberIsUnchanged(t *testing.T) {
+	_, st, ctx := driveProbeShare(t)
+	root2 := st.drive.HostRoot
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
+		Runner: &fakeRunner{}})
+
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	if !ok || mount == nil {
+		t.Fatalf("a Runner with no DriveProber was refused: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestMeUserDriveRefusesAnUnreadableHome is the /me half of the #165
+// property: "a share readable by root but not by the agent uid produces the
+// SAME refusal at create, at preflight and on the member's own view"
+// (issue #165). /me runs the identical driveBindFailureHere DECISION create
+// and preflight run (this file's own header doc for driveShareBindFailure),
+// collapsed to the existing `unmountable` token — the same one home_missing
+// already answers with, since both are "an allocation exists and cannot be
+// mounted" from the member's side.
+func TestMeUserDriveRefusesAnUnreadableHome(t *testing.T) {
+	root, st, ctx := driveProbeShare(t)
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, probe: runner.DriveProbe{Result: runner.DriveProbeUnreadable}}})
+
+	ud, denied, unavailable := meDriveBody(t, srv, ctx)
+	if ud != nil {
+		t.Errorf("user_drive = %v, want null — the allocation cannot be mounted", ud)
+	}
+	if denied != "" {
+		t.Errorf("user_drive_denied_by_profile = %q, want empty — this is not a governance door", denied)
+	}
+	if unavailable != driveUnavailableUnmountable {
+		t.Errorf("user_drive_unavailable = %q, want %q", unavailable, driveUnavailableUnmountable)
+	}
+}
+
 // TestSeedRequestDriveMountShape pins what the runner is handed: the reserved
 // target as the SYMBOL (never a re-typed literal), the derived object name, and
 // the enforcement vocabulary that says what the size actually means.
@@ -814,7 +993,7 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 }
 
 // TestSeedRequestDriveDoorPrecedesTheResolver pins the ORDER inside
-// seedRequestDrive, and the SCOPING of denyMemberDrive — two properties the
+// seedRequestDrive, and the SCOPING of denyUserDrive — two properties the
 // door's own test cannot state, because it runs on a store that answers.
 //
 // The order is load-bearing in the direction that produces the RIGHT sentence.
@@ -1059,7 +1238,7 @@ func TestMeUserDrive(t *testing.T) {
 	})
 
 	t.Run("an operator is never reported as denied", func(t *testing.T) {
-		// The door keys on isOperator exactly as denyMemberDrive does, so a
+		// The door keys on isOperator exactly as denyUserDrive does, so a
 		// profile that happens to carry DenyUserDrive never renders a closed
 		// door for a caller it does not bind.
 		cs := &capStore{
@@ -1212,7 +1391,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 
 	t.Run("the door: 403 on both", func(t *testing.T) {
 		// And the counterfactual the placement guards: preflight runs
-		// denyMemberRequest FIRST, so the ceiling it hands seedRequestDrive is
+		// denyUserRequest FIRST, so the ceiling it hands seedRequestDrive is
 		// the SAME one create resolved — a preflight that passed a zero ceiling
 		// would preview an open door for a run the door will refuse.
 		srv, _, rec := govEscapeFixture(t, assignedStore(limitsProfile("contractors",

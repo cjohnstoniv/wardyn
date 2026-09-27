@@ -35,7 +35,7 @@ type preflightResponse struct {
 	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
 	// Warnings is resolveRunPolicy's clamp-warning list — non-empty only when a
 	// MEMBER authored an inline_policy that composer.Clamp bounded or
-	// filterMemberGrants dropped a grant from. Surfaced here (never at launch, per
+	// filterUserGrants dropped a grant from. Surfaced here (never at launch, per
 	// resolveRunPolicy's doc comment) so Review tells the member WHY their
 	// inline_policy differs from what they typed, before they launch.
 	Warnings []string `json:"warnings,omitempty"`
@@ -151,7 +151,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
 	// create would, not preview a rosier checklist for a request that would be
 	// denied at launch.
-	ceiling, denied := s.denyMemberRequest(w, r, req)
+	ceiling, denied := s.denyUserRequest(w, r, req)
 	if denied {
 		return
 	}
@@ -166,7 +166,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// refusals.
 	//
 	// It can write one audit row on the grace lane
-	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
+	// (workspace.provider.admit, from admitRepoSources) — the same "a
 	// refused dry run leaves the record of the refusal" rule this handler's doc
 	// comment already states for refuse. In legacy open mode (no
 	// provider rows) it reads the site config and returns having refused,
@@ -225,9 +225,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which secrets actually exist (names only) — the SAME map compose builds.
-	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-
 	// Fold the run's model-access binding AND each referenced workspace's
 	// requirements contract into the spec BEFORE computing the enforced confinement
 	// class and grading — the SAME order launch now uses (SPINE-2/SPINE-6), so a
@@ -239,7 +236,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a bedrock integration that supplies the region/model must reach
 	// resolveBedrockAuth below, or the checklist previews "no model access" for a
 	// run launch credentials fine. No audit event — preflight persists nothing
-	// (the run.workspace.creds audit is the create path's launch-only half).
+	// (the run.workspace_cred.resolve audit is the create path's launch-only half).
 	wsRefs := s.referencedWorkspaces(ctx, spec)
 	// Widen the spec's egress from onboarded-workspace registries +
 	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),
@@ -256,6 +253,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
 	}
+	// Which secrets actually exist (names only) — the SAME map compose builds,
+	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
+	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	_, _, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
 	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
@@ -305,8 +305,16 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The autonomy gate below grades the same resolution, which is why this
 	// sits ahead of it — in launch's order.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+	// The model-provider choice, where launch makes it (runs.go). Review has no
+	// run row to freeze the choice onto; it keeps it only for the model-access
+	// row below, which under a provider block is the provider's verdict, and
+	// for the model credential the autonomy gate grades with.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	if !ok {
+		return
+	}
+	modelCred := mpChoice.modelCredential()
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
 		return
 	}
 
@@ -370,7 +378,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject)
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject, mpChoice)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)

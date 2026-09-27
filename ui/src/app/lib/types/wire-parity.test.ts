@@ -191,4 +191,28 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const tsKeys = tsInterfaceTopKeys(runsTs, "AttachHolder");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
+
+  // GET /model-providers' body (#970): the stored block (types.ModelProviders,
+  // embedded) plus connected_people, mirrored as ModelProvidersRead extending
+  // ModelProviders.
+  it("modelProvidersRead (GET /model-providers): full parity with the TS ModelProvidersRead mirror", () => {
+    const siteTs = readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8");
+    const readGo = readFileSync(join(root, "internal/api/model_providers_api.go"), "utf8");
+    const blockGo = readFileSync(join(root, "internal/types/model_provider.go"), "utf8");
+    expect(readGo).toMatch(/type modelProvidersRead struct \{\n\ttypes\.ModelProviders\n/);
+    expect(siteTs).toMatch(/export interface ModelProvidersRead extends ModelProviders \{/);
+    expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProvidersRead"))).toEqual(new Set(goJSONTags(readGo, "modelProvidersRead")));
+    expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProviders"))).toEqual(new Set(goJSONTags(blockGo, "ModelProviders")));
+  });
+
+  // #923's two reads: the Images tab's catalog row and the Available to view.
+  it.each([
+    ["BaseImageEntry", "internal/types/workspace_contract.go", "BaseImageEntry", "ui/src/app/lib/types/workspaces.ts"],
+    ["availabilityView", "internal/api/permissions_availability.go", "AvailabilityView", "ui/src/app/lib/types/permissions.ts"],
+  ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(4);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, tsFile), "utf8"), tsName);
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
 });

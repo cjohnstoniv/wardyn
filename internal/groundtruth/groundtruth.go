@@ -27,7 +27,7 @@
 // overclaim lesson) and is surfaced (not hidden) via data.loader=true rather
 // than suppressed; we never
 // claim exec-blocking. Host eBPF is also blind inside CC3/Kata microVM guests —
-// callers must emit a one-time kernel.sensor.blind event for such runs.
+// callers must emit a one-time kernel.sensor.bypass event for such runs.
 //
 // This package is target-agnostic: it has zero knowledge of Docker, HTTP, the
 // store, or how runs are correlated beyond the small Correlator interface.
@@ -57,11 +57,11 @@ const (
 	// emits (run_id NULL). /healthz keys ebpf_groundtruth state off the most
 	// recent one within a TTL — so the stream is only "healthy" when events
 	// are actually arriving (the overclaim is structurally impossible).
-	ActionSensorHeartbeat = "kernel.sensor.heartbeat"
+	ActionSensorHeartbeat = "kernel.sensor.ping"
 	// ActionSensorBlind is the one-time event emitted for a run the host eBPF
 	// sensor cannot see into (CC3/Kata microVM guest). Blindness is made
 	// VISIBLE rather than silent.
-	ActionSensorBlind = "kernel.sensor.blind"
+	ActionSensorBlind = "kernel.sensor.bypass"
 )
 
 // KernelActionPrefix is the required prefix for every ground-truth action. The

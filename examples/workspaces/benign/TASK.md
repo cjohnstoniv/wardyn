@@ -25,7 +25,7 @@ empty ~/work if not — either way the task exercises the same controls.)
 - UI > Audit tab (filter by run id): events present --
     run.create   success   actor_type=human
     run.exec     success   actor_type=system
-  No egress.deny or egress.pending events.
+  No egress.deny or egress.hold events.
 
 ## PASS criteria
 

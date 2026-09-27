@@ -343,6 +343,7 @@ export function NewRunScreen() {
     error,
     errorSeq,
     credentialRefused,
+    refusedProvider,
     launchWarnings,
     launchedRunId,
     launch,
@@ -719,6 +720,7 @@ export function NewRunScreen() {
             error,
             errorSeq,
             credentialRefused,
+            refusedProvider,
             warnings: launchWarnings,
             onOpenRun: launchedRunId
               ? () => navigate(`/runs/${encodeURIComponent(launchedRunId)}`)

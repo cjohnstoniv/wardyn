@@ -61,7 +61,7 @@ func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
 
 	resolve := func(t *testing.T, users, groups []string) (string, types.CapabilitySubjectType) {
 		t.Helper()
-		p, tier, err := st.ResolveGovernanceProfile(ctx, users, groups)
+		p, tier, err := st.ResolveGovernanceProfile(ctx, users, groups, "")
 		if errors.Is(err, store.ErrNotFound) {
 			return "", ""
 		}
