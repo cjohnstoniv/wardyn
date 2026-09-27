@@ -113,23 +113,6 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
-// LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
-type LostReason string
-
-const (
-	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-	// and kept for the ended-run grace.
-	LostEnded LostReason = "ended"
-	// LostReboot is an interactive run whose agent container exited under it
-	// (a host reboot, a Docker Desktop restart, a long suspend) but still
-	// exists: kept with its files and its proxy stopped.
-	LostReboot LostReason = "reboot"
-	// LostOutage is an interactive run whose run token lapsed because the
-	// control plane was unreachable past the token's life: its proxy is stopped
-	// so it has no egress, and its agent is left running.
-	LostOutage LostReason = "outage"
-)
-
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -284,6 +267,12 @@ type AgentRun struct {
 	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// ContainmentError is set while a kept run's stop could not be confirmed
+	// (its proxy, or its agent, may still be up): the latest stop error, and
+	// ContainmentErrorAt the first failure. The lease sweep retries the stop
+	// every pass and clears both once it lands (#1060, migration 0088).
+	ContainmentError   string     `json:"containment_error,omitempty"`
+	ContainmentErrorAt *time.Time `json:"containment_error_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and
@@ -300,6 +289,11 @@ type AgentRun struct {
 	// one otherwise. Empty for a run with no human creator (admin token, local
 	// mode) or created before migration 0080.
 	UserType string `json:"user_type,omitempty"`
+	// Preset and PresetVersion name the launch preset (and the version of it)
+	// this run was expanded from. Empty / 0 for a run sent as an explicit spec
+	// and for every run created before migration 0087.
+	Preset        string `json:"preset,omitempty"`
+	PresetVersion int    `json:"preset_version,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -971,29 +965,4 @@ type CapabilityGrant struct {
 	Effect      CapabilityEffect      `json:"effect"`
 	CreatedAt   time.Time             `json:"created_at"`
 	CreatedBy   string                `json:"created_by,omitempty"`
-}
-
-// RoleMapping is one console-managed (Getting Started -> People) row of
-// migration 0051's role_mappings table: "value maps to role". This is the
-// STORE'S wire type, carrying id/timestamps/provenance — distinct on purpose
-// from internal/auth/oidc's own RoleMapping (just Value/Role), which stays
-// dependency-free of this package (see that type's doc comment) the same way
-// oidc.SessionRevocations keeps oidc dependency-free of store; the API layer
-// converts between the two, mirroring however SessionRevocations bridges
-// store -> oidc today.
-//
-// Value is expected already canonical (trimmed, lowercased, ASCII) by the API
-// write boundary that owns writes to this table — see the migration comment.
-//
-// UserType is the row's user type when Role is the user tier (migration
-// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
-// row, and on a user row written before types existed, which reads as the
-// built-in "standard".
-type RoleMapping struct {
-	ID        uuid.UUID `json:"id"`
-	Value     string    `json:"value"`
-	Role      string    `json:"role"`
-	UserType  string    `json:"user_type,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by,omitempty"`
 }

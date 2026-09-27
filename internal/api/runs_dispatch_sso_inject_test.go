@@ -53,7 +53,7 @@ func TestAuthorBedrockSSOInjection_GrantScopeAndMITMEntry(t *testing.T) {
 	if got, want := injections[0].Rule.Header, "x-amz-sso_bearer_token"; got != want {
 		t.Errorf("header = %q, want %q", got, want)
 	}
-	// host:PORT for the MITM entry, never bare (F037).
+	// host:PORT for the MITM entry, never bare.
 	wantMITM := net.JoinHostPort(wantHost, "443")
 	if len(mitmHosts) != 1 || mitmHosts[0] != wantMITM {
 		t.Errorf("MITM hosts = %v, want exactly %q", mitmHosts, wantMITM)

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// R4-F014: the capability matcher ships TWICE — capValueMatches /
+// The capability matcher ships TWICE — capValueMatches /
 // capValueOverlaps here, and capabilityValueMatches / capabilityValueOverlaps in
 // ui/src/app/lib/capabilities.ts, which the member "why was this denied" surface
 // reads. Two matchers that disagree is the bug the Go side's own comment refuses

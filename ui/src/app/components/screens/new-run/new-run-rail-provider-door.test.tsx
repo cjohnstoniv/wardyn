@@ -48,6 +48,7 @@ function renderRail(opts: { refusedProvider?: string; credentialRefused?: boolea
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
+        unattended={false}
         launch={{
           onLaunch: opts.onLaunch ?? (() => {}),
           disabled: false,

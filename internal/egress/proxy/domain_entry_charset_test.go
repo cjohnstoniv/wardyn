@@ -10,7 +10,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDomainEntryDotsAndCharset (B10-F7) closes the two ways an operator-authored
+// TestDomainEntryDotsAndCharset closes the two ways an operator-authored
 // policy entry could be DEAD — accepted at write, never matched at request time —
 // which is precisely what ValidDomainEntry exists to prevent.
 //

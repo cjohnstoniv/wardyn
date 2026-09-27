@@ -222,6 +222,13 @@ export interface PushRulesSpec {
   hold_seconds?: number;
 }
 
+// pushRulesIsSet moved to new-run-rail.tsx (bundle-split fix, #181): its only
+// caller is that lazy screen's own RunRail, and this module is eager (some
+// of policy.ts's other exports reach the runs board), so a runtime function
+// living here bundled into the entry chunk for a reader that never runs
+// there — same pattern push-content-card.tsx's isPushContentRequest and
+// audit-decision.tsx's ruleSourceLabel document.
+
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on
   // internal/types/policy.go's AllowedDomains), but the VALUE can be `null` on

@@ -95,16 +95,20 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 		}
 	}
 
-	runID := uuid.Nil
-	if id, perr := uuid.Parse(pod.Labels[labelRun]); perr == nil {
-		runID = id
+	cmd := argv
+	if d.cfg.Record {
+		runID := uuid.Nil
+		if id, perr := uuid.Parse(pod.Labels[labelRun]); perr == nil {
+			runID = id
+		}
+		cmd = recordCmd(runID, argv)
 	}
 	podCopy := pod.DeepCopy()
 	podCopy.Spec.EphemeralContainers = append(podCopy.Spec.EphemeralContainers, corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 			Name:    execContainerName,
 			Image:   main.Image,
-			Command: recordCmd(runID, argv),
+			Command: cmd,
 			Env:     main.Env, // copied verbatim: ephemeral containers inherit nothing
 			// The user drive AND the disk budget's scratch volumes, for the same
 			// reason as Env and read the same way — from the live pod. An ephemeral
@@ -142,9 +146,9 @@ func findContainer(containers []corev1.Container, name string) (corev1.Container
 	return corev1.Container{}, false
 }
 
-// recordCmd wraps argv with the recorder for every Exec — mirrors docker's
-// recordCmd (internal/runner/docker/driver.go's recordCmd/recordCmd), but
-// simpler: k8s has no RecordingMount config (SandboxSpec's Recording doc:
+// recordCmd wraps argv with the recorder — mirrors docker's recordCmd
+// (internal/runner/docker/driver_exec.go's recordCmd), but simpler: k8s has
+// no RecordingMount config (SandboxSpec's Recording doc:
 // "no shared-volume path" — mounts are impossible on this substrate), so
 // delivery is ALWAYS the masked brokered upload, never the unmasked
 // shared-mount fallback. hostAliases + NO_PROXY + the agent NetworkPolicy
@@ -165,17 +169,19 @@ func findContainer(containers []corev1.Container, name string) (corev1.Container
 // local-only (never-uploaded) cast rather than failing Exec outright.
 //
 // The Command IS the bare recorder argv — no shell, no "is wardyn-rec on
-// PATH" fallback. This substrate has no docker-style Config.Record opt-out:
-// Classes always advertises SessionRecording:true (driver.go), so an image
-// that cannot honour it must fail closed, not silently downgrade to
-// unrecorded — the same fail-closed posture invariant 5 (runner/substrate's
-// package doc) requires everywhere else. An agent image on this substrate
-// MUST ship wardyn-rec (image contract §3, deploy/images/README.md); one
-// that doesn't fails Exec closed via the normal container-start error path
-// (parity with docker: a Record-enabled docker exec with a missing
-// wardyn-rec fails the same way, for the same reason). The conformance
-// suite's own agent image is built from deploy/kind/Dockerfile.conformance-
-// agent specifically so this path is exercised for real, not skipped.
+// PATH" fallback. Exec calls this only when Config.Record is on (mirrors
+// docker's Config.Record opt-out — see Config's doc); when it is off, Exec
+// runs argv unwrapped and this function is never reached. While Record is
+// on, an image that cannot honour it must fail closed, not silently
+// downgrade to unrecorded — the same fail-closed posture invariant 5
+// (runner/substrate's package doc) requires everywhere else. An agent image
+// on this substrate MUST ship wardyn-rec (image contract §3,
+// deploy/images/README.md); one that doesn't fails Exec closed via the
+// normal container-start error path (parity with docker: a Record-enabled
+// docker exec with a missing wardyn-rec fails the same way, for the same
+// reason). The conformance suite's own agent image is built from
+// deploy/kind/Dockerfile.conformance-agent specifically so this path is
+// exercised for real, not skipped.
 func recordCmd(runID uuid.UUID, argv []string) []string {
 	uploadURL := ""
 	if runID != uuid.Nil {

@@ -20,9 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded is F227's cross-cutting half.
-//
-// F227 is that a member-reachable groups_snapshot_stale 403 left no
+// The defect was that a member-reachable groups_snapshot_stale 403 left no
 // authz.denied row, against docs/OPERATIONS.md's "Every denial that isn't a
 // 404" section's categorical claim that every member denial which is not a
 // plain foreign-resource 404 is audited. The
@@ -36,7 +34,7 @@ import (
 // That argument is only true while the deciding sites are the only source. A
 // seam that raised errGroupsSnapshotStale itself — a new resolver, a copy of the
 // unusable-groups arm, a shortcut that skips effectiveCeiling — would refuse a
-// member with the documented sentence and record nothing, which is F227 again at
+// member with the documented sentence and record nothing, which is the same defect again at
 // a site nobody thought to look at. Nothing executed that claim; the seams are
 // spread across policies.go, secrets.go, inline_policy.go,
 // runs_create_validate.go, workspace_run.go, profile.go and user_drives.go, and
@@ -62,7 +60,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 			t.Errorf("%s raises errGroupsSnapshotStale, which is a member-reachable 403, but it is not one of "+
 				"the deciding sites that record it. Either resolve through effectiveCeiling / resolveUserDrive "+
 				"so an existing site decides, or emit authz.denied here — a refusal with no row is the whole "+
-				"of F227, and docs/OPERATIONS.md's \"Every denial that isn't a 404\" section says every member "+
+				"of the defect, and docs/OPERATIONS.md's \"Every denial that isn't a 404\" section says every member "+
 				"denial that is not a foreign-resource 404 is audited", name)
 		}
 	}
@@ -74,7 +72,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 		if !records[name] {
 			t.Errorf("%s decides the groups_snapshot_stale refusal and no longer calls recordRefusal: the "+
 				"denial stream is the operator's only view of who cannot use the product, and this is the "+
-				"site F227 put the row at", name)
+				"site the audit row was put at", name)
 		}
 	}
 }

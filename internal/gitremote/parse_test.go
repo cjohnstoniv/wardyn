@@ -13,26 +13,26 @@ import (
 	"time"
 )
 
-// B11a-F8/F9/F10. Every one of these fails SAFE — the wrong answer is a dropped
-// repo or an extra line in a warning, never a widened grant — but F8/F9/F10 all
-// POISON the operator's "other hosts" warning, which is the string a human reads
+// Every one of these fails SAFE — the wrong answer is a dropped
+// repo or an extra line in a warning, never a widened grant — but each
+// POISONS the operator's "other hosts" warning, which is the string a human reads
 // to decide whether a workspace is safe to run. A warning that says the remote
 // host is "https" or "file" or "b@github.com" is worse than no warning.
 func TestParseRemoteURL(t *testing.T) {
 	cases := []struct {
 		name, url, wantHost, wantRepo string
 	}{
-		// B11a-F8: the scheme switch was case-sensitive, so an upper-case
+		// the scheme switch was case-sensitive, so an upper-case
 		// scheme fell into the default (scp-like) arm and the SCHEME itself
 		// came back as the host.
 		{"uppercase https", "HTTPS://github.com/acme/web", "github.com", "acme/web"},
 		{"mixed case ssh", "SSH://git@github.com/acme/web.git", "github.com", "acme/web"},
-		// B11a-F8: a URL whose scheme this package does not handle is NOT an
+		// a URL whose scheme this package does not handle is NOT an
 		// scp target — git's own rule is that "://" makes it a URL — so it must
 		// be dropped rather than parsed into the host "file".
 		{"file url", "file:///srv/mirrors/acme.git", "", ""},
 		{"unknown scheme", "ftp://example.com/acme/web.git", "", ""},
-		// B11a-F9: userinfo was split at the FIRST "@", so a value with two
+		// userinfo was split at the FIRST "@", so a value with two
 		// landed on the host "b@github.com"; git and net/url both split at the
 		// LAST one.
 		{"double at ssh url", "ssh://a@b@github.com/acme/web", "github.com", "acme/web"},
@@ -42,7 +42,7 @@ func TestParseRemoteURL(t *testing.T) {
 		{"scp", "git@github.com:acme/web.git", "github.com", "acme/web"},
 		{"https other host", "https://gitlab.example.com/acme/web.git", "gitlab.example.com", "acme/web"},
 		{"https with port", "https://git.example.com:8443/acme/web.git", "git.example.com", "acme/web"},
-		// Same class as the git helper's B11a-F11: a bracketed IPv6 host was
+		// Same class as the git helper's a bracketed IPv6 host was
 		// truncated at the first colon to "[2001", which is what the operator
 		// would have read in the warning.
 		{"ipv6 with port", "ssh://git@[2001:db8::1]:2222/acme/web.git", "2001:db8::1", "acme/web"},
@@ -85,7 +85,7 @@ func TestDetect_PoisonedHostFormsAreNotWarnedAbout(t *testing.T) {
 	}
 }
 
-// B11a-F10. gitremote.safe carried a FIXED whitespace list while claiming to
+// gitremote.safe carried a FIXED whitespace list while claiming to
 // mirror internal/api's repoFieldSafe, which moved to unicode.IsControl ||
 // unicode.IsSpace — so the Unicode space separators repoFieldSafe rejects
 // (U+2000..U+200A, U+3000, …) passed here. One predicate, one answer.
@@ -121,7 +121,7 @@ func TestFieldSafe(t *testing.T) {
 	}
 }
 
-// B11a-F5. The package doc promises the walk "never follows symlinks" and is
+// The package doc promises the walk "never follows symlinks" and is
 // "bounded", but readCapped did a bare os.Open: a FIFO named .gitmodules blocks
 // open(2) forever waiting for a writer, and CollectFacts runs on an HTTP handler
 // goroutine with NO ctx (source_scan.go's CollectFacts call) — so one such file
@@ -186,7 +186,7 @@ func TestDetect_FifoGitConfigDoesNotHang(t *testing.T) {
 	}
 }
 
-// B11a-F5, symlink half: the walk skips symlinks everywhere EXCEPT the final
+// Symlink half: the walk skips symlinks everywhere EXCEPT the final
 // .git/config open, so a .git/config symlink was the one place the package's
 // own "never follows symlinks" promise did not hold. It pointed anywhere the
 // scanning uid could read.
@@ -213,7 +213,7 @@ func TestDetect_SymlinkedGitConfigIsNotFollowed(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F5: an ordinary directory repo still detects, and a
+// NEGATIVE CONTROL for an ordinary directory repo still detects, and a
 // config LARGER than one read's worth is read whole. The bare single Read could
 // short-read and silently drop every remote after the break; io.ReadFull cannot.
 func TestDetect_LargeConfigReadWhole(t *testing.T) {

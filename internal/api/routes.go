@@ -327,6 +327,9 @@ func (s *Server) routes() chi.Router {
 			// (mirrors /runs/preflight), not operator-only: a member may see the
 			// risk of a spec they cannot necessarily save.
 			r.Post("/policies/grade", s.handleGradePolicy)
+			// Launch presets (#1143): named bundles of run-create fields. See
+			// presets.go for the read/write split.
+			s.mountPresetRoutes(r, operatorOnly)
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token).
@@ -794,6 +797,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// The value is the rest of the path: an image ref carries slashes.
 	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
 	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
+	// Explain (K4) reads this same table at a NAMED subject rather than the
+	// caller's own: still securityOps, never wider.
+	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

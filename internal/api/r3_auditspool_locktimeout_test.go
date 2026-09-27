@@ -64,8 +64,6 @@ func (r *lockTimeoutRecorder) count() int {
 	return len(r.got)
 }
 
-// TestDrainChainLockTimeoutIsNotAPoisonStrike is F207.
-//
 // Drain already refuses to strike a line when the CLIENT's pass deadline fired.
 // A DATABASE-side abort looked nothing like that: the audit-chain insert runs
 // under `SET LOCAL lock_timeout` (internal/db's AuditChainLockTimeoutSQL), so a

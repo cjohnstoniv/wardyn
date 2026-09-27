@@ -233,6 +233,19 @@ type Expired struct {
 	ExpiresAt   time.Time
 }
 
+// ExpiredKept is one row a sweep found expired but could not delete. The
+// sweep's error joins one per such row, so its caller can name each.
+type ExpiredKept struct {
+	Owner, Name string
+	Err         error
+}
+
+func (e *ExpiredKept) Error() string {
+	return fmt.Sprintf("expired (owned_by=%q, name=%q) kept: %v", e.Owner, e.Name, e.Err)
+}
+
+func (e *ExpiredKept) Unwrap() error { return e.Err }
+
 // EraseReport is what EraseOwner removed.
 type EraseReport struct {
 	// Count is how many credentials were deleted.

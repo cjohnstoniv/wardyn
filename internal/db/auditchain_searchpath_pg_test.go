@@ -6,7 +6,7 @@ package db
 // PINS for the two review findings against 0057_audit_chain_security_definer.sql
 // (fixed by 0058_audit_chain_schema_qualified.sql):
 //
-//	F024 — the pinned `search_path = pg_catalog, public` made the SECURITY
+//	First  — the pinned `search_path = pg_catalog, public` made the SECURITY
 //	       DEFINER body resolve `audit_events` and `audit_row_hash` in public
 //	       rather than in the schema the migrations actually ran against. On a
 //	       deployment with nothing in public that is `relation "audit_events"
@@ -15,7 +15,7 @@ package db
 //	       Wardyn schema it is quieter and worse — the head read crosses into
 //	       the wrong table and the chain never links.
 //
-//	F098 — that same path omitted `pg_temp`, and PostgreSQL searches the
+//	Second — that same path omitted `pg_temp`, and PostgreSQL searches the
 //	       session temp schema FIRST for relation names when it is not listed.
 //	       A caller could therefore `CREATE TEMP TABLE audit_events(...)`,
 //	       seed it, and have the definer-privileged head read come back with a
@@ -31,7 +31,7 @@ package db
 // so this package cannot reach either. See
 // TestPG_AuditChainSurvivesTheTriggerRewriteOnAPopulatedDatabase
 // (internal/store/auditchain_upgrade_pg_test.go). Everything in THIS file
-// starts from a fully migrated schema (F023).
+// starts from a fully migrated schema.
 
 import (
 	"context"
@@ -85,7 +85,7 @@ func probeSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
 	return pool, schema
 }
 
-// TestPG_ChainTriggerWorksOutsideThePublicSchema is the F024 pin. It migrates a
+// TestPG_ChainTriggerWorksOutsideThePublicSchema pins this. It migrates a
 // COMPLETE schema into a throwaway namespace — the shared-corporate-Postgres
 // posture, reachable with nothing but `search_path` on the connection — and
 // appends two audit rows through the real trigger.
@@ -115,7 +115,7 @@ func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
 			t.Fatalf("INSERT into audit_events in schema %s: %v\n"+
 				"the chain trigger runs SECURITY DEFINER; a search_path pinned to a schema the migrations did NOT "+
 				"run against makes every audit write on this deployment fail from inside the trigger, while Migrate "+
-				"still reports success (F024)", schema, err)
+				"still reports success", schema, err)
 		}
 		if rowHash == "" {
 			t.Fatal("row appended outside public has no row_hash; the chain trigger did not run for it")
@@ -130,12 +130,12 @@ func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
 	_, secondPrev := append1("test.searchpath.nonpublic.2")
 	if secondPrev != first {
 		t.Fatalf("prev_hash of the second row in schema %s is %q, want the first row's row_hash %q — "+
-			"the definer-side head read resolved audit_events somewhere other than the schema the trigger is attached to (F024)",
+			"the definer-side head read resolved audit_events somewhere other than the schema the trigger is attached to",
 			schema, secondPrev, first)
 	}
 }
 
-// TestPG_ChainTriggerIgnoresAShadowingTempTable is the F098 pin. PostgreSQL's
+// TestPG_ChainTriggerIgnoresAShadowingTempTable pins this. PostgreSQL's
 // CREATE FUNCTION documentation names this exact configuration — a SECURITY
 // DEFINER function with unqualified relation references and a SET clause that
 // does not end in pg_temp — as the subvertible one.
@@ -213,7 +213,7 @@ func TestPG_ChainTriggerIgnoresAShadowingTempTable(t *testing.T) {
 	if gotPrev == forged {
 		t.Fatalf("the chain trigger read its head from the CALLER's temp table: prev_hash = %q, the value the caller planted.\n"+
 			"docs/OPERATIONS.md states prev_hash/row_hash are computed inside Postgres so no caller can choose them; a "+
-			"SECURITY DEFINER search_path that does not end in pg_temp lets any INSERT-capable role choose both (F098)", gotPrev)
+			"SECURITY DEFINER search_path that does not end in pg_temp lets any INSERT-capable role choose both", gotPrev)
 	}
 	if gotPrev != wantPrev {
 		t.Fatalf("prev_hash = %q, want the real preceding row's row_hash %q", gotPrev, wantPrev)

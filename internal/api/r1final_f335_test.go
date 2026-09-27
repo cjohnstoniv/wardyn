@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F335: the run-create path never authorized the SELECTED workspace against the
+// the run-create path never authorized the SELECTED workspace against the
 // CALLER. Two doors reached the same room and both are pinned here:
 //
 //  1. req.workspace_id — a second plain member, and a security_admin (a tier

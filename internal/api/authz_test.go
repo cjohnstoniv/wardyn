@@ -125,7 +125,7 @@ const (
 // ownerTier names WHICH ADMIN TIER an owner-scoped route's admin bypass belongs
 // to. Required whenever class == classOwner, the same way entity already is.
 //
-// Why the table needed a third dimension (F155). routeMatrix is what routes.go
+// Why the table needed a third dimension. routeMatrix is what routes.go
 // calls authoritative, and classAdmin/classSecurity carry the tier so that a
 // route wired to the wrong predicate reddens TestSecurityAdminRouteTier.
 // classOwner carried none, so all 16 owner-scoped routes were SKIPPED by that
@@ -203,6 +203,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/policies":        {class: classAdmin},
 	"PUT /api/v1/policies/{id}":    {class: classAdmin},
 	"DELETE /api/v1/policies/{id}": {class: classAdmin},
+	// Launch presets bundle selectable content the same way, so their writes
+	// are SUPER too; the reads are classMember, narrowed by user type.
+	"PUT /api/v1/presets/{name}":    {class: classAdmin},
+	"DELETE /api/v1/presets/{name}": {class: classAdmin},
 	// Library sources + base images: supply-chain admission, SUPER.
 	"POST /api/v1/sources":            {class: classAdmin},
 	"POST /api/v1/sources/{id}/scan":  {class: classAdmin},
@@ -353,6 +357,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// tier as the grant rows that list who gets the value.
 	"GET /api/v1/permissions/availability/{kind}/*": {class: classSecurity},
 	"PUT /api/v1/permissions/availability/{kind}/*": {class: classSecurity},
+	// Explain (#739): the same table read at a named subject, on the same tier.
+	"GET /api/v1/permissions/explain": {class: classSecurity},
 	// Cutting a compromised human's live sessions: the time-critical half of
 	// incident response, and a revocation only ever SUBTRACTS reach.
 	"POST /api/v1/sessions/revoke": {class: classSecurity},
@@ -492,6 +498,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/policies":         {class: classMember},
 	"GET /api/v1/policies/default": {class: classMember},
 	"GET /api/v1/policies/{id}":    {class: classMember},
+	"GET /api/v1/presets":          {class: classMember},
+	"GET /api/v1/presets/{name}":   {class: classMember},
 	"GET /api/v1/runs":             {class: classMember},
 	// PUT/DELETE moved here from classAdmin in 0.7 (migration `0050`,
 	// per-principal secrets): self-service, scoped to the caller's OWN row at
@@ -553,7 +561,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// emitted CONTENT that decides it: the files carry the internal registry
 	// coordinate the workspace reads blank, the site-config artifact redirects
 	// /site-config is admin-only for, and the operator's setup commands. Its
-	// write twin below has always been operatorOnly (F287).
+	// write twin below has always been operatorOnly.
 	"GET /api/v1/workspaces/{id}/env-as-code": {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
@@ -963,7 +971,7 @@ func TestAuthzMatrix(t *testing.T) {
 				// REQUIRED, the same way entity is: a new owner-scoped route
 				// that does not state which admin tier may bypass ownership on
 				// it cannot be classified, because the answer is not derivable
-				// from the class (F155). Fatal here rather than defaulted, so
+				// from the class. Fatal here rather than defaulted, so
 				// the omission is a failure and not a silent tierSuper.
 				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity {
 					t.Fatalf("classOwner route %q has no ownerTier set (want tierSuper or tierSecurity) — "+
@@ -1103,7 +1111,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 	memberSess := ssoSession(t, "sub-member-tier", "member-tier@corp.example", oidc.RoleUser)
 
-	// F155: the owner-scoped half, probed against a REAL, SEEDED, FOREIGN
+	// the owner-scoped half, probed against a REAL, SEEDED, FOREIGN
 	// entity rather than the "x1" placeholder the gated-route loop uses.
 	//
 	// The placeholder is why this could not simply be folded into the loop
@@ -1186,7 +1194,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		}
 		// Every owner-scoped route is probed, not a subset: the count is what
 		// catches a route that silently leaves classOwner.
-		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
+		// 17 since GET /workspaces/{id}/env-as-code moved here from
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly); 18 since
 		// #569 added PATCH /runs/{id}; 19 since #575 added POST
@@ -1263,17 +1271,20 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// the device pair's twins for enrolment tokens not yet redeemed, list and
 	// revoke (= 32 SEC), CS-5 added the credential erase, which only
 	// subtracts (= 33 SEC), and #612 the GET/PUT /permissions/availability pair
-	// beside the grant rows (= 35 SEC). 0.8's model providers add GET/PUT
+	// beside the grant rows (= 35 SEC), and #739 GET /permissions/explain, the
+	// same table read at a named subject (= 37 SEC with #154's DELETE
+	// /people/{principal}/ssh-keys). 0.8's model providers add GET/PUT
 	// /model-providers, SUPER for the agent roster's reason (= 41). #575 then
 	// added the standing-runs pair (GET /admin/runs/proxy-window, POST
 	// /admin/runs/restart), born SUPER because a restart replaces proxies on runs
 	// the caller does not own (= 43 SUPER). #166 then added POST
 	// /drives/{id}/reclaim, the drive DESTROY verb, born SUPER beside the
-	// family it belongs to (= 44 SUPER). A route silently reclassified in the
+	// family it belongs to (= 44 SUPER). #1143's launch preset writes (PUT/DELETE
+	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 36 || super != 44 {
-		t.Errorf("tier split = %d security / %d admin, want 36 / 44 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 37 || super != 46 {
+		t.Errorf("tier split = %d security / %d admin, want 37 / 46 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1859,6 +1870,20 @@ func (s *authzStore) UpdateUserType(context.Context, types.UserType) (types.User
 func (s *authzStore) UserTypeReferences(context.Context, string) (int, error)  { return 0, nil }
 func (s *authzStore) UserTypeTokenStamps(context.Context, string) (int, error) { return 0, nil }
 func (s *authzStore) DeleteUserType(context.Context, string) error             { return store.ErrNotFound }
+
+// launch presets (migration 0087): the same honest empty state.
+func (s *authzStore) ListLaunchPresets(context.Context) ([]types.LaunchPreset, error) {
+	return nil, nil
+}
+func (s *authzStore) GetLaunchPreset(context.Context, string) (types.LaunchPreset, error) {
+	return types.LaunchPreset{}, store.ErrNotFound
+}
+func (s *authzStore) PutLaunchPreset(_ context.Context, p types.LaunchPreset) (types.LaunchPreset, store.PresetWrite, error) {
+	return p, store.PresetCreated, nil
+}
+func (s *authzStore) DeleteLaunchPreset(context.Context, string) (types.LaunchPreset, error) {
+	return types.LaunchPreset{}, store.ErrNotFound
+}
 
 // governance profiles (migration 0052)
 //

@@ -496,7 +496,7 @@ func run() error {
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
 		BaseCtx:       rootCtx,
-		OrgFederation: orgFederation,
+		OrgFederation: orgFederationStatusFunc(orgFederation),
 	})
 
 	// The login-grant edge, joined after both sides exist and before anything is
@@ -518,8 +518,10 @@ func run() error {
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
 	startUISandboxGateway(rootCtx, f, posture, srv)
 
-	// Serve until signal/error, then drain: HTTP first, audit sinks last.
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop)
+	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
+	// org federation forwarder (if any) joined so it never outlives the
+	// process (issue #1131).
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop, orgFederation)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved

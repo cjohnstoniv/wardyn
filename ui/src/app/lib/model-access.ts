@@ -158,6 +158,8 @@ export interface ProviderAttention {
   /** provider_access's state: not_configured, expired_signin or expiring. */
   state: string;
   deadline: string;
+  /** provider_access's action, composed by the server; "" when it has none. */
+  action: string;
   /** The agents whose default it is, among those the person may run — the
    *  "{Claude Code} runs use …" of B1, B4 and B5. */
   defaultFor: string[];
@@ -182,7 +184,8 @@ export function providerAttention(status: SetupStatus | null | undefined): Provi
     const defaultFor = (p.default_for ?? []).filter((h) => p.harnesses.includes(h));
     const held = p.kind === "bedrock_sso" && (access.state === "expiring" || access.state === "expired_signin");
     const missing = defaultFor.length > 0 && MODEL_ACCESS_ACTIONABLE.has(access.state) && !(p.kind === "anthropic_subscription" && access.state === "expiring");
-    if (held || missing) out.push({ provider: p, state: access.state, deadline: access.deadline ?? "", defaultFor });
+    if (held || missing)
+      out.push({ provider: p, state: access.state, deadline: access.deadline ?? "", action: access.action ?? "", defaultFor });
   }
   return out;
 }

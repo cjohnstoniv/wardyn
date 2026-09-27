@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -31,8 +32,10 @@ import (
 // end plus the grace, or until someone kills it when it has no end. Everything
 // that cannot be kept fails closed and is torn down as before: a headless run
 // (the completion watcher that would finish it skips kept runs), a run past
-// its end and grace, a substrate that cannot keep a sandbox (Kubernetes), or a
-// proxy stop that fails.
+// its end and grace, or a substrate that cannot keep a sandbox (Kubernetes).
+// A proxy stop that fails any other way keeps the run with its containment
+// unresolved (containment_error) for the lease sweep to retry (#1060): a
+// teardown on the same failing daemon would lose the files and contain nothing.
 
 // runTokenLapseAfter is how long a RUNNING run may go without a renew before
 // its identity is dead. The proxy renews at least every 30 minutes and gives
@@ -58,7 +61,7 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()
-			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter) {
+			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, s.cfg.Now()) {
 				return
 			}
 			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
@@ -89,22 +92,25 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	if *st.ExitCode == 0 {
 		terminal = types.RunCompleted
 	}
-	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0)
+	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0, s.cfg.Now())
 }
 
 // loseRun marks run lost for reason and stops its proxy. false means the run
 // cannot be kept, and the caller's fail-closed arm applies. true means it is
-// taken care of: kept, torn down (as terminal) because its proxy could not be
-// removed, or left alone because the claim did not land (another replica took
+// taken care of: kept (with its containment unresolved when the stop failed),
+// torn down (as terminal) because its substrate cannot keep a sandbox, or left
+// alone because the claim did not land (another replica took
 // it, a renew landed, or it went terminal) or could not be written (the next
 // pass retries). tokenLife > 0 also requires the run's token to be lapsed by
-// that much still (MarkRunLost), so the sweep's mark loses to a renew.
-func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration) bool {
+// that much still (MarkRunLost), so the sweep's mark loses to a renew. at is
+// the mark's time: now, except for an ended run put back to ended, whose files
+// grace stays counted from when it first ended.
+func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) bool {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
 		return false
 	}
-	applied, err := loser.MarkRunLost(ctx, run.ID, reason, now, tokenLife)
+	applied, err := loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -113,23 +119,30 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	if !applied {
 		return true
 	}
-	run.LostAt, run.LostReason = &now, reason
+	run.LostAt, run.LostReason = &at, reason
 	s.cancelRunApprovals(ctx, run.ID)
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
-	data := map[string]any{"reason": string(reason)}
+	data, outcome := map[string]any{"reason": string(reason)}, "success"
 	if err := s.stopLostSandbox(ctx, run, now); err != nil {
-		data["kept"] = false
 		data["lost_error"] = err.Error()
-		s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
-		return true
+		if errors.Is(err, runner.ErrEndUnsupported) {
+			data["kept"] = false
+			s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
+			return true
+		}
+		// Any other failure leaves containment unconfirmed, and a teardown
+		// on the same failing daemon would only lose the files (#1060): the
+		// run stays kept and the lease sweep's re-assert retries the stop.
+		data["containment"], outcome = "unresolved", "failure"
+		s.noteContainmentFailure(ctx, leaser, run.ID, err)
 	}
 	data["kept"] = true
 	if until, ok := s.keptUntil(run); ok {
 		data["kept_until"] = until
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.lost",
-		run.ID.String(), "success", mustJSON(data)))
+		run.ID.String(), outcome, mustJSON(data)))
 	return true
 }
 
@@ -154,6 +167,22 @@ func (s *Server) keptUntil(run types.AgentRun) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+// endedFilesKept reports whether an ended run's files grace is still live at
+// now: an ended, kept run may be extended and revived only inside it (#1061).
+func (s *Server) endedFilesKept(run types.AgentRun, now time.Time) bool {
+	return run.LostReason == types.LostEnded && run.LostAt != nil && now.Before(run.LostAt.Add(s.cfg.EndedRunGrace))
+}
+
+// endedKept is the condition a write on an ended, kept run lands under (see
+// store.EndedKept), for run as read and the grace counted at now; nil for a run
+// its own end did not stop.
+func (s *Server) endedKept(run types.AgentRun, now time.Time) *store.EndedKept {
+	if run.LostReason != types.LostEnded || run.LostAt == nil {
+		return nil
+	}
+	return &store.EndedKept{LostAt: *run.LostAt, KeptAfter: now.Add(-s.cfg.EndedRunGrace), Now: now}
 }
 
 // stopLostSandbox stops a lost run's proxy. An outage run inside its lease

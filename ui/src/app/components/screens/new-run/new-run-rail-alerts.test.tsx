@@ -7,7 +7,7 @@
 // from new-run-rail.test.tsx (file-size cap); this seam needs no model-access
 // provider, so the rail mounts bare.
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../../../lib/api/health", () => ({
@@ -33,6 +33,7 @@ function railTree(props: AlertProps) {
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
+        unattended={false}
         launch={{
           onLaunch: () => {},
           disabled: false,
@@ -68,6 +69,8 @@ describe("RunRail — failure lines are announced (#459)", () => {
     renderRail({ launchError: "the server's launch sentence" });
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(RAIL.LAUNCH_ERROR_LABEL);
+    // #497: the prefix is spoken only, never visible text.
+    expect(within(alert).getByText(RAIL.LAUNCH_ERROR_LABEL)).toHaveClass("sr-only");
     expect(alert).toHaveTextContent("the server's launch sentence");
     // The sentence itself is unchanged and visible — only the prefix hides.
     expect(screen.getByText("the server's launch sentence")).toBeVisible();
@@ -77,6 +80,7 @@ describe("RunRail — failure lines are announced (#459)", () => {
     renderRail({ preflightError: "the server's preflight sentence" });
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(RAIL.PREFLIGHT_ERROR_LABEL);
+    expect(within(alert).getByText(RAIL.PREFLIGHT_ERROR_LABEL)).toHaveClass("sr-only");
     expect(alert).toHaveTextContent("the server's preflight sentence");
   });
 

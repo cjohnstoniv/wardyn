@@ -268,7 +268,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		t.Errorf("pod create order = %v, want [%s, %s]", podNames, proxyPodName(spec.RunID), agentPodName(spec.RunID))
 	}
 
-	// B9-F7: enableServiceLinks defaults to TRUE, which makes the kubelet inject
+	// enableServiceLinks defaults to TRUE, which makes the kubelet inject
 	// a pair of docker-link-era env vars (<SVC>_PORT, <SVC>_SERVICE_HOST, ...)
 	// for every Service in the namespace into every container. The agent is
 	// untrusted code and the namespace is the operator's — that is a free

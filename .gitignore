@@ -183,6 +183,10 @@ ds-bundle/
 # editor and refusal doors, and the frozen canon table that draws them.
 !/docs/design/model-providers-prompt.md
 !/docs/design/model-providers-mock/
+# held-push-canon.md records #181's frozen strings + the packet-7 mock
+# answers, cited by the push_content approval card — ships like any other
+# frozen copy table above.
+!/docs/design/held-push-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

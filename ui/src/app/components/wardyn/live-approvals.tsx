@@ -31,6 +31,7 @@ import {
   type DecisionOptions,
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
+import { isPushContentRequest, PushContentCard } from "./push-content-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
@@ -291,6 +292,13 @@ export function LiveApprovals({
               // where the sign-in belongs — the same
               // decision-visible-where-it-happens rule the rows above follow.
               a.kind === "credential_reauth" ||
+              // #181 — a held push parks git on the open connection for at
+              // most push_rules.hold_seconds (isHeld's own push_content doc,
+              // lib/types/approvals.ts), and the row then stays a decidable
+              // passive pending the rest of the way — still surfaced here
+              // either way, since a retry of the same push rejoins this same
+              // row and re-enters the hold.
+              a.kind === "push_content" ||
               (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
         ),
       );
@@ -351,7 +359,7 @@ export function LiveApprovals({
   // instead of decide() above for exactly the reason its comment gives: this
   // card ALWAYS sends an explicit decision_scope (adoDecisionArgs in
   // ado-capability-card.tsx), never decisionArgs()'s omit-for-"run" shape.
-  const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [DecisionOptions]) => {
+  const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [] | [DecisionOptions]) => {
     setBusy(a.id);
     setBusyAction(approve ? "approve" : "deny");
     try {
@@ -365,6 +373,14 @@ export function LiveApprovals({
       setBusyAction(null);
     }
   };
+
+  // decidePush — the push_content card's own decide path (#181), used
+  // instead of decide() above for the opposite reason decideAdo is: this kind
+  // takes NO decision_scope at all (decide's rule 4 refuses one on
+  // push_content — approvals_push.go), so it cannot go through
+  // decisionArgs()'s omit-for-"run" convention either — that convention still
+  // sends a body, just an empty options list; this card never builds one.
+  const decidePush = (a: ApprovalRequest, approve: boolean) => decideAdo(a, approve, []);
 
   const confirmDeny = async () => {
     if (!denyTarget) return;
@@ -485,6 +501,23 @@ export function LiveApprovals({
               busy={busy === a.id ? busyAction : null}
               onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
               onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}
+            />
+          );
+        }
+        // #181 — a held push gets its own card too, the same reason the ADO
+        // escalation does above: it needs fields the strip's plain row can't
+        // show. `run` is `AdoCardRun | null`, a strict superset of the card's
+        // own `PushCardRun` (state only) — structurally assignable as-is.
+        if (isPushContentRequest(a) && a.state === "PENDING") {
+          return (
+            <PushContentCard
+              key={a.id}
+              item={a}
+              securityOperator={securityOperator}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
             />
           );
         }

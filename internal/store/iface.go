@@ -297,6 +297,13 @@ type Store interface {
 	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
 	DeleteUserType(ctx context.Context, id string) error
 
+	// Launch presets (migration 0087, store_launch_presets.go). PutLaunchPreset
+	// is an upsert by name that moves the version only when the row changes.
+	ListLaunchPresets(ctx context.Context) ([]types.LaunchPreset, error)
+	GetLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error)
+	PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.LaunchPreset, PresetWrite, error)
+	DeleteLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error)
+
 	// Governance profiles and their subject assignments (migration 0052,
 	// governance.go): the assignable ceiling that replaces Config.DefaultPolicy
 	// for a principal an admin has named. ARE part of Store, for the third time

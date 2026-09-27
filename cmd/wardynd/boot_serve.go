@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -202,6 +203,12 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 	})
 }
 
+// forwarderJoinWait bounds serveAndShutdown's wait for the org federation
+// forwarder (issue #1131): it observes the same rootCtx.Done() this function's
+// select does, so it is already stopping by the time we wait on it, and only a
+// wedged store or client call would ever make this matter.
+const forwarderJoinWait = 5 * time.Second
+
 // serveAndShutdown runs the HTTP(S) server until a shutdown signal or a serve
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are
@@ -209,7 +216,11 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 // abandoned. Extracted verbatim from run(); fan may be nil. The proxy-facing
 // TLS listener (hop, internal_tls.go) shares this lifecycle: its serve error
 // ends the daemon like the console's, and it drains in the same Shutdown pass.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, hop *hopTLS) error {
+// orgFederation is nil unless hybrid enrolment (issue #103) is on; when set,
+// it is joined (not merely cancelled) before this returns, so the process
+// never exits while its goroutine might still be logging or touching the
+// store.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, hop *hopTLS, orgFederation *federation.Forwarder) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -302,6 +313,21 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	// a margin) and logs if it hits it, so this cannot turn an orderly stop
 	// into a hang.
 	srv.WaitBackground()
+
+	// The forwarder goroutine bootHybrid started on rootCtx is already
+	// stopping (it selects on the same rootCtx.Done() this function's own
+	// select did, above), so this only waits for it to actually finish rather
+	// than abandoning it mid-run — the gap that left one still logging past a
+	// test's end in issue #1131. Bounded so a wedged store or client call
+	// cannot turn an orderly stop into a hang.
+	if orgFederation != nil {
+		select {
+		case <-orgFederation.Done():
+		case <-time.After(forwarderJoinWait):
+			slog.Warn("wardynd: shutdown budget hit with the org federation forwarder still running; abandoning it",
+				slog.Duration("budget", forwarderJoinWait))
+		}
+	}
 
 	// BETWEEN the two, deliberately: the server has stopped accepting requests
 	// (so no new auth.fail can open a streak) and the sinks are still open (so

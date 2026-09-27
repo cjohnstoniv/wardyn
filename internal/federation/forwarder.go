@@ -80,13 +80,25 @@ type Forwarder struct {
 	// step retries it durably. The in-process gate (Status().Revoked) is closed
 	// the instant revoke runs, regardless — this only tracks the durable write.
 	markPending bool
+
+	// done closes once Run returns, so a caller that started Run on its own
+	// goroutine can join it (see Done).
+	done chan struct{}
 }
 
 // NewForwarder returns a forwarder for cred. Nothing is read until Load or Run.
 func NewForwarder(c *Client, st Store, cred Credential, rec audit.Recorder) *Forwarder {
 	return &Forwarder{client: c, store: st, cred: cred, audit: rec, interval: tickInterval,
-		status: Status{DeviceID: cred.DeviceID}}
+		status: Status{DeviceID: cred.DeviceID}, done: make(chan struct{})}
 }
+
+// Done closes once Run has returned — after ctx ends or the organisation
+// revokes this device. A caller that starts Run on its own goroutine (as
+// bootHybrid does) must join it before treating shutdown as complete: cancel
+// the context, then <-Done(), rather than walking away the instant cancel is
+// called. Run must be called at most once per Forwarder; a second call
+// double-closes done and panics.
+func (f *Forwarder) Done() <-chan struct{} { return f.done }
 
 // Status returns a copy of the current state.
 func (f *Forwarder) Status() Status {
@@ -127,6 +139,7 @@ func (f *Forwarder) Load(ctx context.Context) error {
 // revoked forwarder stops calling the organisation for the rest of the
 // process: its credential is dead, and re-enrolment is a boot-time act.
 func (f *Forwarder) Run(ctx context.Context) {
+	defer close(f.done)
 	for {
 		wait, stop := f.step(ctx)
 		if stop {

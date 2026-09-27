@@ -233,6 +233,10 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 		DriveProbeImage:     *f.driveProbeImage,
 		ConfinementRuntimes: confRuntimes,
 		UserDriveHostRoots:  driveHostRoots,
+		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
+		// rather than letting the substrate hardcode Record — "off" must mean no
+		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
+		Record: substrate.RecordEnabled(*f.recordingSel),
 	})
 	if err != nil {
 		// Discriminate WHY substrate.New failed before printing the

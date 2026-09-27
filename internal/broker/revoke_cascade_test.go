@@ -1,10 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// PINS for F096/F122 (RevokeRun emitted ZERO credential.revoke rows for every
+// PINS for two defects (RevokeRun emitted ZERO credential.revoke rows for every
 // credential the run auto-minted, and for a leased git_pat's 2nd..Nth mint,
 // while THREAT-MODEL.md publishes kill-cascade step 4 as "every minted
-// credential for the run") and F013 (one hardcoded GitHub-installation-token
+// credential for the run") and (one hardcoded GitHub-installation-token
 // note on every revoke row, false in both halves for git_pat/ssh_key).
 //
 // The existing TestRevokeRun_EmitsRevokeAudit seeds an APPROVED approval, i.e.
@@ -44,7 +44,7 @@ func revokeNoteFor(t *testing.T, au *fakeAudit, jti string) string {
 	return ""
 }
 
-// TestRevokeRun_AutoMintedGrant_EmitsRevokeAudit is F096/F122's shape: a grant
+// TestRevokeRun_AutoMintedGrant_EmitsRevokeAudit is the other shape: a grant
 // with RequiresApproval=false mints a REAL credential and creates no approvals
 // row at all, so a cascade sourced from approvals.minted_jti saw nothing to
 // revoke.
@@ -79,7 +79,7 @@ func TestRevokeRun_AutoMintedGrant_EmitsRevokeAudit(t *testing.T) {
 	}
 }
 
-// TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint is the second half of F122:
+// TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint is the second half:
 // under the B2 per-run lease the minted_jti burn is SKIPPED on re-mints, so
 // every jti after the first was invisible to a cascade reading that column.
 func TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint(t *testing.T) {
@@ -115,7 +115,7 @@ func TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint(t *testing.T) {
 	revokeNoteFor(t, au, second.JTI)
 }
 
-// TestRevokeRun_NotePerGrantKind is F013: the note is the ONLY place a revoke
+// TestRevokeRun_NotePerGrantKind: the note is the ONLY place a revoke
 // row says what actually happens to the credential, and one constant note
 // claimed GitHub TTL semantics for an operator-managed PAT that Wardyn can
 // neither expire nor down-scope (broker_mint_kinds.go's "honesty ceiling").
@@ -168,7 +168,7 @@ func TestRevokeRun_NotePerGrantKind(t *testing.T) {
 		if !strings.Contains(note, "github installation tokens expire") {
 			t.Fatalf("github_token revoke note = %q, want the TTL-expiry story preserved", note)
 		}
-		// F013/B4/B5: GitHub's DELETE /installation/token endpoint is real (it
+		// B4/B5: GitHub's DELETE /installation/token endpoint is real (it
 		// revokes the token you authenticate with), so the note must not say
 		// the API is missing; and wardyn DOES hold in-memory copies of the
 		// value (the run's mask corpus, broker.go maskReg.Add; the proxy's

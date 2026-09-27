@@ -307,8 +307,8 @@ cover-union: ## Enforce COVER_MIN over the unit/docker/k8s profiles already in t
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
-	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
-	  echo "==> Postgres-gated suite under the race detector"; $(MAKE) test-race-pg; \
+	  echo "==> Postgres-gated suite" && $(MAKE) test-report-pg && \
+	  echo "==> Postgres-gated suite under the race detector" && $(MAKE) test-race-pg; \
 	else \
 	  echo ">> SKIPPED test-report-pg + test-race-pg — set WARDYN_TEST_PG=postgres://... to run them (CI always does)"; \
 	fi
@@ -563,8 +563,10 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-e2e-lane-kill-tree.sh
+	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-image-pins.sh
@@ -573,6 +575,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
+	./scripts/test-release-check.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
@@ -795,6 +798,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
 	role=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r'); \
 	echo "$$out" | grep -qE 'resources: \[[^]]*"secrets"' || { echo "the render has no secrets rule — the verb assertions below would be vacuous"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["events"\]' | grep -q 'verbs: \["list"\]$$' || { echo "the k8s-runner Role does not grant events: [list] exactly — without it an image pull on Kubernetes reads as ContainerCreating and the sign-in door's download step never lights (#807); any verb beyond list is more than pull_events.go issues"; exit 1; }; \
+	echo "$$out" | awk '/^---/{c=0} /^kind: ClusterRole$$/{c=1} c' | grep -q '"events"' && { echo "the ClusterRole grants events — that is every namespace's Events; the grant belongs in the namespaced Role only (#807)"; exit 1; } || true; \
 	echo "$$role" | grep -A1 'resources: \["networkpolicies"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant networkpolicies: list — SweepOrphanedSandboxes keys the both-pods-gone reclaim on the run's NetworkPolicy labels, so without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
 	echo "$$out" | grep -EA1 'resources: \[[^]]*"secrets"' | grep -qE '"(get|list|watch)"' && { echo "the k8s-runner Role grants a Secret-BODY read verb (get/list/watch) on secrets — every one of them returns the object's data, RBAC cannot scope them by label, and with runsNamespace unset that is namespace-wide plaintext read of the control plane's own Secrets. wardynd never reads a Secret back: the kubelet mounts the per-run one into the proxy pod, and the sweep finds it by its NetworkPolicy labels (W6-S4)"; exit 1; } || true
 	@# B12b-F7 retired in 0.7.8 (deployment.yaml's guard comment carries the
@@ -1147,7 +1152,8 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
 	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
 
-# DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
+# DCO sign-off: every commit, merges included, in DCO_RANGE carries a
+# Signed-off-by. See DCO_ALLOW_GITHUB_MERGES for the one exemption.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
 #
 # git parses trailers itself (%(trailers:...) since 2.13), so there is no
@@ -1160,11 +1166,19 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 # exactly like a missing one. `.+ <.+@.+>` is the whole contract — name, space,
 # angle-bracketed address with an @ — and it also covers the empty case.
 DCO_RANGE ?= origin/main..HEAD
-dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
+# 1 only where GitHub itself makes merge commits (push, merge_group): its
+# "Merge pull request" commits (committer GitHub <noreply@github.com>, 2+
+# parents) carry no Signed-off-by. PR ranges end at the PR head instead and
+# never pass this flag — every commit in a PR's own range, merges included,
+# must carry Signed-off-by, even a GitHub-committed one (e.g. from "Update
+# branch") landed on the branch itself (#1070).
+DCO_ALLOW_GITHUB_MERGES ?= 0
+dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
-	@signoffs=$$(git log --no-merges $(DCO_RANGE) --format='%H%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
+	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
 	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
-	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' '$$2 !~ /.+ <.+@.+>/ {print $$1}'); \
+	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' -v gh=$(DCO_ALLOW_GITHUB_MERGES) \
+	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" {next} $$4 !~ /.+ <.+@.+>/ {print $$1}'); \
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 

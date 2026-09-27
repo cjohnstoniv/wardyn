@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestMergeProfiles_LeakTruncationIsSeverityOrderedAndFlagged pins B11b-F9.
+// TestMergeProfiles_LeakTruncationIsSeverityOrderedAndFlagged pins the following.
 // The merge concatenated every source's leak findings and then took the first
 // maxLeakFindings of them — silently, in whatever order the sources happened to
 // be attached. So a private key committed in the ninth source was simply absent

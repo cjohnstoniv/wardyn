@@ -947,7 +947,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 
 | Surface | Gate |
 |---|---|
-| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; launch preset writes (`PUT`/`DELETE /presets/{name}`), selectable content like a stored policy; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the operator-topology READS — `GET /site-config`, `GET /sources`, `GET /sources/{id}`, `GET /base-images`: they carry the upstream-proxy secret ref, a `local_dir` source Locator and internal registry refs, so reading them is reading the deployment's own topology | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
@@ -1189,14 +1189,43 @@ migration `0050`)** are the second and third owned nouns after runs.
   so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
   **Wardyn cannot revoke anything upstream**: revoke the person's AWS, Anthropic
   and Azure DevOps sessions, and any gateway token, where they were issued, and
-  disable them in the identity provider.
+  disable them in the identity provider. A refused erase (a blank principal
+  `400`, or one naming nobody or several people `422`) is audited
+  `credential.erase` `denied`.
+- **Offboarding a person, in full.** The erase removes stored credentials and
+  nothing else. In order:
+  1. Disable the person in the identity provider, so no new sign-in succeeds.
+  2. `POST /sessions/revoke` with their subject or email: ends their console
+     sessions and revokes every `wdn_` API token they hold (its
+     `tokens_revoked` count is the receipt; see "Per-user API tokens: stop
+     sharing the admin token").
+  3. Remove their registered SSH keys and end established SSH connections:
+     [SSH access revocation](SSH.md#revoking-access-during-an-incident).
+  4. Kill their running runs (`POST /runs/{id}/kill`). A run keeps a static
+     key it was handed (an `api_key` injection is cached for the run) until it
+     ends, whatever the erase does.
+  5. Erase their credentials: `DELETE /people/{principal}/credentials`.
+  6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their
+     user drives (the two-halves order above).
+  7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps
+     sessions and any gateway token.
+
+  One copy outlives all of this in memory: wardynd keeps an Azure DevOps
+  sign-in's refresh token in its process-wide masking set, so output quoting it
+  is still masked. It is never served or injected from there; it is let go a
+  grace period after the credential is replaced, or when wardynd restarts. A
+  run's own masking copies go the same grace after the run ends.
 - **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
   refresh token the provider refuses for good (`invalid_grant`) is deleted at
   that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
   no longer be used or renewed (its row's `expires_at`); both audit
-  `credential.expired.delete`. The person is then shown as not connected and
-  signs in again. A Conditional Access refusal does not delete anything — the
-  sign-in still works once the person is present.
+  `credential.expired.delete`. A row the sweep cannot delete is kept, audited
+  `failure`, and retried the next day. The person is then shown as not
+  connected and signs in again. A Conditional Access refusal does not delete
+  anything — the sign-in still works once the person is present. An Azure
+  DevOps sign-in records no expiry, because Entra publishes none for its
+  refresh token: an unused one is kept until the provider refuses it or it is
+  erased.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
   workspace stays the ADMIN in the audit actor (no impersonation) with
   `workspace_owner` naming the member; `secret.write`/`secret.delete` carry
@@ -2095,7 +2124,7 @@ does not have. If the grant tables cannot be read, those lists come back empty
 rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
 is bounded like a member.
 
-**Managing them** (the six `/permissions` rows are `securityOps` — admin or
+**Managing them** (the seven `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
 
@@ -2107,6 +2136,7 @@ is member-safe):
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /permissions/availability/{kind}/{value}` | one resource's "Available to": `restricted`, and `allowed_by`, the allow rows naming it |
 | `PUT /permissions/availability/{kind}/{value}` | `{"restricted": true}` turns on "Only…" for one resource, `false` turns it back to Everyone |
+| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state — `everyone`, `this_type` (an allow, including one written for `all`), `blocked` (a deny that covers the value), `admins_only` (the widening `image` kind, off or with no allow), or `not_available` (an enforced narrowing kind with no allow, or a restricted value no allow naming it lists this subject) — at the `*` default plus every specific value a grant names or "Available to" restricts (`restricted: true`). Each cell is the resolver's own answer, switch and restriction included, for a person who is exactly that subject: only rows naming that subject or `all` are read, so a user's group and type rows are not included. The subject is folded the way a grant's subject is, and a user type that doesn't exist is refused (`400`); `kinds` defaults to every kind |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
@@ -2939,6 +2969,54 @@ regardless, so a **public client** registration (a SPA/native-app client type
 with no secret — some IdPs refuse to issue one for a confidential client) works
 the same as a confidential one. Leave it unset for that shape; nothing else in
 the OIDC config changes.
+
+## Launch presets
+
+A launch preset is a named, versioned bundle of existing `POST /runs` fields
+(image, repo, workspace, drive, a stored `policy_id` or an `inline_policy` with
+its `ui_apps` and ports, and so on). A launcher that is not the console, such
+as a portal button or a CI dispatcher, sends the name and the per-launch fields
+instead of the whole spec:
+
+```sh
+curl -fsS -X POST "$WARDYN_URL/api/v1/runs" -H "Authorization: Bearer $TOKEN" \
+  -d '{"preset":"nightly-tests","title":"nightly","task":"run the test suite"}'
+```
+
+The server replaces the request with the preset's stored one, keeps the
+caller's `title` and `task`, and runs the unchanged create path. A preset
+grants nothing: the caller's governance ceiling, capability grants,
+owner-scoped secrets and drive apply exactly as they would to the same request
+sent explicitly, so a preset that exceeds a member's ceiling is refused the way
+the explicit request is. Alongside `preset`, a request may set only `title`,
+`task` and `preset_version`; any other field is refused `400`
+(`preset_field_not_per_launch`). An unknown preset, or one not open to the
+caller's user type, is `422` (`preset_unknown`). `preset_version` pins the
+version the caller expects; a preset changed since is refused `409`
+(`preset_version_changed`). The run records `preset` and `preset_version`.
+`POST /runs/preflight` expands a preset the same way.
+
+| Route | Who |
+| --- | --- |
+| `GET /presets`, `GET /presets/{name}` | any signed-in person; a non-admin sees only the presets open to their user type (`user_types`, empty is every type) |
+| `PUT /presets/{name}` | admin only. Creates the preset at version 1, or replaces it and moves the version by one; an identical body changes nothing, not even the version |
+| `DELETE /presets/{name}` | admin only. Runs launched from it keep their stamp |
+
+Every write that lands is audited (`preset.create`, `preset.update`,
+`preset.delete`, see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)); the create and
+update rows carry the stored request, which is the only record of what an
+older version contained. A write checks the name, the user types it names and
+that the request is a well-formed create body with no per-launch field;
+everything else is checked at launch, under the launching caller. `ui_apps` in
+an `inline_policy` reach a member only where their ceiling admits them; to
+hand members an app, point the preset at a stored policy they are granted.
+
+Presets round-trip declaratively, like drives:
+
+```sh
+wardyn preset get > presets.json
+wardyn preset apply presets.json   # upserts by name; get then apply is a no-op
+```
 
 ## Workspaces: three tiers
 
@@ -4239,7 +4317,7 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | `agent: PodInitializing` | as above, init containers | yes |
 | `pod: Unschedulable: <scheduler's message>` | no node will take the pod (a taint, a full cluster, an unbound claim) — read the message | yes, if the cluster changes |
 | `pod: Pending` | the pod exists and nothing has claimed it yet | yes |
-| `image: Pulling: <ref>` | **Docker substrate only** — the host does not have this image and is downloading it now | yes |
+| `image: Pulling: <ref>` | the image is downloading now. Docker: the host does not have it. Kubernetes (since 0.8, #807): the kubelet's latest Event for the agent container is `Pulling` | yes |
 | `agent: ImagePullBackOff: <registry's message>` | the registry refused or the tag does not exist | **no** |
 | `agent: ErrImagePull: <registry's message>` | as above, first failure | **no** |
 | `agent: InvalidImageName: <message>` | the reference does not parse | **no** |
@@ -4279,21 +4357,28 @@ estate. A pull slower than them fails the run honestly — the run carries a `fa
 deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
 
 **A first pull after an upgrade does not fail a run.** Every image tag changes at a version bump, so
-the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault. On
-Kubernetes the sentence stays conditional — the kubelet reports `ContainerCreating` for a pull and for
-everything else it does before a container runs, and Wardyn does not read the Events API (below) — so
-the console says a first start *can* take a couple of minutes while the image downloads. Only the
+the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault. The
 Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does
-not have the image.
+not have the image. Since 0.8 (#807) Kubernetes does too, while the kubelet's `Pulling` Event is the
+latest thing it has said about the agent container (below). Without that Event, or with the Events read
+refused, all Wardyn has is `ContainerCreating`, which the kubelet reports for a pull and for everything
+else it does before a container runs, so the console says a first start *can* take a couple of minutes
+while the image downloads.
 
-**No chart change, and why.** The reason comes from `pods: get`, which the chart already grants.
-There is no new RBAC verb in 0.7.6 and none is wanted. A `Pulling` reason on Kubernetes lives in an
-Event, and granting `events: get,list` would — under `k8s.allowRunsInReleaseNamespace=true` — let
-Wardyn read every co-tenant workload's event stream in that namespace (a `fieldSelector` is a client
-convenience, not something RBAC can enforce). `deploy/helm/wardyn/templates/rbac.yaml` states this in
-its own header paragraph: *"the kubelet's eviction verdict comes back through pods: get … never the
-Events API, so no 'events' verb belongs here."* Read that paragraph before "fixing" the conditional
-wording by granting the verb.
+**The one chart change, and why.** Every other reason comes from `pods: get`, which the chart already
+grants. `Pulling` does not: on Kubernetes it lives only in the pod's Events. 0.8 (#807) grants
+`events: list` in the namespaced k8s-runner Role: `list` only (no `get`, no `watch`), never in the
+ClusterRole, and `make helm-lint` fails a render that widens either. The runner lists at most once a
+second, only while the agent container is `ContainerCreating`, field-selected on the pod's kind, name
+and UID. Under `k8s.allowRunsInReleaseNamespace=true` that verb reads every co-tenant workload's Events
+in that namespace: a `fieldSelector` is a client convenience, not something RBAC can enforce. That is
+accepted as part of the same namespace blast radius the render-time fail in
+`deploy/helm/wardyn/templates/rbac.yaml` already names for that setting (exec into and delete any pod
+there, create or delete any Secret there). Nothing an Event says is surfaced: the image ref comes from
+the pod spec, and the Event only chooses between two sentences Wardyn wrote. If you write the Role
+yourself (`k8s.rbac.create=false`), add `events: list` on upgrade. Without it the read fails closed:
+it is switched off for the rest of that start, the create goes on, and a pull reads as
+`agent: ContainerCreating`, as before.
 
 **The fix for a slow registry is to pre-pull, not to wait longer.** Get the agent and `aws-sso`
 images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of
@@ -6008,11 +6093,14 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
 `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
-`api_tokens.user_type` with its CHECK. The long-holds runs add two more on `agent_runs`:
-`0083` adds `token_renewed_at` and `0084` adds `proxy_release`.
+`api_tokens.user_type` with its CHECK. The long-holds runs add three more on `agent_runs`:
+`0083` adds `token_renewed_at` and `0084` adds `proxy_release`, and `0088`
+(`0088_agent_runs_containment_error`) adds `containment_error` and `containment_error_at`.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
+`0087` adds `agent_runs.preset` and `agent_runs.preset_version` beside its new
+`launch_presets` table.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

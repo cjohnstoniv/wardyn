@@ -18,7 +18,13 @@ import (
 // with docs/ENV.md. Every WARDYN_* literal read here has to be documented, and
 // every documented WARDYN_* row has to have a reader here (or be allowlisted as
 // test-only). Together these two directions cover the full var surface.
-var envDocRoots = []string{"cmd", "internal"}
+//
+// "pkg" joined cmd/internal here in #202: the client library under pkg/client
+// reads no WARDYN_* var today, but a name added there without this line would
+// have no forward check at all, silently, the same gap deploy/images/**,
+// install.sh and scripts/ci-run.sh had until TestEnvDoc_OperatorScriptsVarsAreDocumented
+// below closed it for the shell side.
+var envDocRoots = []string{"cmd", "internal", "pkg"}
 
 // envDocAllow lists test-scaffolding / harness / negative-control vars: not
 // operator config, so intentionally not in the registry tables. They are read
@@ -66,7 +72,7 @@ var envDocAllow = map[string]bool{
 	// run-ui-e2e.sh's default invocation runs — same shell-only situation as
 	// the pair above.
 	"WARDYN_E2E_INTERNAL_ADDR": true, "WARDYN_E2E_LANES": true,
-	// F063: the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
+	// the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
 	// run-ui-e2e.sh, screenshots.sh, test/e2e/e2e.sh) — none read by Go, so
 	// TestEnvDoc_E2EShellVarsAreDocumented below is what actually enforces these
 	// stay documented in ENV.md's Test/internal-only table; ten of the eleven
@@ -76,8 +82,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_TOKEN": true, "WARDYN_E2E_AGE_KEY": true,
 	"WARDYN_E2E_SKIP_BUILD": true, "WARDYN_E2E_NO_UI_BUILD": true,
 	"WARDYN_E2E_KEEP": true, "WARDYN_E2E_NO_BUILD": true,
-	"WARDYN_E2E_ANTHROPIC_KEY": true,
-	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
+	"WARDYN_E2E_ANTHROPIC_KEY": true, "WARDYN_E2E_CC_IMAGE": true,
+	// run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
 	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
@@ -203,6 +209,15 @@ var envDocShellOnly = map[string]bool{
 	// The chart render ui/e2e/live/sso-roles.spec.ts runs on, set per leg by
 	// the walk — another walk output, read only via process.env.
 	"WARDYN_LIVE_ROLES_RENDER": true,
+	// #202: docs/ENV.md's "Agent image scripts" table — deploy/images/** shell
+	// constants and internal (never-exported) bash state, none read by Go.
+	"WARDYN_AWS_SSO_LOGIN_COMMAND": true, "WARDYN_AWS_SSO_NOT_A_CODING_AGENT": true,
+	"WARDYN_AWS_SSO_SELFRAN": true, "WARDYN_AWS_SSO_SELFRUN_BANNER": true,
+	"WARDYN_AWS_SSO_SELFRUN_DONE": true, "WARDYN_AWS_SSO_SELFRUN_FAILED": true,
+	"WARDYN_AWS_SSO_SELFRUN_PREP_STUCK": true, "WARDYN_CODEX_BIN_URL": true,
+	"WARDYN_CODEX_BIN_SHA256": true, "WARDYN_IDLE_PID": true,
+	"WARDYN_NOVNC_GEOMETRY": true, "WARDYN_REC_WRAP": true,
+	"WARDYN_SESSION_START": true, "WARDYN_SSH_KEYFILES": true,
 	"WARDYN_LIVE_ADO_MEMBER_EMAIL": true, "WARDYN_LIVE_ADO_PROXY_URL": true,
 }
 
@@ -419,7 +434,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 }
 
 // envDocE2EShellFiles are the Playwright-e2e-backend shell scripts whose
-// WARDYN_E2E_* reads must also stay documented — F063. readVars above walks
+// WARDYN_E2E_* reads must also stay documented. readVars above walks
 // only non-test .go under envDocRoots, so a var read EXCLUSIVELY by one of
 // these scripts (WARDYN_E2E_PG_HOSTPORT chief among them: the one var an
 // operator must set to run the UI e2e gate on a shared box) was invisible to
@@ -430,7 +445,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 // Deliberately a curated FILE list, not a recursive scripts/+test/ walk: the
 // rest of scripts/ (the demo-recording and ci-run harnesses chief among them)
 // reads dozens of its own WARDYN_* vars that are real, but out of scope for
-// F063 and not audited here — documenting those is separate work with its
+// this guard and not audited here — documenting those is separate work with its
 // own review, not a side effect of closing this gap.
 var envDocE2EShellFiles = []string{
 	"scripts/e2e-backend.sh",
@@ -485,12 +500,80 @@ func TestEnvDoc_E2EShellVarsAreDocumented(t *testing.T) {
 	}
 }
 
+// envDocOperatorScriptFiles + envDocOperatorScriptDirs are the shell/Dockerfile
+// surfaces #202 brought under the forward ratchet, beyond envDocRoots (Go) and
+// envDocE2EShellFiles (the Playwright e2e backend): install.sh, scripts/ci-run.sh,
+// and every file under deploy/images/** — the corp-image authoring surface
+// (Dockerfiles plus the agent-run scripts they bake in). Before this landed,
+// 13 WARDYN_* names read here were undocumented anywhere and 11 more
+// (WARDYN_CI_*) were documented only in docs/CI.md, which no ratchet read —
+// both equally invisible to a name that stopped being read, or started being
+// read, under deploy/images/.
+var envDocOperatorScriptFiles = []string{
+	"install.sh",
+	"scripts/ci-run.sh",
+}
+
+// envDocOperatorScriptDirs are walked recursively — every regular file
+// (Dockerfile, shell script, or otherwise), since deploy/images/** names
+// appear in both kinds.
+var envDocOperatorScriptDirs = []string{"deploy/images"}
+
+// readOperatorScriptVars returns every WARDYN_* token found across
+// envDocOperatorScriptFiles and envDocOperatorScriptDirs.
+func readOperatorScriptVars(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, f := range envDocOperatorScriptFiles {
+		for _, m := range wardynVarLit.FindAllString(readRepo(t, filepath.Join(root, f)), -1) {
+			seen[m] = true
+		}
+	}
+	for _, d := range envDocOperatorScriptDirs {
+		err := filepath.WalkDir(filepath.Join(root, d), func(path string, de os.DirEntry, err error) error {
+			if err != nil || de.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range wardynVarLit.FindAllString(string(b), -1) {
+				seen[m] = true
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", d, err)
+		}
+	}
+	return seen
+}
+
+// TestEnvDoc_OperatorScriptsVarsAreDocumented is the forward ratchet's third
+// shell-side leg (#202): every WARDYN_* token read by install.sh,
+// scripts/ci-run.sh or anything under deploy/images/** must appear as a
+// literal token in docs/ENV.md OR docs/CI.md — scripts/ci-run.sh's own
+// WARDYN_CI_* knobs are the CI doc's registry already (docs/ENV.md's "Setup /
+// operator scripts" table points there rather than duplicating it), so this
+// test reads both files rather than forcing a second copy of that table.
+func TestEnvDoc_OperatorScriptsVarsAreDocumented(t *testing.T) {
+	root := repoRoot(t)
+	documented := documentedVars(readEnvDoc(t, root) + "\n" + readRepo(t, filepath.Join(root, "docs", "CI.md")))
+	for v := range readOperatorScriptVars(t, root) {
+		if documented[v] {
+			continue
+		}
+		t.Errorf("%s is read by install.sh, scripts/ci-run.sh or something under deploy/images/** but does not appear anywhere in docs/ENV.md or docs/CI.md — add a row (or a prose mention) for it", v)
+	}
+}
+
 func readEnvDoc(t *testing.T, root string) string {
 	t.Helper()
 	return readRepo(t, filepath.Join(root, "docs", "ENV.md"))
 }
 
-// TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs — B12b-F3+F8: a knob
+// TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs: a knob
 // runner.ProxySidecarEnvKnobs forwards to a sidecar (docker Env / k8s pod
 // Env — see that function's doc comment) first has to reach wardynd's OWN
 // process env, and compose never inherits the operator's shell: unless

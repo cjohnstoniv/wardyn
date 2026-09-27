@@ -125,7 +125,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 	for range 3 {
 		// The state is still REPORTED: the mark suppresses the operator's row,
 		// never the member's answer. A /me that stopped saying
-		// groups_snapshot_stale would be F273 all over again.
+		// groups_snapshot_stale would be the original defect all over again.
 		if _, _, reason := meDriveBody(t, srv, ctx); reason != driveUnavailableGroups {
 			t.Fatalf("user_drive_unavailable = %q, want %q — the mark must suppress the audit row, not the "+
 				"answer the member acts on", reason, driveUnavailableGroups)
@@ -161,8 +161,8 @@ func TestMePollsAreNotDenials(t *testing.T) {
 
 	// …and the shape where the DRIVE seam is the only site that can speak: no
 	// group-tier governance assignment, so the ceiling resolves fine and the
-	// refusal is decided at the drives door. This is the deployment F317 is
-	// about, where an unaudited drive seam left the denial stream entirely empty.
+	// refusal is decided at the drives door. This is the deployment
+	// where an unaudited drive seam left the denial stream entirely empty.
 	t.Run("the drive seam records for an enforcement caller", func(t *testing.T) {
 		st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: false}
 		srv, rec := driveRunServer(st, "docker")
@@ -173,7 +173,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 		got := driveDenialReasons(t, rec)
 		if len(got) != 1 || got[0] != "runs.drive" {
 			t.Errorf("one refused launch wrote %v, want exactly one runs.drive row — the display-read mark "+
-				"must not reach an enforcement caller, or F317 is closed by silencing the seam rather than "+
+				"must not reach an enforcement caller, or the missing row is closed by silencing the seam rather than "+
 				"scoping it", got)
 		}
 	})

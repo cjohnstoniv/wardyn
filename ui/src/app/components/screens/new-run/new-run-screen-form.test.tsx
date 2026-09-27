@@ -388,6 +388,17 @@ describe("NewRunScreen — Preflight", () => {
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
   });
 
+  // #497: the alert speaks the sr-only "Preflight failed" first, so the
+  // fallback for an error with no message must not repeat it.
+  it("an error with no message falls back to a sentence that doesn't repeat the spoken prefix", async () => {
+    preflightRunMock.mockRejectedValue(new Error(""));
+    const button = await readyScreen();
+    await user.click(button);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/^Preflight failed No reason was given\.$/);
+  });
+
   it("disables the button and shows a loading spinner while in flight", async () => {
     let resolve: (v: unknown) => void = () => {};
     preflightRunMock.mockReturnValue(
