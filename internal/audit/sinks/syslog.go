@@ -33,16 +33,36 @@ import (
 // hung collector — nor by a wedged local syslog daemon or a full /dev/log
 // datagram peer buffer (a unixgram send blocks when the receiver's buffer is
 // full) from parking the caller.
-const (
-	// syslogBufferSize is the capacity of the in-process event queue. Events that
-	// would overflow the buffer are dropped and counted (never silently discarded
-	// — Drops() exposes the count).
-	syslogBufferSize = 1024
-	// syslogWriteTimeout bounds a single blocked write. If the background writer
-	// is stuck on s.w.Info for longer than this, the event is counted as dropped
-	// so the writer can move on and never wedge permanently on one write.
-	syslogWriteTimeout = 2 * time.Second
-)
+// syslogBufferSize is the capacity of the in-process event queue. Events that
+// would overflow the buffer are dropped and counted (never silently discarded
+// — Drops() exposes the count).
+const syslogBufferSize = 1024
+
+// syslogWriteTimeoutNS bounds a single blocked write. If the background writer
+// is stuck on s.w.Info for longer than this, the event is counted as dropped
+// so the writer can move on and never wedge permanently on one write.
+//
+// An atomic.Int64 of nanoseconds (not a const) purely so a test can shrink it
+// instead of waiting out the real 2s to exercise the timeout-counts-as-a-drop
+// path, without racing the background writeLoop goroutine that reads it
+// concurrently with a later test's own restore — see
+// TestSyslogWriteTimeout_ProductionValueUnchanged for the guard that the
+// production default itself is untouched. syslogWriteTimeout/
+// setSyslogWriteTimeout wrap it so call sites read like the old
+// time.Duration var.
+var syslogWriteTimeoutNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(2 * time.Second))
+	return &v
+}()
+
+func syslogWriteTimeout() time.Duration {
+	return time.Duration(syslogWriteTimeoutNS.Load())
+}
+
+func setSyslogWriteTimeout(d time.Duration) (prev time.Duration) {
+	return time.Duration(syslogWriteTimeoutNS.Swap(int64(d)))
+}
 
 // syslogWriter is the minimal write surface a SyslogSink needs; *syslog.Writer
 // satisfies it. It exists so tests can inject a wedged writer and prove Emit
@@ -183,7 +203,8 @@ func (s *SyslogSink) timedWrite(b []byte) {
 	done := make(chan error, 1)
 	go func() { done <- s.w.Info(string(b)) }()
 
-	timer := time.NewTimer(syslogWriteTimeout)
+	timeout := syslogWriteTimeout()
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
@@ -199,7 +220,7 @@ func (s *SyslogSink) timedWrite(b []byte) {
 		slog.Error("sinks.syslog: write to collector timed out",
 			slog.String("network", s.Network),
 			slog.String("addr", s.Addr),
-			slog.Duration("timeout", syslogWriteTimeout),
+			slog.Duration("timeout", timeout),
 			slog.Int64("drops", s.drops.Load()))
 	}
 }

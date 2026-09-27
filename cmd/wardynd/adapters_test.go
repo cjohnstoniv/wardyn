@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -249,17 +250,18 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 	}
 }
 
-// TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies pins that a run-less
-// audit row (ev.RunID == nil — policy.inline, secret.*, an admin action) is
-// still masked: a guard like `m.reg != nil && ev.RunID != nil` would skip the
-// whole block whenever RunID is nil. It is masked against the process-global
-// corpus (Bedrock SSO / subscription creds registered via AddGlobal) —
-// Snapshot(uuid.Nil) returns exactly that (globals only; uuid.Nil is never a
-// real run's perRun key).
+// TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies is
+// W20-groundtruth-mapper-2: a run-less audit row (ev.RunID == nil —
+// policy.inline.apply, secret.*, an admin action) used to bypass masking ENTIRELY,
+// because the old guard (`m.reg != nil && ev.RunID != nil`) short-circuited
+// the whole block whenever RunID was nil. It must still be masked against the
+// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered via
+// AddGlobal) — Snapshot(uuid.Nil) returns exactly that (globals only; uuid.Nil
+// is never a real run's perRun key).
 func TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	const secret = "ghp_supersecrettoken123"
-	reg.AddGlobal([]byte(secret))
+	reg.AddGlobal("", "test-credential", time.Now(), []byte(secret))
 
 	inner := &fakeAuditRecorder{}
 	rec := maskingRecorder{inner: inner, reg: reg}

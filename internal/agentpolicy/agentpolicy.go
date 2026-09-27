@@ -141,11 +141,14 @@ const (
 // content is the exact file body, trailing newline included; the delivery
 // contract adds nothing to it.
 //
+// hold is whether the run launches on agent-run's hold lane
+// (WARDYN_TOOL_APPROVALS=hold), whatever level, or no level, it resolved to.
+//
 // ok=false is the ORDINARY answer, not an error: every agent but claude-code
 // has no managed-settings mechanism to express a level through, and the two
 // rungs that constrain nothing are better served by no file than by an empty
 // one. A caller that gets ok=false has nothing to deliver and nothing to fix.
-func ForAgent(agent string, level types.AutonomyLevel) (path string, content []byte, ok bool) {
+func ForAgent(agent string, level types.AutonomyLevel, hold bool) (path string, content []byte, ok bool) {
 	// An allowlist of one, for agentHasHoldLane's reason
 	// (internal/api/runs_autonomy.go): a BYOA image or a custom agent has no
 	// Wardyn launcher and no managed-settings parser, so a denylist would
@@ -156,10 +159,21 @@ func ForAgent(agent string, level types.AutonomyLevel) (path string, content []b
 	}
 	var doc string
 	switch {
+	case hold && HoldTakesOver(level):
+		// A hold run whose level brings no gate-protecting document (#358).
+		// The hold lane's gate is a gate only if nothing answers a tool call
+		// before it, and a repository or user `permissions.allow` rule does:
+		// the CLI resolves it before consulting the permission prompt tool,
+		// and the agent can write both files. The L1 document is the one
+		// written and verified for exactly this lane (its comment above).
+		// Its bypass refusal costs a hold run nothing: the hold branch never
+		// passes --dangerously-skip-permissions, and must not.
+		doc = claudeL1
 	case level == "":
 		// No profile, no rubric, or a rubric that caps nothing at this
-		// posture. Byte for byte the run this deployment launched before the
-		// feature existed — the absent-row rule every governance limit follows.
+		// posture, off the hold lane. Byte for byte the run this deployment
+		// launched before the feature existed — the absent-row rule every
+		// governance limit follows.
 		return "", nil, false
 	case level == types.AutonomyL3:
 		// The top rung permits task_mode=exec, the door that routes around
@@ -181,4 +195,13 @@ func ForAgent(agent string, level types.AutonomyLevel) (path string, content []b
 		doc = claudeL0
 	}
 	return ClaudeCodeManagedSettingsPath, []byte(doc), true
+}
+
+// HoldTakesOver reports whether a hold run at level gets the hold lane's
+// document (L1's) instead of what its level brings: no level, and the two
+// rungs whose own answer leaves the gate unprotected (L3 no file, L2 no
+// allowManagedPermissionRulesOnly). The one spelling of that set, for ForAgent
+// and for a caller naming why a run got its file.
+func HoldTakesOver(level types.AutonomyLevel) bool {
+	return level == "" || level == types.AutonomyL2 || level == types.AutonomyL3
 }

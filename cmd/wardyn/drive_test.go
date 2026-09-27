@@ -161,22 +161,21 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 }
 
 // runDriveGet runs `drive get` against url and returns what it printed and
-// any error. `--json` output goes through emitJSON, which targets os.Stdout
-// directly rather than cobra's OutOrStdout sink (run_wait_ready_test.go,
-// sshkey_test.go note the same thing) — captureStdout (commands_test.go) is
-// this tree's existing fix for that.
+// any error. `--json` output goes through emitJSON, which writes to
+// cmd.OutOrStdout() (#200), so cobra's own SetOut sink captures it directly.
 func runDriveGet(t *testing.T, url string) (stdout string, err error) {
 	t.Helper()
 	root := rootCmd()
+	out := &strings.Builder{}
 	root.SetArgs([]string{"drive", "get", "--url", url, "--token", "tok"})
+	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
-	stdout = captureStdout(t, func() { err = root.Execute() })
-	return stdout, err
+	err = root.Execute()
+	return out.String(), err
 }
 
 // runDriveApply marshals doc to a temp file, runs `drive apply` on it, and
-// returns what it printed and any error (see runDriveGet on why stdout needs
-// captureStdout).
+// returns what it printed and any error (see runDriveGet).
 func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout string, err error) {
 	t.Helper()
 	b, merr := json.Marshal(doc)
@@ -188,10 +187,12 @@ func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout str
 		t.Fatalf("write doc: %v", werr)
 	}
 	root := rootCmd()
+	out := &strings.Builder{}
 	root.SetArgs([]string{"drive", "apply", path, "--url", url, "--token", "tok"})
+	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
-	stdout = captureStdout(t, func() { err = root.Execute() })
-	return stdout, err
+	err = root.Execute()
+	return out.String(), err
 }
 
 // seedDrives exercises every types.DriveBackend, not just docker_volume, the

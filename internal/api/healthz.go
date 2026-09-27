@@ -34,7 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
-// ebpfHeartbeatTTL is how recent the most recent kernel.sensor.heartbeat must
+// ebpfHeartbeatTTL is how recent the most recent kernel.sensor.ping must
 // be for /healthz to report ebpf_groundtruth=healthy. Past it, the stream is
 // degraded; with no heartbeat ever, it is unavailable. This makes the overclaim
 // structurally impossible: the stream is "healthy" only while events arrive.
@@ -67,7 +67,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// reads /healthz before anyone is authenticated. The capability enumeration
 		// below is NOT "admin-gated on /setup/status" — that endpoint is
 		// classMember, and the class list is member-visible there too; what
-		// redactSetupStatusForMember withholds is the operator DETAIL (driver name,
+		// redactSetupStatusForUser withholds is the operator DETAIL (driver name,
 		// per-class substrates, the ephemeral-disk enforcement word). What keeps
 		// THIS endpoint honest is that it composes its body field by field, so a
 		// field added to the setup status never appears here by accident.
@@ -112,7 +112,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// what this build's registries actually hold. Runtime facts only.
 		"components": s.cfg.Components,
 		// ebpf_groundtruth is the honest health of the SECOND audit stream. It
-		// is driven by the most recent kernel.sensor.heartbeat: healthy only when
+		// is driven by the most recent kernel.sensor.ping: healthy only when
 		// beats are fresh AND real kernel events have been observed, idle when the
 		// sidecar is alive but blind (no events), degraded if the beat is stale,
 		// unavailable if no sensor has ever beaten. The overclaim ("we have eBPF
@@ -122,7 +122,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// inspection capability is built in. Whether a given run actually scans
 		// (and in which mode) is per-run policy (RunPolicySpec.LLMInspection),
 		// and per-decision coverage is reported on the egress decision/audit
-		// stream (scanned / tunneled-opaque / llm.scan.blind), not here.
+		// stream (scanned / tunneled-opaque / llm.scan.bypass), not here.
 		"llm_egress_inspection": "available",
 		// ssh discloses the gateway's presence + the two facts the run-detail
 		// "Connect via SSH" pane needs to render its command/config block before
@@ -163,6 +163,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}
+	// org_federation is present ONLY on a hybrid laptop (WARDYN_ORG_URL set),
+	// so every other deployment's body is byte-for-byte what it was
+	// (TestHealthzOrgFederation_GoldenWhenOff). Two facts and no more: this
+	// endpoint is anonymous, so the device id and the org URL never appear.
+	if s.cfg.OrgFederation != nil {
+		st := s.cfg.OrgFederation()
+		body["org_federation"] = map[string]any{"enrolled": !st.Revoked, "lag": st.Lag()}
+	}
 	// sign_in_help_text / sign_in_help_url are the admin's own "what to do
 	// next" for the four sign-in refusals a person cannot clear alone. PUBLIC
 	// by design — the reader has, by definition, not signed in — and written
@@ -182,7 +190,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // ebpfGroundtruthStatus reports the eBPF/Tetragon ground-truth stream's health
-// from the latest kernel.sensor.heartbeat:
+// from the latest kernel.sensor.ping:
 //
 //	unavailable — no heartbeat ever (no sensor configured on this host)
 //	degraded    — last heartbeat older than ebpfHeartbeatTTL (sensor stalled/dead)

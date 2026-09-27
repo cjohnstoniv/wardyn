@@ -121,11 +121,11 @@ test.describe.configure({ mode: "serial" });
 // silently flipped to retrying.
 
 /** The 409 body of POST /setup/harness-login inside the no-credential preview
- *  (internal/api/membermode_preview.go's memberPreviewSignInRefusal — Go-side
+ *  (internal/api/membermode_preview.go's userViewPreviewSignInRefusal — Go-side
  *  and unexported, so there is no TS constant to import; lane member-preview's
  *  canon hands the spelling over verbatim and pins it from the Go side). */
 const MEMBER_PREVIEW_SIGNIN_REFUSAL =
-  "Exit member mode to sign in to AWS — the capture would land on your own identity.";
+  "Exit the user view to sign in to AWS — the capture would land on your own identity.";
 
 /** The kind context/namespace the walk installed into, so case E can taint the
  *  node and read the run pod's phase. scripts/kind-sso-walk.sh exports both. */
@@ -600,7 +600,7 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
 
   const after = await ownAWSRow(page);
   expect(after.source_run_id, "the stored capture did not move to the retry's run").not.toBe(before.source_run_id);
-  // source_run_id is the WHOLE witness, by design: redactSetupStatusForMember
+  // source_run_id is the WHOLE witness, by design: redactSetupStatusForUser
   // keeps it on the caller's own per_user aws row and strips captured_at
   // ("operator credential-lifecycle detail"), so a member's session — the only
   // one this case may use — never sees a capture time to compare.
@@ -1089,9 +1089,9 @@ test("F (member-preview): an admin previews the state a member is in before they
   await dexSignIn(page, ADMIN_EMAIL);
   expect((await me(page)).operator).toBe(true);
   // The menu item is GRANTED by the server, not decided by the console: /me
-  // publishes member_preview_available and it is true only under a per_user
+  // publishes user_preview_available and it is true only under a per_user
   // roster row — which this deployment has.
-  expect((await me(page)).member_preview_available, "the walk's roster row is per_user; the preview must be offered").toBe(
+  expect((await me(page)).user_preview_available, "the walk's roster row is per_user; the preview must be offered").toBe(
     true,
   );
 
@@ -1108,7 +1108,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.goto("/admin/permissions");
   await page.getByRole("button", { name: USER_PREVIEW.MENU_NEW }).click();
   await expect(page.getByText(USER_PREVIEW.BANNER)).toBeVisible({ timeout: 60_000 });
-  await expect.poll(async () => (await me(page)).member_mode_no_credential, { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await me(page)).user_view_no_credential, { timeout: 30_000 }).toBe(true);
 
   // The state every new member is in, and the one the plain toggle structurally
   // cannot show: it clamps the role and leaves the subject alone, so every
@@ -1125,7 +1125,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // `intro` and POST /setup/harness-login is sent only by "Start login"
   // (harness-login-pane.tsx's launch) — so a case that clicked the CTA and then
   // waited for the 409 sentence would have waited for a request it never made.
-  // The sentence is Go-side (memberPreviewSignInRefusal) and reaches the console
+  // The sentence is Go-side (userViewPreviewSignInRefusal) and reaches the console
   // as the pane's error, which renders in its role="alert" region.
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
   await page.getByRole("button", { name: "Start login" }).click();

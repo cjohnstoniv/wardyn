@@ -150,7 +150,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	var scanner *contentscan.Engine
 	if spec := cfg.Policy.LLMInspection; spec != nil {
 		for _, v := range spec.WorkspaceSecretValues {
-			procRegistry.AddGlobal([]byte(v))
+			procMask([]byte(v))
 		}
 		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(uuid.Nil))
 		if eerr != nil {
@@ -192,7 +192,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 	if up != nil {
 		for _, v := range up.maskValues() {
-			procRegistry.AddGlobal(v)
+			procMask(v)
 		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))

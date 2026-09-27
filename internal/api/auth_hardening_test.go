@@ -201,11 +201,11 @@ func TestIsLoopbackRemoteAddr(t *testing.T) {
 	}
 }
 
-// #19a: auth.failed audit event
+// ─── #19a: auth.fail audit event ─────────────────────────────────────────
 
-// TestAdminAuth401EmitsAuthFailed: each of adminAuth's three 401 branches
-// must emit auth.failed (actor system, content-free reason + path + source
-// IP) rather than fail silently.
+// TestAdminAuth401EmitsAuthFailed is the regression for #19a: adminAuth's
+// three 401 branches used to fail silently. Each must now emit auth.fail
+// (actor system, content-free reason + path + source IP).
 func TestAdminAuth401EmitsAuthFailed(t *testing.T) {
 	h := newHarness(t)
 
@@ -215,12 +215,12 @@ func TestAdminAuth401EmitsAuthFailed(t *testing.T) {
 	}
 	var ev *types.AuditEvent
 	for i := range h.audit.events {
-		if h.audit.events[i].Action == "auth.failed" {
+		if h.audit.events[i].Action == "auth.fail" {
 			ev = &h.audit.events[i]
 		}
 	}
 	if ev == nil {
-		t.Fatalf("no auth.failed audit event recorded; events = %+v", h.audit.events)
+		t.Fatalf("no auth.fail audit event recorded; events = %+v", h.audit.events)
 	}
 	if ev.ActorType != types.ActorSystem {
 		t.Errorf("ActorType = %q, want system", ev.ActorType)
@@ -243,8 +243,8 @@ func TestAdminAuth401EmitsAuthFailed(t *testing.T) {
 	}
 }
 
-// TestAuthFailedRateLimited pins the flood guard: a scanner throwing rapid
-// 401s must not get one auth.failed row per
+// TestAuthFailedRateLimited is the regression for the flood-guard half of
+// #19a: a scanner throwing rapid 401s must not get one auth.fail row per
 // request — the process-global token bucket caps it well below the request
 // count.
 func TestAuthFailedRateLimited(t *testing.T) {
@@ -256,15 +256,15 @@ func TestAuthFailedRateLimited(t *testing.T) {
 	}
 	var got int
 	for i := range h.audit.events {
-		if h.audit.events[i].Action == "auth.failed" {
+		if h.audit.events[i].Action == "auth.fail" {
 			got++
 		}
 	}
 	if got == 0 {
-		t.Fatal("expected at least one auth.failed event")
+		t.Fatal("expected at least one auth.fail event")
 	}
 	if got >= attempts {
-		t.Errorf("auth.failed count = %d for %d rapid-fire 401s, want the limiter to have dropped most of them", got, attempts)
+		t.Errorf("auth.fail count = %d for %d rapid-fire 401s, want the limiter to have dropped most of them", got, attempts)
 	}
 }
 

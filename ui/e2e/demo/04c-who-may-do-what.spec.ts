@@ -54,7 +54,7 @@ test("V04c act 1 — the map: who signs in, and as what", async () => {
   await caption(page, "We sign in as the admin. Who is an admin was decided by a role map in the install's config — one line per person.");
   await beat(page, PACE.read);
 
-  await page.goto("/setup?step=people");
+  await page.goto("/admin/setup?step=people");
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible({ timeout: 30_000 });
   await spotlight(page, page.getByText("Multi-user").first());
   await caption(page, "The People step is the claim: multi-user, role-mapped, via your identity provider.");

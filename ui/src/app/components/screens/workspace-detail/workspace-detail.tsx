@@ -21,14 +21,16 @@ import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { Button } from "../../ui/button";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { useCanMutate } from "../../wardyn/operator-context";
-import { KIND_META, workspaceImage } from "../workspaces";
+import { useCanMutate, useSecurityOperator } from "../../wardyn/operator-context";
+import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
@@ -44,7 +46,7 @@ const POLL_MS = 2500;
 // approved mock verbatim for a repo (`repo · github.com/acme/api · main`).
 function detailSourceLine(ws: Workspace): string {
   if (!ws.source) return "empty — discarded after the run";
-  const kindLabel = KIND_META[ws.kind]?.label ?? ws.kind;
+  const kindLabel = kindMetaOf(ws.kind)?.label ?? ws.kind;
   return ws.kind === "repo" && ws.ref ? `${kindLabel} · ${ws.source} · ${ws.ref}` : `${kindLabel} · ${ws.source}`;
 }
 
@@ -75,6 +77,7 @@ export function WorkspaceDetailScreen() {
   // tier, and it fails closed on an absent owner or an unresolved /me. Every
   // OTHER control on this page keeps its own (security/operator) gate.
   const canMutate = useCanMutate(ws?.owned_by);
+  const securityOperator = useSecurityOperator();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
@@ -127,6 +130,19 @@ export function WorkspaceDetailScreen() {
         // hasLlmPath(READY_FALLBACK) is always false — `unreachable` is
         // checked first so a daemon that simply never answered doesn't read
         // as "no model provider configured".
+        //
+        // M-6/QM-10 known gap (not verified at runtime): hasLlmPath(s) is the
+        // DEPLOYMENT's model path, not this caller's own connection.
+        // ModelAccessNote's Admin-view branch (record-pane-chips.tsx) reads
+        // this same value as `modelReady`, i.e. "is MY connection
+        // configured" — so it can show the "connect your own" line when the
+        // real gap is a missing deployment provider, and stay silent when
+        // only the admin's own connection (status.model_access, the field
+        // member-getting-started.tsx's "Your model key" section keys on) is
+        // what's missing. Stays deployment-level until MP wires the admin's
+        // own model_access into this pane — do not "fix" this by swapping in
+        // status.model_access without first confirming it answers the
+        // ADMIN's own state, not a member's, for an Admin-view caller.
         setLlmReady(s.unreachable ? null : hasLlmPath(s));
         setHostClasses(s.runner?.confinement_classes ?? null);
       })
@@ -322,7 +338,7 @@ export function WorkspaceDetailScreen() {
     );
   }
 
-  const kindMeta = KIND_META[ws.kind] ?? KIND_META.local_dir;
+  const kindMeta = kindMetaOf(ws.kind) ?? KIND_META.local_dir;
   const image = imageRow(ws);
 
   return (
@@ -410,6 +426,18 @@ export function WorkspaceDetailScreen() {
             }}
           />
         </DetailSectionCard>
+
+        {/* UT-7b: kind workspace, value = the workspace's own id — one more
+            resource editor carrying the §2.6 "Available to" control, wired
+            here rather than into the /workspaces list row (a table row has
+            no room for it; this detail page is the workspace's editor).
+            Security admins and super admins only, like the control itself:
+            a person opening their own workspace gets no empty card. */}
+        {securityOperator && (
+          <DetailSectionCard title={AVAILABILITY.WORKSPACE_CARD_TITLE} subtitle={AVAILABILITY.WORKSPACE_CARD_SUBTITLE}>
+            <AvailabilityControl kind="workspace" value={ws.id} />
+          </DetailSectionCard>
+        )}
 
         <AllowedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
         <DeniedHostsCard ws={ws} onWorkspaceUpdated={setWs} />

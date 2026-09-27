@@ -43,7 +43,7 @@ import (
 // A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchRun.
 //
-// member is the run's member-mount posture (memberMountPosture, workspace_refs.go).
+// member is the run's member-mount posture (userMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
 // driver's bind-time within-roots check keys on. Everything NOT in that set is
 // operator/Wardyn-authored (the blessed credential mounts copied from the
@@ -61,7 +61,7 @@ func driveTargetReserved(target string) bool {
 	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
 }
 
-func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberMountPosture) []runner.Mount {
+func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
 		// The resident ~/.claude subscription mount is a MODEL-RUN-ONLY
@@ -422,7 +422,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// InteractiveStart above is gated on `interactive`: an interactive run's
 	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
 	// matter what the request said.
-	if !p.Interactive && p.ToolApprovals == "hold" {
+	if p.holdLane() {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
 		// The same ceiling the approval-expiry sweeper actually expires a
 		// PENDING approval at (Config.ApprovalExpiryAfter — see the field's

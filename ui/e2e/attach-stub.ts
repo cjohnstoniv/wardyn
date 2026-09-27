@@ -24,7 +24,7 @@
 // other widgets on the page make) still comes from the real backend, so this
 // stays scoped to this one spec file and touches no other spec's fixture.
 import type { BrowserContext, Page, WebSocketRoute } from "@playwright/test";
-import { ADMIN_TOKEN } from "./fixtures";
+import { ADMIN_TOKEN, TOKEN_KEY } from "./fixtures";
 import type { AttachHolder, AttachModeMsg } from "../src/app/lib/types/runs";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -75,9 +75,26 @@ export async function stubAttachTicket(target: Page | BrowserContext, runId: str
   );
 }
 
-/** POST /api/v1/runs/{id}/attach/takeover — the server's own 200. */
-export async function stubTakeover(target: Page | BrowserContext, runId: string): Promise<void> {
-  await target.route(`**/api/v1/runs/${runId}/attach/takeover`, (route) => route.fulfill({ json: {} }));
+/** POST /api/v1/runs/{id}/attach/takeover — the server's own 200. Defaults to
+ *  `{}` (no `promoted` field, so `doTakeover` reads it as falsy and takes its
+ *  evict-then-reconnect path) — the shape every existing caller relies on.
+ *  Pass `promoted: true` for the in-place-promotion path (#507): the response
+ *  then matches the server's real shape,
+ *  `{taken_over, previous_holder, previous_source, promoted}`. */
+export async function stubTakeover(
+  target: Page | BrowserContext,
+  runId: string,
+  opts?: { promoted?: boolean; previousHolder?: string; previousSource?: string },
+): Promise<void> {
+  const body = opts?.promoted
+    ? {
+        taken_over: true,
+        previous_holder: opts.previousHolder ?? "bob@e2e.example",
+        previous_source: opts.previousSource ?? "web",
+        promoted: true,
+      }
+    : {};
+  await target.route(`**/api/v1/runs/${runId}/attach/takeover`, (route) => route.fulfill({ json: body }));
 }
 
 // The attach-mode control frame the daemon sends as a TEXT frame on every
@@ -118,7 +135,7 @@ export async function stubAttachSocket(
  *  page in this BrowserContext once the FIRST page has written the admin
  *  token, but a tab opened before that write (or as the very first page of a
  *  fresh context) needs its own copy — same key `fixtures.ts`'s own `test`
- *  fixture writes, mirrored here since that key is not exported. */
+ *  fixture writes, imported rather than re-typed (#510-F11). */
 export async function newAuthedPage(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
   await page.addInitScript(
@@ -129,7 +146,7 @@ export async function newAuthedPage(context: BrowserContext): Promise<Page> {
         /* private mode — ignore */
       }
     },
-    ["wardyn_admin_token", ADMIN_TOKEN],
+    [TOKEN_KEY, ADMIN_TOKEN],
   );
   return page;
 }

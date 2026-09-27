@@ -2,6 +2,7 @@
   "bare": [
     "age_key",
     "agent_image",
+    "claude_signin_image",
     "env_builder",
     "host_proxy",
     "llm_provider",
@@ -13,6 +14,7 @@
     "age_key",
     "agent_image",
     "bedrock_provider",
+    "claude_signin_image",
     "env_builder",
     "host_proxy",
     "llm_provider",
@@ -23,6 +25,7 @@
   "with_github_app_secrets": [
     "age_key",
     "agent_image",
+    "claude_signin_image",
     "env_builder",
     "host_proxy",
     "llm_provider",
@@ -33,6 +36,7 @@
   "with_k8s_runner": [
     "age_key",
     "agent_image",
+    "claude_signin_image",
     "env_builder",
     "host_proxy",
     "k8s_egress_containment",
@@ -44,6 +48,7 @@
   "with_oidc": [
     "age_key",
     "agent_image",
+    "claude_signin_image",
     "env_builder",
     "host_proxy",
     "llm_provider",
@@ -57,6 +62,7 @@
     "age_key",
     "agent_image",
     "artifact_repo",
+    "claude_signin_image",
     "env_builder",
     "host_proxy",
     "llm_provider",

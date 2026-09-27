@@ -1,0 +1,166 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model providers canon</title>
+<!--
+  Model-providers mock, the canon (#537, #543) · static, for owner review.
+  One row per user-visible string on provider-editor.html and door-cards.html, with a stable
+  id. Once approved, each console row becomes the app's string byte for byte (the lanes
+  transcribe docs/design/model-providers-prompt.md §7, which carries the same rows).
+  Status: Packet A–E = frozen in that multi-provider packet (approved 2026-09-22); Reused =
+  shipped in ui/src today; Changed = shipped today, new text approved; New = this packet,
+  waiting on its decision; Wire = composed by the server and rendered verbatim, listed for
+  reference and frozen by its server issue, not here.
+  A {placeholder} is filled by the caller; the text inside the braces is the fixture.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Model providers — canon</h1>
+    <div class="sub">Every string the two screens show, one row each. Approved rows become app strings byte for byte.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a href="provider-editor.html">Provider editor</a><a href="door-cards.html">Refusals and doors</a><a class="cur" href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>Table 1</span><b>The provider editor (#537)</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td class="id">MODEL_PROVIDERS.ADD_CTA</td><td class="str">Add model provider</td><td class="st"><span class="tag-reused">Packet A</span></td><td>Editor title, new provider</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.KIND_TITLE</td><td class="str">What kind of model provider?</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Kind step</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.KIND.ANTHROPIC_API_KEY</td><td class="str">Anthropic API key</td><td class="st"><span class="tag-reused">Packet A</span></td><td>Kind step; name default; edit chip</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.KIND.OPENAI_API_KEY</td><td class="str">OpenAI API key</td><td class="st"><span class="tag-reused">Packet A</span></td><td>Kind step; name default; edit chip</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.KIND.CUSTOM_ENDPOINT</td><td class="str">Your own endpoint</td><td class="st"><span class="tag-reused">Packet A</span></td><td>Kind step; name default; edit chip</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.KIND.ANTHROPIC_SUBSCRIPTION</td><td class="str">Claude subscription</td><td class="st"><span class="tag-reused">Packet A</span></td><td>Kind step, decision 1's other option only (#538 builds it)</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.KIND.BEDROCK</td><td class="str">Amazon Bedrock</td><td class="st"><span class="tag-reused">Packet A</span></td><td>Kind step, decision 1's other option only (#538 builds it)</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING</td><td class="str">Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Kind step, decision 1's other option only (#538, E4)</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.PROVIDES_KEY</td><td class="str">Each person adds their own key.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E1, E5</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.PROVIDES_TOKEN</td><td class="str">Each person adds their own token. You set how it is sent.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E2, edit</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.NAME</td><td class="str">Name</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Every kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.NAME_HINT</td><td class="str">What people see when they choose it.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Every kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ROUTE_THROUGH</td><td class="str">Route through a gateway (optional)</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Key kinds</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host)</td><td class="str">Send requests to your gateway instead of {api.anthropic.com}. Each person's key goes with them, and they are told where it goes.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Key kinds; host is <span class="mono">api.anthropic.com</span> or <span class="mono">api.openai.com</span></td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.BASE_URL</td><td class="str">Base URL</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Endpoint kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.BASE_URL_HINT</td><td class="str">https only. Wardyn sends this provider's requests here.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Endpoint kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.AUTH_HEADER</td><td class="str">Auth header</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Endpoint kind; default value <span class="mono">Authorization</span></td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.VALUE_FORMAT</td><td class="str">Value format</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Endpoint kind; default value <span class="mono">Bearer {token}</span></td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.USE_WITH</td><td class="str">Use with</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Every kind</td></tr>
+        <tr><td class="id">harnessCatalog display name</td><td class="str">Claude Code · Codex CLI</td><td class="st"><span class="tag-reused">Reused</span></td><td>Use with rows</td></tr>
+        <tr><td class="id">INTEGRATIONS.X_KEY_CODEX</td><td class="str">Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.</td><td class="st"><span class="tag-reused">Reused</span></td><td>E1 (ui/src/app/lib/integrations.ts)</td></tr>
+        <tr><td class="id">INTEGRATIONS.X_OPENAI_CLAUDE</td><td class="str">Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting.</td><td class="st"><span class="tag-reused">Reused</span></td><td>E5 (ui/src/app/lib/integrations.ts)</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.MODEL</td><td class="str">Model</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Under a ticked agent</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.MODEL_HINT</td><td class="str">Leave empty for the agent's own default.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Under a ticked agent</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.PATH</td><td class="str">Path</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Endpoint kind, under a ticked agent</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.PATH_HINT_CLAUDE</td><td class="str">Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E2</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.PATH_HINT_CODEX</td><td class="str">Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E2</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.CANCEL</td><td class="str">Cancel</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Every dialog</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.SAVE</td><td class="str">Save</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Editor; E9 confirm</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.REMOVE</td><td class="str">Remove</td><td class="st"><span class="tag-reused">Packet B</span></td><td>Edit footer; E7, E8 confirm</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.SAVED_TOAST</td><td class="str">Provider saved.</td><td class="st"><span class="tag-new">New</span></td><td>Toast after Save (decision 4)</td></tr>
+        <tr><td class="id">PROVIDERS.SAVE_REFUSED_TITLE_ONE</td><td class="str">This provider can't be saved as written</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E6, over the server's 400</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.DELETE_TITLE(name)</td><td class="str">Remove {Corp gateway}?</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E7, E8</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.DELETE_BODY</td><td class="str">Runs that chose it are refused until they choose another. Everyone's tokens for it are deleted.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E7, endpoint kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.DELETE_BODY_KEY</td><td class="str">Runs that chose it are refused until they choose another. Everyone's keys for it are deleted.</td><td class="st"><span class="tag-new">New</span></td><td>E7, key kinds (decision 2)</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.DELETE_BLOCKED(name, harness)</td><td class="str">{Corp gateway} is the default for {Claude Code} — choose another default first.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E8</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ADDRESS_TITLE(name)</td><td class="str">Change where {Corp gateway} sends requests?</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E9</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ADDRESS_BODY(n)</td><td class="str">The tokens {12} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.</td><td class="st"><span class="tag-reused">Packet B</span></td><td>E9, endpoint kind, two or more people</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ADDRESS_BODY_ONE</td><td class="str">The token 1 person added was given for the old address, so it is deleted. They add it again.</td><td class="st"><span class="tag-new">New</span></td><td>E9, endpoint kind, one person (decision 2)</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ADDRESS_BODY_KEY(n)</td><td class="str">The keys {12} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.</td><td class="st"><span class="tag-new">New</span></td><td>E9, key kinds, two or more people (decision 2)</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ADDRESS_BODY_KEY_ONE</td><td class="str">The key 1 person added was given for the old address, so it is deleted. They add it again.</td><td class="st"><span class="tag-new">New</span></td><td>E9, key kinds, one person (decision 2)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Table 2</span><b>The run's provider, the failure block, the rail's door, the reauth card (#543)</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td class="id">RUN_FACTS.PROVIDER(name, removed)</td><td class="str">Model provider · {Corp gateway}[ (removed)]</td><td class="st"><span class="tag-reused">Packet E</span></td><td>Run header chip (decision 5)</td></tr>
+        <tr><td class="id">failure-block.tsx HAPPENED</td><td class="str">What happened</td><td class="st"><span class="tag-reused">Reused</span></td><td>Failure block eyebrow</td></tr>
+        <tr><td class="id">failure-block.tsx OPEN_AUDIT</td><td class="str">Open audit trail</td><td class="st"><span class="tag-reused">Reused</span></td><td>Failure block</td></tr>
+        <tr><td class="id">AGENTS.SIGN_IN_AWS</td><td class="str">Sign in to AWS</td><td class="st"><span class="tag-reused">Reused</span></td><td>Failure block; reauth card</td></tr>
+        <tr><td class="id">CONNECTIONS.SIGN_IN_CLAUDE</td><td class="str">Sign in to Claude</td><td class="st"><span class="tag-reused">Packet D</span></td><td>Failure block</td></tr>
+        <tr><td class="id">CONNECTIONS.ADD_KEY</td><td class="str">Add your key</td><td class="st"><span class="tag-reused">Packet D</span></td><td>Failure block</td></tr>
+        <tr><td class="id">CONNECTIONS.ADD_TOKEN</td><td class="str">Add your token</td><td class="st"><span class="tag-reused">Packet D</span></td><td>Failure block</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.NOTE</td><td class="str">Sign in here. This run stays failed — relaunch it from the run header.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Failure block, AWS and Claude</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.NOTE_KEY</td><td class="str">Add it here. This run stays failed — relaunch it from the run header.</td><td class="st"><span class="tag-reused">Packet E</span></td><td>Failure block, key and token</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA</td><td class="str">Sign in to AWS — for this failed run</td><td class="st"><span class="tag-reused">Reused</span></td><td>Accessible name, AWS button</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.SIGN_IN_CLAUDE_ARIA</td><td class="str">Sign in to Claude — for this failed run</td><td class="st"><span class="tag-new">New</span></td><td>Accessible name, Claude button</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.ADD_KEY_ARIA</td><td class="str">Add your key — for this failed run</td><td class="st"><span class="tag-new">New</span></td><td>Accessible name, key button</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.ADD_TOKEN_ARIA</td><td class="str">Add your token — for this failed run</td><td class="st"><span class="tag-new">New</span></td><td>Accessible name, token button</td></tr>
+        <tr><td class="id">MODEL_ACCESS_RUN_DOOR.NOT_OWNER(owner)</td><td class="str">It ran on {bob@acme.example}'s own credential — only they can reconnect it.</td><td class="st"><span class="tag-reused">Packet E</span></td><td>Failure block: every run in the Admin view; anyone but the owner</td></tr>
+        <tr><td class="id">CONSOLE_VIEW.OPEN_IN_USER</td><td class="str">Open in user view</td><td class="st"><span class="tag-changed">Changed</span></td><td>The admin's own run: failure block, reauth card. Packet E said "Open in member view"; user-types packet B renamed it</td></tr>
+        <tr><td class="id">RAIL (new-run-rail.tsx)</td><td class="str">Credentials</td><td class="st"><span class="tag-reused">Reused</span></td><td>Rail section title</td></tr>
+        <tr><td class="id">RAIL_PROVIDER.STATIC(name)</td><td class="str">Model provider · {Bedrock (prod)}</td><td class="st"><span class="tag-reused">Packet C</span></td><td>Rail, one candidate</td></tr>
+        <tr><td class="id">RAIL_PROVIDER.LABEL</td><td class="str">Model provider</td><td class="st"><span class="tag-reused">Packet C</span></td><td>Rail picker</td></tr>
+        <tr><td class="id">RAIL_PROVIDER.OPTION(name, what, state)</td><td class="str">{Corp gateway} — your {token} · {not added}</td><td class="st"><span class="tag-reused">Packet C</span></td><td>Rail picker option</td></tr>
+        <tr><td class="id">RAIL (new-run-rail.tsx)</td><td class="str">Launch run</td><td class="st"><span class="tag-reused">Reused</span></td><td>Rail</td></tr>
+        <tr><td class="id">MODEL_ACCESS_BANNER.DIALOG_TITLE</td><td class="str">Sign in to AWS</td><td class="st"><span class="tag-reused">Reused</span></td><td>AWS door title (#544)</td></tr>
+        <tr><td class="id">DOOR.FOR(name)</td><td class="str">For {Bedrock (prod)}</td><td class="st"><span class="tag-reused">Packet E</span></td><td>AWS and Claude door (#544)</td></tr>
+        <tr><td class="id">KEY_DOOR.TITLE(what, name)</td><td class="str">Add your {token} for {Corp gateway}</td><td class="st"><span class="tag-reused">Packet E</span></td><td>Key and token door (#544)</td></tr>
+        <tr><td class="id">KEY_DOOR.DESTINATION(host)</td><td class="str">Sent to {gateway.corp.example}</td><td class="st"><span class="tag-reused">Packet E</span></td><td>Key and token door (#544)</td></tr>
+        <tr><td class="id">REAUTH_TITLE</td><td class="str">AWS sign-in needed for this run</td><td class="st"><span class="tag-changed">Changed</span></td><td>Reauth card title. Today: "Sign in to AWS again — this run is paused"; packet E (Q146-2) approved the new text</td></tr>
+        <tr><td class="id">REAUTH_ROW.label</td><td class="str">AWS sign-in needed</td><td class="st"><span class="tag-reused">Reused</span></td><td>Reauth card chip and banner</td></tr>
+        <tr><td class="id">REAUTH_ROW.PROVIDER(name)</td><td class="str">Model provider · {Bedrock (prod)}</td><td class="st"><span class="tag-reused">Packet E</span></td><td>Reauth card, under the title</td></tr>
+        <tr><td class="id">APPROVAL_BANNER_LABEL.what</td><td class="str">What you're approving:</td><td class="st"><span class="tag-reused">Reused</span></td><td>Reauth card banner</td></tr>
+        <tr><td class="id">REAUTH_ROW.hint</td><td class="str">If a model call is waiting on your sign-in, the run continues after you sign in; if it already failed, relaunch it.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Reauth card, the owner</td></tr>
+        <tr><td class="id">REAUTH_ROW.notYoursHint(owner)</td><td class="str">Waiting on {bob@acme.example}'s AWS sign-in — only they can complete it.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Reauth card: every run in the Admin view; anyone else</td></tr>
+        <tr><td class="id">REAUTH_ROW.sharedMemberHint</td><td class="str">This run uses the shared AWS sign-in — ask your admin to sign in again.</td><td class="st"><span class="tag-reused">Retired</span></td><td>Nowhere: there is no shared sign-in in 0.8 (D3)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Table 3</span><b>Server sentences the two screens render verbatim — reference only, frozen by their server issues</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Owner</th></tr></thead>
+      <tbody>
+        <tr><td class="id">LLM_PROVIDER_REFUSAL(name, state, remedy)</td><td class="str">This run's model provider is {name}, and {state} — {remedy} Wardyn does not substitute a different model provider.</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532 (design §2.6)</td></tr>
+        <tr><td class="id">state · AWS</td><td class="str">you are not signed in to AWS for it</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state · Claude</td><td class="str">you are not signed in to Claude for it</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state · key</td><td class="str">you have not added your key for it</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state · token</td><td class="str">you have not added your token for it</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state · off</td><td class="str">it is turned off</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state · not available</td><td class="str">it is not available to {Codex CLI}</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state · not granted</td><td class="str">you are not granted it</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">state + remedy · not the owner</td><td class="str">it runs on {bob@acme.example}'s own credential — only they can reconnect it.</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532 (packet E)</td></tr>
+        <tr><td class="id">remedy · connect</td><td class="str">connect it from Getting started in the console, or from the banner the console shows on every page.</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">remedy · choose</td><td class="str">choose another model provider, or ask your admin.</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532</td></tr>
+        <tr><td class="id">mp400BaseURL + validateOneLLMGateway</td><td class="str">model_providers: {"corp-gateway"}: base_url: must be https:// (got {"http://gateway.corp.example"})</td><td class="st"><span class="tag-wire">Wire</span></td><td>internal/api/model_providers.go, llm_gateway.go (shipped)</td></tr>
+        <tr><td class="id">mp400Path</td><td class="str">model_providers: {"corp-gateway"}: {codex-cli}: path {"v1"} must start with a single / and carry no query, fragment, backslash, whitespace or .. segment</td><td class="st"><span class="tag-wire">Wire</span></td><td>internal/api/model_providers.go (shipped)</td></tr>
+        <tr><td class="id">mp400Model</td><td class="str">model_providers: {"corp-gateway"}: {claude-code}: model {"acme large"} is not a model id — letters, digits and ._:/@+[]- , at most 256 characters</td><td class="st"><span class="tag-wire">Wire</span></td><td>internal/api/model_providers.go (shipped)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

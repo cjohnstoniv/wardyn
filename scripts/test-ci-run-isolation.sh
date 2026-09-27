@@ -19,6 +19,10 @@
 #      real fleet token sat in /proc/<pid>/cmdline and in `ps` output for every
 #      other user on the runner — redundantly, since the wardynd container the
 #      same script started already carries it from the compose interpolation.
+#   4. (#546) CI's identity: against WARDYN_URL every call is the CI principal's
+#      own token, never the admin bearer, and a harness run launches only on a
+#      model provider that identity's credential is usable for; nothing is
+#      seeded into the operator namespace, and the throwaway stack runs no model.
 #
 # Usage: scripts/test-ci-run-isolation.sh   (exit 0 = PASS)
 set -uo pipefail
@@ -59,7 +63,7 @@ chmod +x "$STUB/docker"
 run_ci() {
     env PATH="$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" \
         WARDYN_CI_PROJECT="wardyn-ci-selftest" \
-        WARDYN_CI_TASK="echo hi" \
+        WARDYN_CI_TASK="echo hi" WARDYN_CI_TASK_MODE=exec \
         WARDYN_CI_SKIP_BUILD=1 \
         DOCKER_HOST="unix:///nonexistent.sock" \
         ./scripts/ci-run.sh 2>&1
@@ -104,7 +108,8 @@ esac
 # readable on a shared runner, and this fires on every single CLI call the job
 # makes — while docker-compose.yaml already sets WARDYN_ADMIN_TOKEN inside
 # wardynd from the same exported variable, so the container has it either way.
-shim="$(sed -n '/^wardyn() {/,/^}/p' scripts/ci-run.sh)"
+# The throwaway stack's shim is the multi-line one, inside its branch.
+shim="$(sed -n '/^  wardyn() {$/,/^  }$/p' scripts/ci-run.sh)"
 [ -n "$shim" ] || bad "scripts/ci-run.sh has no wardyn() shim to extract"
 ARGV="$STUB/argv.log"
 cat > "$STUB/argv-docker" <<'ARGVEOF'
@@ -136,6 +141,113 @@ if grep -qxF 'WARDYN_URL=http://localhost:8080' "$ARGV" 2>/dev/null; then
     ok "the shim still passes WARDYN_URL (not a credential)"
 else
     bad "the shim no longer passes WARDYN_URL — dropping the credential must not drop the endpoint"
+fi
+
+# ── 4. CI's identity (#546) ──────────────────────────────────────────────────
+# Against an existing control plane (WARDYN_URL), every CLI call authenticates
+# as WARDYN_CI_TOKEN — never the ambient WARDYN_ADMIN_TOKEN, which the CLI would
+# try FIRST — and a harness run is launched only on a provider this identity's
+# own credential is usable for. A `wardyn` on PATH records each call's argv and
+# the two token vars it saw; the docker stub proves no stack is started.
+WSTUB="$STUB/w"; mkdir -p "$WSTUB"
+WCALLS="$WSTUB/calls.log"
+RUN_UUID=11111111-2222-3333-4444-555555555555
+cat > "$WSTUB/wardyn" <<'WEOF'
+#!/usr/bin/env bash
+printf 'ADMIN=%s TOKEN=%s ARGV=%s\n' "${WARDYN_ADMIN_TOKEN-<unset>}" "${WARDYN_TOKEN-<unset>}" "$*" >> "$WCALLS"
+case "$1 ${2:-}" in
+  "setup status") cat "$WSTUB/status" 2>/dev/null; exit "$(cat "$WSTUB/status_rc" 2>/dev/null || echo 0)" ;;
+  "run get") printf '{"id":"%s"}\n' "$RUN_UUID" ;;
+  "run recording") exit 1 ;;
+  "audit "*) echo '[]' ;;
+  "run "*) case " $* " in *" --wait "*) printf '{"id":"%s"}\n' "$RUN_UUID" ;; esac ;;
+esac
+exit 0
+WEOF
+chmod +x "$WSTUB/wardyn"
+
+# run_remote [NAME=VALUE...] -> stdout+stderr of ci-run.sh in remote mode.
+run_remote() {
+    : > "$CALLS"; : > "$WCALLS"
+    env PATH="$WSTUB:$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" WSTUB="$WSTUB" WCALLS="$WCALLS" RUN_UUID="$RUN_UUID" \
+        WARDYN_URL=https://wardyn.example.test \
+        WARDYN_CI_TOKEN=wdn_ci-principal-token \
+        WARDYN_ADMIN_TOKEN=s3cr3t-real-fleet-admin-token \
+        WARDYN_CI_TASK="fix the failing test" \
+        WARDYN_CI_MODEL_PROVIDER=corp-bedrock \
+        WARDYN_CI_OUT="$WSTUB/out" \
+        "$@" ./scripts/ci-run.sh 2>&1
+}
+status() { printf '%s' "$1" > "$WSTUB/status"; printf '%s' "${2:-0}" > "$WSTUB/status_rc"; }
+launched() { grep -q -- '--wait' "$WCALLS"; }
+# refused NAME RC OUT PATTERN: a non-zero exit, the reason in OUT, no launch.
+refused() {
+    local name="$1" rc="$2" out="$3" pat="$4"
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qE -- "$pat" && ! launched; then
+        ok "$name"
+    else
+        bad "$name — rc=$rc, launched=$(launched && echo yes || echo no), wanted /$pat/. Got: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
+    fi
+}
+
+# 4a. live: launches as the CI principal, on exactly the checked provider.
+status '{"provider_access":[{"provider":"corp-bedrock","state":"live"}]}'
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 0 ] && launched; then ok "remote mode: a live provider launches"; else bad "remote mode with a live provider did not launch (rc=$rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; fi
+if [ -s "$WCALLS" ] && ! grep -qv '^ADMIN= TOKEN=wdn_ci-principal-token ' "$WCALLS"; then
+    ok "every CLI call authenticates as WARDYN_CI_TOKEN, with WARDYN_ADMIN_TOKEN cleared"
+else
+    bad "a CLI call saw the wrong identity: $(grep -v '^ADMIN= TOKEN=wdn_ci-principal-token ' "$WCALLS" | head -2 | tr '\n' ' ')"
+fi
+if grep -q -- '--wait.*--model-provider corp-bedrock\|--model-provider corp-bedrock.*--wait' "$WCALLS"; then
+    ok "the launch names the provider it checked"
+else
+    bad "the launch does not pass --model-provider corp-bedrock: $(grep -- '--wait' "$WCALLS")"
+fi
+if grep -o 'ARGV=.*' "$WCALLS" | grep -qF 'wdn_ci-principal-token'; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
+if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(head -2 "$CALLS" | tr '\n' ' ')"; else ok "remote mode starts no stack"; fi
+
+# 4b. expiring is usable (the server counts it), with a warning.
+status '{"provider_access":[{"provider":"corp-bedrock","state":"expiring"}]}'
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 0 ] && launched && printf '%s' "$out" | grep -q 'expiring'; then ok "an expiring credential launches with a warning"; else bad "an expiring credential was refused or unwarned (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
+
+# 4c-4g: every refusal names the provider or the real cause, and launches nothing.
+status '{"provider_access":[{"provider":"corp-bedrock","state":"not_configured"}]}'
+out="$(run_remote)"; refused "a missing credential is refused, naming the provider and the door" $? "$out" "corp-bedrock.*PUT /model-providers/corp-bedrock/credential"
+status '{"provider_access":[{"provider":"other","state":"live"}]}'
+out="$(run_remote)"; refused "a provider this identity may not use is refused, naming it" $? "$out" "corp-bedrock.*not one this CI identity may use"
+status '{}'
+out="$(run_remote)"; refused "a deployment with no model providers is refused, not skipped" $? "$out" "corp-bedrock.*not one this CI identity may use"
+status '{"provider_access":[{"provider":"corp-bedrock","state":"not_applicable"}]}'
+out="$(run_remote)"; refused "the admin token's not_applicable says a person's token is needed" $? "$out" "admin token"
+status '' 2
+out="$(run_remote)"; refused "a failed status call is reported as one, not as a missing grant" $? "$out" "setup status"
+if printf '%s' "$out" | grep -q 'not one this CI identity may use'; then bad "a failed status call was misreported as a missing grant"; fi
+status '' 0
+out="$(run_remote)"; refused "an empty status answer is reported as one, not as a missing grant" $? "$out" "setup status"
+
+# 4h-4j: remote mode's own preconditions.
+status '{"provider_access":[{"provider":"corp-bedrock","state":"live"}]}'
+out="$(run_remote WARDYN_CI_TOKEN=)"; refused "remote mode without WARDYN_CI_TOKEN is refused" $? "$out" "WARDYN_CI_TOKEN"
+out="$(run_remote WARDYN_CI_MODEL_PROVIDER=)"; refused "a remote harness run without WARDYN_CI_MODEL_PROVIDER is refused" $? "$out" "WARDYN_CI_MODEL_PROVIDER"
+# An exec run calls no model: no provider is needed, and a set one is neither
+# checked nor sent (the server refuses model_provider on an exec run).
+for extra in WARDYN_CI_MODEL_PROVIDER= WARDYN_CI_MODEL_PROVIDER=corp-bedrock; do
+    out="$(run_remote "$extra" WARDYN_CI_TASK_MODE=exec)"; rc=$?
+    if [ "$rc" -eq 0 ] && launched && ! grep -q 'setup status\|--model-provider' "$WCALLS"; then ok "a remote exec run ($extra) launches with no provider"; else bad "a remote exec run ($extra) was refused or carried a provider (rc=$rc): $(grep -- '--wait' "$WCALLS")"; fi
+done
+
+# 4k-4l: no operator-namespace seeding, and no model run on the throwaway stack.
+out="$(run_remote WARDYN_CI_SECRETS=anthropic-api-key=sk-x)"; refused "WARDYN_CI_SECRETS is refused" $? "$out" "WARDYN_CI_SECRETS"
+if grep -q 'secret set' "$WCALLS"; then bad "WARDYN_CI_SECRETS still reached 'wardyn secret set'"; fi
+: > "$CALLS"
+out="$(env PATH="$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" WARDYN_CI_PROJECT=wardyn-ci-selftest WARDYN_CI_TASK="fix it" \
+    WARDYN_CI_SKIP_BUILD=1 DOCKER_HOST="unix:///nonexistent.sock" ./scripts/ci-run.sh 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'WARDYN_URL' && ! grep -q 'compose' "$CALLS"; then
+    ok "a harness run on the throwaway stack is refused before any stack starts"
+else
+    bad "a harness run on the throwaway stack was not refused up front (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
 fi
 
 [ "$fail" -eq 0 ] && echo "PASS: scripts/test-ci-run-isolation.sh" || echo "FAIL: scripts/test-ci-run-isolation.sh" >&2

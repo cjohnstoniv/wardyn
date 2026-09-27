@@ -108,7 +108,7 @@ func TestPG_LoginSupersedeSerializesConcurrentSignIns(t *testing.T) {
 	errs := make([]error, 2)
 	launch := func(i int) {
 		defer wg.Done()
-		runs[i], _, errs[i] = srv.launchHarnessLoginRun(context.Background(), actor, hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+		runs[i], _, errs[i] = srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal})
 	}
 
 	// First sign-in: runs until it is parked inside CreateRun, holding the lock.
@@ -242,7 +242,7 @@ func TestPG_LoginSupersedeDoesNotStarveConcurrentSignIns(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 					defer cancel()
 					started := time.Now()
-					_, _, errs[i] = srv.launchHarnessLoginRun(ctx, actor, hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+					_, _, errs[i] = srv.launchHarnessLoginRun(ctx, actor, hl, loginTarget{startURL: perUserPortal})
 					elapsed[i] = time.Since(started)
 				}()
 			}
@@ -311,7 +311,7 @@ func TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld(t *testing.T) {
 		t.Fatal("aws-sso harness login convention missing")
 	}
 
-	_, _, err = srv.launchHarnessLoginRun(context.Background(), actor, hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	_, _, err = srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal})
 	if !errors.Is(err, errSignInBusy) {
 		t.Fatalf("launch err = %v, want errSignInBusy — a held lock must refuse, not proceed unlocked", err)
 	}
@@ -324,7 +324,7 @@ func TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld(t *testing.T) {
 	}
 
 	release()
-	if _, _, err := srv.launchHarnessLoginRun(context.Background(), actor, hl, perUserPortal, awsSSOPin{}, awsSSOScope{}); err != nil {
+	if _, _, err := srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal}); err != nil {
 		t.Fatalf("with the lock free the sign-in must proceed: %v", err)
 	}
 }

@@ -14,9 +14,13 @@
 // server" is as specific as an honest sentence gets.
 export const RECORDINGS_LOAD_MORE = (n: number): string => `Load ${n} more`;
 export const RECORDINGS_LOADING = "Loading…";
+// #510-F9 — pluralise on n: "1 recordings"/"1 recordings are" read wrong for
+// the single-item page (the first page off a server with exactly one
+// recording, or the last page landing on exactly one more).
 export const RECORDINGS_MORE_NOTE = (n: number): string =>
-  `${n} recordings loaded so far — there are more on the server.`;
-export const RECORDINGS_ALL_LOADED = (n: number): string => `All ${n} recordings are loaded.`;
+  `${n} recording${n === 1 ? "" : "s"} loaded so far — there are more on the server.`;
+export const RECORDINGS_ALL_LOADED = (n: number): string =>
+  `All ${n} recording${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} loaded.`;
 export const RECORDINGS_PAGE_ERROR_TITLE = "Couldn't load more recordings";
 export const RECORDINGS_PAGE_ERROR_BODY = (n: number): string =>
   `Wardyn stopped answering partway through. The ${n} already loaded are still here — retry to continue from where it stopped.`;

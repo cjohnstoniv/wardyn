@@ -11,7 +11,7 @@ import (
 )
 
 // TestGovernanceDenyExecRefusesShellBootSeed: under limits.deny_task_mode_exec
-// (and no autonomy rubric, so denyMemberGovernance is the only gate that sees
+// (and no autonomy rubric, so denyUserGovernance is the only gate that sees
 // the request) an interactive run's shell startup command is refused like
 // exec — the image runs it as `bash -lc` at boot, before anyone attaches. An
 // agent start with a task still launches.
