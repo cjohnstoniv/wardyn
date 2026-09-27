@@ -311,18 +311,21 @@ type envelope struct {
 // row if one exists, else the operator's ("", name) row — a member with no
 // key of their own resolves the operator's, exactly as every caller did
 // before For existed. For owner="" the IN clause names "" twice, so only the
-// operator row can ever match.
+// operator row can ever match. Under secretstore.OwnRowOnly (an owner_only
+// grant) only the view owner's own row matches, and owner "" matches nothing.
 // Returns an error wrapping pgx.ErrNoRows and secretstore.ErrNotFound when
 // absent, and ONLY then: a row that exists but will not open is a distinct
 // error, so loadOrCreateSecret can never mistake a tampered boot key for a
 // missing one and mint over it.
 func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	e := envelope{name: name}
-	err := s.pool.QueryRow(ctx,
-		`SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
-		  WHERE owned_by IN ('', $1) AND name=$2 ORDER BY (owned_by = $1) DESC LIMIT 1`,
-		s.owner, name,
-	).Scan(&e.ownedBy, &e.version, &e.kekID, &e.wrapped, &e.ct)
+	q := `SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
+		  WHERE owned_by IN ('', $1) AND name=$2 ORDER BY (owned_by = $1) DESC LIMIT 1`
+	if secretstore.OwnRowOnly(ctx) {
+		q = `SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
+		  WHERE owned_by = $1 AND owned_by <> '' AND name=$2`
+	}
+	err := s.pool.QueryRow(ctx, q, s.owner, name).Scan(&e.ownedBy, &e.version, &e.kekID, &e.wrapped, &e.ct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Satisfy BOTH the seam sentinel (secretstore.ErrNotFound, what the
 		// conformance suite + callers check) and the historical pgx.ErrNoRows

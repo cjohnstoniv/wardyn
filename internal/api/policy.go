@@ -419,6 +419,9 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	if g.TTLSeconds < 0 {
 		return fmt.Errorf("eligible_grants[%d]: negative ttl_seconds", i)
 	}
+	if g.OwnerOnly && (g.Kind == types.GrantGitHubToken || g.Kind == types.GrantCloudSTS) {
+		return fmt.Errorf("eligible_grants[%d]: owner_only applies only to a grant that names a stored secret, not %q", i, g.Kind)
+	}
 	// A github_token grant's scope ({repos, permissions}) is otherwise only
 	// checked at MINT time inside the broker, so a malformed permission key
 	// surfaces as a run-time mint failure instead of an immediate 400. Run the

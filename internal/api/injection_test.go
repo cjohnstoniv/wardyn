@@ -667,11 +667,11 @@ func TestValidateInlineSecretRefs_SentinelHostPin(t *testing.T) {
 	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
 		// The control: the pinned host still validates, so a failure below is the
 		// host pin and not the sentinel path breaking wholesale.
-		if code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinelAt(sentinel, "api.anthropic.com")); err != nil || code != 0 {
+		if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinelAt(sentinel, "api.anthropic.com")); err != nil || code != 0 {
 			t.Fatalf("%s at api.anthropic.com: code=%d err=%v, want (0,nil)", sentinel, code, err)
 		}
 		for _, host := range []string{"evil.attacker.example", "api.anthropic.com.evil.example"} {
-			code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinelAt(sentinel, host))
+			code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinelAt(sentinel, host))
 			if err == nil || code != http.StatusUnprocessableEntity {
 				t.Fatalf("%s at %q: code=%d err=%v, want (422,err) — a sentinel grant may only target %s",
 					sentinel, host, code, err, subscriptionInjectionHost)

@@ -74,7 +74,8 @@ func (b *Broker) mintAPIKey(spec types.GrantSpec) (Minted, error) {
 			SecretName: sc.SecretName,
 			Format:     format,
 		},
-		Metadata: map[string]string{"secret_name": sc.SecretName, "host": sc.Host},
+		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host},
+		OwnerOnly: spec.OwnerOnly,
 	}, nil
 }
 
@@ -107,10 +108,12 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
 	}
-	// The run's own owner's row wins, falling back to the operator's (ownerOf).
-	value, err := b.secrets.For(ownerOf(caller)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeBrokerMint), sc.SecretName)
+	// The run's own owner's row wins, falling back to the operator's (ownerOf)
+	// unless the grant is owner_only.
+	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
+	value, err := b.secrets.For(ownerOf(caller)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
 	if err != nil {
-		return Minted{}, fmt.Errorf("broker: read git_pat secret %q: %w", sc.SecretName, err)
+		return Minted{}, grantReadError("git_pat", sc.SecretName, spec.OwnerOnly, err)
 	}
 	return Minted{
 		Kind:      types.GrantGitPAT,
@@ -118,7 +121,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 		ExpiresAt: time.Now().Add(ttlFor(spec)),
 		Token:     string(value),
 		Username:  gitPATUsername(sc.Host, sc.Username),
-		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host},
+		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host, "secret_scope": row.Scope()},
 	}, nil
 }
 
@@ -155,14 +158,16 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: ssh_key grant but no secret store configured (fail closed)")
 	}
-	// Same owner-then-operator-fallback rule as mintGitPAT, for both the key
-	// and its optional known_hosts material below.
+	// Same owner-then-operator-fallback rule as mintGitPAT (owner_only
+	// included), for both the key and its optional known_hosts material below.
 	owned := b.secrets.For(ownerOf(caller))
-	rctx := secretstore.WithPurpose(ctx, secretstore.PurposeBrokerMint)
+	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
+	rctx := secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint)
 	key, err := owned.Get(rctx, sc.KeySecretRef)
 	if err != nil {
-		return Minted{}, fmt.Errorf("broker: read ssh_key secret %q: %w", sc.KeySecretRef, err)
+		return Minted{}, grantReadError("ssh_key", sc.KeySecretRef, spec.OwnerOnly, err)
 	}
+	keyScope := row.Scope()
 	// Optional operator-supplied known_hosts (for a custom host the image-baked
 	// /etc/ssh/ssh_known_hosts does not cover). For github.com / ADO the baked file
 	// is authoritative and this ref is normally unset.
@@ -170,7 +175,7 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 	if sc.KnownHostsSecretRef != "" {
 		kh, kerr := owned.Get(rctx, sc.KnownHostsSecretRef)
 		if kerr != nil {
-			return Minted{}, fmt.Errorf("broker: read ssh_key known_hosts secret %q: %w", sc.KnownHostsSecretRef, kerr)
+			return Minted{}, grantReadError("ssh_key known_hosts", sc.KnownHostsSecretRef, spec.OwnerOnly, kerr)
 		}
 		knownHosts = string(kh)
 	}
@@ -185,6 +190,42 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 		Token:      string(key),
 		Username:   username,
 		KnownHosts: knownHosts,
-		Metadata:   map[string]string{"key_secret_ref": sc.KeySecretRef, "host": sc.Host},
+		Metadata:   map[string]string{"key_secret_ref": sc.KeySecretRef, "host": sc.Host, "secret_scope": keyScope},
 	}, nil
+}
+
+// grantReadError names why a grant's stored secret could not be read. An
+// owner_only grant whose owner has no row of their own gets its own sentence:
+// the operator's row of that name, if any, was deliberately not consulted.
+func grantReadError(kind, name string, ownerOnly bool, err error) error {
+	if ownerOnly && errors.Is(err, secretstore.ErrNotFound) {
+		return fmt.Errorf("broker: %s grant is owner_only and the run's owner has no secret %q of their own "+
+			"(an operator secret of that name is never used for it): %w", kind, name, err)
+	}
+	return fmt.Errorf("broker: read %s secret %q: %w", kind, name, err)
+}
+
+// withSecretScope records on a credential.mint row whose row the stored
+// secret came from ("own" or "operator"), so an operator-row fallback is
+// visible on the mint itself. A kind that read no stored secret adds nothing.
+func withSecretScope(data json.RawMessage, m Minted) json.RawMessage {
+	if sc := m.Metadata["secret_scope"]; sc != "" {
+		return withDataField(data, "secret_scope", sc)
+	}
+	return data
+}
+
+// withDataField sets one field of an event's Data, returning data unchanged
+// when it does not decode.
+func withDataField(data json.RawMessage, key string, v any) json.RawMessage {
+	var d map[string]any
+	if err := json.Unmarshal(data, &d); err != nil {
+		return data
+	}
+	d[key] = v
+	out, err := json.Marshal(d)
+	if err != nil {
+		return data
+	}
+	return out
 }

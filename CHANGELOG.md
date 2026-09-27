@@ -1186,6 +1186,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A secret grant can opt out of the operator-row fallback with `owner_only` (#1106).** An
+  `api_key`, `git_pat`, `ssh_key` or `env_secret` grant marked `"owner_only": true` resolves its
+  secret from the run owner's own row only; a member with none is refused at launch with a named
+  reason instead of being served the operator row of that name, and a row removed after launch is
+  refused at mint. A grant without the flag keeps the fallback. An operator's `owner_only` on a
+  pairing binds a member's proposal for it. `credential.mint` (`git_pat`, `ssh_key`) and
+  `run.env_secret.resolve` now record `secret_scope` (`own` or `operator`).
+- **Storing a named policy no longer checks its secret grants against the operator namespace
+  (#1123).** `POST`/`PUT /api/v1/policies` refused a grant naming a secret the admin had not
+  stored as an operator row, forcing the very fallback row a per-person credential must not
+  have. A stored policy's secret references are now checked for shape only; existence is checked
+  at run-create in the run owner's namespace, as before. An inline policy submitted with a run
+  keeps its existence check.
 - **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
   Both resolve an authored secret name through the run owner's namespace, falling back to the
   operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`

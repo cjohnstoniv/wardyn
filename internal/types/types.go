@@ -460,6 +460,7 @@ type GrantSpec struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 	// RequiresApproval forces a human approval to mint (vs auto-mint on policy).
 	RequiresApproval bool `json:"requires_approval"`
+	OwnerOnly        bool `json:"owner_only,omitempty"` // stored secret from the run owner's own row only, never the operator's
 }
 
 // CredentialGrant records what a run is ELIGIBLE for. Eligibility is not

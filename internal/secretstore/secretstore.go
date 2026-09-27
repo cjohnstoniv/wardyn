@@ -86,7 +86,9 @@ type Store interface {
 	// The four methods above behave differently under a non-"" owner:
 	//   - Get first tries the owner's own row, then FALLS BACK to the
 	//     operator's ("") row — a member with no key of their own still
-	//     resolves the operator's, exactly as before For existed.
+	//     resolves the operator's, exactly as before For existed. A read
+	//     under GrantRead(ctx, true) (an owner_only grant) never falls back:
+	//     only the owner's own row, and none for owner "".
 	//   - Put and Delete are scoped to the owner's row ONLY. They never read
 	//     or write the operator's row, and never fall back — a write always
 	//     means what it says.

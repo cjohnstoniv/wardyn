@@ -21,6 +21,9 @@ export interface GrantSpec {
   scope?: Record<string, unknown>;
   ttl_seconds?: number;
   requires_approval: boolean;
+  // Resolve the named stored secret from the run owner's own row only, never
+  // the operator's (api_key / git_pat / ssh_key / env_secret).
+  owner_only?: boolean;
 }
 
 // A single operator/policy-controlled host bind mount. Mirrors the wire shape
