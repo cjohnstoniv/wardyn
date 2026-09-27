@@ -678,6 +678,14 @@ jobs:
       WARDYN_QUICKSTART_SSH_PORT: "2522"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -686,6 +694,12 @@ jobs:
           install_only: "true"
       - name: Docker available
         run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
       - name: Bring up the kind quickstart cluster (ado profile's pinned ports — see deploy/kind/sso/README.md)
         run: make kind-quickstart
       - name: Add the Azure DevOps SSO overlay (fake Entra + fake Azure DevOps)
@@ -815,6 +829,12 @@ jobs:
         run: make test-kek-conformance
       - name: Vault on kind with Kubernetes auth
         run: make test-kek-conformance-kind
+      - name: Upload kek-conformance test reports (docker + kind legs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kek-conformance-reports
+          path: test/reports/go/kek-*/**
 
   # Coverage-guided fuzzing of the session-cookie decoder: a cookie whose HMAC
   # does not verify must never decode into a session. Every PR runs the seed
