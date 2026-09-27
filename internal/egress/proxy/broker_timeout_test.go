@@ -49,7 +49,7 @@ func hungControlPlane(t *testing.T) *httptest.Server {
 // budget (plus slack), and still FAILING CLOSED — a 502, no credential, no
 // forward.
 func TestBrokerCredentialPathIsBoundedByTheApprovalBudget(t *testing.T) {
-	const budget = time.Second
+	const budget = 200 * time.Millisecond
 	t.Setenv(envGitApprovalTimeout, budget.String())
 
 	newHungProxy := func(t *testing.T) *Proxy {

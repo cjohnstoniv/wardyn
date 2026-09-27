@@ -265,6 +265,9 @@ func (s blockingHeartbeatStore) LatestAuditEventByAction(ctx context.Context, _ 
 // the same function that deliberately bounds its own store call. A scrape must
 // answer or fail — never hang.
 func TestMetricsScrapeIsBoundedByAStalledStore(t *testing.T) {
+	prev := storePingTimeout
+	storePingTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { storePingTimeout = prev })
 	released := make(chan struct{})
 	defer close(released)
 	h := newHarness(t)
@@ -280,5 +283,13 @@ func TestMetricsScrapeIsBoundedByAStalledStore(t *testing.T) {
 	case <-time.After(storePingTimeout + 10*time.Second):
 		t.Fatalf("GET /metrics did not return within %s + slack against a stalled store — "+
 			"the scrape hangs instead of answering", storePingTimeout)
+	}
+}
+
+// TestStorePingTimeout_ProductionValueUnchanged pins the bound the stalled-store
+// test shrinks.
+func TestStorePingTimeout_ProductionValueUnchanged(t *testing.T) {
+	if storePingTimeout != 3*time.Second {
+		t.Fatalf("storePingTimeout = %v, want the production 3s", storePingTimeout)
 	}
 }
