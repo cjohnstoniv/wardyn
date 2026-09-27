@@ -79,6 +79,11 @@ vx vault write auth/kubernetes/role/wardyn bound_service_account_names=wardyn bo
 kubectl create namespace "$NS" >/dev/null
 kubectl -n "$NS" create serviceaccount wardyn >/dev/null
 kubectl -n "$NS" create token wardyn --audience vault --duration 1h >"$WORK/jwt"
+# wardynd's own CheckSecretFileMode refuses an other-readable token file it
+# owns (internal/cliutil/secret_file.go); the shell redirect above writes 0644
+# under a default umask, so make it look like a real Vault Agent injection
+# (0440) instead of weakening the check.
+chmod 0640 "$WORK/jwt"
 
 kubectl -n vault port-forward svc/vault 0:8200 --address 127.0.0.1 >"$WORK/pf.log" 2>&1 &
 PF_PID=$!
