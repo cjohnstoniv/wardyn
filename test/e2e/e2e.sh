@@ -47,8 +47,16 @@ FIXTURE_DIR="${REPO_ROOT}/test/e2e/fixtures"
 COMPOSE=(docker compose -f "${COMPOSE_FILE}")
 
 ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
-BASE="http://localhost:8080"
-INTERNAL_NET="wardyn-internal"           # compose network name (see compose `networks:`)
+# The compose file's own isolation controls, honoured here rather than assumed at
+# their defaults: WARDYN_NS names the containers and the control-plane network,
+# WARDYN_UP_PORT is the host port wardynd is published on (COMPOSE_PROJECT_NAME and
+# the other *_PORT variables compose reads by itself). A shared host runs this
+# suite under its own namespace and ports; the defaults are unchanged.
+NS="${WARDYN_NS:-wardyn}"
+[[ "${WARDYN_UP_PORT:-8080}" != "0" ]] || { echo "e2e: WARDYN_UP_PORT=0 is not supported (the OIDC redirect names the host port); pick a free port" >&2; exit 1; }
+BASE="http://localhost:${WARDYN_UP_PORT:-8080}"
+IN_BASE="http://localhost:8080"          # the same API as seen from INSIDE the wardynd container
+INTERNAL_NET="${NS}-internal"            # compose network name (see compose `networks:`)
 FIXTURE_AGENT="e2e-fixture"              # agent NAME -> image ghcr.io/.../agent-e2e-fixture
 FIXTURE_IMAGE="ghcr.io/cjohnstoniv/agent-${FIXTURE_AGENT}:latest"
 PROXY_IMAGE="wardyn/wardyn-proxy:local"
@@ -57,9 +65,10 @@ CURL_HELPER="curlimages/curl:latest"
 WORKDIR="$(mktemp -d /tmp/wardyn-e2e.XXXXXX)"
 RUN_ID=""
 CC_RUN_ID=""                             # the REAL-AGENT (claude-code) run id
+REC_RUN_ID=""                            # the finite recording run id (step i)
 PROXY_NAME=""
 CC_AGENT="claude-code"                   # real agent NAME (image via WARDYN_AGENT_IMAGES)
-CC_IMAGE="wardyn/agent-claude-code:local" # the demo tag the compose stack maps to
+CC_IMAGE="${WARDYN_E2E_CC_IMAGE:-wardyn/agent-claude-code:local}" # the demo tag the compose stack maps to
 
 # Pin BOTH agent images this script launches. An agent name the operator map
 # does not carry resolves to the CONVENTION image
@@ -105,7 +114,7 @@ teardown() {
   [[ "${WARDYN_E2E_KEEP:-}" == "1" ]] && { log "WARDYN_E2E_KEEP=1 set; leaving stack up"; return; }
   log "Tearing down"
   [[ -n "${PROXY_NAME}" ]] && docker rm -f "${PROXY_NAME}" >/dev/null 2>&1 || true
-  for rid in "${RUN_ID}" "${CC_RUN_ID}"; do
+  for rid in "${RUN_ID}" "${CC_RUN_ID}" "${REC_RUN_ID}"; do
     [[ -n "${rid}" ]] || continue
     # Best-effort: remove any per-run sandbox artifacts the kill cascade left.
     docker rm -f "wardyn-agent-${rid}" "wardyn-proxy-${rid}" >/dev/null 2>&1 || true
@@ -124,6 +133,57 @@ nci() { docker run --rm --network "${INTERNAL_NET}" "${CURL_HELPER}" "$@"; }
 ncis() { docker run --rm --network "${INTERNAL_NET}" -v "$1":/flow.sh:ro "${CURL_HELPER}" sh /flow.sh; }
 # host-side curl against the published port.
 hc() { curl -sS "$@"; }
+# the wardyn CLI inside the wardynd container, as the admin.
+e2e_wardyn() {
+  "${COMPOSE[@]}" exec -T -e WARDYN_URL="${IN_BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
+    wardynd /usr/local/bin/wardyn "$@"
+}
+run_state() {
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/$1" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("state",""))' 2>/dev/null
+}
+
+# (i) recording AUTO-DELIVERED, on a run of its OWN that ends by itself. wardyn-rec
+# wraps agent-run, and uploads the finished cast through the proxy's brokered
+# recording route only when the wrapped process EXITS. The real-agent run below
+# can never exit while this suite waits on it: it declares --repo, so its clone
+# goes through the git broker, whose credential approval (ii-b) grants only
+# AFTER this step — the nightly showed that run parked in `git clone` for the whole
+# poll, cast staged, nothing uploaded. So this run has no repository and runs a
+# plain command (task mode exec) under the same real image, agent-run and
+# wardyn-rec. The command prints a sentinel its own text does not contain, so the
+# served cast proves the command ran and its output was delivered.
+# scripts/test-e2e-recording-step.sh extracts this function and drives it.
+recording_step() {
+  local sentinel="wardyn-e2e-recording-ok" create state="" code="" settle=0 cast="${WORKDIR}/rec.cast"
+  log "(i) finite recording run: cast AUTO-DELIVERED (no manual PUT) -> GET serves it"
+  create="$(e2e_wardyn run --agent "${CC_AGENT}" --task-mode exec --task "printf 'wardyn-e2e-%s\\n' recording-ok" 2>&1)"
+  echo "${create}"
+  REC_RUN_ID="$(printf '%s\n' "${create}" | awk '/^created run/{print $3; exit}')"
+  if [[ -z "${REC_RUN_ID}" ]]; then bad "(i) the recording run was not created: ${create}"; return; fi
+  # The cast is uploaded before the run can settle, but poll both: a terminal run
+  # gets a short grace for the upload, and a run that never gets going is not
+  # waited on for the whole budget.
+  for _ in $(seq 1 90); do
+    state="$(run_state "${REC_RUN_ID}")"
+    code="$(hc -o "${cast}" -w '%{http_code}' -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+              "${BASE}/api/v1/runs/${REC_RUN_ID}/recording/${REC_RUN_ID}")"
+    [[ "${code}" == "200" && "${state}" == "COMPLETED" ]] && break
+    case "${state}" in COMPLETED|FAILED|KILLED) settle=$((settle+1)); [[ ${settle} -gt 5 ]] && break ;; esac
+    sleep 2
+  done
+  if [[ "${state}" == "COMPLETED" ]]; then ok "(i) recording run ran its command and COMPLETED";
+  else bad "(i) recording run state=${state:-<none>}, expected COMPLETED"; fi
+  if [[ "${code}" == "200" ]] && grep -q "${sentinel}" "${cast}" 2>/dev/null; then
+    ok "(i) recording AUTO-DELIVERED + served (200) and carries the command's output (${sentinel})"
+  elif [[ "${code}" == "200" ]]; then
+    bad "(i) a recording was served but does not carry the sentinel ${sentinel}: $(head -c 400 "${cast}" 2>/dev/null)"
+  else
+    bad "(i) recording not auto-delivered (GET=${code}) for run ${REC_RUN_ID} (state=${state:-<none>})"
+    note "(i) agent container logs (tail 20): $(docker logs --tail 20 "wardyn-agent-${REC_RUN_ID}" 2>&1 | tr '\n' '|' || echo '<logs failed>')"
+    note "(i) recorder staging: $(docker exec "wardyn-agent-${REC_RUN_ID}" sh -c 'ls -la /var/log/wardyn 2>&1 | head -12' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  fi
+}
 
 # ── 0. preflight ───────────────────────────────────────────────────────────--
 command -v docker >/dev/null 2>&1 || die "docker not found"
@@ -150,7 +210,7 @@ log "Starting postgres + dex + wardynd"
 
 log "Waiting for wardynd to become healthy"
 tries=0
-until [[ "$(docker inspect -f '{{.State.Health.Status}}' wardyn-api 2>/dev/null)" == "healthy" ]]; do
+until [[ "$(docker inspect -f '{{.State.Health.Status}}' "${NS}-api" 2>/dev/null)" == "healthy" ]]; do
   tries=$((tries+1)); [[ ${tries} -gt 60 ]] && { "${COMPOSE[@]}" logs --tail 40 wardynd; die "wardynd unhealthy"; }
   sleep 2
 done
@@ -165,7 +225,7 @@ log "Creating a governed run (agent=${FIXTURE_AGENT})"
 # below then measured a TERMINAL run). Not --interactive: an interactive run's
 # MAIN PROCESS is the image's real agent-run --idle contract, which a stub
 # fixture does not implement.
-CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
+CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${IN_BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
   wardynd /usr/local/bin/wardyn run --agent "${FIXTURE_AGENT}" --repo octocat/Hello-World --task "wardyn e2e")"
 echo "${CREATE}"
 RUN_ID="$(printf '%s\n' "${CREATE}" | awk '/^created run/{print $3; exit}')"
@@ -333,7 +393,7 @@ else
 fi
 note "(f) this assertion exercises the endpoints directly; AUTO delivery via the"
 note "(f)      brokered proxy upload route (no shared volume, cross-run 403) is"
-note "(f)      exercised live by the real-agent assertion (i) below."
+note "(f)      exercised live by the finite recording run (i) below."
 
 # ── 6. OIDC login flow against Dex ──────────────────────────────────────────--
 log "(g) OIDC login flow against Dex -> session cookie authenticates GET /runs"
@@ -347,7 +407,7 @@ echo "login_redirect_pkce_s256=$(echo "$AU" | grep -c 'code_challenge_method=S25
 PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')
 LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$DEX$ACT" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
-CB=$(printf '%s' "$LOC" | sed 's#http://localhost:8080#http://wardynd:8080#')
+CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://wardynd:8080#')
 $C -D /tmp/cb.txt -o /dev/null "$CB"
 echo "session_cookie_set=$(grep -c wardyn_session $JAR)"
 echo "runs_with_session=$($C -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
@@ -370,11 +430,9 @@ fi
 # e2e fixture (no agent process, no wardyn-rec). This section proves the REAL
 # shipped path end to end against the claude-code agent image:
 #
-#   (i)   a governed run with a task -> live sandbox RUNNING + run.exec audited
-#         + the recording cast AUTO-DELIVERED to the recording store (GAP-2 live
-#         closure) with NO manual PUT. agent-run launches `claude -p <task>`;
-#         with no api_key brokered it fails fast inside the sandbox, but the
-#         recorder still captures + delivers the attempt.
+#   (i)   a governed run with a task -> live sandbox RUNNING + run.exec audited;
+#         and a SEPARATE finite run whose recording cast is AUTO-DELIVERED to the
+#         recording store (GAP-2 live closure) with NO manual PUT (recording_step).
 #   (ii)  brokered git-credential chain, live: wardyn-git-helper get ->
 #         credential ApprovalRequest -> approve -> the documented fail-closed
 #         mint error ("no GitHubMinter configured"). Proves the FULL chain
@@ -383,9 +441,14 @@ fi
 #         -> the proxy's 404 no-brokered-credential JSON (chain + fail-closed).
 #   (iv)  negative: an ABSOLUTE-URI request to the local-route path must NOT hit
 #         the local route (it is forward-proxied + policy-denied, not minted).
+# The finite recording run goes first: the real-agent run's brokered clone is
+# held on its credential approval from the moment it starts, and (ii) needs that
+# hold still open.
+recording_step
+
 log "REAL-AGENT: creating a governed run (agent=${CC_AGENT}, with a task)"
 CC_TASK="print the word READY and exit"   # trivial; claude fails fast w/o a key
-CC_CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
+CC_CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${IN_BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
   wardynd /usr/local/bin/wardyn run --agent "${CC_AGENT}" --repo octocat/Hello-World --task "${CC_TASK}")"
 echo "${CC_CREATE}"
 CC_RUN_ID="$(printf '%s\n' "${CC_CREATE}" | awk '/^created run/{print $3; exit}')"
@@ -423,43 +486,6 @@ EXEC_OK="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?ru
   | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.exec" and e["outcome"]=="success"))')"
 if [[ "${EXEC_AUDIT}" -ge 1 ]]; then ok "(i) run.exec audit event present (${EXEC_AUDIT}; success=${EXEC_OK})";
 else bad "(i) no run.exec audit event for the claude-code run"; fi
-
-# (i) recording AUTO-DELIVERED: wardyn-rec wraps the agent argv, asciinema
-# records the (fast-failing) session, and -out-dir delivers <run>.cast to the
-# shared wardyn-recordings volume that wardynd's recording store reads. No
-# manual PUT here — this is the live GAP-2 closure. Poll up to ~40s because the
-# cast lands only after the agent process exits and wardyn-rec copies it.
-log "(i) recording cast auto-delivered (no manual PUT) -> GET serves 200"
-CC_REC=""
-for _ in $(seq 1 20); do
-  CC_REC="$(hc -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-            "${BASE}/api/v1/runs/${CC_RUN_ID}/recording/${CC_RUN_ID}")"
-  [[ "${CC_REC}" == "200" ]] && break
-  sleep 2
-done
-if [[ "${CC_REC}" == "200" ]]; then
-  CT="$(hc -D - -o /dev/null -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-        "${BASE}/api/v1/runs/${CC_RUN_ID}/recording/${CC_RUN_ID}" | tr -d '\r' | sed -n 's/^[Cc]ontent-[Tt]ype: //p')"
-  ok "(i) recording AUTO-DELIVERED + served (200, Content-Type: ${CT:-<none>}) — GAP-2 closed live"
-else
-  bad "(i) recording not auto-delivered (GET=${CC_REC}); agent-run/wardyn-rec/-out-dir chain"
-  note "(i) last cast dir listing on the agent: $(docker exec "${CC_AGENT_CTR}" ls -la /wardyn/recordings 2>&1 | tr '\n' ' ' || echo '<exec failed>')"
-  # WHY, not just THAT. A cast lands only after the agent process EXITS (wardyn-rec
-  # uploads on exit), so the first question is whether it has: the run's state, what
-  # is still running in the sandbox, and what the agent last printed. On a CI
-  # runner none of this survives the job.
-  note "(i) run state: $(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${CC_RUN_ID}" | python3 -c 'import sys,json;r=json.load(sys.stdin);print(r.get("state"),"exit_code=",r.get("exit_code"))' 2>&1 || true)"
-  # ps is absent from the claude-code image (confirmed on nightly 36136351071:
-  # "processes in the agent:" came back empty, not an error) — walk /proc instead.
-  note "(i) processes in the agent: $(docker exec "${CC_AGENT_CTR}" sh -c 'for f in /proc/[0-9]*/cmdline; do p=$(basename "$(dirname "$f")"); printf "%s:[" "$p"; tr "\0" " " < "$f" 2>/dev/null; printf "] "; done' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
-  note "(i) agent container state: $(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "${CC_AGENT_CTR}" 2>&1 || echo '<inspect failed>')"
-  note "(i) agent container logs (tail 40): $(docker logs --tail 40 "${CC_AGENT_CTR}" 2>&1 | tr '\n' '|' || echo '<logs failed>')"
-  note "(i) recorder staging: $(docker exec "${CC_AGENT_CTR}" sh -c 'ls -la /var/log/wardyn /tmp/wardyn-rec 2>&1 | head -12' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
-  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}&limit=50" \
-    | python3 -c 'import sys,json
-d=json.load(sys.stdin); ev=d if isinstance(d,list) else d.get("events",[])
-for e in ev[-12:]: print("  NOTE (i) audit:",e.get("action"),e.get("outcome"),json.dumps(e.get("data"))[:200])' 2>/dev/null || true
-fi
 
 # (ii) brokered git-credential chain, LIVE, from inside the real sandbox.
 # This run declares --repo, so dispatch keys the git-broker allowlist from it and

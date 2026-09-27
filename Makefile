@@ -536,6 +536,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-image-pins.sh
