@@ -43,6 +43,7 @@ import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { WRITE_ONLY } from "../wardyn/copy/door";
 import { useOperator } from "../wardyn/operator-context";
 
 // Secret names are constrained server-side to a safe identifier set; mirror that
@@ -64,12 +65,6 @@ const PROVIDER_NAME_CHIPS = [
   "pypi-token",
   "docker-registry",
 ] as const;
-
-// Write-only chip tooltip — the one honest sentence for what "write-only" means
-// here (values are never read back, not even by the operator). Verbatim, so it
-// can't drift between call sites.
-const WRITE_ONLY_TOOLTIP =
-  "Write-only: the value can be replaced or removed, but never read back — not even by you.";
 
 // Rungs 2/3 of the SCM safest-path ladder (ScmProviderStep) name their secrets
 // with these prefixes; both are standing resident credentials auto-used by every
@@ -216,8 +211,8 @@ export function SecretsScreen() {
                             Standing
                           </Chip>
                         )}
-                        <Chip tone="cyan" className="gap-1" title={WRITE_ONLY_TOOLTIP}>
-                          <Lock className="size-3" /> write-only
+                        <Chip tone="cyan" className="gap-1" title={WRITE_ONLY.TOOLTIP}>
+                          <Lock className="size-3" /> {WRITE_ONLY.CHIP}
                         </Chip>
                       </span>
                     </div>

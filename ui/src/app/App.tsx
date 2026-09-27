@@ -111,6 +111,14 @@ const UserTypesScreen = React.lazy(() =>
     default: m.UserTypesScreen,
   })),
 );
+// Stored credentials (CS-8, design F-1) — who holds a credential for which
+// model provider, and offboarding's erase. securityOps server-side, like
+// User types; no member route.
+const CredentialsScreen = React.lazy(() =>
+  import("./components/screens/credentials").then((m) => ({
+    default: m.CredentialsScreen,
+  })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({
     default: m.SecretsScreen,
@@ -696,6 +704,7 @@ export default function App() {
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
             <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
+            <Route path="/admin/credentials" element={suspend(<CredentialsScreen />)} />
             <Route path="/admin/secrets" element={suspend(<SecretsScreen />)} />
             <Route path="/admin/audit" element={suspend(<AuditScreen />)} />
             <Route path="/admin/recordings" element={suspend(<RecordingScreen />)} />
