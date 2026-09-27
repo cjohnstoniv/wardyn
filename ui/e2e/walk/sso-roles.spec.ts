@@ -180,6 +180,19 @@ test(`[${RENDER}] one member cannot see or touch another member's workspace — 
 
 test(`[${RENDER}] mapping changes affect the next sign-in`, async ({ page, browser, baseURL }) => {
   await dexSignIn(page, ADMIN_EMAIL);
+  // This walk never finishes the funnel (status.onboarding_complete stays
+  // false), so a fresh context's direct ?step= deep link below would land on
+  // the Welcome hero instead of the People step (onboarding-screen.tsx's
+  // GettingStarted: `!installOnboarded && !seen`) — same seed
+  // 10-approvals-and-egress.spec.ts and people-access.spec.ts's seeded-backend
+  // path already rely on to reach a step directly.
+  await page.evaluate(() => {
+    try {
+      localStorage.setItem("wardyn-onboarding-seen", "1");
+    } catch {
+      /* private mode — ignore */
+    }
+  });
   const email = "stranger@wardyn.local";
   const initial = await api(page, "GET", "/api/v1/access");
   expect(initial.status, initial.text).toBe(200);

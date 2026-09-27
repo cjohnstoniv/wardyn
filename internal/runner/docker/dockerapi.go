@@ -56,6 +56,9 @@ type dockerAPI interface {
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	// ContainerAttach attaches to a created proxy's stdin, the one way its
+	// config reaches it (startWithConfig, #1176).
+	ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error)
 	// ContainerPause / ContainerUnpause back runner.Freezer (FreezeSandbox /
 	// ThawSandbox, RL-6): pause the agent's process in place — memory, disk and
 	// any established TCP connection keep their state — without stopping or

@@ -787,6 +787,49 @@ for spec in "${specs[@]}"; do
   fi
 done
 
+# ROOT-CAUSE EVIDENCE FOR A FAILED WALK (#1224 part 1). The nightly job's own
+# failure snapshot had no pod scheduling data and no wardynd/proxy logs, so "the
+# sso-member run never reached Running" could not be told apart from "it
+# reached Running and then failed for another reason" — the likeliest
+# candidate (node-capacity starvation from an earlier spec's sandbox still
+# holding the single node) stayed unproven for lack of exactly this. Captured
+# HERE, right after the walk's own exit code and before the role walk below
+# re-renders the chart (which restarts wardynd and would blur the pod/event
+# picture this is trying to preserve) and before this job's runner — and its
+# cluster — are torn down. Every capture is best-effort (`|| true`) and
+# time-bounded (`timeout 60`): a capture that hangs or errors must never mask
+# or change the walk's own exit code, which stays exactly ${walk_rc} either
+# way. Written straight into ${EVIDENCE_DIR}, which nightly.yml already
+# uploads whole.
+if [[ "${walk_rc}" -ne 0 ]]; then
+  step "walk failed (rc=${walk_rc}): capturing pod/node/log evidence for root-cause"
+  timeout 60 kubectl --context "${CONTEXT}" get pods -A -o wide \
+    >"${EVIDENCE_DIR}/failure-pods-all.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" describe pods \
+    >"${EVIDENCE_DIR}/failure-describe-pods-${NAMESPACE}.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" describe pods \
+    >"${EVIDENCE_DIR}/failure-describe-pods-${RUNS_NAMESPACE}.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get events --sort-by=.lastTimestamp \
+    >"${EVIDENCE_DIR}/failure-events-${NAMESPACE}.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get events --sort-by=.lastTimestamp \
+    >"${EVIDENCE_DIR}/failure-events-${RUNS_NAMESPACE}.txt" 2>&1 || true
+  # Allocatable AND allocated: `describe node`, not `get node -o wide`, is the
+  # one view that prints both — the "Allocated resources" section at the
+  # bottom is what proves (or clears) node-capacity starvation.
+  timeout 60 kubectl --context "${CONTEXT}" describe node "${KIND_NODE}" \
+    >"${EVIDENCE_DIR}/failure-describe-node.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" \
+    --all-containers --tail=5000 >"${EVIDENCE_DIR}/failure-wardynd-logs.txt" 2>&1 || true
+  # Any per-run proxy pod still around (wardyn.component=proxy — the label
+  # internal/runner/k8s/naming.go stamps every proxy pod with): zero, one or
+  # several depending on exactly where the stuck run got to.
+  for pod in $(timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods \
+                 -l wardyn.component=proxy -o name 2>/dev/null | sed 's|^pod/||'); do
+    timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" logs "${pod}" \
+      --all-containers --tail=5000 >"${EVIDENCE_DIR}/failure-proxy-logs-${pod}.txt" 2>&1 || true
+  done
+fi
+
 # /_seen is the one observation that is not Wardyn asserting about itself: it is
 # what the AWS SDK actually asked the portal to mint. Read through the harness's
 # own port-forward (see SEEN_URL above for why not `kubectl exec`).

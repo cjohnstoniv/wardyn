@@ -146,6 +146,16 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// #1197 L1a: any opt-in landing-page param (view/owner/status/
+	// ended_within/include_killed/workspace/q) branches to the filtered path
+	// below; NONE present keeps this function's pre-#1197 body byte-identical
+	// (runs_list_filter.go's own doc), so every existing caller that sends no
+	// such param — the Recordings pager, the CLI, the SDK, `wardyn run --wait` —
+	// is unaffected.
+	if hasRunsListFilterParams(r.URL.Query()) {
+		s.handleListRunsFiltered(w, r, page)
+		return
+	}
 	if !s.isSecurityOperator(r.Context()) {
 		creatorPager, capable := s.cfg.Store.(store.RunsByCreatorPager)
 		if !capable {

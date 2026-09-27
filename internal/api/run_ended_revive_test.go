@@ -153,12 +153,12 @@ func TestEndedRun_OldTokenRefusedAndReviveMintsAFreshOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kept, err := proxy.LoadConfigBytes(f.rr.cfg)
+	kept, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	kept.RunToken = old.Token
-	if f.rr.cfg, err = json.Marshal(kept); err != nil {
+	if f.rs.cfg, err = json.Marshal(kept); err != nil {
 		t.Fatal(err)
 	}
 	mint := func(tok string) (int, string) {

@@ -40,7 +40,7 @@ func main() {
 		slog.Error("wardyn-proxy: fatal", slog.Any("err", err))
 		os.Exit(1)
 	}
-	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides WARDYN_PROXY_CONFIG_JSON)")
+	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides "+configStdinEnv+" and WARDYN_PROXY_CONFIG_JSON)")
 	// egressCanary is the k8s substrate's boot-time NetworkPolicy-enforcement
 	// probe (see internal/runner/k8s): launched as a throwaway pod with this
 	// flag instead of the normal proxy entrypoint, it TCP-dials host:port (the
@@ -91,12 +91,18 @@ func main() {
 	switch {
 	case *configPath != "":
 		cfg, err = proxy.LoadConfig(*configPath)
+	case os.Getenv(configStdinEnv) == "1":
+		// Docker sidecar path: the driver writes the full config (incl. the
+		// run's egress policy) to stdin once at start.
+		var raw []byte
+		if raw, err = readStdinConfig(os.Stdin, stdinConfigTimeout); err == nil {
+			cfg, err = proxy.LoadConfigBytes(raw)
+		}
 	case os.Getenv("WARDYN_PROXY_CONFIG_JSON") != "":
-		// Sidecar path: the runner driver delivers the full config (incl. the
-		// run's egress policy) as one env var at container create.
+		// A host-run or hand-started proxy: the whole config in one env var.
 		cfg, err = proxy.LoadConfigBytes([]byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON")))
 	default:
-		slog.Error("wardyn-proxy: -config or WARDYN_PROXY_CONFIG_JSON is required")
+		slog.Error("wardyn-proxy: -config, " + configStdinEnv + "=1 or WARDYN_PROXY_CONFIG_JSON is required")
 		os.Exit(1)
 	}
 	if err != nil {
