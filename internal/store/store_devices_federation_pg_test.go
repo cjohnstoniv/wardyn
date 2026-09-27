@@ -490,6 +490,51 @@ func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testin
 	}
 }
 
+// A row's claimed PrevHash pointing at a real, already-accepted hash from a
+// DIFFERENT device's own chain is not "any hash that verifies" — a device may
+// only continue ITS OWN chain. Row 2 recomputes fine entirely on its own
+// (verifyClaimedHashes checks each row only against its OWN claimed
+// PrevHash), so the foreign splice is caught solely by the intra-batch chain
+// check: refused whole, the device's cursor unchanged, nothing accepted.
+func TestPG_Devices_IngestBatchSpliceRefused(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+
+	foreign := federationDevice(t, st)
+	fRow := federationRow(t, pool, foreign, "", 1, "f1", json.RawMessage(`{}`))
+	if res, err := st.IngestDeviceAudit(ctx, foreign.ID, testPeer, []types.FederatedAuditEvent{fRow}); err != nil || res.Accepted != 1 {
+		t.Fatalf("seed foreign device row: %+v %v", res, err)
+	}
+
+	d := federationDevice(t, st)
+	row1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
+	// row2 claims to continue from the FOREIGN device's real, already-accepted
+	// hash instead of row1's — a splice, not a rewrite: its own RowHash is
+	// self-consistent (audit_row_hash of ITS claimed PrevHash and fields).
+	row2 := federationRow(t, pool, d, fRow.RowHash, 2, "a2", json.RawMessage(`{}`))
+
+	res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{row1, row2})
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("batch splice onto a foreign device's hash: err = %v, want ErrConflict", err)
+	}
+	if res.Accepted != 0 {
+		t.Fatalf("refused splice batch accepted %d rows, want 0", res.Accepted)
+	}
+	devices, err := st.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dv := range devices {
+		if dv.ID == d.ID && dv.LastSeq != 0 {
+			t.Errorf("device cursor advanced to seq=%d despite the refused splice, want 0", dv.LastSeq)
+		}
+	}
+	if got := storedFederated(t, pool, d.ID); len(got) != 0 {
+		t.Fatalf("refused splice batch stored %d rows for the device, want 0", len(got))
+	}
+}
+
 // A retry whose already-ingested prefix was edited is refused: every claimed
 // hash is recomputed, the skipped prefix included.
 func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
