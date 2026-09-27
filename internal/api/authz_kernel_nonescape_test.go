@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -284,11 +285,15 @@ var kernelLaunchFields = []kernelLaunchField{
 	{capPolicy, kernelPolicyID.String(), "runs.policy", "policy_id"},
 }
 
-// kernelTier is one principal the launch door can be asked by, and the tier
-// the resolver's oracle must see it as.
+// kernelTier is one principal the launch door can be asked by, how its
+// request is authenticated, and the tier the resolver's oracle must see it as.
 type kernelTier struct {
 	name, oracle string
-	session      func(t *testing.T, groups []string) *http.Cookie
+	// adminView: an SSO session in the Admin view. The S1 launch door (#639)
+	// answers it 409 admin_view before any capability decision, so such a row
+	// pins that door instead of the capability gate behind it.
+	adminView bool
+	auth      func(t *testing.T, st *govEscapeStore, groups []string, r *http.Request)
 }
 
 func kernelSession(t *testing.T, sess oidc.Session) *http.Cookie {
@@ -302,30 +307,81 @@ func kernelSession(t *testing.T, sess oidc.Session) *http.Cookie {
 	return signedSessionCookie(payload)
 }
 
+func kernelSSO(sess oidc.Session) func(*testing.T, *govEscapeStore, []string, *http.Request) {
+	return func(t *testing.T, _ *govEscapeStore, groups []string, r *http.Request) {
+		sess.Groups = groups
+		r.AddCookie(kernelSession(t, sess))
+	}
+}
+
+// kernelToken authenticates as the caller's own API token of role: the way a
+// security admin (or anyone) launches from the CLI or CI. A nil group list is
+// the stale snapshot, as a truncated one is on a token.
+func kernelToken(role string) func(*testing.T, *govEscapeStore, []string, *http.Request) {
+	return func(_ *testing.T, st *govEscapeStore, groups []string, r *http.Request) {
+		truncated := groups == nil
+		st.tokenRaw = apiTokenPrefix + "kernel"
+		st.token = &types.APIToken{ID: uuid.New(), Principal: capSub, Email: capEmail, Role: role,
+			UserType: types.UserTypeStandard, Groups: groups, GroupsTruncated: &truncated, Name: "kernel"}
+		r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
+	}
+}
+
+// kernelTiers is every way a launch reaches the door. An admin launches with
+// the deployment's admin token or through the user view; a security admin
+// with their own token or through the user view; an Admin-view browser
+// session does not launch at all (#639), which its two rows pin.
 var kernelTiers = []kernelTier{
-	{"admin", oidc.RoleAdmin, func(t *testing.T, g []string) *http.Cookie {
-		return kernelSession(t, oidc.Session{Role: oidc.RoleAdmin, Groups: g})
+	{name: "admin token", oracle: oidc.RoleAdmin, auth: func(_ *testing.T, _ *govEscapeStore, _ []string, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+adminToken)
 	}},
-	{"security admin", oidc.RoleSecurityAdmin, func(t *testing.T, g []string) *http.Cookie {
-		return kernelSession(t, oidc.Session{Role: oidc.RoleSecurityAdmin, Groups: g})
-	}},
-	{"user", oidc.RoleUser, func(t *testing.T, g []string) *http.Cookie {
-		return kernelSession(t, oidc.Session{Role: oidc.RoleUser, Groups: g})
-	}},
+	{name: "security admin token", oracle: oidc.RoleSecurityAdmin, auth: kernelToken(oidc.RoleSecurityAdmin)},
+	{name: "user", oracle: oidc.RoleUser, auth: kernelSSO(oidc.Session{Role: oidc.RoleUser})},
 	// An admin looking through the user view: the session still says admin,
 	// and every decision must be the user's.
-	{"user in view", oidc.RoleUser, func(t *testing.T, g []string) *http.Cookie {
-		return kernelSession(t, oidc.Session{Role: oidc.RoleAdmin, MemberMode: true, UserViewType: types.UserTypeStandard, Groups: g})
-	}},
+	{name: "user in view", oracle: oidc.RoleUser,
+		auth: kernelSSO(oidc.Session{Role: oidc.RoleAdmin, MemberMode: true, UserViewType: types.UserTypeStandard})},
+	{name: "admin, Admin view", oracle: oidc.RoleAdmin, adminView: true, auth: kernelSSO(oidc.Session{Role: oidc.RoleAdmin})},
+	{name: "security admin, Admin view", oracle: oidc.RoleSecurityAdmin, adminView: true,
+		auth: kernelSSO(oidc.Session{Role: oidc.RoleSecurityAdmin})},
+}
+
+// kernelUserTier is the signed-in user row, the principal G3 compares doors as.
+var kernelUserTier = kernelTiers[2]
+
+// kernelLaunch POSTs body to path as tier.
+func kernelLaunch(t *testing.T, srv *Server, st *govEscapeStore, tier kernelTier, groups []string, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	tier.auth(t, st, groups, r)
+	w := httptest.NewRecorder()
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
+	return w
+}
+
+// kernelS1Door reports whether the S1 launch door (#639) is in the source.
+// ponytail: #639 is not on main yet; once it is, drop this and pin 409 always.
+func kernelS1Door(t *testing.T) bool {
+	t.Helper()
+	for _, f := range parseAPISources(t) {
+		for _, d := range f.file.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "refuseAdminViewLaunch" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestKernelNonescape is design G2 at the launch door: every kind run.create
-// decides x every tier that can reach it x every grant state, through the real
-// router, against the resolver's seven-step oracle (resolverCase.want). A
-// field the door stops asking about, a tier the door exempts that the oracle
+// decides x every way a launch reaches it x every grant state, through the
+// real router, against the resolver's seven-step oracle (resolverCase.want).
+// A field the door stops asking about, a tier the door exempts that the oracle
 // does not (or the reverse), and a grant state the door reads differently all
-// fail here.
+// fail here. Every row must reach the door: a 401 or a 409 is a row that
+// tested nothing, except the Admin-view rows, whose answer IS the S1 409.
 func TestKernelNonescape(t *testing.T) {
+	s1 := kernelS1Door(t)
 	for _, f := range kernelLaunchFields {
 		for _, tier := range kernelTiers {
 			t.Run(f.kind+"/"+tier.name, func(t *testing.T) {
@@ -351,12 +407,27 @@ func TestKernelNonescape(t *testing.T) {
 					body := map[string]any{"agent": "claude-code", "task": "kernel nonescape"}
 					body[f.field] = f.value
 					raw, _ := json.Marshal(body)
-					w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", tier.session(t, groups), string(raw))
+					w := kernelLaunch(t, srv, st, tier, groups, "/api/v1/runs", string(raw))
 					refused := false
 					for _, ev := range rec.snapshot()[before:] {
 						if ev.Action == "authz.denied" && ev.Target == f.target {
 							refused = true
 						}
+					}
+					var answer struct {
+						Reason string `json:"reason"`
+					}
+					_ = json.Unmarshal(w.Body.Bytes(), &answer)
+					if tier.adminView && s1 {
+						if w.Code != http.StatusConflict || answer.Reason != "admin_view" || refused {
+							t.Errorf("%v: status %d reason %q, refused on %s = %v; want 409 admin_view before any capability decision\n%s",
+								c, w.Code, answer.Reason, f.target, refused, w.Body.String())
+						}
+						continue
+					}
+					if w.Code == http.StatusUnauthorized || w.Code == http.StatusConflict {
+						t.Errorf("%v: status %d: the request never reached the door\n%s", c, w.Code, w.Body.String())
+						continue
 					}
 					allowed, _ := c.want(resolverDoor{}, f.kind)
 					if refused == allowed || refused && w.Code != http.StatusForbidden {

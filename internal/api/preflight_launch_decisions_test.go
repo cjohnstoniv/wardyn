@@ -64,10 +64,10 @@ func TestPreflightDecisionsEqualLaunch(t *testing.T) {
 		fields: []kernelLaunchField{{kind: capEgressHost, value: "wide.example"}, {kind: capSecret, value: govCorpSecret}},
 	}
 
-	user := kernelTiers[2]
+	user := kernelUserTier
 	ask := func(path string, groups []string, body []byte) doorDecisions {
 		before := len(rec.snapshot())
-		w := doSSO(t, srv, http.MethodPost, path, user.session(t, groups), string(body))
+		w := kernelLaunch(t, srv, st, user, groups, path, string(body))
 		return decisionsOf(t, rec.snapshot()[before:], w)
 	}
 	refusals, drops := 0, 0
