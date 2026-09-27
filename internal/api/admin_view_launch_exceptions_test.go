@@ -48,7 +48,7 @@ func recordSrvWithOIDC(t *testing.T, fake store.Store) *Server {
 // (capabilities_test.go) to the same call.
 type noProfileProbeStore struct{ *probeStore }
 
-func (noProfileProbeStore) ResolveGovernanceProfile(context.Context, []string, []string) (
+func (noProfileProbeStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (
 	*types.GovernanceProfile, types.CapabilitySubjectType, error,
 ) {
 	return nil, "", nil
