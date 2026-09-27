@@ -357,16 +357,27 @@ attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
 hostname would otherwise hand console cookies to sandbox code: every forwarded
 request has **all `wardyn_*` cookies**, `Authorization`, `Proxy-Authorization`
 and any `?ticket` stripped, and every response has `Set-Cookie: wardyn_*`
-dropped (cookie tossing). Every other cookie is forwarded by default. If the
-relay host sits under a parent domain other applications share, the browser
-also sends their `Domain=` cookies here, and the `Cookie` header does not say
-which host set a cookie: set `WARDYN_UI_SANDBOX_STRIP_COOKIES` to
-`allow:<the app's cookie names>` so only those reach the app, or to
-`deny:<names>` to strip known ones. The other direction needs no setting: a
-`Set-Cookie` from the app that carries a `Domain` attribute is always dropped,
-so a sandbox cannot plant a cookie on sibling hosts, and so is one with no name
-(a browser would send its value back verbatim, e.g. as a forged
-`wardyn_ui_sess`). `X-Forwarded-*` is removed and deliberately not
+dropped (cookie tossing), on a `1xx` as well as the final response. Every
+other cookie is forwarded by default. If the relay host sits under a parent
+domain other applications share, the browser also sends their `Domain=`
+cookies here, and the `Cookie` header does not say which host set a cookie:
+set `WARDYN_UI_SANDBOX_STRIP_COOKIES` to `allow:<the app's cookie names>` so
+only those reach the app, or to `deny:<names>` to strip known ones.
+`allow:__Host-*` is the one choice the browser itself guarantees host-only: it
+refuses to store a `__Host-` cookie that carries `Domain=`, so no sibling can
+set one here. The other direction needs no setting: a `Set-Cookie` from the app
+that carries a `Domain` attribute is always dropped, so the app's server cannot
+plant a cookie on sibling hosts, and so is one with no name (a browser would
+send its value back verbatim, e.g. as a forged `wardyn_ui_sess`).
+
+**Both controls act on HTTP headers only.** The relayed page is the sandbox's
+own JavaScript on the relay origin: `document.cookie` can still set a
+`Domain=<parent>` cookie and read every non-HttpOnly cookie a sibling host set
+for the parent domain, so the policy keeps only **HttpOnly** sibling cookies
+away from the app. The real bound is the relay host's registrable domain: it
+must not share one with anything whose non-HttpOnly cookies matter. Host mode
+(`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) on a registrable domain of its own is the
+answer. `X-Forwarded-*` is removed and deliberately not
 re-added — the sandbox has no business learning the operator's IP — and every
 gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
 ticket cannot leak to whatever the app links to.

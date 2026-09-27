@@ -1599,15 +1599,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Security
 
 - **The UI-sandbox gateway drops a sandbox app's `Set-Cookie` that carries a `Domain` attribute, and
-  can keep other hosts' cookies away from the app (#1158).** A relayed app confined to its own origin
-  never needs `Domain=`; with it, a sandbox on a relay host under a shared parent domain could set a
-  cookie every sibling host receives. Any `Domain` attribute, in any case or spacing, now drops the
-  whole `Set-Cookie`, as does one with no name (a browser stores it as a nameless cookie and sends its
-  value back verbatim, so `=wardyn_ui_sess=x` came back named as the relay's session cookie). The new
+  can keep other hosts' HttpOnly cookies away from the app (#1158).** A relayed app confined to its
+  own origin never needs `Domain=`; with it, the app's server on a relay host under a shared parent
+  domain could set a cookie every sibling host receives. Any `Domain` attribute, in any case or
+  spacing, now drops the whole `Set-Cookie`, as does one with no name (a browser stores it as a
+  nameless cookie and sends its value back verbatim, so `=wardyn_ui_sess=x` came back named as the
+  relay's session cookie). These rules now also apply to a `1xx` response such as `103 Early Hints`,
+  whose headers the reverse proxy used to copy through unfiltered. The new
   `WARDYN_UI_SANDBOX_STRIP_COOKIES` sets which inbound cookies reach the app: `allow:<names>` forwards
-  only those, `deny:<names>` strips them (`prefix*` for a prefix). Unset, every cookie except
-  `wardyn_*` is forwarded, as before. Boot refuses a malformed value, and an `allow:` entry naming a
-  `wardyn_*` cookie, which is never forwarded. See docs/UI-SANDBOXES.md, "Header hygiene".
+  only those, `deny:<names>` strips them (`prefix*` for a prefix); `allow:__Host-*` is the choice the
+  browser itself guarantees host-only. Unset, every cookie except `wardyn_*` is forwarded, as before.
+  With the gateway on, boot refuses a malformed value and an `allow:` entry naming a `wardyn_*`
+  cookie, which is never forwarded. Both controls act on headers only: the relayed page's own
+  JavaScript can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies through
+  `document.cookie`, so a relay host must not share a registrable domain with anything whose
+  non-HttpOnly cookies matter — host mode on a registrable domain of its own is the answer. See
+  docs/UI-SANDBOXES.md, "Header hygiene".
 
 - **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
   (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,

@@ -362,8 +362,24 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	s.uiReverseProxy().ServeHTTP(w, r.WithContext(ctx))
+	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
 }
+
+// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say).
+// ReverseProxy copies an interim response's headers straight onto the writer
+// and never runs ModifyResponse for it, so without this uiStripOutbound's
+// rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and
+// hijack reachable through http.ResponseController.
+type uiInterimWriter struct{ http.ResponseWriter }
+
+func (w uiInterimWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		uiFilterSetCookie(w.Header())
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
 // transport) on first use. Per-request state — which run, which port — rides
@@ -471,21 +487,22 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 // would be an authentication attack, not a rendering quirk), nor set one that
 // escapes its own host (uiSetCookieAllowed).
 func uiStripOutbound(resp *http.Response) error {
-	raw := resp.Header.Values("Set-Cookie")
+	uiFilterSetCookie(resp.Header)
+	return nil
+}
+
+// uiFilterSetCookie keeps only the Set-Cookie values uiSetCookieAllowed passes.
+func uiFilterSetCookie(h http.Header) {
+	raw := h.Values("Set-Cookie")
 	if len(raw) == 0 {
-		return nil
+		return
 	}
-	kept := make([]string, 0, len(raw))
+	h.Del("Set-Cookie")
 	for _, sc := range raw {
 		if uiSetCookieAllowed(sc) {
-			kept = append(kept, sc)
+			h.Add("Set-Cookie", sc)
 		}
 	}
-	resp.Header.Del("Set-Cookie")
-	for _, sc := range kept {
-		resp.Header.Add("Set-Cookie", sc)
-	}
-	return nil
 }
 
 // uiIsWardynCookie matches the reserved cookie namespace case-insensitively.

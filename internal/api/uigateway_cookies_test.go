@@ -5,9 +5,12 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/textproto"
 	"net/url"
 	"slices"
 	"testing"
@@ -149,5 +152,52 @@ func TestUIGateway_OutboundSetCookieRules(t *testing.T) {
 				t.Fatalf("Set-Cookie reaching the browser = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// TestUIGateway_InterimResponseSetCookieRules: ReverseProxy copies a 1xx's
+// headers straight to the browser without running ModifyResponse, so a 103
+// Early Hints was a Set-Cookie channel none of the rules above saw. The same
+// rules apply to it; the rest of the 1xx (its Link) is untouched.
+func TestUIGateway_InterimResponseSetCookieRules(t *testing.T) {
+	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for _, sc := range []string{"wardyn_ui_sess=forged; Path=/", "wide=1; Domain=example.com", "=wardyn_ui_sess=x", "app_hint=1"} {
+			w.Header().Add("Set-Cookie", sc)
+		}
+		w.Header().Set("Link", "</x.js>; rel=preload; as=script")
+		w.WriteHeader(http.StatusEarlyHints)
+		w.Header().Del("Set-Cookie")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	sess := h.openSession()
+	gw := httptest.NewServer(h.gateway)
+	defer gw.Close()
+
+	var hints []textproto.MIMEHeader
+	trace := &httptrace.ClientTrace{Got1xxResponse: func(code int, hdr textproto.MIMEHeader) error {
+		if code == http.StatusEarlyHints {
+			hints = append(hints, hdr)
+		}
+		return nil
+	}}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace),
+		http.MethodGet, gw.URL+uiRelayPrefix(h.run.ID, "code")+"/ide", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(sess)
+	resp, err := gw.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(hints) != 1 {
+		t.Fatalf("status %d, %d early hints; want 200 after one 103", resp.StatusCode, len(hints))
+	}
+	if got := hints[0]["Set-Cookie"]; !slices.Equal(got, []string{"app_hint=1"}) {
+		t.Fatalf("103 Set-Cookie = %q, want only the app's own host cookie", got)
+	}
+	if hints[0].Get("Link") == "" {
+		t.Fatal("103 lost its Link header")
 	}
 }
