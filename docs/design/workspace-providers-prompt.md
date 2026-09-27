@@ -714,7 +714,7 @@ member meets these on the launch path; the console renders them verbatim under i
 |---|---|
 | `ADMIT_MEMBER` | this repository's host is not an enabled git provider — ask an admin |
 | `AGENT_NOT_ENABLED(id)` | agent: "{id}" is not an enabled agent on this deployment — ask an admin |
-| `LLM_MECHANISM_DEAD(mechanism, ts)` | this run's model access is configured as {mechanism}, and that credential expired at {ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider. |
+| `LLM_MECHANISM_DEAD(mechanism, ts)` | This run's model access is configured as {mechanism}, and that credential expired at {ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider. |
 
 `ADMIT_MEMBER` is the 403 / 422 body a member meets at every admission site (the capability door
 audits `authz.denied`; the admission miss is a 422 with no audit) — it names the kind and NEVER a
