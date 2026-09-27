@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -268,6 +269,14 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if apiTokenIDFromContext(ctx) != uuid.Nil {
 		writeError(w, http.StatusForbidden,
 			"an API token cannot create another API token — sign in to the console to mint one")
+		return
+	}
+	// The same refusal for a portal's delegated token (#1142): the allow-list
+	// already keeps it off this route, and this keeps a list edit from turning
+	// ten minutes of delegation into a permanent credential.
+	if _, delegated := audit.DelegationFrom(ctx); delegated {
+		writeError(w, http.StatusForbidden,
+			"a delegated token cannot create an API token — sign in to the console to mint one")
 		return
 	}
 	// Member mode refuses, it does not clamp. store.RefreshAPITokenIdentity

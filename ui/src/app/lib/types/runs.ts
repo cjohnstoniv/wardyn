@@ -208,6 +208,10 @@ export interface AgentRun {
   // sent as an explicit spec.
   preset?: string;
   preset_version?: number;
+  // AgentRun.CreatedVia (migration 0092, #1142): the registered portal this
+  // run was launched through on its owner's behalf. Absent for a run its
+  // owner launched themselves.
+  created_via?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

@@ -969,6 +969,11 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = s.cfg.Now().UTC()
 	}
+	// Delegation is recorded as delegation (#1142): every row a delegated
+	// request writes names the portal beside the person (delegation.go).
+	if via, ok := audit.DelegationFrom(ctx); ok {
+		ev.Data = audit.StampDelegation(ev.Data, via)
+	}
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
