@@ -482,7 +482,7 @@ func TestApplyWorkspaceCreds_NoBindingIsNoOp(t *testing.T) {
 // TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp is the create-path twin
 // of TestApplyWorkspaceCreds_NoBindingIsNoOp: zero workspaces, zero
 // integrations, no explicit integration_id — must resolve to nothing. kind==""
-// is exactly the gate runs.go keys the run.workspace.creds audit off (it emits
+// is exactly the gate runs.go keys the run.workspace_cred.resolve audit off (it emits
 // only when kind != ""), so an empty kind is what proves the no-op never
 // audits.
 func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
@@ -495,7 +495,7 @@ func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
 		t.Fatalf("bedrockRef = %+v, want nil", bedrockRef)
 	}
 	if kind != "" {
-		t.Fatalf("kind = %q, want empty (a no-op must not audit run.workspace.creds)", kind)
+		t.Fatalf("kind = %q, want empty (a no-op must not audit run.workspace_cred.resolve)", kind)
 	}
 	if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
 		t.Fatal("no-op case must not mutate the spec")

@@ -17,7 +17,7 @@ document is that process, written down.
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`,
+  `license-headers`, `gitleaks`), `dco`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
   was missing from this list entirely. `sbom-stub` used to be named here and is
   **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
@@ -46,12 +46,12 @@ The live-service jobs are outside `make release-check`: `conformance`
 (`make test-conformance-k8s`, needs a kind/Calico cluster and the test images
 from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
-cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `trivy` (docker builds) and nightly's `buildx-smoke`. Their checks can run
-locally with the required services; follow `.github/workflows/ci.yml` for
-image builds, cluster setup, and environment variables. Run the Playwright
-lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
-suite prints a loud SKIPPED line.
+cluster; the same job then boots the desktop compose envelope), the
+Playwright `ui-e2e` job, `trivy` (docker builds) and nightly's `buildx-smoke`.
+Their checks can run locally with the required services; follow
+`.github/workflows/ci.yml` for image builds, cluster setup, and environment
+variables. Run the Playwright lane with `scripts/run-ui-e2e.sh`. Without
+`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
 Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
 the egress proxy's worst inspection load through it under the sidecar's 256
@@ -188,6 +188,17 @@ another maintainer. Use the chosen version throughout this checklist.
    a past review found the generator gained a Kubernetes-gated bucket with
    nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
    `make test-gaps` is a standalone target, not in `make ci`.
+
+   **Also snapshot the proxy config key set:** generate the previous-release key set AT THE TAG
+   (check out the tag, run the golden with `WARDYN_UPDATE_GOLDEN=1 go test ./internal/egress/proxy/
+   -run TestConfigKeySet`) rather than copying `current.txt` — a patch release is cut from
+   `release/X.Y`, whose tree can differ from whatever `current.txt` reads on the branch you are
+   releasing from. Save the generated file as
+   `internal/egress/proxy/testdata/config-keys/vX.Y.Z.txt` and set `previousProxyTag` in
+   `internal/api/proxy_config_skew_test.go` to `vX.Y.Z`, removing the older file. Operators pin the
+   proxy image apart from wardynd, and that test loads every config dispatch writes against the last
+   release's key set. When a fail-closed case's key (e.g. `policy.push_rules`) reaches the previous
+   release, update or drop that case in `internal/api/proxy_config_skew_test.go`.
 
    **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
    parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs

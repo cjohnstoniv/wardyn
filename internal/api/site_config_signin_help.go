@@ -25,7 +25,7 @@ const signInHelpURLMax = 2048
 var (
 	errSignInHelpTextTooLong  = errors.New("sign_in_help_text: longer than 1,000 characters — it renders under a refusal on the sign-in page")
 	errSignInHelpTextControl  = errors.New("sign_in_help_text: contains a line break, control character or invisible formatting character — it renders as one plain paragraph on the sign-in page")
-	errSignInHelpURLScheme    = errors.New("sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in")
+	errSignInHelpURLScheme    = errors.New("sign_in_help_url: must be an https:// address — it is shown to people who have not signed in")
 	errSignInHelpURLMalformed = errors.New("sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in")
 )
 
@@ -66,6 +66,25 @@ func validateSignInHelp(text, link string) error {
 		return errSignInHelpURLMalformed
 	}
 	return nil
+}
+
+// signInHelpURLHTTPS is the write's https-only rule (#489), checked against the
+// stored link because validateSignInHelp's shape check still admits http://:
+// a link stored before the rule keeps publishing, and a save that echoes it back
+// unchanged (a console save of the whole document, an MDM re-apply) is not
+// refused for a field it did not change. setup/status warns about that link
+// (signInHelpHTTPCheck) until an admin replaces it.
+func signInHelpURLHTTPS(link, stored string) error {
+	if link != stored && signInHelpIsHTTP(link) {
+		return errSignInHelpURLScheme
+	}
+	return nil
+}
+
+// signInHelpIsHTTP reports whether link is an http:// address.
+func signInHelpIsHTTP(link string) bool {
+	u, err := url.Parse(link)
+	return err == nil && strings.EqualFold(u.Scheme, "http")
 }
 
 // signInHelpPublic is what /healthz may publish: each stored value re-checked

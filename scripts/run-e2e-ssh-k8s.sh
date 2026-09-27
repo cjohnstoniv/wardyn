@@ -24,7 +24,7 @@
 #   - authorization, both arms (the compose lane's counterpart checks): a
 #     second principal's MEMBER key is refused on a run it does not own and
 #     the refusal is audited, while a third principal's ADMIN-role key reaches
-#     that same run with data.override=true on the ssh.auth row
+#     that same run with data.override=true on the ssh.authenticate row
 #   - in-place promotion (#131): a `wardyn attach` client mints its own
 #     ticket and holds the terminal over the WEB WebSocket, a second `ssh -tt`
 #     joins and is admitted read-only (the notice on ITS stderr), the web
@@ -308,9 +308,9 @@ if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, publi
 else
   denial_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/foreign_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo should-never-run" 2>&1)"
   denial_rc=$?
-  n="$(audit_probe "[.[] | select(.action==\"ssh.auth\" and .outcome==\"failure\" and .target==\"${FOREIGN_FP}\" and .data.reason==\"not the run owner\")]")"
+  n="$(audit_probe "[.[] | select(.action==\"ssh.authenticate\" and .outcome==\"failure\" and .target==\"${FOREIGN_FP}\" and .data.reason==\"not the run owner\")]")"
   if [[ "${denial_rc}" -ne 0 && "${denial_out}" != *"should-never-run"* && "${n}" -ge 1 ]]; then
-    pass "member-key denial: non-owner, non-admin key refused on k8s (rc=${denial_rc}) and audited ssh.auth failure reason=\"not the run owner\""
+    pass "member-key denial: non-owner, non-admin key refused on k8s (rc=${denial_rc}) and audited ssh.authenticate failure reason=\"not the run owner\""
   else
     fail "member-key denial: rc=${denial_rc} out='${denial_out}' audited_denial_rows=${n}"
   fi
@@ -330,9 +330,9 @@ if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, publi
 else
   override_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/admin_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo wardyn-override-ok" 2>&1)"
   override_rc=$?
-  n="$(audit_probe "[.[] | select(.action==\"ssh.auth\" and .outcome==\"success\" and .target==\"${ADMIN_FP}\" and .data.override==true)]")"
+  n="$(audit_probe "[.[] | select(.action==\"ssh.authenticate\" and .outcome==\"success\" and .target==\"${ADMIN_FP}\" and .data.override==true)]")"
   if [[ "${override_rc}" -eq 0 && "${override_out}" == *"wardyn-override-ok"* && "${n}" -ge 1 ]]; then
-    pass "admin override: admin-role key reached a run it does not own on k8s, ssh.auth success audited with data.override=true"
+    pass "admin override: admin-role key reached a run it does not own on k8s, ssh.authenticate success audited with data.override=true"
   else
     fail "admin override: rc=${override_rc} out='${override_out}' audited_override_rows=${n}"
   fi

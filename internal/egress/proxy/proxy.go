@@ -83,7 +83,7 @@ type Proxy struct {
 	// injection or intercept_tls) — a CA minted only for artifact token injection
 	// must NOT make Anthropic/OpenAI MITM-eligible. See isMITMHost / handleConnect.
 	mitmLLM bool
-	// blindHosts deduplicates the one-time llm.scan.blind signal emitted when an
+	// blindHosts deduplicates the one-time llm.scan.bypass signal emitted when an
 	// inspection-enabled run tunnels to an LLM host over opaque CONNECT (no MITM
 	// yet), so coverage is reported honestly without flooding the audit log.
 	blindMu    sync.Mutex
@@ -849,7 +849,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.mitmConnect(w, r, host, port)
 			return
 		}
-		// Opaque tunnel (no CA, or Bedrock/SigV4). Record a one-time llm.scan.blind
+		// Opaque tunnel (no CA, or Bedrock/SigV4). Record a one-time llm.scan.bypass
 		// ONLY when inspection was expected, so audit never implies coverage we
 		// don't have (an injection-only run with no scanner is not "blind").
 		if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {

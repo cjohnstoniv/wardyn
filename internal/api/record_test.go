@@ -414,7 +414,7 @@ func TestReconcileRecordRun_CaughtCountsDenyAndPending(t *testing.T) {
 			egressAllowEvent(runID, "pypi.org"),
 			{RunID: &runID, Action: "egress.deny", Outcome: "denied", Target: "example.com",
 				Data: mustJSON(map[string]any{"host": "example.com", "method": "GET", "rule_source": "approval:denied"})},
-			{RunID: &runID, Action: "egress.pending", Outcome: "success", Target: "files.pythonhosted.org",
+			{RunID: &runID, Action: "egress.hold", Outcome: "success", Target: "files.pythonhosted.org",
 				Data: mustJSON(map[string]any{"host": "files.pythonhosted.org", "method": "GET", "rule_source": "approval:pending"})},
 		},
 	}

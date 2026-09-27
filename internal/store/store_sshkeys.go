@@ -41,7 +41,7 @@ func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPubli
 func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error) {
 	const q = `
 		SELECT ` + sshKeyCols + `
-		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`
+		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC, fingerprint`
 	return collect(ctx, s.Pool, "list", "ssh keys", q, []any{principal}, scanSSHKey)
 }
 

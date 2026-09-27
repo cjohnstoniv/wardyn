@@ -83,6 +83,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     // suite never has to stand up the health / ssh-key fetches.
     principal: null,
     operator: false,
+    view: "user",
     grants: [],
     egress: [],
     heldCount: 0,
@@ -361,6 +362,21 @@ describe("RunCanvas — the SSH tile follows the card's own owner-OR-admin gate"
           operator: false,
           principal: "bob@example.com",
           run: { ...RUN, created_by: "someone-else@example.com", state: "RUNNING" } as WidgetContext["run"],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  // M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries
+  // no Connect-via-SSH door at all, even for a super admin on their OWN run.
+  it("keeps it away from the admin view, even on the admin's own run", () => {
+    expect(
+      RUN_WIDGETS.ssh.available?.(
+        ctx({
+          view: "admin",
+          operator: true,
+          principal: "admin@example.com",
+          run: { ...RUN, created_by: "admin@example.com", state: "RUNNING" } as WidgetContext["run"],
         }),
       ),
     ).toBe(false);

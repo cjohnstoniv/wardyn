@@ -23,5 +23,8 @@ export interface SSHPublicKey {
   // nobody can see it.
   role: string;
   role_checked_at?: string; // when `role` was last (re-)stamped; absent/undefined for a pre-0046 row
+  // Registered in the user view (migration 0070): member rights for good, the
+  // sign-in re-stamp never promotes it. docs/SSH.md §Bounds.
+  capped: boolean;
   created_at: string;
 }

@@ -37,6 +37,7 @@ import { useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard
 import { UNSAVED } from "../../../lib/unsaved-copy";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
+import { IMAGES } from "../../../lib/availability-copy";
 import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
@@ -47,9 +48,10 @@ import { Segmented } from "../permissions";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
+import { ImagesTab } from "./images-tab";
 import { StorageTab } from "./storage-tab";
 
-type Tab = "git" | "storage" | "agents";
+type Tab = "git" | "storage" | "agents" | "images";
 type ScreenStatus = "loading" | "forbidden" | "error" | "ready";
 
 const EMPTY: WorkspaceProviders = {};
@@ -245,6 +247,8 @@ export function ProvidersScreen() {
               // radio, the credential-source toggle. Present, not hidden —
               // see the file header.
               { value: "agents", label: AGENTS.AGENTS_TITLE, dirty: agentsDirty },
+              // #923: the image catalog, each image with its Available to.
+              { value: "images", label: IMAGES.TAB },
             ]}
           />
 
@@ -314,6 +318,8 @@ export function ProvidersScreen() {
               onDirtyChange={onAgentsDirtyChange}
             />
           )}
+          {/* Images reads and writes itself too; its one teal is Add image. */}
+          {tab === "images" && <ImagesTab />}
           {/* One teal button at a time (CONSOLE-RULES §6, prompt §4): in
               the legacy-open empty state the Git tab's own banner action is
               the state's one affirmative, so the screen's Save providers is
@@ -323,7 +329,7 @@ export function ProvidersScreen() {
               stays; the banner's Add steps down to outline — git-tab.tsx's
               `loadedEmpty`), and a first row added on a fresh install is one
               too (Save appears the moment the draft has a row). */}
-          {tab !== "agents" && !(tab === "git" && loadedEmpty && (draft.git ?? []).length === 0) && (
+          {tab !== "agents" && tab !== "images" && !(tab === "git" && loadedEmpty && (draft.git ?? []).length === 0) && (
             <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
               {/* #217 — a disabled control states its reason BESIDE it, not
                   only in a title tooltip a keyboard or a phone never shows. */}

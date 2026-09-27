@@ -57,7 +57,7 @@ export function TerminalConnectionStatus({
           {reconnecting ? TERMINAL.RECONNECTING_LINE(attempt, maxAttempts) : TERMINAL.CLOSED_TITLE}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {reconnecting ? TERMINAL.RECONNECTING_HINT : TERMINAL.CLOSED_BODY}
+          {reconnecting ? TERMINAL.RECONNECTING_HINT : TERMINAL.CLOSED_BODY(maxAttempts)}
         </p>
       </div>
       {!reconnecting && (

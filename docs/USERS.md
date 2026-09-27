@@ -1,4 +1,4 @@
-# Wardyn for members
+# Wardyn for users
 
 Someone else runs this control plane. You sign in, and you run governed
 sandboxes inside the ceiling your admin set. There is nothing to install.
@@ -26,6 +26,30 @@ Your admin can see this page's world for themselves without a second login —
 [OPERATIONS.md § Exercising member mode as an admin](OPERATIONS.md#exercising-member-mode-as-an-admin)
 — which is worth knowing when you report something: they can usually look at
 exactly what you are looking at.
+
+**Autonomy levels (0.8).** If your admin has set an autonomy rubric on your
+profile, it caps what a run may do unattended, graded on what your run actually
+reaches and holds — not on you personally. Four levels: `L0` (attended —
+interactive only), `L1` (gated — non-interactive runs are allowed, but a
+claude-code run's tool approvals are switched from `auto` to `hold`, so the
+agent still stops for you at every gated call), `L2` (unattended — auto-approval
+and seeded auto tools are allowed), `L3` (adds `task_mode=exec`, unsupervised
+execution). Below `L3`, an interactive run with a task must use
+`interactive_start=agent`; the shell startup form (`interactive_start` unset or
+`shell`) runs your task at sandbox boot before anyone attaches, and is refused
+(`runs.interactive_start`). The level is graded on your run's egress reach,
+whether it holds a secret and how powerful one, and its confinement class — the
+agent you picked does not change the level, though at `L1` it can get a
+non-interactive run refused (below). A run whose shape exceeds what your
+resolved level permits is refused `governance_profile`, the same refusal a
+denied `task_mode` or interactive flag already gives you — see
+[OPERATIONS.md § Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404).
+A non-interactive claude-code run at `L1` is not refused for lacking
+supervision; it launches with its tool approvals derived to `hold` and the
+create response carries a warning saying so. Any other agent (codex-cli, or a
+bring-your-own image) has no tool-approval lane to derive a hold into, so the
+same run is refused instead (`runs.agent`) — launch claude-code, or launch
+interactively.
 
 Three things worth naming here, because they read as bugs otherwise:
 
@@ -83,10 +107,14 @@ older daemon rather than "nothing is wrong":
 - `user_drive_denied_by_profile` — the **door**: the name of the governance
   profile that refuses to mount a drive for you, or `""` when none does.
 - `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
-  one of four tokens saying it could **not**, and which remedy that implies:
+  one of five tokens saying it could **not**, and which remedy that implies:
   - `groups_snapshot_stale` — your group membership cannot be read, so an
     allocation may exist and be invisible to this answer. Sign in again; until
     you do, a launch that asks for the drive is refused (`403`).
+  - `user_type_unknown` — the user type you signed in with no longer exists
+    (an admin deleted it), so which drive your type is given cannot be told.
+    Ask an admin to give you another type, then sign in again; until you do, a
+    launch that asks for the drive is refused (`403`).
   - `unmountable` — an allocation exists and this deployment cannot bind it: a
     directory that is not on the share, or a name that cannot name a directory.
     An admin's fix, not yours; a launch is a `422`.
@@ -97,7 +125,7 @@ older daemon rather than "nothing is wrong":
     and a launch is refused rather than guessed at.
 
 So `user_drive: null` on its own **no longer means** "nothing is allocated to
-you". It means that only when `user_drive_unavailable` is `""`; in the four
+you". It means that only when `user_drive_unavailable` is `""`; in the five
 states above the obvious reading — ask an admin for an allocation — is the wrong
 one, which is exactly why the third key exists.
 
@@ -199,6 +227,12 @@ don't have it, and you shouldn't need it.
 console. Leave off `?run_id=` and you get an empty `200`: a collection
 endpoint's answer when it has nothing scoped to show you, not an error. The
 action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+
+If your laptop is one your organisation enrolled into a remote control plane,
+this same audit trail is also forwarded upward into the organisation's own
+table — this is automatic, admin-configured, and nothing you do here changes
+it. It does not change where you read your own runs' audit: it is still this
+page and this endpoint.
 
 ## Your model key
 

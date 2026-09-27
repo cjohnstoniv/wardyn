@@ -144,6 +144,36 @@ func TestCapabilitiesFor_ClassMapping(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesFor_FreezeVerifiedOnRuncOnly pins RL-6's fail-closed rule:
+// ContainerPause is verified against runc only, so CC1 (the daemon-default
+// runc runtime) reports Freeze=true while runsc (CC2) and Kata (CC3) — both
+// UNVERIFIED per the design (the RL-0 spike) — report false, never absent-as-
+// true-by-omission.
+func TestCapabilitiesFor_FreezeVerifiedOnRuncOnly(t *testing.T) {
+	caps := capabilitiesForWith(infoWithRuntimes("runsc", "kata-qemu"), nil, true)
+	want := map[types.ConfinementClass]bool{types.CC1: true, types.CC2: false, types.CC3: false}
+	for class, wantFreeze := range want {
+		if got := caps.Freeze[class]; got != wantFreeze {
+			t.Errorf("Freeze[%s] = %v, want %v (caps.Freeze=%v)", class, got, wantFreeze, caps.Freeze)
+		}
+	}
+
+	// An operator CC1 pin AWAY from runc (e.g. sysbox) must not claim Freeze
+	// either — the verification is against the RUNTIME, not the class number.
+	pinned := capabilitiesForWith(infoWithRuntimes("sysbox"), map[types.ConfinementClass]string{types.CC1: "sysbox"}, true)
+	if pinned.Freeze[types.CC1] {
+		t.Errorf("Freeze[CC1] = true for a sysbox pin; ContainerPause is verified against runc only")
+	}
+
+	// Nor a daemon whose DEFAULT runtime is not runc: CC1 with no pin is
+	// scheduled on that default, even though its label still reads "oci/runc".
+	runscDefault := infoWithRuntimes("runsc")
+	runscDefault.DefaultRuntime = "runsc"
+	if got := capabilitiesForWith(runscDefault, nil, true); got.Freeze[types.CC1] {
+		t.Errorf("Freeze[CC1] = true on a daemon whose default runtime is runsc; ContainerPause is verified against runc only")
+	}
+}
+
 // A CC1 operator override that pins a runtime the host does not have must NOT
 // leave CC1 advertised (nor a CC1 substrate in Resolved): a class whose pinned
 // runtime cannot be honored is unenforceable, so /healthz must not claim it

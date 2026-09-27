@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -72,6 +73,24 @@ const repoField400Charset = "%s must not contain control characters or whitespac
 // workspace spec — so one sentence serves both doors.
 const repo400LocatorShape = "%s is not a repository address — a repository address carries " +
 	`no percent-escapes, no backslash, and no "", "." or ".." path segment`
+
+// repo400LocatorUnreadable — DRAFT (M2 canon pending). repo400LocatorShape's
+// sentence when the address fails only because the site configuration, which
+// lists the Azure DevOps Server hosts, could not be read (#724).
+const repo400LocatorUnreadable = "%s could not be checked: the site configuration, which lists this " +
+	"deployment's Azure DevOps Server hosts, could not be read — try again in a moment"
+
+// storeNamedLocatorRefusal is msg, a write door's refusal of raw at field —
+// except when msg is repo400LocatorShape and raw would pass on an Azure DevOps
+// Server host while that host list was unreadable (hostsErr): then the store,
+// not the address, is what could not be checked, and the refusal says so.
+func storeNamedLocatorRefusal(msg, field, raw string, hostsErr error) string {
+	if hostsErr != nil && msg == fmt.Sprintf(repo400LocatorShape, field) &&
+		repoLocatorPathSafe(raw, []string{hostrules.HostOf(raw)}) {
+		return fmt.Sprintf(repo400LocatorUnreadable, field)
+	}
+	return msg
+}
 
 // repoLocatorPathSafe reports whether a repo locator's PATH is a plain
 // repository address. git squashes "." and ".." client-side and sends `%2F` raw,
@@ -144,7 +163,8 @@ func canonicalizeRunRepos(req *createRunRequest, ado adoHostsLoader) {
 			values = append(values, wr.Repo)
 		}
 	}
-	adoServerHosts := ado.forAddresses(values...)
+	// A read error leaves no hosts: admission, not this spelling step, refuses.
+	adoServerHosts, _ := ado.forAddresses(values...)
 	req.Repo = canonicalRepoAddress(req.Repo, adoServerHosts)
 	req.DevcontainerRepo = canonicalRepoAddress(req.DevcontainerRepo, adoServerHosts)
 	if req.InlinePolicy != nil {

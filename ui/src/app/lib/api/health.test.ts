@@ -9,6 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { health } from "./health";
 import { WFETCH_TIMEOUT_MS } from "./core";
 import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // Regression for the sign-out HIGH finding: signing out only cleared the local
 // admin token, never calling the server logout endpoint, so the OIDC session
@@ -105,7 +106,7 @@ describe("health — site-config integrations round-trip", () => {
     const echoed: Record<string, unknown> = {
       scm_hosts: ["github.com"],
       integrations: [{ id: "anthropic_api_key" }],
-      onboarding_completed_at: "2026-08-01T00:00:00Z",
+      onboarding_completed_at: aheadByHours(-1),
       // 0.7.2: the provider block is not REFUSED on PUT /site-config (that door
       // is how MDM delivers it), but a GET-spread writer must never carry it —
       // a stale spread would revert an admin's providers to whatever this tab

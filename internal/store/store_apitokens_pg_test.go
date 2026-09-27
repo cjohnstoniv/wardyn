@@ -36,6 +36,7 @@ func seedToken(t *testing.T, st store.PG, principal, raw string, groups []string
 		Principal: principal,
 		Email:     principal + "@example.com",
 		Role:      "user",
+		UserType:  "standard",
 		Groups:    groups,
 		Name:      "ci",
 		CreatedAt: time.Now().UTC(),
@@ -219,7 +220,7 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 
 	// Alice is promoted and her groups changed, so her live tokens must follow
 	// at her next login.
-	if err := st.RefreshAPITokenIdentity(ctx, alice, "admin", []string{"eng", "oncall"}, false); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, alice, "admin", "portfolio-manager", []string{"eng", "oncall"}, false); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity: %v", err)
 	}
 	roleOf := func(id uuid.UUID) string {
@@ -259,12 +260,28 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 	if got := groupsOf(b1.ID); got != nil {
 		t.Errorf("bob's groups = %v, want nil — one human's login re-stamped ANOTHER human's token", got)
 	}
+	// #611: the user type is re-stamped in the same UPDATE, on Alice's live
+	// tokens only.
+	typeOf := func(id uuid.UUID) string {
+		t.Helper()
+		var userType string
+		if err := pool.QueryRow(ctx, `SELECT user_type FROM api_tokens WHERE id = $1`, id).Scan(&userType); err != nil {
+			t.Fatalf("read user_type: %v", err)
+		}
+		return userType
+	}
+	if got := typeOf(a2.ID); got != "portfolio-manager" {
+		t.Errorf("a2 user_type = %q, want portfolio-manager — the login hook did not re-stamp the type", got)
+	}
+	if got := typeOf(b1.ID); got != "standard" {
+		t.Errorf("bob's user_type = %q, want standard — one human's login re-stamped ANOTHER human's type", got)
+	}
 
 	// And the demotion direction, which is the one the finding is about.
 	if _, err := st.RevokeAPIToken(ctx, gone.ID, "", time.Now().UTC()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if err := st.RefreshAPITokenIdentity(ctx, alice, "user", []string{"eng"}, true); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, alice, "user", "analyst", []string{"eng"}, true); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity (demote): %v", err)
 	}
 	if got := roleOf(a1.ID); got != "user" {
@@ -279,10 +296,13 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 		t.Errorf("revoked token role = %q, want the admin it held when it was revoked — the demote rewrote a "+
 			"revoked row, so the trail no longer says what that credential actually was", got)
 	}
+	if got, gotGone := typeOf(a1.ID), typeOf(gone.ID); got != "analyst" || gotGone != "portfolio-manager" {
+		t.Errorf("user_type live=%q revoked=%q, want analyst on the live token and the revoked one left at portfolio-manager", got, gotGone)
+	}
 
 	// A principal with no tokens at all: every login of every human without a
 	// token takes this path.
-	if err := st.RefreshAPITokenIdentity(ctx, "nobody-"+uuid.NewString(), "admin", []string{"x"}, false); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, "nobody-"+uuid.NewString(), "admin", "standard", []string{"x"}, false); err != nil {
 		t.Errorf("refresh for a principal with no tokens = %v, want nil — this fires on EVERY login", err)
 	}
 }
@@ -313,7 +333,7 @@ func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
 	// exactly the shape sessionGroups (internal/auth/oidc/derive.go) reports
 	// for a human who fell off the snapshot cap or hit an IdP-side overage.
 	sessionBGroups := []string{"team-c"}
-	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", sessionBGroups, true); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", "standard", sessionBGroups, true); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity: %v", err)
 	}
 
@@ -334,7 +354,7 @@ func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
 	// A THIRD login with a complete snapshot must be able to clear the bit —
 	// proving it is not a one-way ratchet, i.e. RefreshAPITokenIdentity binds
 	// truncated EXACTLY as given, not OR'd with whatever was there before.
-	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", []string{"team-c", "team-d"}, false); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", "standard", []string{"team-c", "team-d"}, false); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity (session C): %v", err)
 	}
 	got, err = st.GetAPITokenByRaw(ctx, raw)

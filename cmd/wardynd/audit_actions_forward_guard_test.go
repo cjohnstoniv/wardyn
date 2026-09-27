@@ -44,8 +44,14 @@ func documentedAuditActions(t *testing.T, root string) (exact map[string]bool, p
 	if err != nil {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
+	// The "Renamed in 0.8" appendix lists every retired name in its left
+	// column; counting those as documented would let an emit keep an old name.
+	body, _, ok := strings.Cut(string(raw), "## Renamed in 0.8")
+	if !ok {
+		t.Fatal(`docs/AUDIT-ACTIONS.md has no "## Renamed in 0.8" heading — this guard's scope boundary moved; re-anchor it`)
+	}
 	exact = map[string]bool{}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(body, "\n") {
 		m := auditActionRow.FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
 			continue

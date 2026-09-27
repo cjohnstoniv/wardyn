@@ -250,7 +250,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if err != nil {
 		return types.AgentRun{}, release(err)
 	}
-	created, err := s.cfg.Store.CreateRun(ctx, run)
+	created, err := s.createRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}
@@ -324,7 +324,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(ws.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
 		return
 	}
 	// #386 review follow-up N4: a scan clones a repo server-side too — the

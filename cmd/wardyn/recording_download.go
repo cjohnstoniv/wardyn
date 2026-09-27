@@ -54,7 +54,7 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			}
 			defer rc.Close()
 			if outPath == "" {
-				_, err = io.Copy(os.Stdout, rc)
+				_, err = io.Copy(cmd.OutOrStdout(), rc)
 				return err
 			}
 			// Downloaded to a .part and renamed on success: a transfer that
@@ -81,7 +81,7 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			if err := finalizePartFile(f.Name(), outPath, copyErr); err != nil {
 				return fmt.Errorf("recording download for run %s did not complete: %w", id, err)
 			}
-			fmt.Fprintf(os.Stderr, "wrote %s\n", outPath)
+			fmt.Fprintf(cmd.ErrOrStderr(), "wrote %s\n", outPath)
 			return nil
 		},
 	}
