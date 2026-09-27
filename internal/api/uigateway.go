@@ -21,7 +21,7 @@
 // The listener has exactly ONE authentication mechanism and never falls
 // through to the console's session cookie or admin bearer:
 //
-//	POST /runs/{id}/attach-ticket  (existing, owner-or-admin, single-use, 30s)
+//	POST /runs/{id}/attach/ticket  (existing, owner-or-admin, single-use, 30s)
 //	  → GET <ui-origin>/__wardyn/enter?run=&app=&ticket=
 //	  → cookie wardyn_ui_sess (HttpOnly, SameSite=Lax, Path=/r/<run-id>/<app>/)
 //	  → 302 /r/<run-id>/<app>/<app path>  … every later request rides the cookie

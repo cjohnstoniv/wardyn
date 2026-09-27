@@ -88,7 +88,7 @@ served header in full.
   `/api/v1/workspaces/`.
 - **Record Mode — the moat.** Run a task open once, then synthesize a
   least-privilege policy from its captured audit trail (`internal/recordmode`,
-  `POST /api/v1/runs/{id}/profile`) and re-run it confined, by reference.
+  `POST /api/v1/runs/{id}/profile/synthesize`) and re-run it confined, by reference.
   The synthesized *allowlist* is derived from
   PROXY-observed egress only (exact hosts that were actually allowed, never
   wildcarded, never a denied/pending host), so it can only ever subset what the

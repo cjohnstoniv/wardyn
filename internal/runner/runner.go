@@ -910,7 +910,7 @@ var ErrDriveNotReclaimable = errors.New("runner: the object under this drive's n
 //
 // On Kubernetes the verb is not even granted by default. The chart's Role
 // carries `persistentvolumeclaims: [get, create]` and gains `delete` only
-// under `userDrives.reclaim.enabled`, so a stock install cannot execute this
+// under `drives.reclaim.enabled`, so a stock install cannot execute this
 // call at all and the apiserver's own 403 is the backstop under the API's
 // super-admin gate.
 type DriveReclaimer interface {

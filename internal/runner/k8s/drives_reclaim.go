@@ -20,7 +20,7 @@ import (
 
 // ReclaimDrive implements runner.DriveReclaimer (#166): the ONE call in this
 // substrate that destroys a member's data, and the only one whose verb the
-// chart does not grant by default (`userDrives.reclaim.enabled`).
+// chart does not grant by default (`drives.reclaim.enabled`).
 //
 // READ, JUDGE, THEN DELETE — never delete by name. The name cannot answer
 // whose object it is: types.DriveObjectName folds two variable-width fields

@@ -270,7 +270,7 @@ test.describe("member Getting Started (real per-person token)", () => {
     // Registered LAST so it wins over the run read above (Playwright matches the
     // most recently registered route first).
     let ticketPosts = 0;
-    await page.route(`**/api/v1/runs/${loginRunId}/attach-ticket`, async (route) => {
+    await page.route(`**/api/v1/runs/${loginRunId}/attach/ticket`, async (route) => {
       ticketPosts++;
       await route.fulfill({ json: { ticket: "e2e-ticket" } });
     });

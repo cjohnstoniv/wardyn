@@ -159,7 +159,7 @@ while the object answering to that name is not this drive's. Every attempt —
 successes, refusals and failures alike — is audited as ` + "`drive.reclaim`" + `.
 
 On Kubernetes the daemon holds no delete verb on claims unless the chart's
-userDrives.reclaim.enabled is set, so on a stock install every attempt fails
+drives.reclaim.enabled is set, so on a stock install every attempt fails
 with the apiserver's own 403. See docs/OPERATIONS.md.
 
 The outcome is 'deleted' (this call destroyed the storage) or 'already_absent'

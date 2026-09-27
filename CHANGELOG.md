@@ -890,6 +890,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
+- **Three route families renamed for one consistent shape (#658), each old path kept as a chi
+  alias for one minor: `GET /runs/{id}/attach-holder` → `attach/holder`, `POST
+  /runs/{id}/attach-ticket` → `attach/ticket`, `POST /runs/{id}/profile` → `profile/synthesize`.**
+  The SDK and CLI now call the new paths. The Helm chart's `userDrives.enabled` is renamed to
+  `drives.enabled` (a clean break, no alias — see `deploy/helm/wardyn/README.md`'s "User drives"
+  section); a `helm upgrade --reuse-values` from an older release must set `drives` explicitly,
+  and the chart refuses to render while `userDrives.enabled` is still `true`. The nested reclaim
+  switch follows the same rename, `drives.reclaim.enabled` (see "Storage reclaim" below).
+  See `docs/sdk.md`'s "Renamed in 0.8" table.
 - **The Helm chart and the compose stack give `wardynd` 70 seconds to stop (#554).** An orderly
   stop drains HTTP for up to 15s (waiting for background work even if that drain times out), waits
   up to 35s for detached work (a run launch, a superseded sign-in's teardown), then flushes the
@@ -2038,7 +2047,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   behind. `POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim <drive-id> --subject <s>
   --yes`) destroys the storage object one person's allocation resolved to, irreversibly. Four rails
   hold it: on Kubernetes the daemon does not hold the `delete` verb on claims at all unless the new
-  Helm value `userDrives.reclaim.enabled` is set (**default `false`** — leave it off and the Role is
+  Helm value `drives.reclaim.enabled` is set (**default `false`** — leave it off and the Role is
   byte-for-byte what it was, and every attempt ends in the apiserver's own 403); the route is
   super-admin only; it is refused `409` while a run still holds the object, while a reclaim is
   already in flight, or when the object answering to that name is not this drive's (the driver
