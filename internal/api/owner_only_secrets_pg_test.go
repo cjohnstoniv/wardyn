@@ -257,7 +257,17 @@ func TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow(t *testing.T) {
 		t.Errorf("mint rows = %v, want one with secret_scope=operator", rows)
 	}
 
-	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", e.admin, body)
+	// The admin session itself must launch from the user view (#639: an SSO
+	// session of admin tier in the Admin view is refused 409 admin_view before
+	// any owner_only check runs); the point here is the OIDC admin identity
+	// versus the admin token, not the view gate.
+	uv := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/view", e.admin, `{"view":"user"}`)
+	if uv.Code != http.StatusOK {
+		t.Fatalf("admin switches to the user view: %d, want 200: %s", uv.Code, uv.Body.String())
+	}
+	adminInUserView := sessionCookieFrom(t, uv.Result().Cookies())
+
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", adminInUserView, body)
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "from the user view") {
 		t.Fatalf("OIDC admin without an own row: create = %d %s, want 422 naming the user view", w.Code, w.Body.String())
 	}
@@ -279,6 +289,17 @@ func TestOwnerOnlyGrant_IdPSubSpelledLikeTheAdminTokenIsAPerson(t *testing.T) {
 	fallback := e.storePolicy(t, "fallback", "x", false)
 	for _, role := range []string{oidc.RoleUser, oidc.RoleAdmin} {
 		impostor := ssoSession(t, adminTokenPrincipal, "impostor-"+role+"@corp.example", role)
+		if role == oidc.RoleAdmin {
+			// #639: an SSO admin session in the Admin view now gets 409
+			// admin_view on a launch door before any owner_only check; the
+			// admin/user split this test pins is about the OIDC identity, not
+			// the view gate, so the admin impostor launches from the user view.
+			uv := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/view", impostor, `{"view":"user"}`)
+			if uv.Code != http.StatusOK {
+				t.Fatalf("admin impostor switches to the user view: %d, want 200: %s", uv.Code, uv.Body.String())
+			}
+			impostor = sessionCookieFrom(t, uv.Result().Cookies())
+		}
 		w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", impostor, `{"agent":"claude-code","task":"t","policy_id":"`+strict+`"}`)
 		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `secret \"x\" is owner_only`) {
 			t.Fatalf("%s with sub %q: create = %d %s, want 422 — a person, not the operator", role, adminTokenPrincipal, w.Code, w.Body.String())
