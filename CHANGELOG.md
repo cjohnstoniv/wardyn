@@ -131,6 +131,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   only spooled no longer ends in "The sandbox reported a capture the server does not have", and a
   row naming another run is refused. A session for another account/role than the provider pins now
   shows the server's action naming both pairs on the provider strip, as the legacy strip did.
+- **`make dco` now audits merge commits too, and PR ranges end at the PR head (#1070).**
+  `--no-merges` hid every merge's `Signed-off-by` trailer, including 76 unsigned human merges
+  on main since the 0.7.12 fork; it had also become a workaround for `ci.yml` passing
+  `BASE..HEAD` on `pull_request`, where `HEAD` is GitHub's synthetic, unsigned test-merge tip.
+  PR ranges now end at `pull_request.head.sha`, and the only exemption left is
+  `DCO_ALLOW_GITHUB_MERGES=1`, which excuses a merge commit committed by
+  `GitHub <noreply@github.com>` (push and merge_group only, where GitHub makes such merges
+  itself).
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
