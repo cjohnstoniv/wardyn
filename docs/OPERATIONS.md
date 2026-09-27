@@ -4179,24 +4179,39 @@ cert is the trap: the sandbox presents the `vpce` name, the endpoint answers
 with the public-host cert, the handshake fails. The composed dispatch test
 proves the env vars propagate, not that TLS validates.
 
-**The endpoint must not land on the proxy's own subnet.** Every run's
-wardyn-proxy sidecar refuses to dial any address on the subnet(s) it is itself
-attached to (`onOwnSubnetOrControlPlane`, `internal/egress/proxy/
-egress_target.go` — a deliberate SSRF invariant that `internal_hosts` cannot
-lift, on purpose). A PrivateLink endpoint that happens to resolve onto that
-subnet would have every model call denied there instead, with the SDK
+**The endpoint must not land on a wardyn-proxy sidecar's own subnet.** Every
+run's proxy refuses to dial any address on the subnet(s) it is itself attached
+to (`onOwnSubnetOrControlPlane`, `internal/egress/proxy/egress_target.go` — a
+deliberate SSRF invariant that `internal_hosts` cannot lift, on purpose), and
+that covers EVERY subnet the sidecar's own interfaces sit on — both the fixed
+control-plane network below and the per-run network it shares with that run's
+agent. A PrivateLink endpoint that happens to resolve onto either would have
+every model call on the affected run(s) denied there instead, with the SDK
 misreading the proxy's denial page as a malformed Bedrock response — one
-dispatch at a time, never a clean failure. `wardynd` checks this at **boot**
-so the deployment fails closed instead:
+dispatch at a time, never a clean failure. `wardynd` resolves
+`WARDYN_BEDROCK_BASE_URL`'s host ONCE, at **boot**, and checks it against
+whatever it can know this early:
 
-- **docker**: resolves `WARDYN_BEDROCK_BASE_URL`'s host and refuses to start
-  when any resolved address falls inside the control-plane network's subnet
+- **docker, the control-plane network**: refuses to start when the resolved
+  address falls inside the control-plane network's subnet
   (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default — looked up via the
-  Docker API), naming the variable, the resolved address and the subnet. The
-  per-run internal network each sandbox gets is NOT part of this check: Docker
-  assigns its subnet fresh per run, so it cannot be known ahead of time, and it
-  is `Internal=true` (gatewayless) — unroutable off-host regardless of what
-  address lands there.
+  Docker API), naming the variable, the resolved address and the subnet. This
+  is the ONE subnet fixed and knowable ahead of any run, which is why it is a
+  refusal and not a WARN.
+- **docker, the per-run network**: each sandbox's own per-run network is a
+  REAL instance of the same failure — it is not exempt just because it is
+  `Internal=true` (gatewayless); the proxy's clamp above covers it exactly
+  like the control-plane network — but its subnet is allocated fresh by the
+  daemon at `CreateSandbox` time, from Docker's default (or
+  operator-configured) address pools, so no boot-time check can predict which
+  run will draw a colliding range. Rather than guess, boot instead WARNs, by
+  name, when the resolved address falls inside Docker's own BUILT-IN default
+  pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16` — the
+  ranges an unconfigured daemon draws from) — the remedy is to set
+  `default-address-pools` in that daemon's `daemon.json` away from the
+  endpoint's range, or to use an endpoint outside those pools. An operator who
+  has already moved `default-address-pools` elsewhere is not in this set at
+  all.
 - **Kubernetes**: the per-run proxy pod's CIDR is not reliably known from
   `wardynd`'s own boot-time view (it depends on the cluster's CNI and is not
   surfaced to a workload without extra node/API access this daemon is not
@@ -4205,8 +4220,11 @@ so the deployment fails closed instead:
   endpoint's address could fall inside the cluster's pod CIDR, verify that by
   hand before relying on this variable.
 - A DNS name that does not resolve at boot WARNs and proceeds (never refuses
-  boot over a transient resolution failure); the value is re-checked the next
-  time `wardynd` restarts.
+  boot over a transient resolution failure). The name is resolved exactly
+  ONCE, at that boot: a later DNS change for the same name is NOT re-checked
+  until `wardynd` next restarts (a PrivateLink ENI's address is stable for the
+  endpoint's life, which is why this is an accepted gap rather than a
+  request-time re-check).
 
 **The control plane is a second service.** Profile-id and
 application-inference-profile models call `bedrock.<region>.amazonaws.com`
