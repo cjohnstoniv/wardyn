@@ -10,6 +10,7 @@ import type { ApprovalRequest } from "../../lib/types";
 import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "./copy";
+import { aheadByHours } from "../../lib/test-clock";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -422,7 +423,9 @@ describe("LiveApprovals", () => {
       expect(confirm).toBeDisabled();
 
       const input = screen.getByLabelText("Pick a time");
-      fireEvent.change(input, { target: { value: "2030-01-01T17:00" } });
+      // datetime-local wants "YYYY-MM-DDTHH:MM" — no seconds/millis, no "Z".
+      const untilLocal = aheadByHours(24).slice(0, 16);
+      fireEvent.change(input, { target: { value: untilLocal } });
 
       // Scrubbing to a complete value must not have decided anything yet.
       expect(approveMock).not.toHaveBeenCalled();
@@ -431,13 +434,13 @@ describe("LiveApprovals", () => {
       await user.click(confirm);
       expect(approveMock).toHaveBeenCalledWith("held", expect.any(String), {
         scope: "until",
-        until: new Date("2030-01-01T17:00").toISOString(),
+        until: new Date(untilLocal).toISOString(),
       });
     });
   });
 
   // F-12 (0.7 SSO Phase 3): the inline gate must mirror server truth
-  // (authorizeMemberDecision, internal/api/approvals.go) — a member may decide
+  // (authorizeUserDecision, internal/api/approvals.go) — a member may decide
   // an egress_domain approval (this strip only ever shows rows on runs the
   // viewer owns), never credential/tool_call, regardless of role.
   describe("F-12 — member gating mirrors canDecideApproval, not a blanket operator check", () => {

@@ -32,7 +32,7 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 | `record-pane.tsx` — "Approve N selected hosts and replay again" (standing alone) | helper text under | `OPERATOR_ONLY_REASON` |
 | `recording.tsx` — search field, recording disabled on this deployment | helper text under | `RECORDINGS.SEARCH_DISABLED_HINT` |
 | `recording.tsx` — true-empty library (no runs at all) | `EmptyState` title + body | `RECORDINGS.EMPTY_TITLE` / `RECORDINGS.EMPTY_BODY` |
-| `audit.tsx:529` — member's unfiltered feed | `EmptyState` title (already visible; verified, left as-is) | inline literal, unchanged |
+| `audit.tsx` `AuditScreen` — member's unfiltered feed | `EmptyState` title (already visible; verified, left as-is) | `AUDIT.MEMBER_FEED_TITLE` (`screens/audit-copy.ts`) |
 | `sign-in.tsx:394` — disabled SSO button | **not touched** — removed outright by #457 | — |
 
 ## Frozen strings
@@ -46,7 +46,7 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 | `RECORDINGS.EMPTY_TITLE` (`recording-copy.ts`) | Reused (mock naming) | "No recordings yet" |
 | `RECORDINGS.EMPTY_BODY` (`recording-copy.ts`) | Changed | "Recordings appear once a run's terminal session is captured." |
 | `RECORDING_DISABLED_TITLE` (`wardyn/copy/new-run-rail.ts`) | Reused, unchanged | "Session recording is disabled on this deployment" |
-| `AUDIT.MEMBER_FEED_TITLE` (inline literal, `audit.tsx:529`) | Reused, unchanged | "The full audit feed is admin-only." |
+| `AUDIT.MEMBER_FEED_TITLE` (`screens/audit-copy.ts`) | Reused, unchanged | "The full audit feed is admin-only." |
 
 ## Out of scope
 

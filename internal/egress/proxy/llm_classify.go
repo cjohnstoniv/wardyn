@@ -196,12 +196,12 @@ func isBedrockHost(h string) bool {
 // `bedrock-runtime-fips.us-gov-{west,east}-1.amazonaws.com`) and the whole
 // agent family, including `bedrock-agent-runtime` — the InvokeAgent DATA
 // plane, i.e. prompt-bearing model traffic. Missing any of them costs
-// honesty, not just coverage: proxy.go emits the one-time `llm.scan.blind`
+// honesty, not just coverage: proxy.go emits the one-time `llm.scan.bypass`
 // coverage row only under isLLMHost, so an unrecognised label leaves a
 // CONNECT to that endpoint opaque AND unflagged — an audit trail showing an
-// egress.allow and no blind row anywhere, which reads as "no model tunnel
+// egress.allow and no bypass row anywhere, which reads as "no model tunnel
 // happened", against a THREAT-MODEL.md that says those tunnels "stay opaque
-// and flagged llm.scan.blind". It also mislabels the MITM decision row for
+// and flagged llm.scan.bypass". It also mislabels the MITM decision row for
 // such a host as corp-artifact rather than model traffic.
 //
 // The enumeration is deliberately exhaustive-by-name rather than a

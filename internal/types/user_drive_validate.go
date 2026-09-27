@@ -224,6 +224,10 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 				return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 			}
 			g.Subject = subject
+		} else if g.SubjectType == CapabilitySubjectUserType {
+			// Kept verbatim: a type id is matched exactly against the stamped
+			// type and never folded. Its shape and existence are checked by
+			// internal/api, which can read the user_types table.
 		} else {
 			// The USER half is CanonicalUserSubject, not a bare lowercase, and
 			// for the escalating half of the same reason the group arm states.

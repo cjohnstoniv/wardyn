@@ -66,6 +66,7 @@ function ctx(): WidgetContext {
     finished: false,
     principal: null,
     operator: false,
+    view: "user",
     grants: [],
     egress: [],
     heldCount: 0,

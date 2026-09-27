@@ -333,7 +333,7 @@ Agent and CSI examples:
 ## Multi-user (admin/member RBAC)
 
 > This is the multi-user path. Admins read on; a member joining this
-> deployment wants docs/MEMBERS.md.
+> deployment wants docs/USERS.md.
 
 Wardyn has a real two-role model — every OIDC session carries an **admin** or
 **member** role, derived at login (`internal/auth/oidc`'s `deriveRole`).

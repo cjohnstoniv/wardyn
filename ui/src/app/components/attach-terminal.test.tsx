@@ -130,6 +130,7 @@ import { OperatorProvider } from "./wardyn/operator-context";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
 import { HttpError } from "../lib/api/core";
+import { aheadByHours } from "../lib/test-clock";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -140,7 +141,7 @@ function attachModeFrame(readOnly: boolean, principal: string) {
     holder: {
       held: true,
       principal,
-      since: "2026-08-16T12:00:00Z",
+      since: aheadByHours(-1),
       cols: 132,
       rows: 50,
       source: "web",
@@ -571,10 +572,11 @@ describe("AttachTerminal — attach mode, displacement, take-over", () => {
   });
 });
 
-// Take-over evicts, it does not promote: after the POST returns, this client's
-// socket is still the read-only one, so it has to reconnect to claim the writer
-// slot (handleAttachTakeover's own note). Real timers — the confirm dialog is
-// Radix, driven the same way live-approvals.test.tsx drives its deny confirm.
+// `promoted:false` (no queued observer socket of our own on this run): after
+// the POST returns, this client's socket is still the read-only one, so it
+// has to reconnect to claim the writer slot. Real timers — the confirm
+// dialog is Radix, driven the same way live-approvals.test.tsx drives its
+// deny confirm.
 describe("AttachTerminal — take-over reconnects to claim the writer slot", () => {
   beforeEach(stubTerminalEnv);
   afterEach(() => vi.unstubAllGlobals());
@@ -582,7 +584,7 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
   it("confirm → takeoverAttach → a NEW socket is opened", async () => {
     const takeover = vi.mocked(runs.takeoverAttach);
     takeover.mockReset();
-    takeover.mockResolvedValue(undefined);
+    takeover.mockResolvedValue({ promoted: false });
 
     render(<AttachTerminal runId="run_1" />);
     const ws = FakeWebSocket.instances[0];
@@ -647,6 +649,58 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
     // ...and does NOT show the 409 text as an error the operator cannot act on.
     expect(screen.queryByText(/nothing to take over/)).toBeNull();
   });
+
+  // #507: `promoted:true` means the server already flipped THIS socket to
+  // writer in place. Reconnecting on that answer would close the very socket
+  // that was just promoted, releasing the writer slot to whichever bystander
+  // is next in the FIFO queue — the taker ends up read-only despite winning
+  // the take-over. The fix is to leave the socket alone and let the server's
+  // own attach-mode frame (read_only:false) flip it.
+  it("promoted:true does NOT reconnect — the same socket is promoted in place", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockResolvedValue({ promoted: true });
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    await waitFor(() => expect(takeover).toHaveBeenCalledWith("run_1"));
+    // No second socket: the original one is what gets promoted.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // The server's promotion notice arrives on the SAME socket.
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  // `promoted:true` names the principal, not the socket: the server flips that
+  // principal's FIRST observer, which may be another tab. A displaced panel's
+  // socket is already closed, so the promoted one cannot be ours — returning
+  // on that answer left the panel with no socket and no way out.
+  it("promoted:true on a DISPLACED panel still reconnects — its socket is gone", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockResolvedValue({ promoted: true });
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+    act(() => ws.drop(1008, "taken over by bob@example.com"));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    await waitFor(() => expect(takeover).toHaveBeenCalledWith("run_1"));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+  });
 });
 
 // R4-F143: every state in this component came off the socket's open/close/error
@@ -693,7 +747,7 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
     expect(screen.getByText("run_1")).toBeInTheDocument();
     expect(screen.queryByText("[closed] run_1")).toBeNull();
     expect(screen.getByText(TERMINAL.CLOSED_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(TERMINAL.CLOSED_BODY)).toBeInTheDocument();
+    expect(screen.getByText(TERMINAL.CLOSED_BODY(4))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: TERMINAL.RECONNECT })).toBeInTheDocument();
     // Never written into xterm's own buffer — the writeln mock proves it.
     expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[connection closed after"));

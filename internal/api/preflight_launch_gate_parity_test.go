@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -127,6 +128,53 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 			t.Errorf("preflightGateExceptions names %q, which handleCreateRun no longer calls before the mint — drop the entry", name)
 		}
 	}
+
+	// ORDER, not only the set (#515): when two gates can both refuse, the one
+	// that runs first decides the answer, so Review must meet them in launch's
+	// order or it previews a different refusal than the launch gives.
+	launchOrder := orderedServerCalls(t, fset, create, mint)
+	previewOrder := orderedServerCalls(t, fset, preflight, token.NoPos)
+	shared := func(seq, other []string) []string {
+		var out []string
+		for _, name := range seq {
+			if slices.Contains(other, name) {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	if l, p := shared(launchOrder, previewOrder), shared(previewOrder, launchOrder); !slices.Equal(l, p) {
+		t.Errorf("handlePreflightRun calls the shared gates in a different order than handleCreateRun:\n launch:    %v\n preflight: %v", l, p)
+	}
+}
+
+// orderedServerCalls is serverCalls in source order, each name at its FIRST
+// call, with each preflightInlinedWrappers call replaced in place by the
+// wrapper's own calls (the order launch actually meets them in).
+func orderedServerCalls(t *testing.T, fset *token.FileSet, fn *ast.FuncDecl, before token.Pos) []string {
+	t.Helper()
+	var out []string
+	add := func(name string) {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || (before != token.NoPos && call.Pos() >= before) {
+			return true
+		}
+		name := serverMethodName(call)
+		if file, inlined := preflightInlinedWrappers[name]; inlined {
+			for _, inner := range orderedServerCalls(t, fset, parseHandler(t, fset, file, name), token.NoPos) {
+				add(inner)
+			}
+		} else if name != "" {
+			add(name)
+		}
+		return true
+	})
+	return out
 }
 
 // parseHandler returns the named top-level method's body from an internal/api

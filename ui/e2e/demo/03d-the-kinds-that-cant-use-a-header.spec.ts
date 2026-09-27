@@ -30,8 +30,8 @@
  * lines moved verbatim — including the conclusion's "Five credential types,
  * five different boundaries" payoff, which moved here from the 03 conclusion
  * because this is where the fifth kind lands. The chapter card, the opener and
- * the close are [OWNER SLOT — drafted] in local/episode-03-mega-proposal.md;
- * local/episode-03-stanza-check.py (untracked) fails if a spec string and a stanza drift.
+ * the close are [OWNER SLOT — drafted] in the take-3 proposal; an
+ * untracked stanza-check script fails if a spec string and a stanza drift.
  *
  * STAGING THIS FILE OWNS (off camera): sweepStaleState(), then
  * wardyn-demo-ssh-key, because ssh-briefly-resident carries `needsSecret` and

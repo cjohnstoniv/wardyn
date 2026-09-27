@@ -20,7 +20,7 @@ import (
 // envelope and the dispatched env — rather than against the posture alone. A
 // posture test passes when both doors agree on a wrong answer; these do not.
 
-// autonomyDispatchedSpec returns the run.policy.effective envelope of the one
+// autonomyDispatchedSpec returns the run.policy.resolve envelope of the one
 // run this fixture created: dispatch's post-widening snapshot of what the run
 // was allowed to reach.
 func autonomyDispatchedSpec(t *testing.T, st *govEscapeStore, audit *recRecorder) types.RunPolicySpec {
@@ -32,7 +32,7 @@ func autonomyDispatchedSpec(t *testing.T, st *govEscapeStore, audit *recRecorder
 	}
 	st.mu.Unlock()
 	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
-	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
+	ev := waitForRecAudit(t, audit, runID, "run.policy.resolve", "success")
 	var spec types.RunPolicySpec
 	_ = json.Unmarshal(ev.Data, &spec)
 	return spec

@@ -19,7 +19,7 @@ afterEach(() => {
 function setup(access: ViewAccess, loadedMemberMode: boolean, path: string, memberMode: boolean) {
   const assign = vi.fn();
   vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, pathname: path, assign });
-  const whoami = vi.spyOn(health, "whoami").mockResolvedValue({ member_mode: memberMode } as Me);
+  const whoami = vi.spyOn(health, "whoami").mockResolvedValue({ user_view: memberMode } as Me);
   renderHook(() => useViewResync(access, loadedMemberMode));
   return { assign, whoami };
 }

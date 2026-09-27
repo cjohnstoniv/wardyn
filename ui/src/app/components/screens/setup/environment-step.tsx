@@ -173,7 +173,7 @@ export function EnvironmentStep({
 }) {
   const classes = status.runner.confinement_classes ?? [];
   // No barrier can be built -> runs can't launch. Matrix stays visible read-only.
-  // HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForMember
+  // HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForUser
   // zeroes the struct, whose Go zero value is "", not the sentinel "none") —
   // treat both as no-driver, or a member landing here (e.g. a stale direct
   // /setup visit before B4's honest-landing redirect) sees the wrong "start
@@ -440,8 +440,10 @@ export function EnvironmentStep({
         <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
           <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="text-sm text-muted-foreground">
-            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")} are
-            stronger and each needs a one-time setup step.
+            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")}{" "}
+            {/* #510-F9 — subject/verb: recStronger is length 1 when rec is CC2 (only CC3 left to
+                name), and "X are stronger" reads wrong for a single tier. */}
+            {recStronger.length === 1 ? "is" : "are"} stronger and each needs a one-time setup step.
           </p>
         </div>
       )}

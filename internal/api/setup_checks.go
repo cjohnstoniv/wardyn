@@ -39,10 +39,10 @@ import (
 //
 // It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
 // severity ranking. Two families must never carry it. Rows graded through the
-// CALLER's own credential rather than the install: llmProviderCheck's and
-// bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
-// the caller's own AWS SSO session. Confiscating the console over a fact about
-// one person is exactly what this flag exists to prevent. And advisory
+// CALLER's own credential rather than the install: llmProviderCheck's per_user
+// and provider arms, bedrockProviderCheck's per_user arm, providerAccessCheck and
+// awsSSOCredentialRow (the caller's own AWS SSO session). Confiscating the console
+// over a fact about one person is exactly what this flag exists to prevent. And advisory
 // install rows, whose grade belongs on every surface that renders them but
 // whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
 // key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
@@ -56,6 +56,12 @@ type SetupCheck struct {
 	Detail   string `json:"detail,omitempty"`
 	Fix      string `json:"fix,omitempty"`
 	Blocking bool   `json:"blocking,omitempty"`
+	// Cause narrows a row that can warn for more than one reason, the same
+	// shape as SCMAccess.cause on the wire (ui/src/app/lib/types/setup.ts) — a
+	// machine key, never prose, so a console reader can pick per-cause copy
+	// without string-matching Detail. Only sso_rbac sets it today ("default_role",
+	// #491): #484's original no-role-map-and-no-admin-list warn leaves it empty.
+	Cause string `json:"cause,omitempty"`
 }
 
 // runnerCheck grades the sandbox runner: no runner (or no live class) is the one
@@ -314,8 +320,8 @@ const (
 // detail, "" when there is none). INFO when there is NO model provider at
 // all — it is OPTIONAL, needed only for agent-harness runs, so "no model" is
 // a deliberate non-blocking state, never a gap the operator must clear. WARN
-// is reserved for the per_user arm below: there a provider IS declared and
-// THIS person's half of it is missing, which is a real, actionable gap.
+// is reserved for the per_user and provider arms below: there a provider IS
+// declared and THIS person's half of it is missing, a real, actionable gap.
 //
 // bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
 // signal always outranks it (unchanged), and the "no provider configured"
@@ -324,7 +330,8 @@ const (
 // fact than "nothing is configured" (a cross-row contradiction:
 // bedrock_provider says Bedrock IS configured two rows down), so it gets its
 // own per-principal sentence instead of the generic optional-provider one.
-func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
+// access (provider_access) is read last: granted providers aren't "nothing configured".
+func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProviderAccess) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
 	}
@@ -336,6 +343,9 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 			ID: "llm_provider", Label: "LLM access", Status: "warn",
 			Detail: llmProviderPerUserDetail, Fix: llmProviderPerUserFix,
 		}
+	}
+	if chk, ok := providerAccessLLMCheck(access); ok {
+		return chk
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
@@ -485,33 +495,37 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 }
 
-// secretStoreCheck is store_external in store mode (design §3,
-// SETUP_CHECK.STORE_EXTERNAL): the credentials live in the organisation's
-// store, and there is no local key to be durable. Otherwise the age-key row.
-func secretStoreCheck(external string, durable bool) SetupCheck {
-	if external == "" {
-		return ageKeyCheck(durable)
+// secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}") when a key service wraps every data
+// key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
+// reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
+// the age key then also forges run identities and sessions).
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
+	if external != "" {
+		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
 	}
-	return SetupCheck{
-		ID: "store_external", Label: "Credential storage", Status: "ok",
-		Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
+	if keyService != "" {
+		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
+				" and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log."}}
 	}
-}
-
-// secretStoreRows is secretStoreCheck's row, then platform_shared in local
-// mode while no WARDYN_PLATFORM_KEY_FILE is set (design §3, §2.13 c): the age
-// key then protects wardynd's own signing and session keys and people's
-// credentials alike, so one leak of it forges run identities and sessions.
-func secretStoreRows(external string, durable, platformSeparate bool) []SetupCheck {
-	rows := []SetupCheck{secretStoreCheck(external, durable)}
-	if external == "" && !platformSeparate {
-		rows = append(rows, SetupCheck{
+	checks := []SetupCheck{ageKeyCheck(durable)}
+	if durable && multiUser {
+		checks = append(checks, SetupCheck{
+			ID: "kek_local", Label: "Credential key", Status: "warn",
+			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
+			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+		})
+	}
+	if !platformSeparate {
+		checks = append(checks, SetupCheck{
 			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
 			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
 			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
 		})
 	}
-	return rows
+	return checks
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
@@ -591,19 +605,6 @@ func internalHostsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		ID: "internal_hosts", Label: internalHostsCheckLabel, Status: "info",
 		Detail: internalHostsDeclaredSentence(sc.InternalHosts),
 	}, true
-}
-
-// siteConfigStatusChecks bundles the /setup/status rows derived from one
-// site-config read — siteConfigCheck, artifactRepoCheck, the conditional
-// internalHostsCheck — into a single call. Factored out of handleSetupStatus
-// (setup.go) to keep that function under the funlen gate as this list grows;
-// purely mechanical, no behavior beyond what three separate append calls had.
-func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
-	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-	if chk, ok := internalHostsCheck(sc); ok {
-		checks = append(checks, chk)
-	}
-	return checks
 }
 
 // platformChecks are the platform rows — permanent and non-fixable, so always
@@ -722,66 +723,6 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 		}
 	}
 	return ""
-}
-
-// ssoRBACCheck warns when OIDC is configured and NOTHING splits admins from
-// members: no role mapping — neither the chart's WARDYN_OIDC_ROLE_MAP nor a
-// console-managed row (migration 0051, the People step) — and no admin list
-// (the operator allowlist, WARDYN_OIDC_OPERATOR_EMAILS). Only then does every
-// signed-in human derive role "admin" (internal/auth/oidc's deriveRole,
-// upgrade-safe default; accessRolePosture's `before` reads the same arm) —
-// fine for a single-operator deployment, but it silently grants admin to
-// everyone the moment a second human signs in. An admin list alone is ok
-// (Q457-5): an unmatched person then derives user.
-// consoleRows is whether the store currently holds at least one People-step
-// row (the same nil-Store guard setup.go's own read of it applies —
-// unreadable/absent reads as false, the conservative direction: it surfaces
-// the warning rather than hiding it). Only surfaced when OIDC is configured
-// (mirrors bedrockProviderCheck's own "worth showing at all" gate).
-//
-// Wording per docs/design/admin-access-canon.md (frozen; the console's
-// everyone-is-an-admin banner carries the same warn sentence).
-func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows, adminList bool) (SetupCheck, bool) {
-	if !oidcConfigured {
-		return SetupCheck{}, false
-	}
-	if roleMapConfigured || consoleRows || adminList {
-		return SetupCheck{
-			ID: "sso_rbac", Label: "Who is an admin", Status: "ok",
-			Detail: "People are mapped to admin or user, so a person's role comes from their sign-in.",
-		}, true
-	}
-	return SetupCheck{
-		ID: "sso_rbac", Label: "Who is an admin", Status: "warn",
-		Detail:   "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin.",
-		Fix:      "Map people to admin or user on the People step, so only the people you name can change this deployment.",
-		Blocking: true,
-	}, true
-}
-
-// tlsCookiePostureCheck warns when the OIDC redirect URL is https — evidence
-// that TLS terminates somewhere in front of this deployment — but wardynd
-// still computed secureCookies=false (validateConfig, cmd/wardynd/main.go: the
-// exact condition this inverts is tlsEnabled||WARDYN_TLS_TERMINATED), so the
-// session cookie is issued without the Secure attribute: the classic
-// behind-an-ingress misconfiguration where WARDYN_TLS_TERMINATED was never
-// set. Only surfaced when OIDC is configured AND the redirect URL is https —
-// there is nothing to warn about otherwise.
-func tlsCookiePostureCheck(oidcConfigured bool, redirectURL string, secureCookies bool) (SetupCheck, bool) {
-	if !oidcConfigured || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(redirectURL)), "https://") {
-		return SetupCheck{}, false
-	}
-	if secureCookies {
-		return SetupCheck{
-			ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "ok",
-			Detail: "The OIDC redirect URL is https and wardynd knows the connection is TLS-protected; session cookies are marked Secure.",
-		}, true
-	}
-	return SetupCheck{
-		ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "warn",
-		Detail: "The OIDC redirect URL is https but WARDYN_TLS_TERMINATED is not set, so wardynd still thinks it is serving plain HTTP: the session cookie is issued WITHOUT the Secure attribute.",
-		Fix:    "Set WARDYN_TLS_TERMINATED=true (helm: env.WARDYN_TLS_TERMINATED) when TLS terminates at an upstream reverse proxy/ingress.",
-	}, true
 }
 
 // scmProviderCheck grades the SCM credential posture against the safest-path

@@ -36,23 +36,27 @@ type fakeKV struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu              sync.Mutex
-	secrets         map[string]*kvSecret // live, by lowercase name
-	deleted         map[string]*kvSecret // soft-deleted
-	deleting        map[string]int       // name -> calls left before the delete shows up
-	deleteLag       int                  // lag given to each new soft delete
-	retention       int                  // recoverableDays
-	purgeForbidden  bool
-	tokens          map[string]bool
-	assertions      map[string]bool // federated tokens the tenant accepts
-	tenant, client  string
-	expiresIn       int
-	exchanges       int
-	lastAssertion   string
-	imdsCalls       int
-	imdsHeader      string
-	imdsClientID    string
-	force           []int // statuses to answer vault calls with, one per call
+	mu             sync.Mutex
+	secrets        map[string]*kvSecret // live, by lowercase name
+	deleted        map[string]*kvSecret // soft-deleted
+	deleting       map[string]int       // name -> calls left before the delete shows up
+	deleteLag      int                  // lag given to each new soft delete
+	retention      int                  // recoverableDays
+	purgeForbidden bool
+	tokens         map[string]bool
+	assertions     map[string]bool // federated tokens the tenant accepts
+	tenant, client string
+	expiresIn      int
+	exchanges      int
+	lastAssertion  string
+	imdsCalls      int
+	imdsHeader     string
+	imdsClientID   string
+	force          []int // statuses to answer vault calls with, one per call
+	// denyPath, when non-empty, refuses (403) every call whose path contains
+	// it — persistent, unlike force's one-shot queue, so it can target one
+	// owner's secret without also catching another's.
+	denyPath        string
 	calls           []string
 	pageSize        int
 	nextLinkHost    string // non-empty: nextLinks point here instead
@@ -161,6 +165,10 @@ func (f *fakeKV) serve(w http.ResponseWriter, r *http.Request) {
 	if !ok || !f.tokens[tok] {
 		w.Header().Set("WWW-Authenticate", `Bearer authorization="https://login.example/`+f.tenant+`", resource="https://vault.azure.net"`)
 		kvFail(w, http.StatusUnauthorized, "Unauthorized", "", "AKV10000: Request is missing a Bearer or PoP token.")
+		return
+	}
+	if f.denyPath != "" && strings.Contains(r.URL.Path, f.denyPath) {
+		kvFail(w, http.StatusForbidden, "Forbidden", "", "forced")
 		return
 	}
 	for k := range f.deleting { // an asynchronous delete makes progress per call

@@ -74,7 +74,7 @@ func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 
 // The capability reads: no grant rows and no switch, so a member caller is
 // offered every row, as a deployment that adopted no grants offers it.
-func (s *scmTestStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *scmTestStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *scmTestStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
@@ -82,6 +82,9 @@ func (s *scmTestStore) ListGroupDenyGrants(context.Context, string) ([]types.Cap
 }
 func (s *scmTestStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return map[string]bool{}, nil
+}
+func (s *scmTestStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 const scmTestRowID = "ado-row-1"

@@ -4,11 +4,23 @@ Status: **Phase 0 decided, 2026-09-19** — O1 `m′`-at-org, O2 offline runs co
 durable evidence, O3 one audit chain per writer, O4 no placement field in Phase 1, O5
 drive-as-source as Phase 3a; the defaults and their reasons are in
 [0.8/PLAN.md](0.8/PLAN.md) § B, and Phase 1 is on the `0.8.0` milestone. Written in 0.7.2 as
-research; built in nothing yet. This is the brief behind
+research; in 0.8, only rung 3's enrolment and the one audit stream are built (see the
+owner ruling below), and everything else here is still a proposal. This is the brief behind
 [ROADMAP.md](../../ROADMAP.md)'s "Also new for 0.8: hybrid local + remote" row. Every
 claim about today's tree is anchored to the file and line it came from, at
 `feat/v0.7.2`; every claim about tomorrow is marked as a decision, an option or an
 open question, and none of it is code.
+
+**Owner ruling, 2026-09-23: the full rollout below moves to 0.9.** 0.8 ships only
+rung 3 of §2.2's ladder (desktop enrolment to a remote control plane) and the one
+audit stream (issues #102, #103, #106) — never per-run placement (§6), the disk link
+(§7), or a laptop's runs deciding anywhere but locally. Rungs 4 and 5 and the
+placement issues #107–#117 (except #115), T-27 (#687) and #475 are 0.9.0 work; see
+[ROADMAP.md](../../ROADMAP.md)'s milestone table. What DID ship, and is no longer
+this brief's proposal but its build: `docs/DESKTOP.md`'s "Enrolling into an org
+control plane", `docs/OPERATIONS.md`'s "Managed laptops", and
+[THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) residuals #50–#52, all written
+against the shipped code rather than this design's projection of it.
 
 The shape of the ask, in one sentence: **the org runs the control plane on its
 cluster, MDM installs Wardyn on the laptop, and the same person under the same
@@ -78,7 +90,7 @@ sets their own ceiling is not a person an org control plane bounds.
 
 **An audited channel into a running sandbox is DONE.** The SSH gateway runs the
 sandbox's own `sftp-server` as the subsystem's backing process — no SFTP protocol
-reimplementation — and audits it as `ssh.sftp`
+reimplementation — and audits it as `ssh.sftp.transfer`
 (`internal/api/sshgateway_channels.go:687-713`). That channel is the one existing
 seam through which bytes can move between a human's machine and a sandbox under an
 audit row, and §7 builds on it rather than inventing a transport.
@@ -345,7 +357,7 @@ is permanent, and §8 carries the security half of the argument.
 ### 7.2 Option (ii) — file sync over the EXISTING sftp channel: the follow-on
 
 The gateway already runs the sandbox's own `sftp-server` as the subsystem's backing
-process and audits every session as `ssh.sftp`
+process and audits every session as `ssh.sftp.transfer`
 (`internal/api/sshgateway_channels.go:687-713`). A mutagen- or rsync-shaped
 bidirectional sync of ONE local directory against a per-user PVC needs **no new
 protocol surface** — it is a client on a channel that already exists, under an audit
@@ -420,7 +432,7 @@ adds no new reachable surface, so it goes first.
 
 Under **(ii)**, the laptop's bytes do leave — but through an audited, run-scoped,
 governed channel. **New audit actions: none required either**, because the sftp
-channel already audits as `ssh.sftp`; what a sync lane should add is one action of
+channel already audits as `ssh.sftp.transfer`; what a sync lane should add is one action of
 its own naming the selected directory, so a reader can distinguish a human's
 interactive `sftp` session from a sync engine holding one for a run's lifetime.
 The blast radius is the directory the human selected — not a mount namespace, not
@@ -493,7 +505,7 @@ Documentation lands as an extension of what exists rather than a third document.
 [docs/DESKTOP.md](../DESKTOP.md) gains the hybrid topology beside `a′` and `m′` and
 the offline rows from §5.3; [docs/OPERATIONS.md](../OPERATIONS.md) gains the
 placement ceiling in its governance section and the two-substrate capability rule
-from §6.3; [docs/MEMBERS.md](../MEMBERS.md) gains one short section, because
+from §6.3; [docs/USERS.md](../USERS.md) gains one short section, because
 placement is the first thing in Wardyn a member will ask for by name. A fourth
 document describing "hybrid" as a separate product would be the documentation
 version of the mistake D2 rejects.

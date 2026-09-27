@@ -52,11 +52,11 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 				continue
 			}
 			found++
-			// runs.drive, matching denyMemberDrive — the other refusal this seam
+			// runs.drive, matching denyUserDrive — the other refusal this seam
 			// writes. governance.ceiling would file it under a resolve that did
 			// not happen and did not fail.
 			if ev.Target != "runs.drive" {
-				t.Errorf("target = %q, want %q — the drive seam's own target, the one denyMemberDrive uses",
+				t.Errorf("target = %q, want %q — the drive seam's own target, the one denyUserDrive uses",
 					ev.Target, "runs.drive")
 			}
 			if ev.Actor != "sub-drive-bob" {

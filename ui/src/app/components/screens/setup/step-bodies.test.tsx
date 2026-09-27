@@ -72,6 +72,7 @@ import { deriveReadiness } from "../../../lib/readiness";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import type { Workspace } from "../../../lib/types";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // This suite's own pin is its `checks` array (gvisor/loopback/kvm/platform_wsl).
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
@@ -99,8 +100,8 @@ function ws(overrides: Partial<Workspace> = {}): Workspace {
     kind: "local_dir",
     source: "/home/dev/demo-workspace",
     status: "scanned",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     ...overrides,
   };
 }
@@ -209,6 +210,29 @@ describe("step-bodies.tsx — smoke", () => {
     expect(await screen.findByText("demo-workspace")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^scan$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /edit workspace…/i })).not.toBeInTheDocument();
+  });
+
+  // M-6 (QM-8/§4.8): Finish's own "Switch to user view" offer — a
+  // presentational click through to the orchestrator-owned handler
+  // (setup-screen.tsx's finishSwitchToUser, a plain navigate("/setup") —
+  // ViewGate's own interstitial owns the busy/failed state from there).
+  it("Finish's 'Switch to user view' calls onSwitchToUser", async () => {
+    const user = userEvent.setup();
+    const onSwitchToUser = vi.fn();
+    const status = baseStatus();
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+        onSwitchToUser={onSwitchToUser}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Switch to user view" }));
+    expect(onSwitchToUser).toHaveBeenCalledTimes(1);
   });
 
   it("ReviewStep renders the 'About this host' rollup", () => {
@@ -378,6 +402,24 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.queryByText("Blocking")).not.toBeInTheDocument();
     expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
     expect(screen.queryByText("Optional — not blocking")).not.toBeInTheDocument();
+  });
+
+  // #603 and #489: the two warnings /setup/status sends, byte for byte
+  // (setup_checks_siteconfig.go), are 'Worth a look' — never 'Blocking'.
+  it("#603/#489: the ado_entra_rows and sign_in_help_url warnings land under 'Worth a look'", () => {
+    const ado = "More than one Azure DevOps connection is enabled. Keep one enabled so runs sign in to a single organization.";
+    const help =
+      "The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page.";
+    renderReview(
+      reviewStatus([
+        { id: "ado_entra_rows", label: "Azure DevOps", status: "warn", detail: ado },
+        { id: "sign_in_help_url", label: "When someone can't sign in", status: "warn", detail: help },
+      ]),
+    );
+    const worth = screen.getByText("Worth a look").closest("section");
+    expect(worth).toHaveTextContent(ado);
+    expect(worth).toHaveTextContent(help);
+    expect(screen.queryByText("Blocking")).not.toBeInTheDocument();
   });
 
   it("#161: no actionable checks renders none of the four groups", () => {

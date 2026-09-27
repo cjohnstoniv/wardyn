@@ -90,21 +90,20 @@ func execWaitReadyText(t *testing.T, srv *httptest.Server, args ...string) (stri
 }
 
 // execWaitReadyJSON runs `run wait-ready <args> --json` and decodes stdout.
-// --json goes through emitJSON, which targets os.Stdout directly rather than
-// cobra's out sink (captureStdout is commands_test.go's fixture for exactly
-// that).
+// --json goes through emitJSON, which writes to cmd.OutOrStdout() (#200), so
+// cobra's own out sink captures it directly, like execWaitReadyText above.
 func execWaitReadyJSON(t *testing.T, srv *httptest.Server, args ...string) (waitReadyResult, error) {
 	t.Helper()
 	cmd := runWaitReadyCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	var out bytes.Buffer
+	cmd.SetOut(&out)
 	cmd.SetArgs(append(args, "--json"))
-	var err error
-	out := captureStdout(t, func() { err = cmd.Execute() })
-	if err != nil {
+	if err := cmd.Execute(); err != nil {
 		return waitReadyResult{}, err
 	}
 	var res waitReadyResult
-	if uerr := json.Unmarshal([]byte(out), &res); uerr != nil {
-		t.Fatalf("--json output not valid JSON: %v (%q)", uerr, out)
+	if uerr := json.Unmarshal(out.Bytes(), &res); uerr != nil {
+		t.Fatalf("--json output not valid JSON: %v (%q)", uerr, out.String())
 	}
 	return res, nil
 }

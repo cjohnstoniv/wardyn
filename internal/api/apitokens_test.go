@@ -124,6 +124,15 @@ func (s *tokenMemStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (
 	return cfg, nil
 }
 
+// GetUserType knows the one custom type these tests stamp: callerSubjects
+// resolves a stamped type against the store and refuses one with no row.
+func (s *tokenMemStore) GetUserType(ctx context.Context, id string) (types.UserType, error) {
+	if id == "portfolio-manager" {
+		return types.UserType{ID: id, Name: "Portfolio manager"}, nil
+	}
+	return s.noGovernanceStore.GetUserType(ctx, id)
+}
+
 func (s *tokenMemStore) RevokeAPIToken(_ context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,6 +203,7 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		Principal: tokenMemberSub,
 		Email:     tokenMemberMail,
 		Role:      oidc.RoleUser,
+		UserType:  "portfolio-manager",
 		Groups:    []string{"eng", "oncall"},
 		// A 0.7 mint RECORDS completeness (handleCreateAPIToken stamps the bit);
 		// leaving this nil would make the fixture a pre-0.7 row, which
@@ -222,7 +232,7 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		t.Fatal("token auth never reached the next handler")
 	}
 
-	want := withHumanIdentity(context.Background(), row.Principal, row.Email, row.Role, row.Groups, false)
+	want := withHumanIdentity(context.Background(), row.Principal, row.Email, row.Role, row.UserType, row.Groups, false)
 	if a, b := oidcHumanFromContext(got), oidcHumanFromContext(want); a != b {
 		t.Errorf("sub = %q, want %q", a, b)
 	}
@@ -231,6 +241,9 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 	}
 	if a, b := oidcRoleFromContext(got), oidcRoleFromContext(want); a != b {
 		t.Errorf("role = %q, want %q", a, b)
+	}
+	if a, b := oidcUserTypeFromContext(got), oidcUserTypeFromContext(want); a != b || a != row.UserType {
+		t.Errorf("user type = %q, want %q (the row's stamp)", a, b)
 	}
 	if a, b := oidcGroupsFromContext(got), oidcGroupsFromContext(want); !slices.Equal(a, b) {
 		t.Errorf("groups = %v, want %v", a, b)

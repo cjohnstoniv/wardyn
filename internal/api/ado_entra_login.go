@@ -120,8 +120,9 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		return
 	}
 
-	// Mask BEFORE anything can log or persist it.
-	s.cfg.MaskRegistry.AddGlobal([]byte(grant.RefreshToken))
+	// Mask BEFORE anything can log or persist it, merged until the store write
+	// succeeds: a failed write leaves the credential already stored live.
+	s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken))
 
 	now := s.cfg.Now()
 	expiresAt := grant.Expiry.UTC()
@@ -151,6 +152,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		})
 		return
 	}
+	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken))
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": usable, "source": adoEntraSourceLogin,

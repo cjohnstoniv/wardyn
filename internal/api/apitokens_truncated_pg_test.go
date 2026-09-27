@@ -191,7 +191,7 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Errorf("403 body does not name the condition: %s", body)
 	}
 	// The same refusal must reach a run create, the lane that actually spends
-	// the ceiling (denyMemberRequest in runs_create_validate.go). No Runner is
+	// the ceiling (denyUserRequest in runs_create_validate.go). No Runner is
 	// wired, so a
 	// non-403 here means the ceiling resolved and the create went on to fail
 	// LATER for an unrelated reason — which is exactly the widening.
@@ -257,9 +257,9 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 // fell off the cap matches nothing for this token, and the seam answers "allowed".
 //
 // The seam under test is capAllowed itself, reached through the real
-// apiTokenAuth context — the same path authorizeMemberDecision in approvals.go
-// (member decides an egress approval), narrowMemberInlinePolicy in
-// inline_policy.go and memberVisibleOperatorSecretNames in secrets.go take.
+// apiTokenAuth context — the same path authorizeUserDecision in approvals.go
+// (member decides an egress approval), narrowUserInlinePolicy in
+// inline_policy.go and userVisibleOperatorSecretNames in secrets.go take.
 // None of those seams is preceded by an effectiveCeiling call, so on a
 // deployment with group deny grants but no group governance
 // assignments, capAllowed is the only thing that can answer 403.
@@ -311,7 +311,7 @@ func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
 	legacyRaw := apiTokenPrefix + "legacy-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := pg.CreateAPIToken(ctx, types.APIToken{
 		ID: uuid.New(), Principal: truncProbeSub, Email: truncProbeSub + "@corp.example",
-		Role: oidc.RoleUser, Groups: []string{truncProbeGroupKept}, GroupsTruncated: nil,
+		Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{truncProbeGroupKept}, GroupsTruncated: nil,
 		Name: "legacy", CreatedAt: time.Now().UTC(),
 	}, legacyRaw); err != nil {
 		t.Fatalf("seed legacy token: %v", err)

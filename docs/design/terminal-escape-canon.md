@@ -18,7 +18,7 @@ Source: `ui/src/app/components/wardyn/copy/terminal.ts`.
 | `ESCAPE_CHORD` | `Ctrl+Shift+Backspace` |
 | `ESCAPE_CHORD_HINT` | `Ctrl+Shift+Backspace leaves the terminal` (composed from `ESCAPE_CHORD` — one spelling reaches every render site) |
 | `RECONNECTING_LINE(n, max)` | `Reconnecting — attempt {n} of {max}.` (unchanged by #133) |
-| `RECONNECTING_HINT` | `Keystrokes are held until the terminal is back.` (unchanged; the escape hint stays visible while reconnecting) |
+| `RECONNECTING_HINT` | `Keystrokes typed now are not sent.` (owner ruling 2026-09-25, #726: canon follows the app — #510-F2 found no input buffer exists, so the earlier "held" promise was false) |
 
 Render sites: the title-bar strip and the grid's `aria-description`, both in
 `ui/src/app/components/attach-terminal.tsx`.

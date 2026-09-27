@@ -456,7 +456,7 @@ func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
 // so any registered secret it carries is masked (httpError) before it leaves.
 func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	const secret = "sk-ant-oat-LEAKED-0123456789"
-	procRegistry.AddGlobal([]byte(secret))
+	procMask([]byte(secret))
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "resolve failed for "+secret, http.StatusInternalServerError)
 	}))
@@ -575,6 +575,12 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	holdPollInterval = 5 * time.Millisecond
 	defer func() { holdPollInterval = prevPoll }()
 
+	// Shrink the clamp floor: the "budget really expired" case below waits out
+	// the whole budget, so this trades the real 10s production floor for a
+	// test-scale one (restored after — see
+	// TestMinCredentialReauthTimeout_ProductionFloorUnchanged).
+	shrinkReauthFloor(t, 50*time.Millisecond)
+
 	// The decision row is narrower than the 401 (security NIT-B). Every case
 	// below ends without a credential and every one of them earns the modelled
 	// 401 — the sandbox has to be told. Only ONE of them expired, and only that
@@ -590,7 +596,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 		sentence string
 	}{{
 		name:     "the budget really expired",
-		budget:   "10s", // the clamp's floor
+		budget:   "1ms", // clamped UP to the (shrunk) floor
 		steps:    pending(1),
 		wantRow:  true,
 		sentence: reauthTimedOutSentence,
