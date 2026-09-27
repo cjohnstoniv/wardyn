@@ -120,7 +120,7 @@ type preflightResponse struct {
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req createRunRequest
-	if !decodeStrict(w, r, &req) {
+	if !s.decodeRunRequest(w, r, &req) {
 		return
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))

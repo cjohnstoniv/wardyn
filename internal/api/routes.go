@@ -326,6 +326,9 @@ func (s *Server) routes() chi.Router {
 			// (mirrors /runs/preflight), not operator-only: a member may see the
 			// risk of a spec they cannot necessarily save.
 			r.Post("/policies/grade", s.handleGradePolicy)
+			// Launch presets (#1143): named bundles of run-create fields. See
+			// presets.go for the read/write split.
+			s.mountPresetRoutes(r, operatorOnly)
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token).

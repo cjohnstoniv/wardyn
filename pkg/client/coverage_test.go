@@ -58,6 +58,9 @@ var (
 	_ client.HomeTemplate
 	_ client.DriveReclaim
 	_ client.CapabilitySubjectType
+	_ client.PresetsDocument
+	_ client.Preset
+	_ client.PresetRequest
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -76,6 +79,7 @@ func routeFamilies() map[string][]string {
 		"secrets":     {"ListSecrets", "ListSecretsPage", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"drives":      {"GetDrives", "ApplyDrives"},
+		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},

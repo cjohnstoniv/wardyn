@@ -612,6 +612,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Launch presets (#1143).** An admin names a bundle of existing run fields with
+  `PUT /api/v1/presets/{name}`, and a launcher starts it with `POST /runs {"preset": "<name>",
+  "title": …, "task": …}` instead of a full spec. The server expands the preset and runs the
+  unchanged create path, so the caller's own ceiling, grants, secrets and drive apply as they
+  would to the explicit request; any other field beside `preset` is refused. Presets are
+  versioned, every write is audited (`preset.create`/`update`/`delete`), the run records
+  `preset` and `preset_version`, and `wardyn preset get/apply` round-trips them. Migration
+  `0086_launch_presets`.
+
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.

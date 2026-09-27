@@ -265,6 +265,9 @@ Data is unchanged.
 | `policy.create` | A named egress/run policy is created | `min_confinement_class`, `name` | `internal/api/policies.go#Server.handleCreatePolicy` | internal | — |
 | `policy.update` | A named policy is updated | `min_confinement_class`, `name` | `internal/api/policies.go#Server.handleUpdatePolicy` | internal | — |
 | `policy.delete` | A named policy is deleted | — | `internal/api/policies.go#Server.handleDeletePolicy` | internal | — |
+| `preset.create` | `PUT /presets/{name}` created a launch preset (#1143). `Target` is the preset name. `request` is the stored create-run body, recorded because the row is replaced on the next write and this is the only record of what that version held | `request`, `user_types`, `version` | `internal/api/presets.go#Server.handlePutPreset` | internal | — |
+| `preset.update` | `PUT /presets/{name}` replaced a launch preset and moved its `version`. An identical body writes nothing and emits no row. Same fields as `preset.create` | `request`, `user_types`, `version` | `internal/api/presets.go#Server.handlePutPreset` | internal | — |
+| `preset.delete` | `DELETE /presets/{name}`. Runs launched from the preset keep their `preset`/`preset_version` stamp | `version` | `internal/api/presets.go#Server.handleDeletePreset` | internal | — |
 | `policy.inline.apply` | A one-off (inline, unsaved) policy is used to launch a run | `eligible_grants`, `min_confinement_class`, `workspace_mounts` | `internal/api/inline_policy.go#Server.resolveRunPolicy` | internal | — |
 | `capability.grant.create` | `POST /permissions/grants` (new) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go#Server.handleUpsertCapabilityGrant` | internal | — |
 | `capability.grant.update` | `POST /permissions/grants` (upsert on existing key) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go#Server.handleUpsertCapabilityGrant` | internal | — |

@@ -328,6 +328,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
 		ModelProviderID: mpChoice.provider.ID,
 		UserType:        runCreatorUserType(ctx),
+		Preset:          req.Preset,
+		PresetVersion:   req.PresetVersion,
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
