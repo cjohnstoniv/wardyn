@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -339,10 +340,13 @@ func plural(n int, one, many string) string {
 // hand EVERY run the same host, silently turning per-run isolation back into
 // the shared origin it exists to replace.
 //
+// The inbound cookie policy must parse (api.ParseUICookiePolicy): a typo there
+// would otherwise boot with a policy the operator did not write.
+//
 // The TLS posture is taken rather than re-derived so this listener answers to
 // the SAME plaintext refusal the console does (refusePlaintextListen): the
 // relay session cookie is a bearer credential, and it travels on this address.
-func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string, posture tlsPosture, allowPlaintextListen bool) error {
+func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate, stripCookies string, posture tlsPosture, allowPlaintextListen bool) error {
 	if uiListen == "" {
 		return nil // off: nothing to validate, no listener, no new surface
 	}
@@ -363,7 +367,18 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 			"every run would share one origin while the deployment claims per-run isolation; "+
 			"use e.g. \"https://run-{run}.ui.example.com\", or unset it for the documented shared-origin mode", originTemplate)
 	}
+	if _, err := api.ParseUICookiePolicy(stripCookies); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
 	return nil
+}
+
+// uiCookiePolicy is WARDYN_UI_SANDBOX_STRIP_COOKIES for api.Config. The error
+// is dropped because validateUISandboxConfig already refused boot on it; with
+// the gateway off the policy is never read.
+func uiCookiePolicy(raw string) api.UICookiePolicy {
+	p, _ := api.ParseUICookiePolicy(raw)
+	return p
 }
 
 // validateBootPosture runs the flag-only posture refusals (UI-sandbox gateway,
@@ -383,7 +398,7 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 // failed OIDC discovery leaves nil), and neither exists this early in boot.
 // It is still called directly, at its own later point in run().
 func validateBootPosture(f *bootFlags, posture tlsPosture) error {
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {

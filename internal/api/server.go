@@ -702,6 +702,10 @@ type Config struct {
 	// built without going through cmd/wardynd's flags gets the shipped posture
 	// rather than a zero TTL that would refuse every session.
 	UISessionTTL time.Duration
+	// UICookiePolicy is WARDYN_UI_SANDBOX_STRIP_COOKIES: which inbound cookies,
+	// beyond the always-stripped wardyn_* namespace, the relay forwards to a
+	// sandbox app. The zero value forwards every other cookie.
+	UICookiePolicy UICookiePolicy
 	// UISessionKey signs the wardyn_ui_sess relay cookie (HMAC-SHA256, >= 32
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
