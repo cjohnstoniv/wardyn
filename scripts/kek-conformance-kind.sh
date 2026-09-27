@@ -26,17 +26,23 @@ VAULT_TAG="${VAULT_TAG:-2.1.1}"
 NS=wardyn-live
 WORK="$(mktemp -d)"
 PF_PID=""
+CREATED_CLUSTER=""
 
 cleanup() {
   [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
-  kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
+  # Only delete a cluster THIS invocation created — never one the guard below
+  # found already there.
+  [ -n "$CREATED_CLUSTER" ] && kind delete cluster --name "$CREATED_CLUSTER" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
-trap cleanup EXIT
 
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && die "a kind cluster named $CLUSTER already exists; set CLUSTER to another name"
+# The trap is installed only after the guard passes, so a pre-existing
+# cluster of the same name is never torn down by this script exiting.
+trap cleanup EXIT
 log "creating kind cluster $CLUSTER"
 kind create cluster --name "$CLUSTER" --kubeconfig "$WORK/kubeconfig" --wait 120s >/dev/null
+CREATED_CLUSTER="$CLUSTER"
 export KUBECONFIG="$WORK/kubeconfig"
 
 log "installing Vault (chart $CHART_VERSION, image $VAULT_TAG, dev mode)"

@@ -21,7 +21,7 @@ source "$ROOT/scripts/lib/common.sh"
 cd "$ROOT"
 
 VAULT_IMAGE="${VAULT_IMAGE:-hashicorp/vault:2.1.1}"
-OPENBAO_IMAGE="${OPENBAO_IMAGE:-openbao/openbao:2.7.0}"
+OPENBAO_IMAGE="${OPENBAO_IMAGE:-openbao/openbao:2.6.2}"
 PG_IMAGE="${PG_IMAGE:-postgres:17}"
 TAG="kekconf-$$"
 WORK="$(mktemp -d)"
