@@ -32,6 +32,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 const release0712Migrations = "../../internal/db/testdata/migrations-0.7.12"
@@ -136,7 +137,7 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedV0Row(t, pool, id, secretSigningKey, signingPEM)
-	store0712, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+	store0712, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("0.7.12 boot: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		if err := db.Migrate(ctx, pool); err != nil {
 			t.Fatalf("%s: migrate a 0.7.12 database: %v", label, err)
 		}
-		secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+		secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
 		if err != nil {
 			t.Fatalf("%s: secret store over a 0.7.12 database: %v", label, err)
 		}
@@ -193,7 +194,7 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: session key: %v", label, err)
 		}
-		gotCred, err := secrets.For(owner).Get(ctx, cred)
+		gotCred, err := secrets.For(owner).Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), cred)
 		if err != nil {
 			t.Fatalf("%s: %s's %s: %v", label, owner, cred, err)
 		}
