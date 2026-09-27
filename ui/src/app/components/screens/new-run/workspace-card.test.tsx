@@ -18,11 +18,10 @@ import userEvent from "@testing-library/user-event";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DENIED } from "../../../lib/permissions-copy";
-import { baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
+import { baseMeDrive } from "../../../lib/test-fixtures";
 import type { SetupModelProvider, Workspace } from "../../../lib/types";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
-import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { WorkspaceCard } from "./workspace-card";
 import { initialWizardState, type WizardState } from "./wizard-types";
 
@@ -41,34 +40,25 @@ function renderCard(opts: {
   unavailable?: string;
   workspaces?: Workspace[];
   state?: Partial<WizardState>;
-  // #922: undefined mounts NO <ModelAccessProvider> at all — the exact shape
-  // every OTHER case in this file renders, untouched. Only a test that passes
-  // this wraps one, matching new-run-rail.test.tsx's own "no provider above"
-  // fail-open precedent.
+  // #922 review F5: a PROP now (the screen's own /setup/status read), not a
+  // Context this card reads on its own — undefined is "not loaded yet", the
+  // same fail-open default every case but the ones below exercises.
   modelProviders?: SetupModelProvider[];
 } = {}) {
   const patch = vi.fn();
   const state = { ...initialWizardState(), ...opts.state };
-  const card = (
+  const view = render(
     <WorkspaceCard
       state={state}
       patch={patch}
       workspaces={opts.workspaces ?? []}
       caps={null}
+      modelProviders={opts.modelProviders}
       onAddWorkspace={() => {}}
       drive={opts.drive ?? null}
       driveDeniedBy={opts.deniedBy ?? ""}
       driveUnavailable={opts.unavailable ?? ""}
-    />
-  );
-  const view = render(
-    opts.modelProviders ? (
-      <ModelAccessProvider status={baseStatus({ model_providers: opts.modelProviders })} onRefresh={() => {}}>
-        {card}
-      </ModelAccessProvider>
-    ) : (
-      card
-    ),
+    />,
   );
   return { patch, view };
 }
@@ -343,9 +333,22 @@ describe("WorkspaceCard — a selected workspace is pinned to an unavailable mod
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 
-  it("says nothing while the list hasn't loaded yet (no ModelAccessProvider mounted) — fails open, never flashes on", () => {
+  it("says nothing while the list hasn't loaded yet (no modelProviders prop) — fails open, never flashes on", () => {
     const ws = pinnedWorkspace("bloomberg-gateway");
     renderCard({ workspaces: [ws], state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] } });
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  // review F2: a Shell command never asks the server's model-provider door
+  // (run_model_provider.go's needsModel/createDoorIsModelRun), so applying
+  // this line to one would be a false advisory for a run the server admits.
+  it("says nothing for a Shell command, even with the pin unavailable", () => {
+    const ws = pinnedWorkspace("bloomberg-gateway");
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }], runType: "command" },
+      modelProviders: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }],
+    });
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 

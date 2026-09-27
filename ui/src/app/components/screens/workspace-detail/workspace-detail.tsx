@@ -34,7 +34,7 @@ import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
-import { workspaceModelProviderUnavailable } from "../new-run/wizard-types";
+import { resolvedModelProviders, workspaceModelProviderUnavailable } from "../new-run/wizard-types";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
@@ -364,7 +364,7 @@ export function WorkspaceDetailScreen() {
   // carry.
   const workspaceUnavailable =
     (!operator && !capabilityAllowed(caps, "workspace", ws.id)) ||
-    workspaceModelProviderUnavailable(ws, shellStatus?.model_providers);
+    workspaceModelProviderUnavailable(ws, resolvedModelProviders(shellStatus));
 
   return (
     <div className="mx-auto max-w-[1000px] px-6 py-5">

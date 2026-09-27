@@ -39,7 +39,6 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
-import { DENIED } from "../../../lib/permissions-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
@@ -71,6 +70,7 @@ import { mergeRunSelections } from "./wizard-spec";
 import {
   agentLabel,
   initialWizardState,
+  resolvedModelProviders,
   titleFromTask,
   workspaceUnavailableToCaller,
   type RunPrefill,
@@ -232,7 +232,11 @@ export function NewRunScreen() {
         if (!alive) return;
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
-        setModelProviders(st.model_providers);
+        // #922 review F3: a LOADED status with no model_providers key means
+        // "granted none", not "haven't checked" — resolvedModelProviders
+        // draws that line off the same `unreachable` bit this effect already
+        // reads, never a second signal.
+        setModelProviders(resolvedModelProviders(st));
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
@@ -331,12 +335,27 @@ export function NewRunScreen() {
   // per-reason advisory lines resolve it (state.workspaces[0] is the primary
   // selection) — folded into ONE generic reason via workspaceUnavailableToCaller,
   // never the picker's own more specific copy (that stays put, unchanged).
+  //
+  // review F2: the model-provider arm is gated on `isAgent` — a Shell/exec run
+  // sends no `agent`, and the server's own model-provider door only ever asks
+  // for a model run (run_model_provider.go's `needsModel`/`createDoorIsModelRun`,
+  // runs_dispatch_llm.go's `taskMode != "exec"`); applying it to every run type
+  // was a false-disable for a command the server would happily admit. The
+  // WORKSPACE capability arm is NOT gated — a plain ungranted workspace refuses
+  // regardless of run type.
   const pickedWorkspace = workspaces.find((w) => w.id === state.workspaces[0]?.workspaceId);
   const workspaceUnavailable =
-    !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders);
+    !!pickedWorkspace &&
+    workspaceUnavailableToCaller(pickedWorkspace, caps, isAgent ? modelProviders : undefined);
   // #1197 L2: Title dropped out of this chain — the server never required
   // one (runs_create_validate.go's own doc comment), only the console did,
   // and the console default now derives one from the task instead of asking.
+  //
+  // review F5: `workspaceUnavailable` is NOT a clause here — it disables
+  // Launch through the rail's own `workspaceUnavailable` prop instead (below),
+  // so the sentence renders exactly once, on the workspace picker's own
+  // advisory line (workspace-card.tsx), never a second time in the rail's
+  // problem slot.
   const problem = needsTask && !state.task.trim()
     ? isAgent
       ? "An autonomous run needs a task to perform."
@@ -349,9 +368,7 @@ export function NewRunScreen() {
         ? RUN.POLICY_GONE
         : useSaved && !state.selectedPolicyId
           ? "Pick a saved policy, or write a custom one."
-          : workspaceUnavailable
-            ? DENIED.WORKSPACE_NOT_AVAILABLE
-            : null;
+          : null;
 
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
@@ -625,6 +642,7 @@ export function NewRunScreen() {
             patch={patch}
             workspaces={workspaces}
             caps={caps}
+            modelProviders={modelProviders}
             onAddWorkspace={() => setAddWsOpen(true)}
             drive={userDrive}
             driveDeniedBy={driveDeniedBy}
@@ -814,6 +832,10 @@ export function NewRunScreen() {
             spinning: launchSpinning,
             inFlight: launching,
             problem,
+            // review F5: disables Launch WITHOUT a second rendering of the
+            // sentence — workspace-card.tsx's own advisory line is the one
+            // place it's shown.
+            workspaceUnavailable,
             error,
             errorSeq,
             credentialRefused,

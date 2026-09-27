@@ -13,13 +13,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The person side of "Available to" disables Launch, in the console, before the server ever has to
   refuse (#922).** New Run's own Launch button is now disabled with
   `This workspace isn't available to you.` when the chosen workspace itself carries no allow for
-  the caller, or is pinned to a model provider the caller's own filtered
-  `/setup/status.model_providers` doesn't carry — the sentence never names the resource, since the
-  console has no member-safe way to learn a restricted value's own name. The workspace picker's own
-  per-reason advisory lines, a workspace's own page ("Start a run"), and the Workspaces list's Model
-  column carry the same signal. The git-provider-pinned case (`Uses Azure DevOps (contoso), which
-  isn't available to you.`) is not built — `GET /me/scm-access` only covers per-user Azure DevOps
-  rows, so absence there is ambiguous for a shared-PAT row or a GitHub App; tracked as a follow-up.
+  the caller (the kind-wide "workspace" enforcement switch), or is pinned to a model provider the
+  caller's own filtered `/setup/status.model_providers` doesn't carry — checked only for an agent
+  run, since a Shell command asks the server for neither. The sentence never names the resource,
+  since the console has no member-safe way to learn a restricted value's own name. The same two
+  reasons now show consistently everywhere: the workspace picker's own advisory line, a workspace's
+  own page ("Start a run"), and the Workspaces list (both the Workspace and Model columns) — each
+  reason renders in exactly one place, never twice on the same screen.
+  **Known gap, disclosed rather than silently shipped:** a workspace's own PER-VALUE "Available to:
+  Only these" restriction (set from its own admin editor) is invisible to a member's console —
+  `GET /me/capabilities` carries the caller's own allow rows but no per-value restricted bit, so a
+  workspace restricted that way (with the kind-wide switch left off, the common case) reads as
+  available here and Launch stays enabled; the server still refuses it at launch. Tracked for a
+  wider fix (a per-value signal the caller's own console can safely read).
+  The git-provider-pinned case (`Uses Azure DevOps (contoso), which isn't available to you.`) is not
+  built either — `GET /me/scm-access` only covers per-user Azure DevOps rows, so absence there is
+  ambiguous for a shared-PAT row or a GitHub App; tracked as its own follow-up.
 
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one

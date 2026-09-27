@@ -26,6 +26,7 @@ import type {
   CreateRunInput,
   FirstUseMode,
   MeCapabilities,
+  SetupModelProvider,
   Workspace,
   WorkspaceMount,
   WorkspaceRepo,
@@ -118,10 +119,14 @@ export function hasSourceNotAdmitted(ws: Workspace): boolean {
 // member-safe way to learn a restricted value's own name — #1018 tracks the
 // same gap for the refusal sentence).
 //
-// undefined `modelProviders` means "haven't read the list yet" (or a
-// deployment with no provider block at all) and answers false — the same
-// fail-open default hasSourceNotAdmitted's sibling checks take: an advisory
-// hint must never flash on before its own data has loaded.
+// undefined `modelProviders` means "haven't read the list yet" (or the read
+// failed) — the same fail-open default hasSourceNotAdmitted's sibling checks
+// take: an advisory hint must never flash on before its own data has loaded.
+// It does NOT mean "loaded, and the caller is granted no provider at all" —
+// that case is a real, loaded, EMPTY array, and every call site normalizes it
+// that way (resolvedModelProviders, below) precisely so this function can
+// answer "unavailable" for it rather than silently fail open (review
+// FINAL-PR-1249.md F3).
 export function workspaceModelProviderUnavailable(
   ws: Workspace,
   modelProviders: { id: string }[] | undefined,
@@ -131,16 +136,45 @@ export function workspaceModelProviderUnavailable(
   return !modelProviders.some((p) => p.id === ref);
 }
 
+// #922 review F3: SetupStatus.model_providers is `omitempty` on the wire, so
+// a caller granted no provider at all (capVisible filtered every row out) is
+// indistinguishable, ON THE WIRE, from "this deployment has no provider block"
+// or "the read hasn't resolved yet" — all three arrive as an absent key. The
+// carrier this build already has for telling them apart is `unreachable`
+// (the SAME bit new-run-screen.tsx's own llmReady/harnesses reads): a status
+// object that resolved and is NOT unreachable is a LOADED answer, so its
+// absent `model_providers` is normalized to `[]` (loaded, granted nothing) —
+// only a null/absent status (not fetched yet) or an unreachable one (the read
+// failed) stays `undefined` (unknown, fail open). No server change: this is
+// the client-only fix the lead asked to prefer.
+export function resolvedModelProviders(
+  status: { unreachable?: boolean; model_providers?: SetupModelProvider[] } | null | undefined,
+): SetupModelProvider[] | undefined {
+  if (!status || status.unreachable) return undefined;
+  return status.model_providers ?? [];
+}
+
 // #922: the STRONGER answer New Run's own Launch button needs, folding both
 // person-side "isn't available to you" reasons into one boolean — an
 // ungranted workspace (capabilityAllowed's existing "workspace" narrowing) or
 // one pinned to a model provider the caller's own filtered list doesn't carry
-// (workspaceModelProviderUnavailable, above). Deliberately NOT reused by
-// workspace-card.tsx's own per-reason advisory lines — those keep their more
-// specific, already-shipped copy (DENIED.WORKSPACE_BODY /
-// DENIED.WORKSPACE_NOT_AVAILABLE) unchanged; this is the single generic
-// canon sentence (DENIED.WORKSPACE_NOT_AVAILABLE) the `problem` chain shows
-// when EITHER reason applies to the currently CHOSEN workspace.
+// (workspaceModelProviderUnavailable, above). Both arms answer DENIED.WORKSPACE_NOT_AVAILABLE
+// wherever this is read (workspace-card.tsx's own advisory line, this screen's
+// `problem` chain, workspace-detail.tsx, workspaces.tsx) — one sentence, never
+// two different ones for the same reason.
+//
+// KNOWN GAP (review FINAL-PR-1249.md F1, disclosed rather than silently
+// shipped): capabilityAllowed only answers "denied" when the WORKSPACE KIND's
+// enforcement switch is on (a caller with no matching allow, `caps.enforcement.workspace`).
+// A single workspace individually restricted via its own "Available to: Only
+// these" control (the per-VALUE bit AvailabilityControl writes) with the
+// kind switch left off — the common case — is invisible here: GET
+// /me/capabilities carries the caller's own allow rows but no per-value
+// restricted signal, so this reads "available" and Launch stays enabled; the
+// server still refuses it at launch (capBatch.decide's step 3 treats a
+// restricted value as enforced regardless of the switch). No member-safe
+// carrier exists for this today — see the PR body and CHANGELOG for what's
+// tracked to fix it, and #1018 for the adjacent existence-oracle gap.
 export function workspaceUnavailableToCaller(
   ws: Workspace,
   caps: MeCapabilities | null,

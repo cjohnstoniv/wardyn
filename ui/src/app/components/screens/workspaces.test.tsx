@@ -35,6 +35,15 @@ vi.mock("../../lib/api/integrations", async () => {
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
+// #922 review F5: the list now ALSO checks the "workspace" capability arm
+// (a plain ungranted workspace, no provider pin involved). Mocking the HOOK
+// itself, not the underlying fetch — the same choice new-run-screen-form.test.tsx
+// made, since a MeCapabilities fixture is otherwise the whole point of the case.
+const myCapabilitiesMock = vi.fn();
+vi.mock("../../lib/capabilities", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/capabilities")>("../../lib/capabilities");
+  return { ...actual, useMyCapabilities: (...a: unknown[]) => myCapabilitiesMock(...a) };
+});
 
 import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
@@ -339,6 +348,7 @@ describe("WorkspacesScreen — member workspace access", () => {
   beforeEach(() => {
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     createWorkspaceMock.mockReset();
+    myCapabilitiesMock.mockReset().mockReturnValue(null);
   });
 
   function renderAsMember() {
@@ -379,6 +389,44 @@ describe("WorkspacesScreen — member workspace access", () => {
     await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());
     const [payload] = createWorkspaceMock.mock.calls[0] as [{ sources: Array<{ writable?: boolean }> }];
     expect(payload.sources[0].writable).toBeUndefined();
+  });
+
+  // review F5: a plain ungranted workspace (no provider pin at all) got no
+  // line in the list before this — only the provider-pin arm rendered here.
+  it("names a plain ungranted workspace under its own name, not just a provider pin", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-ungranted", name: "payments" })]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember();
+    const text = await screen.findByText(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).toBe(DENIED.WORKSPACE_NOT_AVAILABLE);
+  });
+
+  it("says nothing for a workspace an allow names", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-granted", name: "payments" })]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user_type",
+          subject: "standard",
+          capability: "workspace",
+          value: "ws-granted",
+          effect: "allow",
+          created_at: "",
+        },
+      ],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember();
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 });
 

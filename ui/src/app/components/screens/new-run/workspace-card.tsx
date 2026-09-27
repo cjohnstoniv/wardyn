@@ -52,7 +52,7 @@
 // four closed tokens gets which sentence).
 import * as React from "react";
 import { Plus, X } from "lucide-react";
-import type { MeCapabilities, Workspace } from "../../../lib/types";
+import type { MeCapabilities, SetupModelProvider, Workspace } from "../../../lib/types";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { capabilityAllowed } from "../../../lib/capabilities";
 import { MEMBER } from "../../../lib/governance-copy";
@@ -65,7 +65,6 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { makeMono } from "../../wardyn/code-block";
-import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { Chip } from "../../wardyn/primitives";
 import { SectionCard } from "./new-run-primitives";
 import { hasSourceNotAdmitted, workspaceModelProviderUnavailable } from "./wizard-types";
@@ -213,6 +212,7 @@ export function WorkspaceCard({
   patch,
   workspaces,
   caps,
+  modelProviders,
   onAddWorkspace,
   drive,
   driveDeniedBy,
@@ -222,6 +222,13 @@ export function WorkspaceCard({
   patch: (p: Partial<WizardState>) => void;
   workspaces: Workspace[];
   caps: MeCapabilities | null;
+  // #922 review F5: THE SCREEN's own /setup/status read (new-run-screen.tsx's
+  // `modelProviders` state, already normalized by resolvedModelProviders) —
+  // a PROP, not this card's own useShellSetupStatus() read, so the card's own
+  // advisory line and the screen's Launch-disable can never see two different
+  // answers to "is the pin available" (the review's own F5 finding: the two
+  // used to read from separate sources and could disagree).
+  modelProviders: SetupModelProvider[] | undefined;
   onAddWorkspace: () => void;
   // /me's drive bits. All default to "nothing to show" for an unresolved or
   // failed read, which renders as today's card — the honest answer, since
@@ -244,12 +251,14 @@ export function WorkspaceCard({
   // #922: the picked workspace is pinned to a model provider this caller's
   // OWN filtered `/setup/status.model_providers` doesn't carry (see
   // workspaceModelProviderUnavailable's own doc comment for why this can
-  // never name the provider). The shared shell status, not a fetch of its
-  // own — new-run-rail.tsx already reads the same context for its own
-  // preflight line, so this is the second consumer, not a second call.
-  const { status: shellStatus } = useShellSetupStatus();
+  // never name the provider). `modelProviders` is a PROP (see this
+  // component's own doc comment above) — never a second read of its own.
+  // review F2: gated on isAgent — a Shell/exec run never asks the server's
+  // model-provider door (see new-run-screen.tsx's own `workspaceUnavailable`
+  // comment for the full reasoning), so this line must not flash on for one.
+  const isAgent = state.runType === "agent";
   const selectedProviderUnavailable =
-    !!pickedWorkspace && workspaceModelProviderUnavailable(pickedWorkspace, shellStatus?.model_providers);
+    !!pickedWorkspace && workspaceModelProviderUnavailable(pickedWorkspace, isAgent ? modelProviders : undefined);
 
   return (
     <SectionCard title="Workspace">
@@ -321,15 +330,20 @@ export function WorkspaceCard({
       {/* The reason rides the SELECTION, not each row: a Radix item's
           content is what the closed trigger renders, so a per-row
           paragraph would end up inside the trigger. The chip above
-          annotates every ungranted row; this says what it costs. */}
-      {selectedWorkspaceUngranted && (
-        <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_BODY}</p>
+          annotates every ungranted row; this says what it costs.
+          review F5: both the capability arm (selectedWorkspaceUngranted) and
+          the provider arm (selectedProviderUnavailable) now show the SAME
+          canon sentence Launch's own disable reads (DENIED.WORKSPACE_NOT_AVAILABLE)
+          — merged into one paragraph so the two reasons never print it twice
+          back to back when both happen to be true at once. This is also the
+          ONE place the sentence renders for New Run: Launch disables through
+          the rail's own `workspaceUnavailable` boolean, with no text of its
+          own, precisely so it is never shown here AND in the rail together. */}
+      {(selectedWorkspaceUngranted || selectedProviderUnavailable) && (
+        <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
       )}
       {selectedNotAdmitted && (
         <p className="mt-2 text-xs text-muted-foreground">{PROVIDERS.CARD_NOT_ADMITTED}</p>
-      )}
-      {selectedProviderUnavailable && (
-        <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
       )}
       <DriveBlock
         drive={drive}

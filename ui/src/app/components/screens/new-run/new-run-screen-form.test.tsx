@@ -396,6 +396,82 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     await waitFor(() => expect(launch).toBeEnabled());
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
   });
+
+  // review F2: the server's model-provider door only ever asks for a model
+  // run (run_model_provider.go's needsModel/createDoorIsModelRun) — a Shell
+  // command sends no `agent` at all (task_mode=exec, wizard-spec.ts), so the
+  // server admits it regardless of the workspace's model-provider pin.
+  // Applying the client-side check to every run type was a false-disable.
+  it("stays enabled for a Shell command, even with the chosen workspace's model-provider pin unavailable", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ model_providers: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }] }),
+    );
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+    await user.click(screen.getByRole("radio", { name: "Shell command" }));
+    await user.type(screen.getByLabelText("Command"), "make test");
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  // review F3: SetupStatus.model_providers is `omitempty`, so a caller
+  // granted no provider AT ALL is, on the wire, indistinguishable from "not
+  // loaded yet" unless the console tells the two apart itself. baseStatus()'s
+  // own default carries no model_providers key and no `unreachable` bit — a
+  // genuinely LOADED, empty answer, the exact case the old code silently
+  // treated as "haven't checked" and left Launch enabled for.
+  it("disables Launch when the caller is granted no model provider at all (a loaded, empty list — not 'unloaded')", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  // review F6: R1 (the reviewer's mutation) flipped `useMyCapabilities(!operator)`
+  // to `useMyCapabilities(true)` and survived every existing test in this
+  // file — nothing here asserted an operator's OWN exemption is wired
+  // through. This file mocks the HOOK itself (not the underlying fetch, the
+  // way workspace-detail.test.tsx's F030 "never asks /me/capabilities" case
+  // does), so the pin is on the ARGUMENT the screen passes it: `false` for
+  // an operator (renderScreen's own default), which is exactly what R1's
+  // `useMyCapabilities(true)` breaks.
+  it("passes useMyCapabilities the operator's own exemption (enabled=false for an operator)", async () => {
+    renderScreen();
+    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false));
+  });
 });
 
 // #1197 L2: the Title default tracks the task's own first line until the

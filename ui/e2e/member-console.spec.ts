@@ -156,7 +156,9 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
     await expect(option.getByText(DENIED.WORKSPACE_CHIP)).toBeVisible();
 
     await option.click();
-    await expect(page.getByText(DENIED.WORKSPACE_BODY)).toBeVisible();
+    // #922 review F5: the picker's own advisory line now shares the ONE
+    // canon sentence Launch's own disable reads, rather than its own wording.
+    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
   });
 });
 
