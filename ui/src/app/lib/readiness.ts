@@ -52,12 +52,17 @@ function agentCapableRows(rows: IntegrationRow[]): IntegrationRow[] {
 }
 
 // Whether a coding agent (Claude Code / Codex CLI) has somewhere to call —
-// ≥1 integration with an agent-tool capability ON and a resolved credential.
-// Used directly by callers that only need the boolean (workspace-detail.tsx,
-// feeding record-pane.tsx's model-readiness warning) without the rest of
-// Readiness.
+// ≥1 integration with an agent-tool capability ON and a resolved credential,
+// OR'd with the server's own llm_ready verdict (#850). The client-derived
+// rows above read Providers/Secrets.Present, which a member's redacted
+// SetupStatus empties out (an API key or a host CLI login both vanish); the
+// server computes llm_ready from the SAME unredacted facts before redaction
+// strips them, and keeps it on the wire for exactly this reason (see
+// internal/api/setup.go's SetupStatus.LLMReady doc). Used directly by
+// callers that only need the boolean (workspace-detail.tsx, feeding
+// record-pane.tsx's model-readiness warning) without the rest of Readiness.
 export function hasLlmPath(status: SetupStatus): boolean {
-  return agentCapableRows(aiIntegrationRows(status)).length > 0;
+  return agentCapableRows(aiIntegrationRows(status)).length > 0 || status.llm_ready === true;
 }
 
 export interface Readiness {
@@ -89,7 +94,10 @@ export function deriveReadiness(status: SetupStatus): Readiness {
     ready: status.ready,
     barrierReady: barrierCount > 0,
     barrierCount,
-    llmReady: agentRows.length > 0,
+    // See hasLlmPath's own comment: the OR is the server's llm_ready
+    // fallback for a member whose real model access (an API key, a host CLI
+    // login) the redacted Providers/Secrets.Present can no longer show.
+    llmReady: agentRows.length > 0 || status.llm_ready === true,
     llmLabel: defaultAgentRow?.name ?? "",
     composerReady,
   };

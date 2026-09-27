@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A user whose admin already stored a demo secret, or configured real model access another way,
+  is no longer refused a Getting Started demo their own console has no way to explain (#850).** Two
+  gates behind `needsSecret`/`needsModel` read fields a user's redacted setup status always empties
+  regardless of the real deployment state: `secrets.present` (so a demo referencing the console's
+  own seed secret never unlocked, even once the exact name was stored) and a client-only "is there a
+  model path" check that misses an API key or a host CLI login (both invisible post-redaction). The
+  redaction now keeps presence of the demo catalog's own public seed-secret names, and the
+  console's readiness/demo-gating checks fall back to the server's own `llm_ready` verdict — already
+  computed from the unredacted facts and already carried on the wire for exactly this reason.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

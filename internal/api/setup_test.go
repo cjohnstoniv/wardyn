@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,25 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 	}
 	if !memberSt.Ready {
 		t.Errorf("member: ready = false, want true (App.tsx's reachability gate — never redacted)")
+	}
+}
+
+// TestRedactSetupStatusForUser_KeepsDemoSecretPresence is #850 item 1: a
+// member's redacted secrets.present kept EVERY name at [], so
+// setup/steps.ts's walkableDemos/stepOrder never offered a needsSecret demo
+// even once an admin stored its exact seed secret — the demo's Start button
+// stayed closed forever, for every member, regardless of the real state.
+// demoSecretPresence narrows to the console demo catalog's own public secret
+// names (safe: they carry no more information than the shipped client
+// bundle already does) while every other name stays dropped, unchanged.
+func TestRedactSetupStatusForUser_KeepsDemoSecretPresence(t *testing.T) {
+	full := SetupStatus{
+		Secrets: SetupSecrets{Present: []string{"wardyn-demo-key", "wardyn-demo-pat", "anthropic-api-key", "corp-proxy-url"}},
+	}
+	got := redactSetupStatusForUser(full, false, false)
+	want := []string{"wardyn-demo-key", "wardyn-demo-pat"}
+	if !slices.Equal(got.Secrets.Present, want) {
+		t.Errorf("secrets.present = %v, want %v (demo seed secrets kept, every real secret name still dropped)", got.Secrets.Present, want)
 	}
 }
 

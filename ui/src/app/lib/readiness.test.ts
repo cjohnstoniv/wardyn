@@ -95,6 +95,19 @@ describe("hasLlmPath — via the integrations adapter", () => {
   it("a stored Azure key is never an LLM path — the kind no longer derives a row at all", () => {
     expect(hasLlmPath(status({ secrets: { present: ["azure-openai-key"], github_app: false } }))).toBe(false);
   });
+
+  // #850: a member's redacted SetupStatus carries empty providers/secrets no
+  // matter what the admin actually configured, so the rows above can never
+  // see an API key or a host CLI login for them. The server's own llm_ready
+  // verdict is computed from the unredacted facts and survives redaction —
+  // this must be honored as a fallback, not overridden by the empty rows.
+  it("honors the server's llm_ready even when providers/secrets are both empty (a member's redacted view)", () => {
+    expect(hasLlmPath(status({ llm_ready: true }))).toBe(true);
+  });
+
+  it("llm_ready:false with nothing else configured still reads no LLM path", () => {
+    expect(hasLlmPath(status({ llm_ready: false }))).toBe(false);
+  });
 });
 
 describe("deriveReadiness — must not overclaim a connected model", () => {
@@ -144,6 +157,16 @@ describe("deriveReadiness — must not overclaim a connected model", () => {
     expect(r.llmReady).toBe(false);
     expect(r.llmLabel).toBe("");
     expect(r.composerReady).toBe(false);
+  });
+
+  // #850: same fallback as hasLlmPath, for the demo-gating consumer
+  // (setup/steps.ts's walkableDemos/stepOrder) — a member with real model
+  // access the redacted rows cannot show must still read llmReady true, with
+  // no label to offer (nothing here names WHICH row, by construction).
+  it("a member's redacted view (no rows) still reads llmReady via the server's llm_ready", () => {
+    const r = deriveReadiness(status({ llm_ready: true }));
+    expect(r.llmReady).toBe(true);
+    expect(r.llmLabel).toBe("");
   });
 });
 

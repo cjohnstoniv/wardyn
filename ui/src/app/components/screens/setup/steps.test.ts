@@ -318,6 +318,14 @@ describe("walkableDemos — conditional demos are offered only once their precon
     );
     expect(order).toContain("agent-in-the-box");
   });
+
+  // #850: a member's redacted SetupStatus carries empty providers no matter
+  // what real model access exists (an API key, a host CLI login) — the
+  // server's llm_ready verdict, computed before redaction and kept on the
+  // wire for exactly this reason, must still unlock the demo.
+  it("restores the harness demo for a member via llm_ready, with providers empty", () => {
+    expect(ids(baseStatus({ providers: [], llm_ready: true }))).toContain("agent-in-the-box");
+  });
 });
 
 // ceilingNarrows(demo) — pinned to #850's per-demo table (read against the
