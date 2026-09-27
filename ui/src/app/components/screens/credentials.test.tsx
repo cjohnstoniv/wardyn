@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 const listInventoryMock = vi.fn();
 const eraseMock = vi.fn();
@@ -31,11 +32,13 @@ import { CredentialsScreen } from "./credentials";
 function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
   const { status = null, operator = true, securityOperator = true } = opts;
   return render(
-    <ModelAccessProvider status={status} onRefresh={() => {}}>
-      <OperatorProvider operator={operator} securityOperator={securityOperator} operatorResolved principal="admin@corp.example">
-        <CredentialsScreen />
-      </OperatorProvider>
-    </ModelAccessProvider>,
+    <MemoryRouter>
+      <ModelAccessProvider status={status} onRefresh={() => {}}>
+        <OperatorProvider operator={operator} securityOperator={securityOperator} operatorResolved principal="admin@corp.example">
+          <CredentialsScreen />
+        </OperatorProvider>
+      </ModelAccessProvider>
+    </MemoryRouter>,
   );
 }
 

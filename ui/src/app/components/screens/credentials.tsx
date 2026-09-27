@@ -11,6 +11,7 @@
 // refused at the route (the generic admin-view refusal covers it, same as
 // every other /admin/* screen).
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { AlertTriangle, KeyRound, Loader2 } from "lucide-react";
 import { credentials as credentialsApi, type CredentialInventory, type CredentialRow } from "../../lib/api/credentials";
 import { getErrorMessage, relativeTime, absoluteTime } from "../../lib/format";
@@ -122,7 +123,7 @@ export function CredentialsScreen() {
               action={
                 operator ? (
                   <Button variant="outline" size="sm" asChild>
-                    <a href="/admin/settings">{INVENTORY.OPEN_SETTINGS}</a>
+                    <Link to="/admin/settings">{INVENTORY.OPEN_SETTINGS}</Link>
                   </Button>
                 ) : undefined
               }
