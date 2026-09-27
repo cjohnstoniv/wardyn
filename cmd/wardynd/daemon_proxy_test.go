@@ -499,6 +499,29 @@ func TestInstallDaemonProxySecret_GroupReadableUnderFsGroupAccepted(t *testing.T
 	}
 }
 
+// TestInstallDaemonProxySecret_SelfOwnedOtherReadableRefusesBoot pins the
+// hand-made-host-file shape at the INSTALL level, through installDaemonProxySecret's
+// own fi.Sys().(*syscall.Stat_t)/os.Geteuid() owner extraction — not
+// daemonProxySecretMode in isolation, which takes owner/euid as plain
+// parameters and so cannot catch a broken wiring between fi.Sys() and the
+// rule (e.g. an owner that is never actually read). A file under t.TempDir()
+// is owned by the test process's own uid, so 0644 here is exactly the
+// self-owned-other-readable shape the rule refuses.
+func TestInstallDaemonProxySecret_SelfOwnedOtherReadableRefusesBoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("runs as root: a root-owned 0644 file is accepted (see TestDaemonProxySecretMode's \"root daemon, own file 0644\" case)")
+	}
+	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128\n", 0o644)
+	tr := freshTransport()
+	_, err := installDaemonProxySecret(tr, path, "")
+	if err == nil {
+		t.Fatal("installDaemonProxySecret(mode 0644, self-owned) succeeded, want a refusal")
+	}
+	if strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "s3cr3t-token") {
+		t.Fatalf("refusal echoes the raw credential: %q", err.Error())
+	}
+}
+
 // TestDaemonProxySecretMode walks every delivery shape through the mode rule
 // without chown: owner and euid are passed in.
 func TestDaemonProxySecretMode(t *testing.T) {
