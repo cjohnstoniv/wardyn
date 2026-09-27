@@ -22,13 +22,17 @@ import (
 type RunReviver interface {
 	// MarkRunRevived claims run id for a new proxy: while it is RUNNING and
 	// still as the revive read it, live (from "") or lost to an outage or a
-	// reboot (from that reason; never its end), it clears the lost mark, stamps
-	// the token as just renewed (the revive mints a fresh one, and the
-	// lapsed-token sweep must not read the old stamp) and refreshes the watcher
-	// lease (a rebooted agent is started only after the new proxy, and the
-	// watcher sweep must not probe it before then). false means the run went
-	// terminal, ended, was lost or revived since, and must get no proxy.
-	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason) (bool, error)
+	// reboot (from that reason), it clears the lost mark (and any unresolved
+	// containment error: the old proxy it was about is replaced), stamps the
+	// token as just renewed (the revive mints a fresh one, and the lapsed-token sweep
+	// must not read the old stamp) and refreshes the watcher lease (a stopped
+	// agent is started only after the new proxy, and the watcher sweep must
+	// not probe it before then). A run kept by its own end (from LostEnded) is
+	// claimed only with ended set: its exact mark, its files grace still live
+	// and its end after ended.Now (#1061). false means the run went terminal,
+	// ended, was lost or revived since, or its grace or end ran out, and it
+	// must get no proxy.
+	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
 	// proxy, once a revive's new proxy runs.
 	SetRunProxyRelease(ctx context.Context, id uuid.UUID, release string) error
@@ -49,14 +53,23 @@ type RunProxyRelease struct {
 var _ RunReviver = PG{}
 
 // MarkRunRevived — see RunReviver.
-func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason) (bool, error) {
-	if from != "" && from != types.LostOutage && from != types.LostReboot {
+func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error) {
+	switch from {
+	case "", types.LostOutage, types.LostReboot:
+	case types.LostEnded:
+		if ended == nil {
+			return false, nil
+		}
+	default:
 		return false, nil
 	}
+	lostAt, keptAfter, now := endedArgs(ended)
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
-		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3`,
-		id, string(types.RunRunning), string(from))
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL,
+			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
+		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3
+		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))`,
+		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now)
 	if err != nil {
 		return false, fmt.Errorf("store: mark run revived: %w", err)
 	}

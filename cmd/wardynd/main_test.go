@@ -43,6 +43,9 @@ func (f *fakeSecretStore) Put(_ context.Context, name string, value []byte) erro
 	return f.putErr
 }
 
+// unlocked wraps a fake as a single-instance process's boot-key store.
+func unlocked(s secretKeyStore) bootKeyStore { return bootKeyStore{s, holdsSingleInstanceLock} }
+
 // notFoundErr mirrors how every secret store reports a missing row: it wraps
 // secretstore.ErrNotFound so callers can distinguish "absent" from
 // "present-but-broken".
@@ -63,7 +66,7 @@ func decryptErr() error {
 func TestLoadOrCreateSecret_DecryptErrorFailsClosed(t *testing.T) {
 	store := &fakeSecretStore{getErr: decryptErr()}
 	genCalled := false
-	_, err := loadOrCreateSecret(context.Background(), store, "wardyn-signing-key",
+	_, err := loadOrCreateSecret(context.Background(), unlocked(store), "wardyn-signing-key",
 		func(b []byte) bool { return len(b) > 0 },
 		func() ([]byte, error) { genCalled = true; return []byte("new"), nil },
 	)
@@ -78,11 +81,39 @@ func TestLoadOrCreateSecret_DecryptErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// The first-boot seam: loadOrCreateSecret mints only on secretstore.ErrNotFound.
+// Every other shape of Get error — a store outage, a decrypt failure, an
+// error whose text merely says "not found" — fails closed with no Put.
+func TestLoadOrCreateSecret_MintsOnlyOnErrNotFound(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		err   error
+		mints bool
+	}{
+		{"wrapped ErrNotFound", notFoundErr(), true},
+		{"store unavailable", fmt.Errorf("transit KEK: vault POST transit/decrypt/wardyn: 503: %w", secretstore.ErrUnavailable), false},
+		{"decrypt failure", decryptErr(), false},
+		{"text says not found", errors.New("vault GET wardyn/data/ns1/platform/wardyn-signing-key: 404 (secret not found)"), false},
+		{"unavailable and not found joined", errors.Join(secretstore.ErrUnavailable, errors.New("not found")), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := &fakeSecretStore{getErr: c.err}
+			_, err := loadOrCreateSecret(context.Background(), unlocked(store), "wardyn-signing-key",
+				func(b []byte) bool { return len(b) > 0 },
+				func() ([]byte, error) { return []byte("new"), nil },
+			)
+			if minted := len(store.putCalls) > 0; minted != c.mints || (err == nil) != c.mints {
+				t.Fatalf("Get error %v: err=%v, Put calls=%d; want mint=%v", c.err, err, len(store.putCalls), c.mints)
+			}
+		})
+	}
+}
+
 // Finding A: a TRUE not-found generates a fresh key and persists it.
 func TestLoadOrCreateSecret_NotFoundGeneratesAndPuts(t *testing.T) {
 	store := &fakeSecretStore{getErr: notFoundErr()}
 	want := []byte("freshly-generated")
-	got, err := loadOrCreateSecret(context.Background(), store, "wardyn-signing-key",
+	got, err := loadOrCreateSecret(context.Background(), unlocked(store), "wardyn-signing-key",
 		func(b []byte) bool { return len(b) > 0 },
 		func() ([]byte, error) { return want, nil },
 	)
@@ -105,7 +136,7 @@ func TestLoadOrCreateSecret_NotFoundGeneratesAndPuts(t *testing.T) {
 func TestLoadOrCreateSecret_ExistingKeyReturnedNoPut(t *testing.T) {
 	existing := []byte("existing-key-material")
 	store := &fakeSecretStore{getVal: existing}
-	got, err := loadOrCreateSecret(context.Background(), store, "wardyn-session-key",
+	got, err := loadOrCreateSecret(context.Background(), unlocked(store), "wardyn-session-key",
 		func(b []byte) bool { return len(b) >= len(existing) },
 		func() ([]byte, error) { t.Fatal("must not generate when a valid key exists"); return nil, nil },
 	)
@@ -127,7 +158,7 @@ func TestLoadOrCreateSecret_ExistingKeyReturnedNoPut(t *testing.T) {
 func TestLoadOrCreateSecret_PresentButInvalidRegenerates(t *testing.T) {
 	store := &fakeSecretStore{getVal: []byte("short")}
 	want := []byte("0123456789abcdef0123456789abcdef")
-	got, err := loadOrCreateSecret(context.Background(), store, "wardyn-session-key",
+	got, err := loadOrCreateSecret(context.Background(), unlocked(store), "wardyn-session-key",
 		func(b []byte) bool { return len(b) >= 32 },
 		func() ([]byte, error) { return want, nil },
 	)
@@ -142,11 +173,30 @@ func TestLoadOrCreateSecret_PresentButInvalidRegenerates(t *testing.T) {
 	}
 }
 
+// #754: a create that cannot take the cross-replica lock FAILS CLOSED — no
+// generate, no Put — rather than racing another replica unlocked.
+func TestLoadOrCreateSecret_CreateLockErrorFailsClosed(t *testing.T) {
+	store := &fakeSecretStore{getErr: notFoundErr()}
+	keys := bootKeyStore{store, func(context.Context) (func(), error) {
+		return nil, errors.New("lock wait: context deadline exceeded")
+	}}
+	_, err := loadOrCreateSecret(context.Background(), keys, "wardyn-signing-key",
+		func(b []byte) bool { return len(b) > 0 },
+		func() ([]byte, error) { t.Fatal("must not generate without the create lock"); return nil, nil },
+	)
+	if err == nil {
+		t.Fatal("expected an error when the create lock is unavailable, got nil")
+	}
+	if len(store.putCalls) != 0 {
+		t.Fatalf("no lock must mean no Put; got %d Put call(s)", len(store.putCalls))
+	}
+}
+
 // Sanity: the real session-key generator produces a 32-byte key, exercising the
 // loadOrCreateSessionKey wiring end to end against the fake (not-found path).
 func TestLoadOrCreateSessionKey_NotFoundIsThirtyTwoBytes(t *testing.T) {
 	store := &fakeSecretStore{getErr: notFoundErr()}
-	key, err := loadOrCreateSessionKey(context.Background(), store)
+	key, err := loadOrCreateSessionKey(context.Background(), unlocked(store))
 	if err != nil {
 		t.Fatalf("session key: %v", err)
 	}
@@ -161,7 +211,7 @@ func TestLoadOrCreateSessionKey_NotFoundIsThirtyTwoBytes(t *testing.T) {
 // Sanity: a decrypt error from the session-key path fails closed (no Put).
 func TestLoadOrCreateSessionKey_DecryptErrorFailsClosed(t *testing.T) {
 	store := &fakeSecretStore{getErr: decryptErr()}
-	if _, err := loadOrCreateSessionKey(context.Background(), store); err == nil {
+	if _, err := loadOrCreateSessionKey(context.Background(), unlocked(store)); err == nil {
 		t.Fatal("expected fail-closed error on decrypt failure")
 	}
 	if len(store.putCalls) != 0 {
@@ -173,7 +223,7 @@ func TestLoadOrCreateSessionKey_DecryptErrorFailsClosed(t *testing.T) {
 // persisted, and parses back into a usable *ecdsa.PrivateKey on not-found.
 func TestLoadOrCreateSigningKey_NotFoundGeneratesParsableKey(t *testing.T) {
 	store := &fakeSecretStore{getErr: notFoundErr()}
-	key, err := loadOrCreateSigningKey(context.Background(), store)
+	key, err := loadOrCreateSigningKey(context.Background(), unlocked(store))
 	if err != nil {
 		t.Fatalf("signing key: %v", err)
 	}
@@ -189,7 +239,7 @@ func TestLoadOrCreateSigningKey_NotFoundGeneratesParsableKey(t *testing.T) {
 // most damaging case, since overwriting the signing key invalidates every SVID.
 func TestLoadOrCreateSigningKey_DecryptErrorFailsClosed(t *testing.T) {
 	store := &fakeSecretStore{getErr: decryptErr()}
-	if _, err := loadOrCreateSigningKey(context.Background(), store); err == nil {
+	if _, err := loadOrCreateSigningKey(context.Background(), unlocked(store)); err == nil {
 		t.Fatal("expected fail-closed error on decrypt failure")
 	}
 	if len(store.putCalls) != 0 {

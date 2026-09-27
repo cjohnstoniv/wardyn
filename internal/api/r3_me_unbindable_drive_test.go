@@ -18,8 +18,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestMeWithholdsAnUnbindableDrive is F269.
-//
 // driveIsMountableHere ran at the launch door and at the ADMIN preview, and
 // never on the member's own surface. So /me offered a mountable-looking
 // allocation — name, size, writable, home_name, user_drive_unavailable "" — for

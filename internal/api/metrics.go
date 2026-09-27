@@ -21,7 +21,11 @@ import (
 // storePingTimeout bounds the Postgres reachability check shared by the /readyz
 // readiness probe (handleReadyz) and the wardyn_store_up gauge below, so the two
 // cannot drift into disagreeing about whether the store is up.
-const storePingTimeout = 3 * time.Second
+//
+// A var (not a const) purely so a stalled-store test need not wait out the
+// real 3s; TestStorePingTimeout_ProductionValueUnchanged pins the production
+// value.
+var storePingTimeout = 3 * time.Second
 
 // metrics holds the control plane's scrape counters, served as Prometheus text
 // exposition by GET /metrics (admin-gated — see routes()).

@@ -156,17 +156,23 @@ func (t *Transit) Unwrap(ctx context.Context, wrapped []byte, bind map[string]st
 	}
 	dek, err := base64.StdEncoding.DecodeString(r.Data.Plaintext)
 	if err != nil || len(dek) != kek.DEKSize {
-		return nil, fmt.Errorf("transit KEK %s: decrypt did not answer a %d-byte data key", t.id, kek.DEKSize)
+		return nil, fmt.Errorf("transit KEK %s: %w: decrypt did not answer a %d-byte data key", t.id, kek.ErrService, kek.DEKSize)
 	}
 	return dek, nil
 }
 
-// post calls <mount>/<op>/<key>. A 404 (no such mount or key) is definitive.
+// post calls <mount>/<op>/<key>. An unreachable Vault stays transient
+// (secretstore.ErrUnavailable); any answer Vault gives with an error status —
+// 400 for a deleted key or a wrap that does not authenticate, 403, 404 — is
+// kek.ErrService, carrying Vault's status and message.
 func (t *Transit) post(ctx context.Context, op string, in map[string]string, out any) error {
 	path := t.mount + "/" + op + "/" + t.key
 	status, err := t.c.call(ctx, http.MethodPost, path, in, out)
-	if err != nil {
+	if errors.Is(err, secretstore.ErrUnavailable) {
 		return fmt.Errorf("transit KEK %s: %w", t.id, err)
+	}
+	if err != nil {
+		return fmt.Errorf("transit KEK %s: %w: %w", t.id, kek.ErrService, err)
 	}
 	if status == http.StatusNotFound {
 		return fmt.Errorf("transit KEK %s: vault POST %s: 404 (no such mount or key)", t.id, path)

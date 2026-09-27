@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F245 residue: the first fix projected the workspace WRAPPER (Sources,
+// A residue of the workspace-read redaction: the first fix projected the workspace WRAPPER (Sources,
 // BaseImage, Requirements) and left Workspace.Profile — the scan result that
 // travels in the SAME response — intact. The profile republishes every axis the
 // wrapper was just stripped of, under its own keys, so the redaction was

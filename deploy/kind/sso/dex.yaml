@@ -39,7 +39,7 @@ data:
         hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
         username: "member"
         userID: "gsv-member-0001"
-      # The role walk's cast (ui/e2e/live/sso-roles.spec.ts), one per role path
+      # The role walk's cast (ui/e2e/walk/sso-roles.spec.ts), one per role path
       # in values.yaml. Keyed by email: this Dex's password DB emits no groups
       # claim. oidc's TestShippedShapeRoleDerivation holds this list equal to its
       # expectation table.

@@ -386,7 +386,7 @@ func TestValidateModelProviders_BedrockHTTPNeedsTestHatch(t *testing.T) {
 			if err := dec.Decode(&cfg); err != nil {
 				t.Fatal(err)
 			}
-			ts := httptest.NewServer(srv.Handler())
+			ts := httptest.NewServer(panicFails(t, srv.Handler()))
 			defer ts.Close()
 			_, _, _, err := client.New(ts.URL, adminToken).PutSiteConfig(context.Background(), cfg)
 			return err

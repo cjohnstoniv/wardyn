@@ -732,6 +732,11 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 			*warns = append(*warns, fmt.Sprintf("grant %q forced to require approval (operator policy)", g.Kind))
 			g.RequiresApproval = true
 		}
+		// owner_only tightens the same way: a proposal may not drop the flag an
+		// operator set on the pairing and so take the operator row back.
+		if !g.OwnerOnly && slices.ContainsFunc(bounds, func(cg types.GrantSpec) bool { return cg.OwnerOnly }) {
+			g.OwnerOnly = true
+		}
 		out = append(out, g)
 	}
 	return out

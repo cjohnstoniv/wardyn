@@ -187,7 +187,6 @@ func TestLostRun_ALapsedTokenCutsTheProxy(t *testing.T) {
 func TestLostRun_ALapsedTokenFailsClosed(t *testing.T) {
 	cases := map[string]func(f *lostFixture){
 		"a headless run":            func(f *lostFixture) { f.st.run.Interactive = false },
-		"a proxy that stays up":     func(f *lostFixture) { f.lr.proxyErr = errors.New("docker: remove proxy: boom") },
 		"a substrate that can't":    func(f *lostFixture) { f.lr.proxyErr = runner.ErrEndUnsupported },
 		"a runner without the stop": func(f *lostFixture) { f.srv.cfg.Runner = f.rn },
 		"a run past its end and grace": func(f *lostFixture) {
@@ -349,5 +348,64 @@ func TestLostRun_RenewStampsAndRefusesAKeptRun(t *testing.T) {
 	}
 	if !hasAudit(h, "identity.renew", "denied") {
 		t.Error("no identity.renew/denied audit row for a lost run's renew")
+	}
+}
+
+// TestLostRun_ATransientStopProxyErrorKeepsTheRun is #1060 (0.8 review F06):
+// a proxy stop that fails with anything but ErrEndUnsupported must not tear
+// the run down, which would remove the agent container and its files on the
+// same failing daemon. The run stays kept and RUNNING, its containment
+// unresolved (audited, containment_error set); every pass retries the stop
+// without a teardown, and the pass that lands it clears the error and audits
+// the resolution once.
+func TestLostRun_ATransientStopProxyErrorKeepsTheRun(t *testing.T) {
+	f := newLostFixture(t)
+	f.ls.lapsed = true
+	f.lr.proxyErr = errors.New("docker: stop proxy: context deadline exceeded")
+	f.sweepTokens(t)
+
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
+		t.Fatalf("state %s, StopSandbox %d; want RUNNING, 0 — a transient stop error must not tear the run down",
+			f.st.State(), f.rn.stopCount())
+	}
+	lost := f.audit.eventsFor(f.run.ID, "run.lost")
+	if len(lost) != 1 {
+		t.Fatalf("run.lost events = %+v, want one", lost)
+	}
+	if d := leaseAuditData(t, lost[0]); d["kept"] != true || d["containment"] != "unresolved" || d["lost_error"] == nil {
+		t.Errorf("run.lost data = %v, want kept:true, containment:unresolved and lost_error", d)
+	}
+	if f.st.containmentError() == "" {
+		t.Error("containment_error not set on a run whose proxy stop failed")
+	}
+	if f.brk.count(f.run.ID) != 1 {
+		t.Errorf("broker revocations = %d, want 1 — the credentials go even when the stop fails", f.brk.count(f.run.ID))
+	}
+
+	for range 3 {
+		f.now = f.now.Add(time.Minute)
+		f.sweep(t)
+	}
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 || f.lr.proxyStopCount() != 4 || f.st.containmentError() == "" {
+		t.Fatalf("a persistent error: state %s, StopSandbox %d, StopProxy %d, containment_error %q; want RUNNING, 0, 4, still set",
+			f.st.State(), f.rn.stopCount(), f.lr.proxyStopCount(), f.st.containmentError())
+	}
+	if got := f.audit.eventsFor(f.run.ID, "run.containment.reassert"); len(got) != 0 {
+		t.Errorf("run.containment.reassert events = %+v; want none — run.lost already audited this failure in this process", got)
+	}
+
+	f.lr.proxyErr = nil
+	f.sweep(t)
+	f.sweep(t)
+	if f.lr.proxyStopCount() != 6 || f.st.containmentError() != "" {
+		t.Fatalf("StopProxy %d, containment_error %q; want the stop re-asserted and the error cleared",
+			f.lr.proxyStopCount(), f.st.containmentError())
+	}
+	resolved := f.audit.eventsFor(f.run.ID, "run.containment.reassert")
+	if len(resolved) != 1 || resolved[0].Outcome != "success" || leaseAuditData(t, resolved[0])["containment"] != "resolved" {
+		t.Errorf("run.containment.reassert events = %+v, want one success with containment:resolved", resolved)
+	}
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
+		t.Errorf("after the resolution: state %s, StopSandbox %d; want RUNNING, 0", f.st.State(), f.rn.stopCount())
 	}
 }

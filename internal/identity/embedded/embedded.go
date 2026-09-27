@@ -126,6 +126,8 @@ type svidClaims struct {
 	Act actClaim `json:"act"`
 	// Sponsor is the accountable human owner.
 	Sponsor string `json:"sponsor"`
+	// OperatorOwned is identity.Claims.OperatorOwned.
+	OperatorOwned bool `json:"wardyn_operator_owned,omitempty"`
 }
 
 type actClaim struct {
@@ -145,9 +147,9 @@ func (p *Provider) CheckGrants(grants []types.GrantSpec) error {
 
 // MintRunIdentity issues a 1h ES256 JWT-SVID for runID. humanSub is the human
 // principal; sponsor is the accountable owner (defaults to humanSub when
-// empty); audience binds the token (RFC 8707). It emits an identity.mint audit
-// event (actor_type system).
-func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string) (identity.RunIdentity, error) {
+// empty); audience binds the token (RFC 8707); operatorOwned is signed in as
+// Claims.OperatorOwned. It emits an identity.mint audit event (actor_type system).
+func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
 	if humanSub == "" {
 		return identity.RunIdentity{}, errors.New("embedded identity: humanSub is required")
 	}
@@ -178,8 +180,9 @@ func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSu
 			Expiry:    jwt.NewNumericDate(exp),
 			NotBefore: jwt.NewNumericDate(now),
 		},
-		Act:     actClaim{Sub: spiffeID},
-		Sponsor: sponsor,
+		Act:           actClaim{Sub: spiffeID},
+		Sponsor:       sponsor,
+		OperatorOwned: operatorOwned,
 	}
 
 	token, err := jwt.Signed(p.signer).Claims(claims).Serialize()
@@ -260,12 +263,13 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 	}
 
 	out := &identity.Claims{
-		SPIFFEID: claims.Act.Sub,
-		RunID:    runID,
-		Sub:      claims.Subject,
-		Sponsor:  claims.Sponsor,
-		JTI:      claims.ID,
-		Audience: expectedAudience,
+		SPIFFEID:      claims.Act.Sub,
+		RunID:         runID,
+		Sub:           claims.Subject,
+		Sponsor:       claims.Sponsor,
+		OperatorOwned: claims.OperatorOwned,
+		JTI:           claims.ID,
+		Audience:      expectedAudience,
 	}
 	if claims.IssuedAt != nil {
 		out.IssuedAt = claims.IssuedAt.Time()

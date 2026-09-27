@@ -142,6 +142,9 @@ var queryParamNotAnID = map[string]string{
 	"path":                      "internal route: the proxy describing the agent's own request, under the run token",
 	"repo":                      "internal route: the proxy describing the agent's own request, under the run token",
 	"ref_class":                 "internal route: the proxy describing the agent's own request, under the run token",
+	"subject_type":              "Explain grid (security tier route): the grant subject kind asked about",
+	"subject":                   "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
+	"kinds":                     "Explain grid (security tier route): capability kind names, a closed set",
 }
 
 // queryParamDynamicReads names the parameters a function reads through a

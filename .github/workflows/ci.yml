@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches: [main, master, 'release/**', 'feature/**']
-  pull_request:
-    branches: [main, master, 'release/**', 'feature/**']
+  # No branches filter: `branches:` matches the PR's BASE, and the 0.8
+  # working-practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90),
+  # not on main — a filtered trigger gave a stacked PR no checks at all
+  # (`gh pr checks` -> "no checks reported" on #348 and #351, both based on a
+  # lane branch). `push:` stays narrow: every commit already gets a run from
+  # its own PR, so an unfiltered push trigger would only double it, and the
+  # `concurrency:` group below keys pull_request runs off the PR number, push
+  # runs off run_id — it does not save a redundant push run from a lane branch.
+  pull_request: {}
   # The merge queue tests each queued PR against the queue's head before it
   # lands; the required checks must run on that event or the queue never moves.
   merge_group:
@@ -472,6 +479,11 @@ jobs:
         working-directory: ui
         run: pnpm exec playwright install --with-deps chromium
       - name: Run Playwright UI e2e (fresh seed per spec)
+        # #469: explicit rather than relying on run-ui-e2e.sh's CI-set default
+        # (1 locally, 3 in CI) — a hosted runner is dedicated and sized for
+        # three concurrent backends; a shared dev box's default stays 1.
+        env:
+          WARDYN_E2E_LANES: 3
         run: make test-e2e-ui
       - name: Upload Playwright report
         id: upload_playwright_report
@@ -869,6 +881,12 @@ jobs:
           WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
         run: make test-conformance-k8s
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Upload conformance-k8s test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-k8s-test-reports
+          path: test/reports/go/conformance-k8s/**
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -917,8 +935,9 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Two image builds (one of them a bookworm + node + `npm install -g` layer)
-    # in front of a suite whose own `go test -timeout` is 20m.
-    timeout-minutes: 45
+    # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
+    # key-service leg.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.backend != 'false'
@@ -946,6 +965,13 @@ jobs:
       - name: Docker smoke check
         if: needs.changes.outputs.backend != 'false'
         run: docker run --rm hello-world
+      # T-33: the Vault Transit KEK and the Vault KV store against the official
+      # hashicorp/vault and openbao/openbao dev images (a paused server must be
+      # transient, a deleted key definitive, every read one audited decrypt).
+      # Needs no image build, so it runs first.
+      - name: Key-service conformance (Vault + OpenBao dev servers)
+        if: needs.changes.outputs.backend != 'false'
+        run: make test-kek-conformance
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
@@ -983,6 +1009,16 @@ jobs:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Upload conformance-docker test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-docker-test-reports
+          path: test/reports/go/conformance-docker/**
+      - name: Published 0.7.11 wardynd fails closed over a converted secret store (docker)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        run: go test -count=1 -v -run '^TestPG_OldBinaryAgainstV1Store$' ./cmd/wardynd/
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1036,6 +1072,12 @@ jobs:
         run: make test-envbuild-integration
         # No continue-on-error: a real regression in the push/finalize/pull
         # cycle must block the build.
+      - name: Upload envbuild test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: envbuild-test-reports
+          path: test/reports/go/envbuild/**
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1380,26 +1422,33 @@ jobs:
       - name: Check DCO sign-off (Signed-off-by on all commits)
         run: |
           BASE=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          if [ -z "$BASE" ]; then
+          PR_HEAD=${{ github.event.pull_request.head.sha }}
+          if [ -n "$PR_HEAD" ]; then
+            # End at the PR head, not HEAD: HEAD is GitHub's synthetic refs/pull/N/merge
+            # commit, which this range excludes entirely. No DCO_ALLOW_GITHUB_MERGES here:
+            # the exemption applies only where GitHub itself makes the merge (push,
+            # merge_group below) — every commit in a PR's own range, merges included, must
+            # carry Signed-off-by (#1070).
+            make dco DCO_RANGE="$BASE..$PR_HEAD"
+          elif [ -n "$BASE" ]; then
+            # merge_group: the queue's own merge commits are committed by GitHub
+            # and carry no Signed-off-by — exempt only those.
+            make dco DCO_RANGE="$BASE..HEAD" DCO_ALLOW_GITHUB_MERGES=1
+          else
             # On push, check every commit the push introduced — `-1 HEAD`
             # checked only the tip, so a multi-commit direct push could land
             # unsigned commits behind one signed HEAD. github.event.before is
             # the ref's previous tip; it is all-zeros on a newly created ref,
             # and after a force-push it can name a commit this clone no longer
             # has — both fall back to the single-commit check rather than
-            # erroring the job.
+            # erroring the job. A push-landed "Merge pull request" commit is
+            # committed by GitHub and carries no Signed-off-by — exempt only that.
             BEFORE=${{ github.event.before }}
             if [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$' \
                && git cat-file -e "$BEFORE" 2>/dev/null; then
-              make dco DCO_RANGE="$BEFORE..HEAD"
+              make dco DCO_RANGE="$BEFORE..HEAD" DCO_ALLOW_GITHUB_MERGES=1
             else
-              make dco DCO_RANGE="-1 HEAD"
+              make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
             fi
-          else
-            # checkout@v4 on pull_request (and on a merge_group, the queue's own
-            # merge commits) lands on an auto-generated merge commit, whose message has no Signed-off-by. `make dco` uses
-            # --no-merges to exclude that synthetic commit so only real
-            # contributor commits are checked (otherwise DCO fails on every PR).
-            make dco DCO_RANGE="$BASE..HEAD"
           fi
 

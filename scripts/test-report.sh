@@ -14,7 +14,8 @@
 #   scripts/test-report.sh unit ./...
 #   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
-# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER (passed through to go test).
+# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
+# WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
@@ -32,9 +33,99 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # from any package in the module, not just calls from within the same
 # package as the covered code (module-wide instrumentation regardless of
 # which PKGS are under test). Capture the JSON stream to a file.
-go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" \
-  > "$OUT/test-output.json"
+# The live-substrate suites (conformance, envbuild) turn coverage off: nobody
+# reads their profile, and instrumenting the whole module is compile time spent
+# inside the CI job's own timeout.
+if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
+  rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
+  go test -json "${PKGS[@]}" > "$OUT/test-output.json"
+else
+  go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" > "$OUT/test-output.json"
+fi
 GO_EXIT=$?
+
+# ── name the failure ─────────────────────────────────────────────────────────
+# G11: a red `build`/`test-pg` job used to say only `make: *** [Makefile:195:
+# test-report] Error 1` — the failing test names and any compiler output were
+# visible only in the uploaded JSON artifact (gh run download -n
+# go-test-reports). Surface both directly in the job log on a red run, plus
+# any package that failed with no failing test to name (a -timeout panic, a
+# panic in init, os.Exit or a failure in TestMain): its package name and the
+# panic, or else its last few output lines.
+if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
+import json
+import sys
+from collections import deque
+
+fails = set()
+build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fail
+build_fails = {}   # ImportPath -> [Output, ...]
+pkg_fails = set()  # Package: failed with no Test and not a build failure
+tail = {}          # Package -> its last few output lines
+panics = {}        # Package -> its first `panic:` line and the lines after it
+panic_test = {}    # Package -> the test that panic was attributed to, if any
+
+
+def emit(out):
+    sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
+
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue  # a non-JSON line (e.g. `go test` itself failed to start)
+        action = ev.get("Action")
+        if action == "build-output":
+            build_output.setdefault(ev.get("ImportPath", ""), []).append(ev.get("Output", ""))
+        elif action == "build-fail":
+            ip = ev.get("ImportPath", "")
+            build_fails[ip] = build_output.get(ip, [])
+        elif action == "output" and ev.get("Package"):
+            pkg, out = ev["Package"], ev.get("Output", "")
+            tail.setdefault(pkg, deque(maxlen=8)).append(out)
+            # A -timeout panic is attributed to the running test but emits no
+            # fail event for it, and its last lines are goroutine frames: the
+            # `panic:` line and the ones after it are what name the cause.
+            if pkg not in panics and out.startswith("panic: "):
+                panics[pkg] = [out]
+                panic_test[pkg] = ev.get("Test", "")
+            elif pkg in panics and len(panics[pkg]) < 8:
+                panics[pkg].append(out)
+        elif action == "fail" and ev.get("Test"):
+            fails.add((ev.get("Package", ""), ev["Test"]))
+        elif action == "fail" and not ev.get("FailedBuild"):
+            pkg_fails.add(ev.get("Package", ""))
+
+if fails:
+    print(">> failing tests:")
+    for pkg, test in sorted(fails):
+        print(f">>   {pkg} {test}")
+
+if build_fails:
+    print(">> failed to build:")
+    for ip, lines in sorted(build_fails.items()):
+        print(f">>   {ip}")
+        for out in lines:
+            emit(out)
+
+named_fail_pkgs = {pkg for pkg, _ in fails}
+# An ordinary panic in a test fails that test, already named above; a -timeout
+# panic fails no test, so it still needs its package listed here.
+orphan_panics = {p for p in panics if (p, panic_test[p]) not in fails}
+unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p not in named_fail_pkgs)
+if unnamed:
+    print(">> failed outside any named test:")
+    for pkg in unnamed:
+        print(f">>   {pkg}")
+        for out in panics.get(pkg) or tail.get(pkg, []):
+            emit(out)
+PYEOF
+fi
 
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
 if [ -s "$OUT/cover.out" ]; then
@@ -72,6 +163,80 @@ fi
 if [ -n "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   DECLARE_FLOOR=0
 fi
+# conformance-docker, conformance-k8s and envbuild have no testfloor.Mark
+# probes of their own (see the REQUIRE_ALL floor right below, which is their
+# equivalent) — the testfloor.Mark floor further down must not run for them,
+# or it would read "no package suite tested calls testfloor.Mark" as a red
+# floor instead of a floor that simply lives elsewhere.
+case "$SUITE" in
+  conformance-docker | conformance-k8s | envbuild) DECLARE_FLOOR=0 ;;
+esac
+
+# T-08 (G9): conformance and envbuild have no must-pass floor at all today —
+# their Makefile targets call `go test` directly, never through this script —
+# and their falsifiable cases are exactly the ones a capability flip or an
+# unset probe silently turns into a SKIP that never reddens the job (see
+# conformance.go's DefaultRouteProbe/RecordingProbe skip sites). Named by
+# subtest so a rename cannot quietly empty the set, same law as the
+# testfloor.Mark floor below — these three suites' must-pass cases are
+# specific subtests of a single shared Test func (TestConformanceDocker,
+# TestConformanceK8s), not distinct top-level funcs a source scan can find,
+# so they get their own name-list floor instead of a Mark call.
+# WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran at all —
+# a lane without them declared has no substrate, same as the pg floor's
+# default-off shape. WARDYN_TEST_REPORT_SKIP_FLOOR silences this floor too.
+# Exact names, not a pattern: EVERY one must pass (checked below), so dropping
+# or renaming one case reddens the job even while the others still match.
+REQUIRE_ALL=""
+if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
+  if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestBootEgress_NoFirstUseApproval'
+  fi
+  if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode'
+  fi
+  if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
+  fi
+fi
+if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then
+  REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"
+  # go test -json emits one event per line. REQUIRE_ALL here always names a
+  # subtest (e.g. "TestConformanceDocker/CreateStatusStop"), so the extraction
+  # keeps the full Test field ("/" and all) — unlike the testfloor.Mark floor
+  # below, which only ever inspects top-level (bare-name) test outcomes.
+  names() {
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"]*\"" "$OUT/test-output.json" \
+      | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
+  }
+  PASSED="$(names pass)"
+  SKIPPED="$(names skip)"
+  FAILED="$(names fail)"
+  MISSING=""
+  for n in $REQUIRE_ALL; do
+    grep -qxF "$n" <<<"$PASSED" || MISSING="$MISSING $n"
+  done
+  if [ -z "$PASSED$SKIPPED$FAILED" ]; then
+    echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
+    echo ">> Those probes are the falsifiable proof of the real invariant; a set that matches nothing" >&2
+    echo ">> is a rename that silently removed the floor, not a suite with nothing to check." >&2
+    GO_EXIT=1
+  elif [ -n "$SKIPPED" ]; then
+    echo ">> SKIP FLOOR: these probes SKIPPED:" >&2
+    echo "$SKIPPED" | sed 's/^/>>   /' >&2
+    echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These cases are falsifiable ONLY" >&2
+    echo ">> against the real driver (a capability flip, a missing probe, or an unpullable image all read" >&2
+    echo ">> as this same skip) — see conformance.go's skip sites for the specific cause." >&2
+    GO_EXIT=1
+  elif [ -n "$MISSING" ]; then
+    echo ">> SKIP FLOOR: these must-pass cases did not pass (failed, or never ran: renamed, removed or -run filtered):" >&2
+    printf '>>   %s\n' $MISSING >&2
+    GO_EXIT=1
+  else
+    echo ">> skip floor: $(echo "$REQUIRE_ALL" | wc -w | tr -d ' ') probe(s) required by name, all passed"
+  fi
+fi
+
 if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
   # Suite-scoped: a probe declares which suite it gates
   # (testfloor.Mark(t, "pg")), because files with no build tag — internal/api's,
@@ -142,6 +307,9 @@ if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
       unit)
         echo ">> Put curl on PATH — these probes exist to prove a real curl round-trip and cannot do that" >&2
         echo ">> skipped. A minimal dev container without curl can set WARDYN_TEST_REPORT_SKIP_FLOOR=1." >&2 ;;
+      kek-*)
+        echo ">> Run the suite through scripts/kek-conformance.sh or scripts/kek-conformance-kind.sh," >&2
+        echo ">> which set every variable these probes need." >&2 ;;
       *)
         echo ">> These probes need no real daemon or cluster — they are the fake-backed core cases every" >&2
         echo ">> lane can run, so a skip means the environment broke, not that it is missing." >&2

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -625,6 +626,17 @@ const reconcileProbeErrorCeiling = 30 * time.Minute
 // reconcileProbeMaxBackoff caps the error backoff interval.
 const reconcileProbeMaxBackoff = 60 * time.Second
 
+// reconcileWatchIntervalNS is reconcileWatch's base probe interval, 5s. An
+// atomic of nanoseconds (not a const) purely so a test can shrink it instead
+// of waiting out the real tick, without racing a detached watcher goroutine
+// that reads it while a later test restores it (the sshHandshakeTimeoutNS
+// pattern). TestReconcileWatchInterval_ProductionValueUnchanged pins it.
+var reconcileWatchIntervalNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(5 * time.Second))
+	return &v
+}()
+
 // reconcileWatch polls a re-adopted sandbox's agent liveness until it exits, then
 // finalizes the run and runs the revoke cascade. Panic-safe (a panic here must
 // not crash the control plane).
@@ -640,7 +652,7 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	// here or on another replica, adopts the run).
 	stopLease := s.holdRunWatcherLease(ctx, runID)
 	defer stopLease()
-	const baseInterval = 5 * time.Second
+	baseInterval := time.Duration(reconcileWatchIntervalNS.Load())
 	tick := time.NewTicker(baseInterval)
 	defer tick.Stop()
 	backoff := baseInterval

@@ -47,7 +47,7 @@ func TestTokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 	p.now = func() time.Time { return base }
 
 	runID := uuid.New()
-	id, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "", "wardyn-internal")
+	id, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "", "wardyn-internal", false)
 	if err != nil {
 		t.Fatalf("MintRunIdentity: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
 	p.now = func() time.Time { return base }
 
 	runID := uuid.New()
-	id, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "", "wardyn-internal")
+	id, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "", "wardyn-internal", false)
 	if err != nil {
 		t.Fatalf("MintRunIdentity: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
 	// the row this type feeds is about a run of ours whose renews stopped landing,
 	// not about anything a caller managed to present.
 	p.now = func() time.Time { return base }
-	fresh, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", "wardyn-internal")
+	fresh, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", "wardyn-internal", false)
 	if err != nil {
 		t.Fatalf("MintRunIdentity: %v", err)
 	}

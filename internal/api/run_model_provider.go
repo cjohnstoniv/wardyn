@@ -140,11 +140,25 @@ func providerRefusal(id string, kind types.ModelProviderKind, state string) runP
 // already answers that reason with a sign-in and a relaunch, which would
 // repair nothing for a provider that is off, not available to the agent,
 // unset, or of no person (multi-provider §5.8: no door).
-func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProviderKind, msg string, credential bool) {
+//
+// Each one is also an authz.denied row (model_provider_unavailable, #987),
+// at both doors as dispatch's refuseProviderDispatch is at its own: the body
+// keeps this envelope, which refuse's plain error would drop, so the row is
+// written beside it with the same provider, kind and credential class.
+func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id string, kind types.ModelProviderKind, msg string, credential bool) {
+	d := authz.Deny(authz.ReasonModelProviderUnavailable, "runs.model_provider", msg)
+	if id != "" {
+		d = d.With("provider", id)
+	}
+	if kind != "" {
+		d = d.With("kind", string(kind))
+	}
 	body := errorBody{Error: msg, Provider: id, Kind: string(kind)}
 	if credential {
 		body.Reason = llmRefusalAuditReason
+		d = d.With("remedy", llmRefusalAuditReason)
 	}
+	s.recordRefusal(r.Context(), r, d)
 	writeJSON(w, http.StatusUnprocessableEntity, body)
 }
 
@@ -179,13 +193,12 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
 		return runProviderChoice{}, false
 	}
-	// Not llmMechanismGateApplies: that reads workspace_id without interactive
-	// as a scan, but this door never sets run.WorkspaceID (seedRequestWorkspace),
-	// so dispatch runs such a body as a model run — exactly what the CLI's
-	// --workspace and the console send. Both ids are nil for every run this
-	// door creates.
+	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is
+	// llmMechanismGateApplies' own predicate, shared here (#767 step 2) so this
+	// door and that one can never again ask a different question of the same
+	// request.
 	_, needsModel := agentLLMProvider(req.Agent)
-	if !needsModel || req.Task == harnessLoginTask || !isModelRun(req.TaskMode, nil, nil, req.Interactive) {
+	if !needsModel || !createDoorIsModelRun(req) {
 		if req.ModelProvider != "" {
 			writeError(w, http.StatusBadRequest, mpRunNoModel)
 			return runProviderChoice{}, false
@@ -233,7 +246,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal))
 		return runProviderChoice{}, false
 	case choice.refusal != "":
-		writeProviderRefusal(w, choice.providerID, choice.kind, choice.refusal, false)
+		s.writeProviderRefusal(w, r, choice.providerID, choice.kind, choice.refusal, false)
 		return runProviderChoice{}, false
 	case choice.chosen:
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
@@ -249,12 +262,12 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			return runProviderChoice{}, false
 		}
 		if d.msg != "" {
-			writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
+			s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
 			return runProviderChoice{}, false
 		}
 	}
 	if name, secretName, found := modelEnvSecretGrant(spec); found {
-		writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)
+		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)
 		return runProviderChoice{}, false
 	}
 	choice.governs = true

@@ -19,9 +19,9 @@ package conformance_test
 //
 // Agent image: WARDYN_TEST_K8S_AGENT_IMAGE — must be built from
 // deploy/kind/Dockerfile.conformance-agent (busybox:1.36 + a real wardyn-rec
-// binary; `make build-conformance-agent-image`), NOT bare busybox. k8s's
-// SessionRecording is unconditionally true (exec.go's recordCmd has no
-// docker-style opt-out) — a bare busybox agent image fails EVERY Exec closed
+// binary; `make build-conformance-agent-image`), NOT bare busybox. The suite
+// builds the substrate with Record: true, the production default (recording is
+// off only under WARDYN_RECORDING_STORE=off) — a bare busybox agent image fails EVERY Exec closed
 // (no wardyn-rec on PATH), so this suite would never reach a real verdict
 // with one; review round 2 (H1) caught a first version of this file that
 // silently took that failure as "conformance passed" via a since-reverted
@@ -66,7 +66,7 @@ func TestConformanceK8s(t *testing.T) {
 	}
 	agentImage := os.Getenv("WARDYN_TEST_K8S_AGENT_IMAGE")
 	if agentImage == "" {
-		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (`make build-conformance-agent-image`) — a recorder-less image (e.g. bare busybox) fails every Exec closed under this substrate's unconditional SessionRecording, which would make the gate meaningless; see this file's doc comment")
+		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (`make build-conformance-agent-image`) — a recorder-less image (e.g. bare busybox) fails every Exec closed under this suite's Record: true, which would make the gate meaningless; see this file's doc comment")
 	}
 
 	// Namespace: the substrate's own real config knob (WARDYN_K8S_NAMESPACE),
@@ -76,6 +76,7 @@ func TestConformanceK8s(t *testing.T) {
 	sub, err := k8s.New(k8s.Config{
 		Namespace:  os.Getenv("WARDYN_K8S_NAMESPACE"),
 		ProxyImage: proxyImage,
+		Record:     true, // the production default; see the doc comment above
 		// ConfinementRuntimes deliberately nil: this suite proves CC1 (the
 		// unconditional floor); CC2/CC3 need a RuntimeClass pin this
 		// throwaway conformance cluster does not provision (see A1's

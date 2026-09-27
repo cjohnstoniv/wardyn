@@ -183,7 +183,26 @@ means the same thing regardless of which lane sent it:
 | `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. Azure DevOps; `approvals_unreadable` also AWS SSO's re-auth hold. |
 | `signin_closed` / `signin_holds_exhausted` | The hold chain has gone terminal (cancelled, expired, denied) or hit its per-run cap — see `injection_ado_signin.go`'s sign-in hold and `injection_awssso.go`'s re-auth hold, the same shape under two names. |
 | `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
+| `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
+
+## Renamed in 0.8
+
+Issue #658: the attach route family had three different sub-resource shapes,
+`POST /runs/{id}/profile` was a noun where every sibling POST is a verb, and
+one concept spelled itself four ways across the wire, Go, audit and the Helm
+chart. Each HTTP route below keeps its OLD path mounted as a chi alias for one
+minor (this doc's release plus one); the SDK and CLI already call the NEW
+path. The chart key is a clean break, no alias — see
+`deploy/helm/wardyn/README.md`'s "User drives" section.
+
+| Old | New | Kind |
+|---|---|---|
+| `GET /runs/{id}/attach-holder` | `GET /runs/{id}/attach/holder` | HTTP route, aliased for one minor |
+| `POST /runs/{id}/attach-ticket` | `POST /runs/{id}/attach/ticket` | HTTP route, aliased for one minor |
+| `POST /runs/{id}/profile` | `POST /runs/{id}/profile/synthesize` | HTTP route, aliased for one minor |
+| Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
+| Helm `userDrives.reclaim.enabled` | Helm `drives.reclaim.enabled` | Chart value, clean break (no alias); never released under the old name |
 
 ## Local dev: principal override
 
@@ -219,7 +238,8 @@ sent on **every** call (omitting it returns `401`):
 # in the console) and "description"; "image" (bring-your-own container, wrapped +
 # governed); "task_mode":"exec" (plain shell command, no agent);
 # "interactive_start":"agent" (an interactive run's attach shell opens in the
-# image's agent CLI instead of a bare shell); "inline_policy".
+# image's agent CLI instead of a bare shell); "inline_policy"; "preset" (a launch
+# preset's name, which then admits only "title" and "task" beside it).
 curl -s -X POST http://localhost:8080/api/v1/runs \
   -H 'Authorization: Bearer demo-admin-token' \
   -H 'Content-Type: application/json' \

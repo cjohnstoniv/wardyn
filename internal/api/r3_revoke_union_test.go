@@ -14,8 +14,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestRevokeSessionsUnionsPrincipalAndEmail is F214.
-//
 // The email sweep ran only when the principal lookup came back EMPTY, so the two
 // halves of one revoke disagreed about who was named. On any IdP where sub and
 // email differ — Entra, where sub is an opaque per-app identifier — a human's

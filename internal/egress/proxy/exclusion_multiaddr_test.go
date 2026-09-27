@@ -13,7 +13,7 @@ import (
 )
 
 // TestControlPlaneExclusionCoversEveryResolvedAddress pins the other half of
-// F002: resolveControlPlaneIP kept ips[0] ONLY, so a wardynd behind more than
+// resolveControlPlaneIP kept ips[0] ONLY, so a wardynd behind more than
 // one A record had exactly one of its addresses excluded — while
 // THREAT-MODEL.md states the exclusion covers "its resolved control-plane
 // host". vetTrustedHost already checks every answer; this mirrors it.

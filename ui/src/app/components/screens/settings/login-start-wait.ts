@@ -17,10 +17,10 @@
 // end a sign-in that is five minutes old and working.
 //
 // What this file deliberately does NOT do is claim to know a pull is happening.
-// Nothing on the read path can: `GET /runs/{id}` is a plain SELECT, the k8s
-// canary reports `ContainerCreating` for a pull and for everything else, and
-// "Pulling" is an Event reason the chart grants no verb to read. The slow-start
-// sentence is hedged for that reason.
+// Nothing on the read path can: `GET /runs/{id}` is a plain SELECT, and a pull
+// reaches it only as a status reason — Docker's `ensureImage`, or on Kubernetes
+// the pod's "Pulling" Event (#807; a chart Role without `events: list` falls
+// back to `ContainerCreating`). The slow-start sentence is hedged for that reason.
 //
 // 0.7.6 (finding 6) changes the SHAPE of that concession rather than the
 // budget: the substrate's reason now reaches this file (`agent_runs.status_detail`),

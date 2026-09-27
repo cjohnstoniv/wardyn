@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestValidatePolicySpec_HoldBounds pins B11b-F2. first_use_hold_seconds and
+// TestValidatePolicySpec_HoldBounds pins the following. first_use_hold_seconds and
 // max_holds were the last two policy knobs NOTHING bounded: composer.Clamp
 // never visits them, validatePolicySpec never read them, and the proxy turns
 // max_holds straight into a channel capacity and hold_seconds into how long a

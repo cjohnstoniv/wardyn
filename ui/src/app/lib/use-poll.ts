@@ -39,6 +39,10 @@ import * as React from "react";
 //      immediately so the view is fresh on the first frame the human sees rather
 //      than up to intervalMs later.
 //
+// PollPauseContext holds EVERY poll below it (#483): while the console is
+// signed out mid-page, each tick would only collect another 401.
+export const PollPauseContext = React.createContext(false);
+
 // `fn` may return a promise; when it does, that promise is what the in-flight
 // guard waits on. A caller whose fn returns void keeps exactly today's
 // behaviour (nothing to wait for, so nothing is ever skipped) — which is why
@@ -49,10 +53,11 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     fnRef.current = fn;
   });
 
-  const pausedRef = React.useRef(paused);
+  const held = React.useContext(PollPauseContext);
+  const pausedRef = React.useRef(paused || held);
   React.useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+    pausedRef.current = paused || held;
+  }, [paused, held]);
 
   const inFlight = React.useRef(false);
   // Set when a refocus arrives while a read is already in flight. The

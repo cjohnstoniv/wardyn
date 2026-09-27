@@ -118,10 +118,52 @@ func SiteAudited(ctx context.Context) (context.Context, *Row) {
 // value, so a refusal is recorded against the row too. A Store calls it once
 // per Get that finds a row.
 func NoteRow(ctx context.Context, r Row) {
+	r.Found = true
 	if m := markOf(ctx); m.row != nil {
-		r.Found = true
 		*m.row = r
 	}
+	if g, ok := ctx.Value(grantReadKey{}).(grantRead); ok {
+		*g.row = r
+	}
+}
+
+// Scope names whose namespace a found row is in: "operator" for the
+// operator's ("") row, "own" otherwise (a view reads no other owner's row).
+// "" when no row was found.
+func (r Row) Scope() string {
+	switch {
+	case !r.Found:
+		return ""
+	case r.Owner == "":
+		return "operator"
+	}
+	return "own"
+}
+
+type grantReadKey struct{}
+
+// grantRead is kept apart from mark: Audited replaces the mark on the way in,
+// and this must reach the store unchanged.
+type grantRead struct {
+	ownOnly bool
+	row     *Row
+}
+
+// GrantRead marks ctx for reads made on a credential grant's behalf. ownOnly
+// (the grant's owner_only) removes the operator fallback from For(owner).Get:
+// only the owner's own row can match. The returned Row is filled with the row
+// each read opens, so the caller can record its Scope. It is not an audit
+// mark; the read still needs WithPurpose or SiteAudited.
+func GrantRead(ctx context.Context, ownOnly bool) (context.Context, *Row) {
+	r := &Row{}
+	return context.WithValue(ctx, grantReadKey{}, grantRead{ownOnly: ownOnly, row: r}), r
+}
+
+// OwnRowOnly reports whether reads under ctx must not fall back to the
+// operator's row (GrantRead). A Store's Get honors it.
+func OwnRowOnly(ctx context.Context) bool {
+	g, _ := ctx.Value(grantReadKey{}).(grantRead)
+	return g.ownOnly
 }
 
 // Audited wraps s so that every Get records one secret.read on rec, carrying
@@ -184,6 +226,33 @@ func (a *audited) DeleteExpired(ctx context.Context) ([]Expired, error) {
 		return sw.DeleteExpired(ctx)
 	}
 	return nil, ErrNoExpirySweep
+}
+
+// MarkUsed, Metadata and MetadataEverywhere forward the wrapped store's row
+// metadata (MetaStore), or answer ErrNoMetadata. Not audited: none reads a
+// value.
+func (a *audited) MarkUsed(ctx context.Context, name string) error {
+	m, ok := a.inner.(MetaStore)
+	if !ok {
+		return ErrNoMetadata
+	}
+	return m.MarkUsed(ctx, name)
+}
+
+func (a *audited) Metadata(ctx context.Context, names []string) ([]Meta, error) {
+	m, ok := a.inner.(MetaStore)
+	if !ok {
+		return nil, ErrNoMetadata
+	}
+	return m.Metadata(ctx, names)
+}
+
+func (a *audited) MetadataEverywhere(ctx context.Context, names []string) ([]Meta, error) {
+	m, ok := a.inner.(MetaStore)
+	if !ok {
+		return nil, ErrNoMetadata
+	}
+	return m.MetadataEverywhere(ctx, names)
 }
 
 // KeyService forwards the wrapped store's description of the key service that

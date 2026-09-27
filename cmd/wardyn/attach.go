@@ -52,7 +52,7 @@ func attachCmd(client clientFn) *cobra.Command {
 		Long: `Attach an interactive PTY to a RUNNING Wardyn sandbox.
 
 Mints a single-use, 30s-TTL attach ticket with your configured token (the
-same door the console's own terminal uses: POST /runs/{id}/attach-ticket,
+same door the console's own terminal uses: POST /runs/{id}/attach/ticket,
 owner-or-admin — a member may mint one for a run THEY created) and dials the
 WebSocket attach endpoint with it, so a member never needs the shared admin
 token to attach to their own run. When no ticket can be minted (e.g. an older
@@ -122,7 +122,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	go func() { <-ctx.Done(); stopSignals() }()
 
 	// Mint-then-dial (item 1 of the ticket lane): a member's own token can
-	// already mint a ticket for a run THEY own (POST /runs/{id}/attach-ticket
+	// already mint a ticket for a run THEY own (POST /runs/{id}/attach/ticket
 	// is owner-or-admin, internal/api/attach_ticket.go) even though the WS
 	// route itself falls through to requireOperator for a bare bearer — so
 	// minting first is what lets a member attach at all without the shared
@@ -484,12 +484,14 @@ func buildWSURL(baseURL, runID, ticket string) string {
 	return u.String()
 }
 
-// mintAttachTicket POSTs /api/v1/runs/{id}/attach-ticket with the configured
-// token and returns the single-use ticket string. Deliberately a raw request,
-// not an sdk.Client method: pkg/client's doc comment and its three pinning
-// tests (TestClientCoversRouteFamilies / TestRouteFamiliesCoverEveryMethod /
+// mintAttachTicket POSTs /api/v1/runs/{id}/attach/ticket (renamed from
+// attach-ticket in 0.8 — docs/sdk.md "Renamed in 0.8"; the old path still
+// answers, as a chi alias, for one minor) with the configured token and
+// returns the single-use ticket string. Deliberately a raw request, not an
+// sdk.Client method: pkg/client's doc comment and its three pinning tests
+// (TestClientCoversRouteFamilies / TestRouteFamiliesCoverEveryMethod /
 // TestSDKCensusNamesEveryRouteFamily) enumerate the whole attach family —
-// attach, attach-ticket, attach-holder, attach/takeover — as DELIBERATELY
+// attach, attach/ticket, attach/holder, attach/takeover — as DELIBERATELY
 // unwrapped, so adding a method here would fight that pin rather than use it.
 //
 // Returns ("", nil) — NOT an error — in two cases the caller treats alike, by
@@ -504,7 +506,7 @@ func buildWSURL(baseURL, runID, ticket string) string {
 // non-2xx becomes *sdk.APIError (errors.As-able, same as every other SDK
 // call) for the caller to surface verbatim rather than mask with a fallback.
 func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string, error) {
-	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach-ticket"
+	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach/ticket"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
 		return "", nil

@@ -18,7 +18,7 @@ import (
 )
 
 // bedrockAWSDirCfg is the HOST-MODE Bedrock posture: no stored credential of
-// any kind, an existing ~/.aws to bind read-only. The residual B2-F4 is about is
+// any kind, an existing ~/.aws to bind read-only. The residual risk is
 // sharpest here — the operator's whole AWS config directory in the sandbox of a
 // principal whose profile denies Bedrock outright.
 func bedrockAWSDirCfg(t *testing.T) Config {
@@ -55,8 +55,6 @@ func ceilingBedrockFixture(t *testing.T, cfg Config) (*Server, *recRecorder, typ
 	return srv, audit, run, llm, sandboxEnv, policy
 }
 
-// TestCeilingReassert_WithholdsTheResidentBedrockLane is B2-F4.
-//
 // The re-assertion dropped the Bedrock BEARER injection — a bearer rides an
 // injection rule and injection rules are filtered by host — but the bearer is
 // the one Bedrock mode that is never resident. A profile denying the Bedrock
@@ -109,7 +107,7 @@ func TestCeilingReassert_WithholdsTheResidentBedrockLane(t *testing.T) {
 	}
 }
 
-// TestCeilingReassert_NoProfileLeavesBedrockAlone is B2-F4's negative control:
+// TestCeilingReassert_NoProfileLeavesBedrockAlone is the negative control:
 // with no assigned profile the phase must be a provable no-op, so the sandbox
 // env, the transport and the mounts are byte-identical to what dispatch
 // composed.

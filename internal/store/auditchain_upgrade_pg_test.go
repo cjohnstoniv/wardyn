@@ -41,7 +41,7 @@ func appendAuditRow(t *testing.T, pool *pgxpool.Pool, action string) (int64, str
 	return seq, prev, row
 }
 
-// TestPG_AuditChainSurvivesTheTriggerRewriteOnAPopulatedDatabase is F023's
+// TestPG_AuditChainSurvivesTheTriggerRewriteOnAPopulatedDatabase is the
 // missing coverage. Every other chain test — internal/store/auditchain_pg_test.go,
 // auditchain_f11_probe_pg_test.go, auditchain_locktimeout_pg_test.go and
 // internal/db/auditchain_searchpath_pg_test.go — runs against a FULLY migrated

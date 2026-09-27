@@ -17,9 +17,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDriveShareProbeDoesNotStackBehindAStrandedOne is F295.
+// TestDriveShareProbeDoesNotStackBehindAStrandedOne.
 //
-// F269 gave GET /me the launch door's own bind DECISION so the console would
+// GET /me was given the launch door's own bind DECISION so the console would
 // stop offering a mount the create path refuses. What came with it is that a
 // Display read on a timer now performs the share probe: up to two uncancellable
 // filesystem syscalls, each bounded at five seconds, on a path the operator
@@ -154,7 +154,7 @@ func TestDriveShareProbeDoesNotStackBehindAStrandedOne(t *testing.T) {
 		if !present {
 			t.Fatal("a concurrent reader DELETED the mark of a probe that is still outstanding: the next " +
 				"reader will start a second uncancellable syscall behind the first, which is the accumulation " +
-				"F295 removes")
+				"the probe mark exists to prevent")
 		}
 		if still != owned {
 			t.Errorf("the mark changed from %v to %v — a loser must not reset the clock either, or a queue of "+
@@ -182,7 +182,7 @@ func TestDriveShareProbeDoesNotStackBehindAStrandedOne(t *testing.T) {
 // …and the route the finding is actually about. A GET /me for a host_path
 // allocation whose share has already stranded a probe answers from memory: it
 // does not stat, and it reports the SAME state the launch door reports for the
-// same subject, which is the agreement F269 exists to hold.
+// same subject, which is the agreement the bind decision exists to hold.
 //
 // The home directory here EXISTS, so a /me that reached the filesystem would
 // offer the drive. That it does not is the whole observation.
@@ -240,8 +240,8 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 	}
 }
 
-// TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded is B5-F1: the
-// member doors have been bounded since F295, and the ADMIN doors over the same
+// TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded documents that
+// the member doors were already bounded, and the ADMIN doors over the same
 // shares were not.
 //
 // GET /drives asks whether any configured host root could hold a drive, and the

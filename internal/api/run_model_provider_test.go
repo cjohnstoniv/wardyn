@@ -118,6 +118,19 @@ func providerRunFixture(t *testing.T, site types.SiteConfig, cs *capStore, ws *t
 	return New(cfg)
 }
 
+// providerAdminToken mints a wdn_ token for sub (RoleAdmin) on srv's
+// providerRunFixture store and returns its bearer: an SSO session of an admin
+// tier is in the Admin view and cannot launch (refuseAdminViewLaunch), so a
+// test exercising operator/provider-owner semantics launches through this
+// lane instead of admitAdminSession's cookie.
+func providerAdminToken(srv *Server, sub string) string {
+	st := srv.cfg.Store.(*integStore)
+	complete := false
+	st.tokenRaw = apiTokenPrefix + "provider-admin-" + sub
+	st.token = &types.APIToken{ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: oidc.RoleAdmin, GroupsTruncated: &complete}
+	return st.tokenRaw
+}
+
 // TestRunModelProviderDoors drives create and Review with the same body and
 // caller: each case must answer the same status and body at both doors.
 func TestRunModelProviderDoors(t *testing.T) {
@@ -224,15 +237,16 @@ func TestRunModelProviderDoors(t *testing.T) {
 			var codes [2]int
 			for i, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
 				srv := providerRunFixture(t, tc.site, tc.cs, tc.ws)
-				session := govSession(t, govMemberSub, []string{"eng"}, false)
-				if tc.operator {
-					session = admitAdminSession(t)
-				}
 				var w *httptest.ResponseRecorder
-				if tc.adminToken {
+				switch {
+				case tc.adminToken:
 					w = do(t, srv, http.MethodPost, path, adminToken, tc.body)
-				} else {
-					w = doSSO(t, srv, http.MethodPost, path, session, tc.body)
+				case tc.operator:
+					// An SSO admin session is in the Admin view and cannot
+					// launch (refuseAdminViewLaunch); the token lane still can.
+					w = do(t, srv, http.MethodPost, path, providerAdminToken(srv, "sub-admit-admin"), tc.body)
+				default:
+					w = doSSO(t, srv, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), tc.body)
 				}
 				codes[i] = w.Code
 				var body errorBody
@@ -266,8 +280,11 @@ func TestRunModelProviderDoors(t *testing.T) {
 
 	t.Run("a block that serves no provider for this agent leaves the run on today's path", func(t *testing.T) {
 		site := types.SiteConfig{ModelProviders: providerBlock(keyProvider("codex", "codex-cli"))}
-		w := doSSO(t, providerRunFixture(t, site, &capStore{}, nil), http.MethodPost, "/api/v1/runs",
-			admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
+		srv := providerRunFixture(t, site, &capStore{}, nil)
+		// An SSO admin session is in the Admin view and cannot launch
+		// (refuseAdminViewLaunch); the token lane still can.
+		w := do(t, srv, http.MethodPost, "/api/v1/runs",
+			providerAdminToken(srv, "sub-admit-admin"), `{"agent":"claude-code","task":"t"}`)
 		if w.Code != http.StatusCreated {
 			t.Errorf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
@@ -279,7 +296,9 @@ func TestRunModelProviderDoors(t *testing.T) {
 		for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
 			srv := providerRunFixture(t, twoKeys, &capStore{}, nil)
 			srv.cfg.Secrets = wedgedSecrets{err: errors.New("age: no identity matched")}
-			w := doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), `{"agent":"claude-code","task":"t","model_provider":"corp"}`)
+			// An SSO admin session is in the Admin view and cannot launch
+			// (refuseAdminViewLaunch); the token lane still can.
+			w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, "sub-admit-admin"), `{"agent":"claude-code","task":"t","model_provider":"corp"}`)
 			var body errorBody
 			_ = json.Unmarshal(w.Body.Bytes(), &body)
 			if w.Code != http.StatusServiceUnavailable || body != (errorBody{Error: fmt.Sprintf(mpRunCredUnreadable, "corp")}) {
@@ -333,7 +352,9 @@ func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
+	// An SSO admin session is in the Admin view and cannot launch
+	// (refuseAdminViewLaunch); the token lane still can.
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", providerAdminToken(srv, "sub-admit-admin"), `{"agent":"claude-code","task":"t"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 	}

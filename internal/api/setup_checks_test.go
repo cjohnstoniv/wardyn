@@ -282,7 +282,7 @@ func TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured(t *testing.T) {
 	}
 }
 
-// TestInternalHostsCheck is B7-F5's dedicated row: absent when InternalHosts
+// TestInternalHostsCheck is the dedicated row: absent when InternalHosts
 // is empty, present and "info" (never warn/fail — the neg control: the setup
 // gate only fires on warn/fail, so an install with nothing else configured
 // stays gate-inactive with only this row) when it is set, and its Detail is
@@ -498,7 +498,7 @@ func TestPermissionsPostureCheck(t *testing.T) {
 // the bare form hands the operator a command that cannot run.
 var helmUpgradeWithArgs = regexp.MustCompile(`helm(?:\s+-n\s+\S+)?\s+upgrade\s+[^-\s]\S*\s+[^-\s]\S*`)
 
-// assertHelmFixRunnable is the R5 F236 (deduped twin ADV3-05) invariant, applied
+// assertHelmFixRunnable is the R5 (deduped twin ADV3-05) invariant, applied
 // to one SetupCheck.Fix. Three rules, each one a shape a reviewer found shipped:
 //
 //  1. never the bare `helm upgrade --set` — it exits "requires 2 arguments";
@@ -692,16 +692,23 @@ func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
 // finding 3: bedrock_provider / llm_provider under a per-principal caller
 
 // bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
-// request would compute for scope — real per_user zeroing included — so
-// these tests pin the end-to-end behaviour, not a hand-built SetupBedrock the
-// production code path would never actually produce.
-func bedrockRowVia(t *testing.T, scope awsSSOScope) SetupCheck {
+// request would compute for scope and rosterSC — real per_user zeroing and
+// roster mechanism-lookup included — so these tests pin the end-to-end
+// behaviour, not a hand-built SetupBedrock the production code path would
+// never actually produce.
+//
+// bedrockProviderCheck's OWN sc argument stays types.SiteConfig{} regardless
+// of rosterSC — that argument folds in the UNRELATED roster-PIN posture
+// (BedrockSSOPinUnenforced and friends), which these tests do not exercise and
+// must not start asserting on as a side effect of naming a roster row's
+// mechanism.
+func bedrockRowVia(t *testing.T, scope awsSSOScope, rosterSC types.SiteConfig) SetupCheck {
 	t.Helper()
 	srv := New(Config{
 		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets: &memSecrets{m: map[string][]byte{}},
 	})
-	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, scope)
+	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, rosterSC, scope)
 	chk, ok := bedrockProviderCheck(bedrock, types.SiteConfig{}, true)
 	if !ok {
 		t.Fatal("a region+model-configured Bedrock row must always surface a check")
@@ -709,12 +716,34 @@ func bedrockRowVia(t *testing.T, scope awsSSOScope) SetupCheck {
 	return chk
 }
 
+// perUserBearerRosterRow is the site config a per_user row whose MECHANISM is
+// bedrock_bearer (#153) reads from — the roster shape bedrockRowVia needs to
+// reach bedrockProviderRow's bearer branch (#320) at all.
+func perUserBearerRosterRow() types.SiteConfig {
+	return types.SiteConfig{AgentProviders: agentBlock(types.AgentProvider{
+		ID: modelAccessAgent, Mechanism: types.AgentMechanismBedrockBearer, CredentialSource: types.CredentialSourcePerUser,
+	})}
+}
+
+// perUserSSORosterRow is perUserBearerRosterRow's SSO twin — an EXPLICIT
+// bedrock_sso row, not just the zero-value SiteConfig a caller with no roster
+// read would pass. Pinning against this (rather than only the zero value)
+// proves the SSO wording survives an actual roster lookup, not merely the
+// absence of one.
+func perUserSSORosterRow() types.SiteConfig {
+	return types.SiteConfig{AgentProviders: agentBlock(types.AgentProvider{
+		ID: modelAccessAgent, Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: types.CredentialSourcePerUser,
+	})}
+}
+
 // TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn is finding 3: a per_user
 // admin with no session of their own must be told to sign in, not offered the
 // three operator-only remedies per_user resolution skips outright (the bearer,
-// host-~/.aws-mount and static-key arms).
+// host-~/.aws-mount and static-key arms). The roster row here is an EXPLICIT
+// bedrock_sso row (see perUserSSORosterRow) — the SSO half of #320's two-way
+// pin.
 func TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: "member-x"})
+	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: "member-x"}, perUserSSORosterRow())
 	if chk.Status != "warn" {
 		t.Errorf("status = %q, want warn (a real person has something to do)", chk.Status)
 	}
@@ -724,8 +753,39 @@ func TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn(t *testing.T) {
 	if !strings.Contains(chk.Fix, "Sign in to AWS") {
 		t.Errorf("fix = %q, want it to name the sign-in", chk.Fix)
 	}
+	if strings.Contains(chk.Fix, "bedrock-api-key bearer") == false {
+		t.Errorf("fix = %q, want the SSO row to still name the bearer among what cannot carry runs (unchanged wording)", chk.Fix)
+	}
 	if chk.Detail != bedrockPerUserDetail {
 		t.Errorf("detail = %q, want the per_user DRAFT sentence verbatim", chk.Detail)
+	}
+}
+
+// TestBedrockProviderCheck_PerUserBearerNamesStoringABearer is #320: a
+// per_user row whose roster MECHANISM is bedrock_bearer (#153) must tell a
+// caller with no bearer of their own that storing one IS the remedy — never
+// "sign in to AWS", and never list the bearer among the things that "cannot
+// carry your runs" (the old sentence, still correct for the SSO row above,
+// was exactly backwards here).
+func TestBedrockProviderCheck_PerUserBearerNamesStoringABearer(t *testing.T) {
+	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: "member-x"}, perUserBearerRosterRow())
+	if chk.Status != "warn" {
+		t.Errorf("status = %q, want warn (a real person has something to do)", chk.Status)
+	}
+	if strings.Contains(chk.Detail, "sign in to AWS") {
+		t.Errorf("detail = %q, must not tell a bearer-row caller to sign in to AWS", chk.Detail)
+	}
+	if strings.Contains(chk.Fix, "Sign in to AWS") {
+		t.Errorf("fix = %q, must not offer the sign-in remedy to a bearer-row caller", chk.Fix)
+	}
+	if !strings.Contains(chk.Fix, "wardyn secret set bedrock-api-key") {
+		t.Errorf("fix = %q, want it to name storing a bearer as the remedy", chk.Fix)
+	}
+	if strings.Contains(chk.Fix, "and aws-access-key-id + aws-secret-access-key cannot") == false {
+		t.Errorf("fix = %q, want the bearer row to still say the OTHER lanes cannot carry the run", chk.Fix)
+	}
+	if chk.Detail != bedrockPerUserBearerDetail {
+		t.Errorf("detail = %q, want the per_user bearer DRAFT sentence verbatim", chk.Detail)
 	}
 }
 
@@ -733,7 +793,7 @@ func TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn(t *testing.T) {
 // other half: the shared admin token under a per_user row cannot act on this
 // row, so it must never read as a warning the operator will chase forever.
 func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: adminTokenPrincipal})
+	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: adminTokenPrincipal}, perUserSSORosterRow())
 	if chk.Status != "info" {
 		t.Errorf("status = %q, want info", chk.Status)
 	}
@@ -745,7 +805,7 @@ func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
 // TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing shared-row
 // text, byte-for-byte, through the per_user/mechanism split.
 func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{})
+	chk := bedrockRowVia(t, awsSSOScope{}, types.SiteConfig{})
 	want := SetupCheck{
 		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
 		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
@@ -783,6 +843,28 @@ func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *tes
 	}
 	if got.Detail != llmProviderPerUserDetail || got.Fix != llmProviderPerUserFix {
 		t.Errorf("detail/fix = %+v, want the per_user DRAFT sentence verbatim", got)
+	}
+}
+
+// TestLLMProviderCheck_PerUserBearerNamesStoringABearer is #320's sibling
+// defect on the llm_provider row: a per_user row whose roster MECHANISM is
+// bedrock_bearer must never tell that caller to sign in to AWS — the row must
+// name storing a bearer as the remedy, the same split bedrockProviderRow
+// applies via PerUserBearer.
+func TestLLMProviderCheck_PerUserBearerNamesStoringABearer(t *testing.T) {
+	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, PerUserBearer: true}
+	got := llmProviderCheck("", b, nil)
+	if strings.Contains(got.Detail, "sign in to AWS") {
+		t.Errorf("detail = %q, must not tell a bearer-row caller to sign in to AWS", got.Detail)
+	}
+	if strings.Contains(got.Fix, "Sign in to AWS") {
+		t.Errorf("fix = %q, must not offer the sign-in remedy to a bearer-row caller", got.Fix)
+	}
+	if !strings.Contains(got.Fix, "wardyn secret set bedrock-api-key") {
+		t.Errorf("fix = %q, want it to name storing a bearer as the remedy", got.Fix)
+	}
+	if got.Detail != llmProviderPerUserBearerDetail || got.Fix != llmProviderPerUserBearerFix {
+		t.Errorf("detail/fix = %+v, want the per_user bearer DRAFT sentence verbatim", got)
 	}
 }
 

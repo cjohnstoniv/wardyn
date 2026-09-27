@@ -179,7 +179,7 @@ func TestRewrapMode_KeyServiceBothWays(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	orig, err := loadOrCreateSigningKey(ctx, local)
+	orig, err := loadOrCreateSigningKey(ctx, unlocked(local))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestRewrapMode_KeyServiceBothWays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boot with no age key after -rewrap: %v", err)
 	}
-	if got, err := loadOrCreateSigningKey(ctx, svc); err != nil || !got.Equal(orig) {
+	if got, err := loadOrCreateSigningKey(ctx, unlocked(svc)); err != nil || !got.Equal(orig) {
 		t.Fatalf("signing key under the key service = %v; want the same key", err)
 	}
 	if err := rewrapKeys(ctx, &recAudit{}, secretstore.Deps{Pool: pool, AgeIdentity: id, PlatformIdentity: platform, KEK: k, KEKWrites: true}); err != nil {
@@ -240,7 +240,7 @@ func TestRewrapMode_KeyServiceBothWays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := loadOrCreateSigningKey(ctx, back); err != nil || !got.Equal(orig) {
+	if got, err := loadOrCreateSigningKey(ctx, unlocked(back)); err != nil || !got.Equal(orig) {
 		t.Fatalf("signing key back under the platform key = %v; want the same key", err)
 	}
 	if v, err := back.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "a"); err != nil || string(v) != "v-a" {

@@ -49,7 +49,7 @@ func TestUpdatePolicyDuplicateName(t *testing.T) {
 	}
 }
 
-// TestUpdatePolicyUnknownIDStillA404 is B1-F5's negative control: the conflict
+// TestUpdatePolicyUnknownIDStillA404 is the negative control: the conflict
 // arm must sit BESIDE notFoundIf, never in front of it.
 func TestUpdatePolicyUnknownIDStillA404(t *testing.T) {
 	h := newHarness(t)

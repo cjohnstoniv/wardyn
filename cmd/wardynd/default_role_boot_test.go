@@ -54,6 +54,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap := "", ""
+	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode, ssoOnly := false, false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
@@ -61,7 +62,9 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	sshListen, uiListen := "", ""
 	adminToken := ""
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
+	basePath := ""
 	return &bootFlags{
+		basePath:                &basePath,
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
 		oidcIssuer:              &issuerURL,
@@ -70,6 +73,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 		oidcClientSecret:        &oidcClientSecret,
 		oidcRedirectURL:         &oidcRedirectURL,
 		oidcEmailDomains:        &oidcEmailDomains,
+		oidcExtraScopes:         &oidcExtraScopes,
 		oidcOperatorEmails:      &oidcOperatorEmails,
 		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
 		oidcRoleMap:             &oidcRoleMap,
@@ -126,7 +130,7 @@ func TestBuildOptionalFeatures_DefaultRoleBootRefusal(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := defaultRoleBootFlags(httpSrv.URL, tt.role)
-			of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+			of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("buildOptionalFeatures: want a boot refusal for WARDYN_OIDC_DEFAULT_ROLE=%q, got nil error", tt.role)
