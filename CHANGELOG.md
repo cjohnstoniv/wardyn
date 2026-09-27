@@ -76,6 +76,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   multi-user first paint get more slack on a loaded CI host, and `workspaces.spec.ts` unroutes
   before its member-delete describe block tears down so a poll in flight cannot fail a finished
   test.
+- **A PR based on a `<kind>/<issue#>-<slug>` lane branch got no CI checks at all** — `ci.yml`'s
+  `pull_request` trigger filtered on `branches:`, which matches the PR's base, not its head; the
+  0.8 working practice stacks PRs on other lane branches, not `main`, so those PRs ran no checks
+  (`gh pr checks` reported none). The filter is removed from `pull_request:`; `push:` stays narrow
+  (#211).
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
