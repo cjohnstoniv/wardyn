@@ -71,7 +71,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// per-class substrates, the ephemeral-disk enforcement word). What keeps
 		// THIS endpoint honest is that it composes its body field by field, so a
 		// field added to the setup status never appears here by accident.
-		"version": version.Version,
+		"version": version.String(),
 		// sso reports whether the OIDC login flow is mounted (/auth/login). The
 		// sign-in screen reads it BEFORE anyone is authenticated to decide whether to
 		// offer the SSO link — without it the console has no usable sign-in at all in

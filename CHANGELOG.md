@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Untagged builds no longer report the last release's version (#1105).** `wardyn --version`,
+  the daemon's startup log and `/healthz` now report `<version>+<commit>` (and `-dirty` if the
+  working tree had uncommitted changes) for any build that isn't the release build itself, taken
+  from `runtime/debug.ReadBuildInfo()`. A release build (release.yml's binaries job and its
+  Dockerfile.wardynd image, both stamped with `-ldflags -X` at build time) still reports the bare
+  release string byte-exact.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
