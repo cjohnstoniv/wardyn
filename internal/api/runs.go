@@ -287,7 +287,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Host capacity, the last refusal and before the mint, the same siting as
 	// the autonomy gate: a refusal leaves no identity and no run row.
-	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs")) {
+	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", true)) {
 		return
 	}
 

@@ -95,6 +95,36 @@ func TestHostCapacityCreateRun(t *testing.T) {
 	}
 }
 
+// TestHostCapacityPreflight: Review answers the launch's own 503 over the
+// limits, so a busy host shows before the click, and writes no audit row;
+// within the limits it previews as before.
+func TestHostCapacityPreflight(t *testing.T) {
+	h := newHarness(t)
+	st := &runWarnStore{capStore: &capStore{}}
+	cfg := baseTestConfig(h, st)
+	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	srv := New(cfg)
+	const body = `{"agent":"claude-code","task":"t"}`
+	for _, g := range []*hostcapacity.Guard{nil, hostAt(16384, 1)} {
+		srv.cfg.HostCapacity = g
+		if w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("guard %v: code = %d, want 200: %s", g, w.Code, w.Body)
+		}
+	}
+	srv.cfg.HostCapacity = hostAt(4096, 150)
+	before := len(h.audit.snapshot())
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	var got map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != http.StatusServiceUnavailable || got["error"] != "host_capacity_refused" ||
+		got["reason"] != "mem_available_mib=4096 < 8192, load1=150.00 > 100" || w.Header().Get("Retry-After") != "30" {
+		t.Fatalf("over limits: code = %d body = %s Retry-After = %q", w.Code, w.Body, w.Header().Get("Retry-After"))
+	}
+	if rows := h.audit.snapshot()[before:]; len(rows) != 0 {
+		t.Fatalf("preflight wrote %d audit rows, want none: %+v", len(rows), rows)
+	}
+}
+
 // TestHostCapacityLaunchersRefuseBeforeState drives the four server-authored
 // launchers over a saturated host: each returns the refusal before claiming,
 // minting or writing a run row.

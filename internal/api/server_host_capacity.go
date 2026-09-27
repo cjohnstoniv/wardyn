@@ -19,14 +19,17 @@ type HostCapacityConfig struct {
 	HostCapacity *hostcapacity.Guard
 }
 
-// admitHostCapacity is every launch door's host-capacity check: nil, or the
-// hostcapacity.ErrRefused after a host_capacity.refuse audit row naming the
-// door, who asked and the measured reason. The refusal is the daemon's, so the
-// row's actor is wardynd; no run exists yet, so it carries no run id.
-func (s *Server) admitHostCapacity(ctx context.Context, requestedBy, door string) error {
+// admitHostCapacity is the host-capacity check every launch door and Review
+// share: nil, or the hostcapacity.ErrRefused. On a launch (launch=true) a
+// refusal first writes a host_capacity.refuse audit row naming the door, who
+// asked and the measured reason; the refusal is the daemon's, so the row's
+// actor is wardynd, and no run exists yet, so it carries no run id. Review
+// (launch=false) answers the same refusal and writes nothing, the preview
+// contract every other shared create/preflight gate keeps.
+func (s *Server) admitHostCapacity(ctx context.Context, requestedBy, door string, launch bool) error {
 	err := s.cfg.HostCapacity.Admit()
 	var refused hostcapacity.ErrRefused
-	if errors.As(err, &refused) {
+	if launch && errors.As(err, &refused) {
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "host_capacity.refuse", door, "denied",
 			mustJSON(map[string]any{"reason": refused.Reason, "requested_by": requestedBy})))
 	}
