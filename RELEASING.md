@@ -28,19 +28,27 @@ document is that process, written down.
   passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
   triggered by step 5's tag push itself, so it cannot be a prerequisite of
   tagging).
-- The multi-arch build is green on that commit too. It is `nightly.yml`'s
-  `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so
-  a pull request never runs it: read the latest nightly, or run it on the
-  branch you tag with `gh workflow run nightly.yml --ref release/X.Y`. It is
-  the only build of the arm64 half before `release.yml` publishes it.
+- **Before tagging, dispatch `nightly.yml` on the exact commit you are about to
+  tag, and wait for it to complete.** `gh workflow run nightly.yml --ref
+  release/X.Y` (or `main`, if that is the commit), run against whichever ref
+  currently points at that exact commit. `preflight-green` (below) matches
+  the nightly run's commit SHA exactly — a nightly from an earlier commit,
+  even one this commit descends from, does not count, and neither does a run
+  dispatched on some other branch. The multi-arch build is part of this same
+  nightly run: it is
+  `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`), not a
+  `ci.yml` job, so a pull request never runs it, and it is the only build of
+  the arm64 half before `release.yml` publishes it.
 - `release.yml`'s own `preflight-green` job (T-06, #666) checks the two bullets
   above again, automatically, on the tag commit itself, the moment step 5
   pushes the tag: every required status check green on that exact SHA, plus
-  the latest COMPLETED `nightly.yml` run for that SHA having concluded
-  `success`. It is belt-and-suspenders, not a replacement for reading CI
-  yourself first — a red preflight fails every downstream release job, so
-  catching it before pushing the tag is still cheaper than a failed release
-  run.
+  the completed `nightly.yml` run for that EXACT SHA (no ancestor, no other
+  branch) having every watched job green. If no nightly ran on that exact
+  commit, `preflight-green` fails loudly naming the dispatch command above —
+  it never falls back to an older or unrelated run. It is belt-and-suspenders,
+  not a replacement for reading CI yourself first — a red preflight fails
+  every downstream release job, so catching it before pushing the tag is
+  still cheaper than a failed release run.
 - **Nightly coverage is not a reliable signal until it has run green for 7
   consecutive nights.** `preflight-green` only proves the latest nightly on
   the tag commit was green, not that the lane it ran is stable — a lane that

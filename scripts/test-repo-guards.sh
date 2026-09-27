@@ -53,8 +53,8 @@ bad() { echo "FAIL: $*" >&2; fail=1; }
 ok()  { echo "ok: $*"; }
 
 # ── 1. nightly notification coverage ─────────────────────────────────────────
-# e2e-live is the ONE deliberate exemption (known-fail, tracked in #965 — see
-# nightly.yml's own comment). notify-new-lanes cannot need itself.
+# e2e-live is the ONE deliberate exemption (known-fail, tracked in #965 and
+# #1181 — see nightly.yml's own comment). notify-new-lanes cannot need itself.
 # migration-merge-check is exempt too: it is red from its first run
 # and will stay red for as long as the lead renumbers migrations at merge
 # time (a live dry run found 0069 claimed by several open PRs) — its own red
@@ -362,8 +362,23 @@ if [ "$notify_gh_repo_fail" = 0 ]; then ok "every notify-* job carries GH_REPO";
 # `images`/the built set instead), so this walks each publishing job's
 # `needs:` graph and requires preflight-green to be reachable somewhere in
 # it, not just spelled out on the job itself.
+#
+# R2-2 (review round 2): release.yml's `watched=` list (the nightly jobs
+# preflight-green judges) is a hand-typed string, not derived from anything —
+# it must stay identical to nightly.yml's notify-new-lanes.needs (minus
+# buildx-smoke, which release.yml matches by job-name PREFIX instead, since
+# its API job name is "multi-arch build (<matrix.name>)", never the literal
+# YAML key) or a lane added to nightly and to notify-new-lanes silently stops
+# being release-gated. This guard is what makes that parity enforced instead
+# of assumed; on CI (yq preinstalled on ubuntu-latest) a missing yq fails the
+# guard rather than skipping it, since a skip in CI is not evidence of
+# anything.
 if ! command -v yq >/dev/null 2>&1; then
-    echo "skip: yq not installed — preflight-green guard needs it"
+    if [ "${CI:-}" = "true" ]; then
+        bad "yq not installed — guard 13 (preflight-green) cannot run in CI and a skip here proves nothing"
+    else
+        echo "skip: yq not installed — preflight-green guard needs it"
+    fi
 else
     preflight_fail=0
     PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets"
@@ -385,13 +400,32 @@ else
     done
     # The job's own source text (steps' run: blocks are plain strings, not YAML
     # comments, so this catches a neutered check as-written, not just its shape).
+    # `|| :` is the shell no-op colon builtin — an equally silent escape hatch
+    # to `|| true`, and one review round found it untested.
     preflight_block="$(awk '$0=="  preflight-green:"{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$REL")"
     [ -n "$preflight_block" ] || { bad "$REL: no 'preflight-green:' job found — guard 13 is pointing at nothing"; preflight_fail=1; }
-    if printf '%s' "$preflight_block" | grep -qE '\|\| *true|continue-on-error'; then
-        bad "$REL: preflight-green contains \`|| true\` or \`continue-on-error\` — its gate can be satisfied without actually being green"
+    if printf '%s' "$preflight_block" | grep -qE '\|\| *true|\|\| *:([[:space:]]|$)|continue-on-error'; then
+        bad "$REL: preflight-green contains \`|| true\`, \`|| :\`, or \`continue-on-error\` — its gate can be satisfied without actually being green"
         preflight_fail=1
     fi
-    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green, which has no silent-pass escape hatch"; fi
+    # R2-2: watched= must equal notify-new-lanes.needs minus buildx-smoke —
+    # neither list may drift from the other without this guard going red.
+    rel_watched="$(printf '%s' "$preflight_block" | grep -m1 '^ *watched="' | sed -E 's/^ *watched="([^"]*)".*/\1/')"
+    if [ -z "$rel_watched" ]; then
+        bad "$REL: preflight-green has no \`watched=\"...\"\` line — guard 13's parity check is pointing at nothing"
+        preflight_fail=1
+    else
+        nightly_needs_raw="$(yq -r '.jobs["notify-new-lanes"].needs[]' "$NIGHTLY" 2>/dev/null)"
+        printf '%s\n' "$nightly_needs_raw" | grep -qx 'buildx-smoke' \
+            || { bad "$NIGHTLY: notify-new-lanes.needs no longer lists buildx-smoke — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
+        nightly_watched_sorted="$(printf '%s\n' "$nightly_needs_raw" | grep -vx 'buildx-smoke' | sort)"
+        rel_watched_sorted="$(printf '%s\n' $rel_watched | sort)"
+        if [ "$rel_watched_sorted" != "$nightly_watched_sorted" ]; then
+            bad "$REL: preflight-green's watched= list has drifted from $NIGHTLY's notify-new-lanes.needs (minus buildx-smoke) — watched=[$(printf '%s ' $rel_watched_sorted)] vs needs=[$(printf '%s ' $nightly_watched_sorted)]. A lane added to (or renamed in) notify-new-lanes must be added to watched= too, or it silently stops gating a release."
+            preflight_fail=1
+        fi
+    fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

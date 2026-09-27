@@ -129,8 +129,9 @@ jobs:
   # branch protection's LIVE required_status_checks.contexts (the one list
   # RELEASING.md's own PATCH configures — never a second, hand-typed copy that
   # could drift from it) and the check-runs GitHub recorded for the tagged
-  # commit, plus the most recent COMPLETED nightly run in the tag commit's own
-  # ancestry. Skipped only when this is an explicit dry-run rehearsal
+  # commit, plus the completed nightly run for that EXACT commit (no
+  # ancestor walk, no branch filter — see the step's own comment). Skipped
+  # only when this is an explicit dry-run rehearsal
   # (`inputs.dry_run == true`) — a real tag push has no `inputs` at all, and a
   # workflow_dispatch with `dry_run: false` is a real publish, so keying the
   # skip on the event name instead of the flag would have let that path
@@ -168,7 +169,7 @@ jobs:
             fi
           done <<<"${contexts}"
           [ "${failed}" -eq 0 ] || exit 1
-      - name: The latest completed nightly in this commit's ancestry must have its watched jobs green
+      - name: The completed nightly run on this exact commit must have its watched jobs green
         if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -184,34 +185,29 @@ jobs:
           # individually instead of the run's conclusion — this list must
           # stay identical to nightly.yml's notify-new-lanes.needs (the set
           # nightly.yml itself treats as "no characterised noise"), which
-          # already excludes both of those by name.
+          # already excludes both of those by name — test-repo-guards.sh's
+          # guard 13 fails the build if this list and that needs: list drift.
           # buildx-smoke is handled separately below: it is a matrix job whose
           # API job name is "multi-arch build (<matrix.name>)"
           # (nightly.yml:444), never the literal YAML key "buildx-smoke", so it
           # cannot be matched by name the way the other ten are.
           watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk fuzz gvisor-cc2-live"
-          # nightly.yml runs on schedule against whatever commit is main's
-          # HEAD at 07:00 UTC, so it is never triggered ON the tag commit
-          # itself — walk back through the recent completed runs (newest
-          # first) and take the first whose head commit is an ancestor of
-          # (or equal to) this tag commit, i.e. the nightly actually
-          # validated a state this tag's history includes.
-          # --method GET is load-bearing: gh api defaults to POST the moment any
-          # -f/-F field is present, which 404s on this GET-only endpoint.
-          runs="$(gh api --method GET "repos/${repo}/actions/workflows/nightly.yml/runs" -f status=completed -f per_page=20 --jq '.workflow_runs[] | "\(.id)\t\(.head_sha)"')"
-          run_id=""
-          nightly_sha=""
-          while IFS=$'\t' read -r candidate_id candidate_sha; do
-            [ -n "${candidate_id}" ] || continue
-            cmp_status="$(gh api "repos/${repo}/compare/${candidate_sha}...${sha}" --jq '.status' 2>/dev/null || echo error)"
-            if [ "${cmp_status}" = "identical" ] || [ "${cmp_status}" = "ahead" ]; then
-              run_id="${candidate_id}"
-              nightly_sha="${candidate_sha}"
-              break
-            fi
-          done <<<"${runs}"
+          # Exact commit match ONLY (R2-1) — no ancestor walk, no branch
+          # filter. nightly.yml runs on schedule against whatever commit is
+          # main's HEAD at 07:00 UTC, or on whatever ref a workflow_dispatch
+          # names, so this finds a run only when someone actually ran nightly
+          # ON the commit being tagged (RELEASING.md's own "for that SHA").
+          # An ancestor walk was tried and reverted: it could pick an old,
+          # stale run from days earlier (silently passing a tag whose
+          # cherry-picks that nightly never saw), or a run dispatched on an
+          # unrelated feature branch that happens to be an ancestor after a
+          # merge commit. --method GET is load-bearing: gh api defaults to
+          # POST the moment any -f/-F field is present, which 404s on this
+          # GET-only endpoint. A failing gh api call here is not caught and
+          # falls back to anything — set -e stops the job outright.
+          run_id="$(gh api --method GET "repos/${repo}/actions/workflows/nightly.yml/runs" -f status=completed -f "head_sha=${sha}" -f per_page=1 --jq '.workflow_runs[0].id // empty')"
           if [ -z "${run_id}" ]; then
-            echo "::error::no completed nightly.yml run was found in ${sha}'s ancestry (checked the latest 20) — dispatch one (workflow_dispatch on nightly.yml against a commit that includes this tag) and re-tag once it completes, or wait for the 07:00 UTC schedule to reach it"
+            echo "::error::no completed nightly.yml run was found for exactly ${sha} — dispatch one on the commit you are about to tag (e.g. \`gh workflow run nightly.yml --ref <branch-or-tag-pointing-at-this-commit>\`), wait for it to complete, then re-tag"
             exit 1
           fi
           job_conclusions="$(gh api "repos/${repo}/actions/runs/${run_id}/jobs" --paginate --jq '.jobs[] | "\(.name)\t\(.conclusion)"')"
@@ -219,18 +215,18 @@ jobs:
           for job in ${watched}; do
             status="$(printf '%s\n' "${job_conclusions}" | awk -F'\t' -v j="${job}" '$1==j{print $2; exit}')"
             if [ "${status}" != "success" ]; then
-              echo "::error::watched nightly job '${job}' is not green on run ${run_id} (commit ${nightly_sha}; saw: '${status:-not reported}')"
+              echo "::error::watched nightly job '${job}' is not green on run ${run_id} (commit ${sha}; saw: '${status:-not reported}')"
               failed=1
             fi
           done
           buildx_rows="$(printf '%s\n' "${job_conclusions}" | awk -F'\t' '$1 ~ /^multi-arch build \(/')"
           if [ -z "${buildx_rows}" ]; then
-            echo "::error::watched nightly job 'buildx-smoke' (matrix rows 'multi-arch build (...)') was not reported on run ${run_id} (commit ${nightly_sha})"
+            echo "::error::watched nightly job 'buildx-smoke' (matrix rows 'multi-arch build (...)') was not reported on run ${run_id} (commit ${sha})"
             failed=1
           else
             while IFS=$'\t' read -r name status; do
               if [ "${status}" != "success" ]; then
-                echo "::error::watched nightly job 'buildx-smoke' row '${name}' is not green on run ${run_id} (commit ${nightly_sha}; saw: '${status}')"
+                echo "::error::watched nightly job 'buildx-smoke' row '${name}' is not green on run ${run_id} (commit ${sha}; saw: '${status}')"
                 failed=1
               fi
             done <<<"${buildx_rows}"
