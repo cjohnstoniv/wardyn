@@ -657,6 +657,89 @@ test.describe("governance — the member is told which ceiling bounds them", () 
 });
 
 // ---------------------------------------------------------------------------
+// 5b. #1200 — the shared TierPicker on the member's own New Run page: the
+// installed ∧ allowed filter, the decided state it collapses to with exactly
+// one tier left, and T-9's requirement card when the floor and the host
+// disagree. mockAssignedCeiling above only ever named a PROFILE; this splices
+// the floor itself (min_confinement_class) the same documented way, plus
+// /setup/status's confinement_classes — this harness's own runner (`-runner
+// none`) advertises none at all, so "what this host has installed" has to be
+// spliced too, or every tier would read as unknown rather than as a real
+// install fact.
+// ---------------------------------------------------------------------------
+
+async function mockGovernanceFloor(page: Page, floor: string, profileName: string): Promise<void> {
+  await page.route("**/api/v1/policies/default", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.min_confinement_class = floor;
+    json.governance_profile_name = profileName;
+    await route.fulfill({ response, json });
+  });
+}
+
+async function mockInstalledTiers(page: Page, classes: string[]): Promise<void> {
+  await page.route("**/api/v1/setup/status", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.runner = { ...json.runner, driver: "docker", confinement_classes: classes };
+    await route.fulfill({ response, json });
+  });
+}
+
+test.describe("governance — the member's own picker obeys the floor (T-9)", () => {
+  test("a Vault floor, with Vault installed, leaves no picker at all — 'Vault' decided", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockGovernanceFloor(page, "CC3", "vault-required");
+    await mockInstalledTiers(page, ["CC1", "CC2", "CC3"]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByText("Vault · set by your admin")).toBeVisible();
+    // No control at all — not Fence/Wall disabled, not present. (The
+    // authored-policy spec's OWN floor chip, unrelated to this governance
+    // floor, legitimately renders "Fence" elsewhere on this page — the
+    // radiogroup is what actually proves "no picker".)
+    await expect(page.getByRole("radio", { name: "Fence" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
+  });
+
+  test("a Vault floor the host cannot build shows the requirement, never a silent fallback", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockGovernanceFloor(page, "CC3", "vault-required");
+    // This host only has Fence/Wall — the floor and the host disagree.
+    await mockInstalledTiers(page, ["CC1", "CC2"]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    // Review P2-6: the governance-sourced wording, not the generic one —
+    // this member's floor IS the governance ceiling's doing.
+    await expect(
+      page.getByText(/Your admin requires Vault, and this host can't run it/),
+    ).toBeVisible();
+    // Never the false claim that Wall (the strongest tier this host DOES
+    // have) is what the member gets.
+    await expect(page.getByText("Wall · set by your admin")).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
+  });
+
+  test("a tier the host hasn't installed never shows on the member's page, floor or not", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockInstalledTiers(page, ["CC1", "CC2"]); // no Vault, no floor spliced
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Fence" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Wall" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 6. The §E "yolo" walls, at the API level.
 //
 // The north-star scenario is a group whose profile lets an agent run

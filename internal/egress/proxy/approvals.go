@@ -83,16 +83,21 @@ const pollInterval = 2 * time.Second
 
 const (
 	// defaultHoldTimeout / defaultMaxHolds back wait_for_review when the config
-	// leaves them unset.
-	defaultHoldTimeout = 30 * time.Second
+	// leaves them unset. #1197: points at types.HoldWindowEgress, the ONE
+	// definition of this number — internal/approval.Hold reads the same
+	// constant for its egress arm.
+	defaultHoldTimeout = types.HoldWindowEgress
 	defaultMaxHolds    = 16
 	// maxHoldTimeout / maxHoldsCeiling are the absolute ceilings configureHold
 	// clamps a policy's values to, mirroring the control plane's own
 	// maxFirstUseHoldSeconds/maxHoldsPerSpec — the control plane bounds these
 	// only at AUTHORING time, so a policy stored before that bound existed
 	// reaches this sidecar unvalidated; this is the last door before it becomes
-	// a channel capacity / poll duration.
-	maxHoldTimeout  = 600 * time.Second
+	// a channel capacity / poll duration. #1197: points at
+	// types.HoldWindowPush, the same number internal/approval.Hold's
+	// push_content arm reads (this file's own push_content hold and the
+	// egress ceiling share one constant, as they always have).
+	maxHoldTimeout  = types.HoldWindowPush
 	maxHoldsCeiling = 256
 )
 

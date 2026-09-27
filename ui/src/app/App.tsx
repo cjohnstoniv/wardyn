@@ -27,23 +27,14 @@ import {
   setupGateActive,
 } from "./components/screens/setup/setup-gate";
 import { useOperatorResolved, useRole, useRoleResolved } from "./components/wardyn/operator-context";
-import { approvals as approvalsApi } from "./lib/api/approvals";
-import { runs as runsApi } from "./lib/api/runs";
+import { attention as attentionApi } from "./lib/api/attention";
 import { PollPauseContext, usePoll } from "./lib/use-poll";
 import { ReauthContext, useReauthController } from "./lib/reauth";
 import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
 import { ModelAccessProvider } from "./components/wardyn/model-access-context";
-import { ViewGate, screenPath, useViewAccess, viewLanding } from "./components/wardyn/console-view";
+import { ViewGate, screenPath, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
 import { appURL } from "./lib/base-path";
-import type {
-  AgentRun,
-  ApprovalRequest,
-  SetupStatus,
-} from "./lib/types";
-import {
-  approvalSignals,
-  needsAttention,
-} from "./components/screens/runs/board-groups";
+import type { SetupStatus } from "./lib/types";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
@@ -322,12 +313,12 @@ export function RequireSetup({ status }: { status: SetupStatus | null }) {
   return <Outlet />;
 }
 
-// What needs an operator's attention — surfaced as the amber count badge on the
-// Runs nav entry — is `needsAttention` in screens/runs/board-groups, the SAME
-// predicate the board itself renders. A second, hand-copied set of run states
-// here could disagree with the board about the same run: neither would know
-// about a held approval, which parks the sandbox while the run state stays
-// RUNNING, so a run the board shows as blocked could go unbadged.
+// What needs an operator's attention — surfaced as the amber count badge on
+// the Runs nav entry — is now GET /me/attention's own needs_you (#1197:
+// internal/api/run_attention.go's attention rule, projected server-side). A
+// second, hand-copied predicate here could disagree with the server about
+// the same run; the Runs board's own local count (screens/runs/board-groups)
+// is still client-computed until L3 folds it into the same server rule.
 
 // The Runs attention badge and the Approvals pending badge are background
 // signals visible from every screen, so both are polled — approvals can now be
@@ -379,33 +370,28 @@ export default function App() {
   }, [auth]);
   const location = useLocation();
 
-  // Both badges come off ONE tick, because the attention count is now a join:
-  // a run is blocked when a held approval is parked on it, which lives in the
-  // approvals list, not on the run. Fetching them apart would let the two
-  // halves land a poll out of step and flash a wrong count. Each half fails
-  // independently — a broken approvals call still leaves an honest run badge.
-  // Counts, not lists, stay in state: this re-renders the whole shell, and the
-  // number is the only thing it renders.
-  // RETURNED for usePoll's in-flight guard (R4-F074): the badge fetch is two
-  // un-scoped LIST_LIMIT reads, the most expensive tick in the shell.
+  // Both badges come off ONE small object now (#1197): GET /me/attention
+  // replaces the old two-list join (an unscoped listApprovals + listRuns,
+  // joined client-side via board-groups.ts's approvalSignals/needsAttention)
+  // with one server-scoped read. Counts, not lists, stay in state: this
+  // re-renders the whole shell, and the number is the only thing it renders.
+  // RETURNED for usePoll's in-flight guard (R4-F074).
+  //
+  // view is the console's own path view (console-view.tsx's viewOfPath),
+  // NOT the server-side user/admin session split — same distinction
+  // GET /runs?view= and GET /approvals?view= already draw.
   const refreshBadges = React.useCallback(() => {
-    return Promise.all([
-      approvalsApi.listApprovals("PENDING").catch(() => null),
-      runsApi.listRuns().catch(() => null),
-      /* both already route 401 through onUnauthorized */
-    ]).then(
-      ([approvals, runs]: [ApprovalRequest[] | null, AgentRun[] | null]) => {
-        const pending = approvals?.filter((a) => a.state === "PENDING") ?? [];
-        if (approvals) setPendingApprovals(pending.length);
-        if (runs) {
-          const signals = approvalSignals(pending);
-          setAttentionCount(
-            runs.filter((r) => needsAttention(r, signals)).length,
-          );
-        }
-      },
-    );
-  }, []);
+    return attentionApi
+      .getMeAttention(viewOfPath(location.pathname))
+      .then((counts) => {
+        setPendingApprovals(counts.pending_approvals);
+        setAttentionCount(counts.needs_you);
+        /* 401 already routes through onUnauthorized */
+      })
+      .catch(() => {
+        /* leave the last-known counts in place */
+      });
+  }, [location.pathname]);
 
   // Probe auth on mount: a live OIDC session cookie or a stored admin token
   // lets us straight into the console; otherwise show the sign-in gate.
@@ -458,14 +444,14 @@ export default function App() {
   // Keep both nav badges live across the whole console, not just while the
   // operator is on the Runs/Approvals screen (a decision made in RunDetail must
   // still tick the pending badge down).
-  // X3-F13: EXCEPT on /runs itself — the board already runs its own listRuns +
-  // listApprovals poll (runs.tsx, 3s) on the same two facts, so this tick (the
-  // most expensive one in the shell — two unscoped LIST_LIMIT reads, see
-  // refreshBadges above) would be pure duplication while parked there. R-1:
-  // that only holds because the board PUBLISHES its counts back up through
-  // publishAttention below — pausing this tick with nothing feeding the
-  // badges from the other side would freeze both of them for as long as the
-  // operator sat on /runs.
+  // X3-F13: EXCEPT on /runs itself — the board still runs its own listRuns +
+  // listApprovals poll (runs.tsx, 3s; L3 folds this into the same
+  // GET /me/attention read), so this tick would be a redundant second read of
+  // the same facts while parked there — cheap now (#1197), but still
+  // pure duplication. R-1: that only holds because the board PUBLISHES its
+  // counts back up through publishAttention below — pausing this tick with
+  // nothing feeding the badges from the other side would freeze both of them
+  // for as long as the operator sat on /runs.
   usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || lapsed || screenPath(location.pathname) === "/runs");
   // R-1: the setter side of the publish — RunsScreen calls this (via
   // usePublishAttention) every time its own fetch resolves, driving the SAME

@@ -95,6 +95,7 @@ const PUSH_ROW = {
   },
   state: "PENDING",
   requested_at: new Date().toISOString(),
+  held: true, // #1197: held is now a server field, not derived client-side
 };
 
 function renderAsAdmin() {

@@ -68,6 +68,7 @@ const reauthSignals = (runId: string) =>
       kind: "credential_reauth",
       requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "me" },
       state: "PENDING",
+      held: true, // #1197: held is now a server field, not derived client-side
       requested_at: new Date().toISOString(),
     },
   ]);
@@ -83,6 +84,7 @@ const adoConsentSignals = (runId: string) =>
       kind: "credential_reauth",
       requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "me", provider_id: "row_1", scopes: [] },
       state: "PENDING",
+      held: true, // #1197: held is now a server field, not derived client-side
       requested_at: new Date().toISOString(),
     },
   ]);
@@ -133,6 +135,7 @@ describe("RunCard — two-row anatomy", () => {
         kind: "credential_reauth",
         requested_scope: { lane: "azure_devops", mechanism: "entra_signin", reason: "signin", owner: "me", provider_id: "row_1" },
         state: "PENDING",
+      held: true, // #1197: held is now a server field, not derived client-side
         requested_at: new Date().toISOString(),
       },
     ]);
@@ -163,6 +166,7 @@ describe("RunCard — two-row anatomy", () => {
         kind: "egress_domain",
         requested_scope: { host: "h", mode: "wait_for_review" },
         state: "PENDING",
+      held: true, // #1197: held is now a server field, not derived client-side
         requested_at: new Date().toISOString(),
       },
     ]);
@@ -227,6 +231,7 @@ describe("RunCard — a PENDING hold stays held until the server's own state say
       kind: "tool_call",
       requested_scope: { tool: "Bash", cmd: "rm -rf build" },
       state: "PENDING",
+      held: true, // #1197: held is now a server field, not derived client-side
       requested_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
     },
   ]);
