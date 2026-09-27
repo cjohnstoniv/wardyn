@@ -37,6 +37,65 @@ import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "./primitives";
 
+// unquoteGitPath decodes a path exactly as internal/egress/proxy/push_hold.go's
+// quotePath produced it (git's own core.quotePath=true / quote_c_style):
+// quotePath leaves a path with no control byte, no '"'/'\\' and no byte past
+// ASCII UNCHANGED (no wrapping quotes at all); anything else it double-quotes,
+// with \" and \\ for those two bytes, \a\b\t\n\v\f\r for 0x07-0x0d, and a
+// three-digit octal escape for every other such byte. A review-matched
+// "café.yml" therefore arrives on the wire as `"caf\303\251.yml"`.
+//
+// DISPLAY ONLY: this walks the escapes back to raw BYTES (never runes — one
+// octal escape is one UTF-8 byte, and a real character can take several in a
+// row) and decodes the byte string as UTF-8 only at the very end. Every other
+// reader of a push_content path — the stored list, the audit export, the
+// dedup digest — keeps the quoted wire form exactly as the sidecar sent it;
+// nothing about what is stored, exported or approved changes here.
+//
+// A string that isn't quoted at all is returned unchanged (quotePath's own
+// "nothing special" case). Anything this can't parse as a well-formed
+// quote_c_style string — an unterminated quote, an unrecognized escape, a
+// byte sequence that isn't valid UTF-8 once decoded — falls back to the RAW
+// input rather than guess at a name.
+export function unquoteGitPath(raw: string): string {
+  if (raw.length < 2 || raw[0] !== '"' || raw[raw.length - 1] !== '"') return raw;
+  const inner = raw.slice(1, -1);
+  const simpleEscapes: Record<string, number> = { a: 0x07, b: 0x08, t: 0x09, n: 0x0a, v: 0x0b, f: 0x0c, r: 0x0d };
+  const bytes: number[] = [];
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (c === "\\") {
+      const next = inner[i + 1];
+      if (next === '"' || next === "\\") {
+        bytes.push(next.charCodeAt(0));
+        i += 1;
+      } else if (next !== undefined && next in simpleEscapes) {
+        bytes.push(simpleEscapes[next]);
+        i += 1;
+      } else {
+        const octal = inner.slice(i + 1, i + 4);
+        if (!/^[0-7]{3}$/.test(octal)) return raw; // unrecognized escape — malformed
+        bytes.push(parseInt(octal, 8));
+        i += 3;
+      }
+    } else {
+      const code = c.charCodeAt(0);
+      // quotePath escapes every byte outside plain printable ASCII, so a
+      // literal byte inside the quotes must already be one — anything else
+      // means this string was never quotePath's own output.
+      if (code >= 0x80) return raw;
+      bytes.push(code);
+    }
+  }
+  try {
+    // fatal: true refuses to substitute U+FFFD for invalid UTF-8 — past a
+    // single malformed escape the rest of the byte string may not decode.
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    return raw;
+  }
+}
+
 // The run this card needs to know about — only whether it has ENDED (the
 // same defensive re-check screens/approvals.tsx's generic PendingCard makes:
 // a terminal run's PENDING approvals are cancelled by the lifecycle cascade a
@@ -122,15 +181,20 @@ export function PushContentCard({
 
       <div className="mt-3">
         <p className="text-xs font-semibold text-foreground">{PUSH.PATHS_TITLE}</p>
-        {/* Q181-2: ten paths, then "+N more" — no expanding. The full list
-            (paths_total may exceed the ten names here) lives in the run's
-            audit trail, not behind a control on this card. */}
+        {/* Q181-2: ten paths, then "+N more" — no expanding. The audit row
+            holds the list's digest; the audit export inlines the full list
+            (paths_total may exceed the ten names here), not a control on this
+            card. Each path is UNQUOTED for display only (unquoteGitPath) —
+            the key stays the raw wire string, which is still unique. */}
         <ul className="mt-1 space-y-0.5">
-          {shown.map((p) => (
-            <li key={p} className="truncate font-mono text-xs text-muted-foreground" title={p}>
-              {p}
-            </li>
-          ))}
+          {shown.map((p) => {
+            const display = unquoteGitPath(p);
+            return (
+              <li key={p} className="truncate font-mono text-xs text-muted-foreground" title={display}>
+                {display}
+              </li>
+            );
+          })}
         </ul>
         {moreCount > 0 && <p className="mt-1 text-xs text-muted-foreground">{PUSH.PATHS_MORE(moreCount)}</p>}
         <p className="mt-1.5 text-xs text-muted-foreground">{PUSH.PATHS_NOTE}</p>

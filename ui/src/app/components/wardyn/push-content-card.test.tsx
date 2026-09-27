@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import type { ApprovalRequest } from "../../lib/types";
 import type { PushContentScope } from "../../lib/types/approvals";
-import { PushContentCard, type PushCardRun } from "./push-content-card";
+import { PushContentCard, unquoteGitPath, type PushCardRun } from "./push-content-card";
 import { PUSH } from "./copy/push";
 import { APPROVAL, SECURITY_ONLY_REASON } from "./copy";
 
@@ -254,5 +254,55 @@ describe("PushContentCard — member watching, decides nothing", () => {
     expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     // Still sees the full requested scope — "sees everything, decides nothing".
     expect(screen.getByText("github.com/acme/payments")).toBeInTheDocument();
+  });
+});
+
+// unquoteGitPath — the inverse of internal/egress/proxy/push_hold.go's
+// quotePath (git's own core.quotePath=true / quote_c_style). Owner note on
+// #555, 2026-09-26: since #1066/#1087 every held-push path arrives quoted
+// this way, so a review-matched "café.yml" reaches the console as
+// `"caf\303\251.yml"` — display it unquoted, but never touch the stored,
+// exported or approved (digest) form.
+describe("unquoteGitPath", () => {
+  it("passes an unquoted ASCII path through unchanged — quotePath itself never wraps one", () => {
+    expect(unquoteGitPath("dir/file.txt")).toBe("dir/file.txt");
+    expect(unquoteGitPath("")).toBe("");
+  });
+
+  it("decodes the octal-escaped UTF-8 case exactly as quotePath produced it", () => {
+    // "é" is U+00E9 = UTF-8 bytes 0xC3 0xA9 = octal 303 251 — quotePath's own
+    // worked example (docs/design/held-push-canon.md).
+    expect(unquoteGitPath('"caf\\303\\251.yml"')).toBe("café.yml");
+  });
+
+  it("decodes \\\" and \\\\ and the abtnvfr control-byte escapes", () => {
+    expect(unquoteGitPath('"a\\"b"')).toBe('a"b');
+    expect(unquoteGitPath('"a\\\\b"')).toBe("a\\b");
+    expect(unquoteGitPath('"a\\tb"')).toBe("a\tb");
+    expect(unquoteGitPath('"a\\nb"')).toBe("a\nb");
+  });
+
+  it("falls back to the raw string on a malformed escape, an unterminated quote, or invalid UTF-8 bytes", () => {
+    expect(unquoteGitPath('"a\\qb"')).toBe('"a\\qb"'); // \q is not an escape quotePath ever emits
+    expect(unquoteGitPath('"unterminated')).toBe('"unterminated'); // no closing quote
+    expect(unquoteGitPath('"\\300\\300"')).toBe('"\\300\\300"'); // two lead bytes, not valid UTF-8
+  });
+});
+
+describe("PushContentCard — a quoted path renders unquoted (owner note, 2026-09-26)", () => {
+  it("shows café.yml, never the wire's \\303\\251 escape form", () => {
+    render(
+      <PushContentCard
+        item={push({ requested_scope: { paths: ['"caf\\303\\251.yml"'], paths_total: 1 } as Partial<PushContentScope> })}
+        securityOperator
+        run={RUNNING}
+        busy={null}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId("push-content-card");
+    expect(within(card).getByText("café.yml")).toBeInTheDocument();
+    expect(within(card).queryByText(/\\303\\251/)).not.toBeInTheDocument();
   });
 });

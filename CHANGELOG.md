@@ -1176,9 +1176,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The console shows a held push, its files, and who may decide it (#181).** A brokered
   git push that matches `push_rules.require_review_paths` is a new approval kind
   (`push_content`) with its own card — repository, branch, who it acts as, and up to ten
-  files under review, with the full list in the run's audit trail. Admins/security-admins
-  decide it directly (no scope menu); everyone else sees the same card and no controls. The
-  New Run rail gets a "Push rules" section ("N paths denied · M paths held for review") when
+  files under review (displayed unquoted even where git's `core.quotePath` sent one); the
+  audit row carries the list's digest, and the audit export inlines the full list.
+  Admins/security-admins decide it directly (no scope menu); everyone else sees the same
+  card and no controls. The New Run rail gets a "Push rules" section ("N paths denied · M
+  paths held for review") when
   a policy sets them, and a note when the run is unattended. A `push_rules.deny_paths` refusal
   is never a held request — it's named distinctly in the audit trail instead.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the

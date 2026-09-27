@@ -16,8 +16,8 @@ Approval kind `push_content`. `requested_scope`:
 | `acts_as` | `"<grant kind>:<grant id>"` — a credential reference, never rendered |
 | `acts_as_kind` | `github_app` \| `git_pat` \| `ado_entra` — server-set |
 | `acts_as_label` | the run owner principal, or `"operator"` for a shared PAT — server-set, the ONLY thing the console renders for "who" |
-| `paths` | ≤10, sorted |
-| `paths_total` | exact count; the full list is in the run's audit trail |
+| `paths` | ≤10, sorted; `core.quotePath`-quoted (e.g. `"caf\303\251.yml"` for `café.yml`) — the card unquotes each one for DISPLAY only (`unquoteGitPath`); the stored/exported form never changes |
+| `paths_total` | exact count; the audit row holds the list's digest, the audit export inlines the full list (`internal/api/approvals_push.go`'s `recordPushPathList`/`withPushPaths`) |
 | `commits` | for an Azure DevOps REST push this is the SHA-256 of the request body, not a commit — never rendered as "commits" |
 | `paths_digest` | the dedup key's own hash — never rendered |
 
@@ -72,8 +72,9 @@ Not yet frozen. Marked `DRAFT` at each definition site (`copy/push.ts`,
 ## The three mock questions (packet 7)
 
 - **Q181-1** — the rail reads "{d} paths denied · {r} paths held for review".
-- **Q181-2** — the card lists ten paths, then "+N more"; the full list is in
-  the run's audit trail. No expanding control on the card.
+- **Q181-2** — the card lists ten paths, then "+N more"; the audit row holds
+  the list's digest, and the audit export inlines the full list. No expanding
+  control on the card.
 - **Q181-3** — no forge badge. The repository line names the forge implicitly
   (`github.com/...` / `dev.azure.com/...`); GitHub and Azure DevOps share one
   card.
@@ -89,6 +90,16 @@ file under the 1000-line file-size gate). A DECIDED push_content row on the
 Approvals tab never falls through to that tab's generic `JsonBlock` either
 (review finding 3) — a short repo/branch/acts_as_label summary instead, the
 same fields this card's own header carries.
+
+Since #1066/#1087, every path on the wire is quoted the way git's own
+`core.quotePath=true` quotes an unusual name (octal-escaped UTF-8 bytes,
+`\"`/`\\`/`\t`/`\n`, wrapped in `"..."`) — a review-matched `café.yml` arrives
+as `"caf\303\251.yml"`. `unquoteGitPath` (`push-content-card.tsx`) decodes this
+back to the real name for DISPLAY ONLY, wherever the card renders a path; a
+string it cannot parse falls back to the raw wire form rather than guessing.
+The stored list, the audit export and the dedup digest all keep the quoted
+form exactly as the sidecar sent it — nothing about what is stored, exported
+or approved changes.
 
 - **held** — PENDING and within the proxy's own bounded hold window
   (`push_rules.hold_seconds`, at most `maxHoldTimeout` = 600s —
