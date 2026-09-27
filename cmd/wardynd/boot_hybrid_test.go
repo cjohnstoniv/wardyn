@@ -117,12 +117,21 @@ type hybridStore struct {
 	cursor  int64
 	head    int64
 	revoked bool
+	resets  int
 }
 
 func (s *hybridStore) cursorNow() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cursor
+}
+
+// resetsNow counts ResetFederation calls: only bootHybrid makes them, unlike
+// the cursor, which a running forwarder rewrites on its own schedule.
+func (s *hybridStore) resetsNow() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resets
 }
 
 func (s *hybridStore) FederationRevoked(context.Context) (bool, error) {
@@ -140,6 +149,7 @@ func (s *hybridStore) ResetFederation(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cursor, s.revoked = 0, false
+	s.resets++
 	return nil
 }
 
@@ -209,6 +219,50 @@ func (o *hybridOrg) serve(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// hybridJoin cancels the context a test's bootHybrid calls share, then waits
+// for every forwarder they started to actually stop before the test returns —
+// cancelling alone only asks; a forwarder still logging when a later test
+// swaps the process logger is what raced -race in issue #1131. Registered
+// once via t.Cleanup so it covers however many bootHybrid calls add to it,
+// in whatever order.
+type hybridJoin struct {
+	cancel context.CancelFunc
+	fwds   []*federation.Forwarder
+}
+
+// newHybridJoin returns a cancellable context and the join that owns it; call
+// add with every bootHybrid call's forwarder made on that context.
+func newHybridJoin(t *testing.T) (context.Context, *hybridJoin) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	j := &hybridJoin{cancel: cancel}
+	t.Cleanup(func() {
+		j.cancel()
+		for _, fwd := range j.fwds {
+			<-fwd.Done()
+		}
+	})
+	return ctx, j
+}
+
+func (j *hybridJoin) add(fwd *federation.Forwarder) {
+	if fwd != nil {
+		j.fwds = append(j.fwds, fwd)
+	}
+}
+
+// joinOnTestContext waits for fwd (nil if that bootHybrid call refused) to
+// actually stop once t.Context() is cancelled, instead of leaving it running
+// past the test's return. Safe to call unconditionally: t.Context() is
+// cancelled before any t.Cleanup runs (testing.T.Context's own guarantee), so
+// this can never block on a context that has not been told to stop yet.
+func joinOnTestContext(t *testing.T, fwd *federation.Forwarder) {
+	t.Helper()
+	if fwd != nil {
+		t.Cleanup(func() { <-fwd.Done() })
+	}
+}
+
 func TestBootHybrid_NoOrgURLDoesNothing(t *testing.T) {
 	secrets := hybridSecrets{}
 	status, err := bootHybrid(context.Background(), t.Context(), "", "", unlocked(secrets), &hybridStore{}, &hybridRecorder{})
@@ -245,10 +299,10 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	org := &hybridOrg{}
 	url := org.serve(t).URL
 	secrets, st, rec := hybridSecrets{}, &hybridStore{cursor: 99}, &hybridRecorder{}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	ctx, hj := newHybridJoin(t)
 
 	status, err := bootHybrid(context.Background(), ctx, url, "wde_first", unlocked(secrets), st, rec)
+	hj.add(status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,8 +315,8 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 		cred.EnrolmentTokenSHA256 != federation.TokenSHA256("wde_first") {
 		t.Fatalf("enrols=%v cred=%+v", enrols, cred)
 	}
-	if status().DeviceID != cred.DeviceID {
-		t.Fatalf("status device = %v", status().DeviceID)
+	if status.Status().DeviceID != cred.DeviceID {
+		t.Fatalf("status device = %v", status.Status().DeviceID)
 	}
 	st.mu.Lock()
 	if st.cursor != 0 {
@@ -275,26 +329,35 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	}
 
 	// A restart with the spent token still in secret.env keeps the credential.
-	if _, err := bootHybrid(context.Background(), ctx, url, "wde_first", unlocked(secrets), st, rec); err != nil {
+	if fwd, err := bootHybrid(context.Background(), ctx, url, "wde_first", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
+	} else {
+		hj.add(fwd)
 	}
 	// And with no token at all.
-	if _, err := bootHybrid(context.Background(), ctx, url, "", unlocked(secrets), st, rec); err != nil {
+	if fwd, err := bootHybrid(context.Background(), ctx, url, "", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
+	} else {
+		hj.add(fwd)
 	}
+	// A restart must not reset federation state. Counted, not read off the
+	// cursor: each restart's forwarder is already running and finds no row at
+	// seq 7 in this fake table, so it resends from 0 whenever it gets there.
 	enrols, _ = org.seen()
-	if len(enrols) != 1 || len(rec.events) != 1 || st.cursorNow() != 7 {
-		t.Fatalf("restart re-enrolled: enrols=%d rows=%d cursor=%d", len(enrols), len(rec.events), st.cursorNow())
+	if len(enrols) != 1 || len(rec.events) != 1 || st.resetsNow() != 1 {
+		t.Fatalf("restart re-enrolled: enrols=%d rows=%d resets=%d", len(enrols), len(rec.events), st.resetsNow())
 	}
 
 	// A fresh token re-enrols as a new device and resets the cursor.
-	if _, err := bootHybrid(context.Background(), ctx, url, "wde_second", unlocked(secrets), st, rec); err != nil {
+	if fwd, err := bootHybrid(context.Background(), ctx, url, "wde_second", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
+	} else {
+		hj.add(fwd)
 	}
 	_ = json.Unmarshal(secrets[secretOrgDeviceCredential], &cred)
 	enrols, devices = org.seen()
-	if len(enrols) != 2 || cred.DeviceID != devices[1] || st.cursorNow() != 0 || len(rec.events) != 2 {
-		t.Fatalf("re-enrol: enrols=%v cred=%v cursor=%d rows=%d", enrols, cred.DeviceID, st.cursorNow(), len(rec.events))
+	if len(enrols) != 2 || cred.DeviceID != devices[1] || st.resetsNow() != 2 || st.cursorNow() != 0 || len(rec.events) != 2 {
+		t.Fatalf("re-enrol: enrols=%v cred=%v resets=%d cursor=%d rows=%d", enrols, cred.DeviceID, st.resetsNow(), st.cursorNow(), len(rec.events))
 	}
 }
 
@@ -306,10 +369,11 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	org := &hybridOrg{}
 	srv := org.serve(t)
 	secrets, st, rec := hybridSecrets{}, &hybridStore{}, &hybridRecorder{}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec); err != nil {
+	ctx, hj := newHybridJoin(t)
+	if fwd, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
+	} else {
+		hj.add(fwd)
 	}
 	st.mu.Lock()
 	st.revoked = true // what Forwarder.revoke leaves behind
@@ -317,19 +381,21 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close()
 	status, err := bootHybrid(context.Background(), ctx, down.URL, "wde_first", unlocked(secrets), st, rec)
+	hj.add(status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status().Revoked {
+	if !status.Status().Revoked {
 		t.Fatal("a revoked laptop came back up enrolled")
 	}
 	status, err = bootHybrid(context.Background(), ctx, srv.URL, "wde_second", unlocked(secrets), st, rec)
+	hj.add(status)
 	if err != nil {
 		t.Fatal(err)
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if status().Revoked || st.revoked {
+	if status.Status().Revoked || st.revoked {
 		t.Fatal("re-enrolment did not clear the revoked mark")
 	}
 }
@@ -403,7 +469,8 @@ func TestReviewRev08ReenrolRecoversAfterResetFailure(t *testing.T) {
 	secrets := hybridSecrets{secretOrgDeviceCredential: raw}
 	st := &reviewRev08ResetStore{hybridStore: &hybridStore{cursor: 7, head: 7, revoked: true}, failReset: true}
 	rec := &hybridRecorder{}
-	_, err = bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", unlocked(secrets), st, rec)
+	fwd1, err := bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", unlocked(secrets), st, rec)
+	joinOnTestContext(t, fwd1)
 	if err == nil || !strings.Contains(err.Error(), "reset federation state") {
 		t.Fatalf("first boot should fail after durable credential write: %v", err)
 	}
@@ -413,10 +480,11 @@ func TestReviewRev08ReenrolRecoversAfterResetFailure(t *testing.T) {
 	}
 	st.failReset = false
 	status, err := bootHybrid(context.Background(), t.Context(), server.URL, "wde_fresh", unlocked(secrets), st, rec)
+	joinOnTestContext(t, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := status()
+	got := status.Status()
 	if got.Revoked || got.AckedSeq != 0 {
 		t.Errorf("restart kept prior device's state: revoked=%v acked_seq=%d; want active, cursor 0", got.Revoked, got.AckedSeq)
 	}
@@ -442,10 +510,11 @@ func TestBootHybrid_ResumesResetAfterCrashBeforeReset(t *testing.T) {
 	st := &hybridStore{cursor: 7, head: 7, revoked: true}
 	rec := &hybridRecorder{}
 	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	joinOnTestContext(t, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := status()
+	got := status.Status()
 	if got.Revoked || got.AckedSeq != 0 {
 		t.Errorf("resumed reset left stale state: revoked=%v acked_seq=%d; want active, cursor 0", got.Revoked, got.AckedSeq)
 	}
@@ -470,7 +539,8 @@ func TestBootHybrid_ResumesResetAfterFlakyLocalRecord(t *testing.T) {
 	secrets := hybridSecrets{}
 	st := &hybridStore{}
 	rec := &reviewRev08FlakyRecorder{hybridRecorder: &hybridRecorder{}, failNext: true}
-	_, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	fwd1, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	joinOnTestContext(t, fwd1)
 	if err == nil || !strings.Contains(err.Error(), "device.local.enrol") {
 		t.Fatalf("first boot should refuse after a failed local audit record: %v", err)
 	}
@@ -479,11 +549,12 @@ func TestBootHybrid_ResumesResetAfterFlakyLocalRecord(t *testing.T) {
 		t.Fatal("precondition: ResetPending should still be true after a failed Record")
 	}
 	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	joinOnTestContext(t, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status().AckedSeq != 0 || status().Revoked {
-		t.Fatalf("resumed boot left stale state: %+v", status())
+	if status.Status().AckedSeq != 0 || status.Status().Revoked {
+		t.Fatalf("resumed boot left stale state: %+v", status.Status())
 	}
 	if len(rec.events) != 1 || rec.events[0].Action != "device.local.enrol" {
 		t.Fatalf("local rows = %+v, want exactly one device.local.enrol", rec.events)
@@ -501,20 +572,22 @@ func TestBootHybrid_RevokedAfterCompletionStaysRevokedOnRestart(t *testing.T) {
 	org := &hybridOrg{}
 	srv := org.serve(t)
 	secrets, st, rec := hybridSecrets{}, &hybridStore{}, &hybridRecorder{}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec); err != nil {
+	ctx, hj := newHybridJoin(t)
+	if fwd, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec); err != nil {
 		t.Fatal(err)
+	} else {
+		hj.add(fwd)
 	}
 	// The organisation revokes this freshly-enrolled, reset-complete identity.
 	st.mu.Lock()
 	st.revoked = true
 	st.mu.Unlock()
 	status, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec)
+	hj.add(status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status().Revoked {
+	if !status.Status().Revoked {
 		t.Fatal("a genuine revocation after the reset completed was cleared by a restart with the same (spent) token")
 	}
 	if enrols, _ := org.seen(); len(enrols) != 1 {
@@ -543,11 +616,12 @@ func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
 
 	// Boot 1: the clearing Put fails.
 	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	joinOnTestContext(t, status)
 	if err == nil || !strings.Contains(err.Error(), "persist reset completion") {
 		t.Fatalf("boot 1 err = %v, want a refusal naming persist reset completion", err)
 	}
 	if status != nil {
-		t.Fatal("boot 1 must not return a status accessor after refusing")
+		t.Fatal("boot 1 must not return a forwarder after refusing")
 	}
 	cred, ok := parseOrgCredential(secrets.stored(secretOrgDeviceCredential))
 	if !ok || !cred.ResetPending {
@@ -556,10 +630,11 @@ func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
 
 	// Boot 2: the same (already-spent) token resumes and completes.
 	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	joinOnTestContext(t, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := status()
+	got := status.Status()
 	if got.Revoked || got.AckedSeq != 0 {
 		t.Fatalf("boot 2 left stale state: revoked=%v acked_seq=%d; want active, cursor 0", got.Revoked, got.AckedSeq)
 	}
@@ -584,10 +659,11 @@ func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
 	st.revoked = true
 	st.mu.Unlock()
 	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", unlocked(secrets), st, rec)
+	joinOnTestContext(t, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status().Revoked {
+	if !status.Status().Revoked {
 		t.Fatal("boot 3: a genuine revocation was cleared by a restart")
 	}
 }
@@ -606,7 +682,8 @@ func TestBootHybrid_FirstEnrolmentTakesTheCreateLock(t *testing.T) {
 		atomic.AddInt32(&lockCalls, 1)
 		return func() {}, nil
 	}}
-	_, err := bootHybrid(context.Background(), t.Context(), org.serve(t).URL, "wde_first", secrets, &hybridStore{}, &hybridRecorder{})
+	fwd, err := bootHybrid(context.Background(), t.Context(), org.serve(t).URL, "wde_first", secrets, &hybridStore{}, &hybridRecorder{})
+	joinOnTestContext(t, fwd)
 	if err != nil {
 		t.Fatal(err)
 	}
