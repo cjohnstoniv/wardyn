@@ -24,6 +24,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`WARDYN_BEDROCK_BASE_URL` on the per-run proxy's own subnet now refuses boot instead of
+  denying every model call (#1198).** The proxy's SSRF guard never lifts an address on its own
+  subnet, so a Bedrock PrivateLink endpoint that resolves onto the docker control-plane
+  network's subnet used to have every model call denied at dispatch time, with the SDK
+  misreading the denial as a malformed Bedrock response. `wardynd` now resolves the variable's
+  host at boot and refuses to start when a resolved address falls inside that subnet, naming the
+  variable, the address and the subnet. Kubernetes logs a WARN instead (the per-run proxy pod's
+  CIDR is not reliably known at boot); an unresolvable host also WARNs and proceeds.
+
 - **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
   run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
   answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the

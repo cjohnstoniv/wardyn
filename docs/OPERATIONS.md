@@ -4117,6 +4117,35 @@ cert is the trap: the sandbox presents the `vpce` name, the endpoint answers
 with the public-host cert, the handshake fails. The composed dispatch test
 proves the env vars propagate, not that TLS validates.
 
+**The endpoint must not land on the proxy's own subnet.** Every run's
+wardyn-proxy sidecar refuses to dial any address on the subnet(s) it is itself
+attached to (`onOwnSubnetOrControlPlane`, `internal/egress/proxy/
+egress_target.go` — a deliberate SSRF invariant that `internal_hosts` cannot
+lift, on purpose). A PrivateLink endpoint that happens to resolve onto that
+subnet would have every model call denied there instead, with the SDK
+misreading the proxy's denial page as a malformed Bedrock response — one
+dispatch at a time, never a clean failure. `wardynd` checks this at **boot**
+so the deployment fails closed instead:
+
+- **docker**: resolves `WARDYN_BEDROCK_BASE_URL`'s host and refuses to start
+  when any resolved address falls inside the control-plane network's subnet
+  (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default — looked up via the
+  Docker API), naming the variable, the resolved address and the subnet. The
+  per-run internal network each sandbox gets is NOT part of this check: Docker
+  assigns its subnet fresh per run, so it cannot be known ahead of time, and it
+  is `Internal=true` (gatewayless) — unroutable off-host regardless of what
+  address lands there.
+- **Kubernetes**: the per-run proxy pod's CIDR is not reliably known from
+  `wardynd`'s own boot-time view (it depends on the cluster's CNI and is not
+  surfaced to a workload without extra node/API access this daemon is not
+  guaranteed to hold). This is a documented gap, not a guess: boot logs a WARN
+  instead of refusing, and instead of silently passing. If your PrivateLink
+  endpoint's address could fall inside the cluster's pod CIDR, verify that by
+  hand before relying on this variable.
+- A DNS name that does not resolve at boot WARNs and proceeds (never refuses
+  boot over a transient resolution failure); the value is re-checked the next
+  time `wardynd` restarts.
+
 **The control plane is a second service.** Profile-id and
 application-inference-profile models call `bedrock.<region>.amazonaws.com`
 (`ListInferenceProfiles`/`GetInferenceProfile`), which `WARDYN_BEDROCK_BASE_URL`
