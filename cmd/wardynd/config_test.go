@@ -108,7 +108,7 @@ func TestValidateConfig(t *testing.T) {
 			dsn:         "postgres://localhost/wardyn",
 			listen:      "10.0.0.5:8080",
 			wantErr:     true,
-			errContains: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+			errContains: "WARDYN_LISTEN_ALLOW_PLAINTEXT",
 		},
 		{
 			name:                 "specific-routable bind allowed with the explicit override",
@@ -640,7 +640,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 			// listener serving exactly what the first one refuses to.
 			name:     "plaintext UI gateway on a specific-routable bind is refused",
 			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
-			wantErr: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+			wantErr: "WARDYN_LISTEN_ALLOW_PLAINTEXT",
 		},
 		{
 			name:     "plaintext UI gateway names its own flag in the refusal",

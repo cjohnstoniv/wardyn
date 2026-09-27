@@ -490,6 +490,14 @@ func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err e
 	if strings.HasPrefix(sc.Name, "WARDYN_") {
 		return "", "", fmt.Errorf("env_secret name %q is reserved: WARDYN_* configures the sandbox harness itself", sc.Name)
 	}
+	// #1048: secret_name never went through secretNameRE, so an impossible
+	// name (upper-case, a leading space, a unicode hyphen, a path) passed
+	// write time and failed only silently at dispatch — resolveEnvSecretGrants
+	// simply finds no such row, one fewer value delivered with no reason
+	// surfaced back to the author.
+	if !secretNameRE.MatchString(sc.SecretName) {
+		return "", "", fmt.Errorf("env_secret secret_name %q is not a valid secret name", sc.SecretName)
+	}
 	return sc.Name, sc.SecretName, nil
 }
 

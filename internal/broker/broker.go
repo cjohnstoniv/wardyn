@@ -68,8 +68,9 @@ const defaultMaxTTL = time.Hour
 // smart-HTTP). A git_pat push DOES traverse a brokered, cleartext smart-HTTP
 // route since 0.7 (the never-resident lane, default ON — internal/egress/proxy/
 // pat_broker.go), and since 0.7.2 the same parser binds it when the operator
-// wires it behind WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF: a PAT
-// carries whatever scope the operator issued and Wardyn cannot narrow it, over
+// wires it behind the pat scope of WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF
+// (folded from the standalone WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS by
+// #203): a PAT carries whatever scope the operator issued and Wardyn cannot narrow it, over
 // forges whose push ref conventions are not GitHub's, so opting in is the
 // operator's call rather than Wardyn's default. Either way both are bounded by the operator who supplied the
 // credential, not by this namespace — and on a brokered run no such second path

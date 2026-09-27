@@ -172,6 +172,13 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	secrets.m["wardyn-ssh-host-key"] = []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nfake-host-key-material\n-----END OPENSSH PRIVATE KEY-----\n")
 	secrets.m["wardyn-ui-session-key"] = []byte("0123456789abcdef0123456789abcdef")
 	secrets.m["bedrock-api-key"] = []byte("bedrock-bearer-token-value")
+	// #1048: a per-person model-provider credential name (wardyn-provider-<uid>-key)
+	// must also be refused here — the mint chokepoint a git_pat grant naming one
+	// would otherwise cross into the sandbox as a git password. Today this is
+	// pinned only from internal/api (model_provider_credentials_test.go); this
+	// case puts the same pin next to reservedBrokerSecret's own implementation.
+	const providerKeySecret = providerSecretPrefix + "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70-key"
+	secrets.m[providerKeySecret] = []byte("sk-ant-planted-operator-key")
 
 	cases := []struct {
 		name string
@@ -193,6 +200,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		// forge wardyn_ui_sess for any run and any role.
 		{"reserved-ui-session-key", gitPATSpec("github.com", "wardyn-ui-session-key", "")},
 		{"reserved-bedrock-api-key", gitPATSpec("bedrock-runtime.us-east-1.amazonaws.com", "bedrock-api-key", "")},
+		{"reserved-provider-key", gitPATSpec("github.com", providerKeySecret, "")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
