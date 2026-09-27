@@ -195,6 +195,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   default the sign-in run to 500m/512Mi, configurable, and still capped by the acting principal's
   governance ceiling like every run.
 
+- **A proxy-only revive on Docker works on Docker Engine 28, and a failed one no longer leaves the
+  run's proxy gone for good (#1133).** The revive re-creates the proxy at the address the agent's
+  hosts entry pins, and Engine 28 accepts a pinned address only on a network created with a
+  subnet; the per-run network named none, so every revive there failed ("user specified IP address
+  is supported only when connecting to networks with user configured subnets"). The per-run
+  network is now created asking for a subnet, the one the daemon itself picks from its address
+  pools. The old proxy was also removed before the new one was created, so a failed replace left
+  nothing holding the run's proxy config and MITM CA, and the run could only be re-launched. The
+  old proxy is now put back, stopped, under its name: the run is still lost, with no egress, but
+  it can be revived again. A run started before this release keeps a subnet-less network, so on
+  Engine 28 its revive still fails, and it is restored the same way.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

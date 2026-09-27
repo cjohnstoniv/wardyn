@@ -686,6 +686,8 @@ type ProxyStopper interface {
 // run's network at the address the agent's hosts entry pins. An error wrapping
 // ErrProxyReplaceFailed means the old proxy is, or may be, gone and no new one
 // runs: the sandbox has no egress, and the caller must treat the run as lost.
+// Where it can, the driver puts the old proxy back stopped (Docker), so its
+// config can be read back for a later revive.
 // Any other error came before the old proxy was touched and left it as it
 // was. A router in front of a substrate without it (Kubernetes: the agent pins
 // the proxy pod's IP) returns ErrReviveUnsupported.
