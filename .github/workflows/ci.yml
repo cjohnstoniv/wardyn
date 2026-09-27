@@ -472,6 +472,11 @@ jobs:
         working-directory: ui
         run: pnpm exec playwright install --with-deps chromium
       - name: Run Playwright UI e2e (fresh seed per spec)
+        # #469: explicit rather than relying on run-ui-e2e.sh's CI-set default
+        # (1 locally, 3 in CI) — a hosted runner is dedicated and sized for
+        # three concurrent backends; a shared dev box's default stays 1.
+        env:
+          WARDYN_E2E_LANES: 3
         run: make test-e2e-ui
       - name: Upload Playwright report
         id: upload_playwright_report

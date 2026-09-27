@@ -12,19 +12,22 @@
 # shared backend in parallel) is non-deterministic by construction.
 #
 # #469: the DEFAULT invocation (no spec args, not LIVE mode) runs
-# WARDYN_E2E_LANES (default 3, capped at 3) CONCURRENT lanes, each its own
-# isolated wardynd (console + UI-sandbox + internal-TLS listeners) and
-# Postgres database. Every lane's ports are picked the SAME way the top-level
-# single-lane default already picks ADDR/UI_ADDR — ask the OS for a free port
-# — never a fixed arithmetic offset from another lane's port: an offset is not
-# a reservation, and a lane bringing itself down must never resort to killing
-# whatever it finds bound to a guessed port number (see e2e-backend.sh's
-# cmd_down_quiet, which only ever stops the PID it itself started). Each lane
-# claims the next unclaimed spec from one shared list, so the lanes finish
-# together. Within a lane the fresh-reseed-per-spec contract above is
-# unchanged: a backend only ever serves one spec at a time. An explicit spec
-# list (`run-ui-e2e.sh runs secrets`), WARDYN_E2E_LANES=1 and LIVE mode run
-# one lane.
+# WARDYN_E2E_LANES CONCURRENT lanes (clamped 1-3), each its own isolated
+# wardynd (console + UI-sandbox + internal-TLS listeners) and Postgres
+# database. Unset, the default itself is 1 locally and 3 in CI (`$CI` set) —
+# three concurrent backends triple the memory of one run, which a shared dev
+# box may not have headroom for, while a CI runner is dedicated and sized for
+# it (`ci.yml` also pins WARDYN_E2E_LANES=3 explicitly). Every lane's ports
+# are picked the SAME way the top-level single-lane default already picks
+# ADDR/UI_ADDR — ask the OS for a free port — never a fixed arithmetic offset
+# from another lane's port: an offset is not a reservation, and a lane
+# bringing itself down must never resort to killing whatever it finds bound
+# to a guessed port number (see e2e-backend.sh's cmd_down_quiet, which only
+# ever stops the PID it itself started). Each lane claims the next unclaimed
+# spec from one shared list, so the lanes finish together. Within a lane the
+# fresh-reseed-per-spec contract above is unchanged: a backend only ever
+# serves one spec at a time. An explicit spec list (`run-ui-e2e.sh runs
+# secrets`), WARDYN_E2E_LANES=1 and LIVE mode run one lane.
 #
 # Prereqs: the dockerized Postgres "wardyn-test-pg" on :55432 (override with
 # WARDYN_E2E_PG_HOSTPORT + WARDYN_E2E_PG_CONTAINER on a shared box where that
@@ -34,9 +37,9 @@
 # Playwright's JSON report for the zero-executed check below — the script aborts
 # up front without it rather than judge a spec on a report it cannot parse.
 #
-# Usage:  scripts/run-ui-e2e.sh                 # all specs, in concurrent lanes
+# Usage:  scripts/run-ui-e2e.sh                 # all specs, 1 lane locally / 3 in CI
 #         scripts/run-ui-e2e.sh runs secrets    # only runs.spec.ts + secrets.spec.ts (single lane)
-#         WARDYN_E2E_LANES=1 scripts/run-ui-e2e.sh   # all specs, single lane (debugging)
+#         WARDYN_E2E_LANES=3 scripts/run-ui-e2e.sh   # all specs, 3 lanes (local override)
 #
 # WARDYN_E2E_ALLOW_ALL_SKIPPED: space-separated spec basenames (no extension,
 # e.g. "drives ssh") allowed to report zero executed tests without failing the
@@ -153,7 +156,18 @@ allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
 # #469: how many lanes. Only the DEFAULT all-spec invocation fans out; an
 # explicit spec list (a developer running two named specs by hand) and LIVE
 # mode (one already-running external Wardyn) run a single lane.
-NUM_LANES="${WARDYN_E2E_LANES:-3}"
+#
+# The UNSET default itself depends on CI: 1 locally, 3 in CI. Three
+# concurrent backends (three wardynd + three Postgres schemas) triple a
+# single run's memory footprint, and a shared dev box has a hard cap on
+# concurrent heavy jobs and has OOM-crashed before — a bare `run-ui-e2e.sh`
+# on such a box must not silently fan out to 3 by default. CI runners are
+# dedicated and sized for it, and `ci.yml` also pins WARDYN_E2E_LANES=3
+# explicitly rather than lean on this default. An explicit WARDYN_E2E_LANES
+# always wins over both.
+default_lanes=1
+[[ -n "${CI:-}" ]] && default_lanes=3
+NUM_LANES="${WARDYN_E2E_LANES:-${default_lanes}}"
 [[ ${NUM_LANES} =~ ^[0-9]+$ ]] || { echo "run-ui-e2e.sh: WARDYN_E2E_LANES must be a positive integer, got '${NUM_LANES}'" >&2; exit 1; }
 [[ $# -gt 0 || -n "${LIVE_BASE_URL}" ]] && NUM_LANES=1
 [[ ${NUM_LANES} -lt 1 ]] && NUM_LANES=1

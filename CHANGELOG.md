@@ -12,9 +12,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **`ui-e2e` runs its specs in concurrent lanes and hardens four specs that flaked in CI (#469).**
   `scripts/run-ui-e2e.sh`'s default (all-spec) invocation now runs isolated backends concurrently
-  (`WARDYN_E2E_LANES`, default 3, 1-3), each with its own console/UI-sandbox/internal-TLS listener
-  ports and database, picked the same way the single-lane default already picks a free port rather
-  than a fixed one — never a guessed offset from another lane's port. Bringing a lane's backend
+  (`WARDYN_E2E_LANES`, 1-3, defaulting to 1 locally and 3 in CI), each with its own
+  console/UI-sandbox/internal-TLS listener ports and database, picked the same way the single-lane
+  default already picks a free port rather than a fixed one — never a guessed offset from another
+  lane's port. Bringing a lane's backend
   down now only ever stops the PID it started (`e2e-backend.sh` no longer `fuser -k`s a port).
   `setup-gate.spec.ts`'s remaining "pick your barrier" checks and `episode-catalog.spec.ts`'s
   multi-user first paint get more slack on a loaded CI host, and `workspaces.spec.ts` unroutes
