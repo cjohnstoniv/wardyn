@@ -628,10 +628,11 @@ jobs:
           expect_per_spec_summaries "$evidence/walk.log" 2
           expect_summary "$evidence/roles-sso.log" 1
           expect_summary "$evidence/roles-sso-only.log" 1
-          if ! grep -q '^kind-sso-walk: PASS' "$log"; then
-            echo "::error::the walk never reached its own closing PASS line — see the uploaded log"
-            exit 1
-          fi
+          # Shared with kind-sso-ado-walk below (scripts/test-kind-sso-walk-log.sh
+          # proves it profile-aware, red on self-skip, green on PASS) — the
+          # per-spec counts above are this job's own extra rigor (T-08/G9),
+          # unrelated to the profile drift this script exists to close (#695).
+          ./scripts/check-kind-sso-walk-log.sh default "$log"
       - name: Upload walk evidence (log + manifest + per-spec results)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -696,20 +697,12 @@ jobs:
         run: |
           mkdir -p test/reports/e2e
           ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-ado-walk.log
-      # THE LOAD-BEARING CHECK — see kind-sso-walk's own comment above.
+      # THE LOAD-BEARING CHECK — shared with kind-sso-walk above via
+      # scripts/check-kind-sso-walk-log.sh (profile-aware: default and ado
+      # close on different PASS lines — see that script's own header).
       - name: Assert the walk actually ran (not a self-skip)
         shell: bash
-        run: |
-          set -euo pipefail
-          log=test/reports/e2e/kind-sso-ado-walk.log
-          if grep -q 'set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)' "$log"; then
-            echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
-            exit 1
-          fi
-          if ! grep -q '^kind-sso-walk (ado): PASS' "$log"; then
-            echo "::error::the ado walk never reached its own closing PASS line — see the uploaded log"
-            exit 1
-          fi
+        run: ./scripts/check-kind-sso-walk-log.sh ado test/reports/e2e/kind-sso-ado-walk.log
       - name: Upload walk evidence (log + per-step evidence)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
