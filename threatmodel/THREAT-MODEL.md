@@ -2196,9 +2196,18 @@ hiding them would repeat the failure mode we are designed to avoid.
     sees this config, and no injected per-run credential VALUE is in it (only
     a `grant_id` reference, re-minted fresh at each proxy start). The run
     token itself is NOT revoked when the run ends — `endRun` never revokes
-    the run's identity, and `Broker.RevokeRun` is audit-only
-    (`internal/broker/revoke.go`) — so it stays valid, unrevoked, until its
-    ≤1h TTL lapses from its last renewal (tracked as #1176). The exposure
+    the run's identity, because a run-wide revoke would also refuse the
+    fresh token a revive mints, and `Broker.RevokeRun` is audit-only
+    (`internal/broker/revoke.go`) — so it still verifies until its ≤1h TTL
+    lapses from its last renewal. Since #1176 it is refused anyway: the
+    `/internal` liveness gate (`refuseTerminalRun`,
+    `internal/api/internal_live_run.go`) refuses every door to a kept run
+    (`authz.denied`, `run_kept`), and renew refuses it on its own path, so a
+    token read out of a kept container mints, injects and decides nothing;
+    only the three upload-only tail doors accept it, for five minutes after
+    the run was kept. What remains is the material itself at rest in the
+    stopped container's env: the CA key and the upstream-proxy credential
+    (#1176's second half, still open). The exposure
     here is scoped to whoever already has host or Docker-daemon access — the
     same actor every other proxy-state residual in this section already
     assumes. It is bounded to one run's own token and CA — but when an

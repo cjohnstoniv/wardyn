@@ -141,6 +141,63 @@ func TestInternalAuth_TailUploadsLandInsideTheGrace(t *testing.T) {
 	}
 }
 
+// keptRunStore serves one RUNNING run kept by its end or a loss, marked `age`
+// ago.
+type keptRunStore struct {
+	store.Store
+	runID  uuid.UUID
+	reason types.LostReason
+	age    time.Duration
+}
+
+func (s keptRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if id != s.runID {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	lostAt := time.Now().UTC().Add(-s.age)
+	return types.AgentRun{ID: id, State: types.RunRunning, LostAt: &lostAt, LostReason: s.reason,
+		UpdatedAt: time.Now().UTC()}, nil
+}
+
+// TestInternalAuth_KeptRunIsRefusedAtEveryDoor is #1176: a run its lease ended
+// (or one lost to a reboot or an outage) is still RUNNING, and its token is not
+// revoked, so before this gate refused it the stopped proxy's token could still
+// mint and resolve injections until its TTL lapsed. Every door refuses it; the
+// tail uploads alone keep their grace, counted from the mark, and lose it
+// after. UpdatedAt is fresh on purpose: the grace must not be measured from it.
+func TestInternalAuth_KeptRunIsRefusedAtEveryDoor(t *testing.T) {
+	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	for _, reason := range []types.LostReason{types.LostEnded, types.LostReboot, types.LostOutage} {
+		for _, age := range []time.Duration{time.Second, terminalUploadGrace + time.Minute} {
+			h := newHarness(t)
+			runID, grantID := uuid.New(), uuid.New()
+			cfg := baseTestConfig(h, keptRunStore{runID: runID, reason: reason, age: age})
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.RecordingStore = &fakeRecordingStore{}
+			cfg.Approvals = h.approvals
+			cfg.Broker = h.broker
+			srv := New(cfg)
+			tok := h.mintRunToken(t, runID)
+			inGrace := age < terminalUploadGrace
+			for _, d := range internalDoors(runID, grantID) {
+				t.Run(string(reason)+"/"+age.String()+"/"+d.name, func(t *testing.T) {
+					w := do(t, srv, d.method, d.path, tok, d.body)
+					refused := w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "lost")
+					if graced[d.name] && inGrace {
+						if refused {
+							t.Fatalf("a tail upload inside the grace was refused: %s", w.Body.String())
+						}
+						return
+					}
+					if !refused {
+						t.Fatalf("code = %d body=%s, want 403 saying the run is lost", w.Code, w.Body.String())
+					}
+				})
+			}
+		}
+	}
+}
+
 // TestInternalAuth_LiveRunIsUntouched is the negative control: a run that is
 // still going must see byte-identical behaviour, gate or no gate.
 func TestInternalAuth_LiveRunIsUntouched(t *testing.T) {

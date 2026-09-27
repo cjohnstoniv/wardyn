@@ -2539,8 +2539,8 @@ field carries the stored value forward; name it as `""` to clear it.
 Every member denial that isn't a plain foreign-resource 404 is audited under
 `authz.denied`, whose `reason` field is the whole vocabulary.
 
-Two of the reasons below are NOT member denials at all: 0.7.4 added a RUN-TOKEN
-tier (`run_terminal`, `run_not_found`), raised by `internalAuth`'s liveness
+Three of the reasons below are NOT member denials at all: 0.7.4 added a RUN-TOKEN
+tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness
 gate against a sandbox sidecar's own run token rather than against a person. They
 live in this table because the action, the shape and the `reason` field are the
 same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
@@ -2581,6 +2581,7 @@ admin walking the member path, not an incident.
 | `harness_login_not_per_user` | 0.7.2: `POST /setup/harness-login` by a member when the agent's model credential is NOT a `per_user` row (`authorizeHarnessLogin`, `internal/api/harnesscred.go`) — the deployment's credential is one an admin connects for everyone, so there is no personal sign-in to capture. Target `setup.harness_login`. Emitted since 0.7.2 and missing from this table until 0.8 | ⛔ `403` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
+| `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
@@ -2693,13 +2694,20 @@ the run has no network, its pending approvals are cancelled and its broker
 credentials get a best-effort, audit-only revoke — but the run's own identity
 is NOT revoked, so the run stays `RUNNING` and holds its quota slot until
 `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or a
-kill. `run.ending_soon` warns at 24h, 1h and 10m before the end.
+kill. `run.ending_soon` warns at 24h, 1h and 10m before the end. Its token is
+refused all the same: every `/internal/*` door refuses a kept run (ended, or
+lost to a reboot or an outage) with `403` and an `authz.denied` row, reason
+`run_kept`, so nothing can mint a credential, resolve an injection or decide an
+approval with it; only the three tail uploads are still accepted, for five
+minutes after the run was kept. A revive gives the new proxy a fresh token.
 
 A stopped-but-kept container is not an empty one: the proxy's own rendered
-configuration — its per-run TLS-MITM CA private key and its run token, still
-unrevoked and valid until its ≤1h TTL lapses from its last renewal (see
-#1176), included — sits in that container's own environment for the whole
-grace window, specifically so a revive (below) can read it back. Sizing
+configuration — its per-run TLS-MITM CA private key, its run token (refused
+by the control plane once the run is kept, but not revoked, and valid as a
+signature until its ≤1h TTL lapses) and any authenticated upstream-proxy URL
+included — sits in that container's own environment for the whole grace
+window, specifically so a revive (below) can read it back (#1176 tracks
+moving it out). Sizing
 `WARDYN_ENDED_RUN_GRACE` is therefore also sizing the exposure window of that
 container's own state to whoever already has host or Docker-daemon access —
 see the threat model's residual on kept-proxy-state. The same "kept, not
