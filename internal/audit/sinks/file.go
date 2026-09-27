@@ -49,7 +49,6 @@ type FileSink struct {
 }
 
 // NewFileSink opens (or creates) the log file at cfg.Path.
-// Returns an error if the file cannot be opened.
 func NewFileSink(cfg FileConfig) (*FileSink, error) {
 	cfg = cfg.withDefaults()
 	if cfg.Path == "" {
@@ -136,9 +135,7 @@ func (s *FileSink) rotate() error {
 		if i-1 == 0 {
 			newer = s.cfg.Path
 		}
-		// The .Keep slot falls off the end: drop it before anything shifts into
-		// it. No Lstat first — os.Remove reports an absent path by returning an
-		// error, which is exactly the error this discards.
+		// The .Keep slot falls off the end; os.Remove discards the absent-path error.
 		if i == s.cfg.Keep {
 			_ = os.Remove(older)
 		}
@@ -146,7 +143,6 @@ func (s *FileSink) rotate() error {
 			_ = os.Rename(newer, older)
 		}
 	}
-	// After rotation the active path is free; open a fresh file.
 	return s.openFile()
 }
 

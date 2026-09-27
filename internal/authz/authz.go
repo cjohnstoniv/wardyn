@@ -1,10 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package authz is Wardyn's authorization kernel: the one Decision every door
-// refuses with, and the registry of refusal reasons that is the audit contract
-// a SIEM rule is written against. Pure Go — no HTTP, no store — so the same
-// Decision can later cross a wire (schema authz/v1) unchanged.
+// Package authz is Wardyn's authorization kernel: the one Decision every
+// door refuses with, and the registry of refusal reasons that is the audit
+// contract a SIEM rule is written against. Pure Go — no HTTP, no store — so
+// the same Decision can later cross a wire (schema authz/v1) unchanged.
 package authz
 
 import (
@@ -136,11 +136,10 @@ func (d Decision) With(key, value string) Decision {
 // Principal is who a decision is about.
 type Principal struct {
 	Subject string `json:"subject"`
-	// MemberView: an admin exercising "view as member"; the tier the kernel
-	// saw is already clamped, this only marks the row.
+	// MemberView: an admin exercising "view as member"; only marks the row,
+	// the tier the kernel saw is already clamped.
 	MemberView bool `json:"member_view,omitempty"`
-	// UserType is the type a member view looks through; read only with
-	// MemberView.
+	// UserType is the type a member view looks through; read only with MemberView.
 	UserType string `json:"user_type,omitempty"`
 	Origin   Origin `json:"origin"`
 }
@@ -155,20 +154,14 @@ type Origin struct {
 
 var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
 
-// Datum is the data of d's audit row, refused to p over method (empty when no
-// request carried it). A detail never stands in for a reserved key, so it can
-// never forge the reason or a marker.
+// Datum is the data of d's audit row, refused to p over method (empty when
+// no request carried it). A detail never stands in for a reserved key, so it
+// can never forge the reason or a marker.
 //
-// user_view is a marker, present only when true — renamed in 0.8 from
-// member_mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; history not
-// rewritten, and no dual-emit here unlike auth.user_view.set's own action row:
-// this key lives inside authz.denied's own Data map, not on a separate audit
-// row, so there is no old-key row to keep landing). user_type (the caller's
-// stamped type, or the type a user view looks through) rides on its own,
-// whenever the principal carries one — a stamped type refused on its own
-// (user_type_unknown) is not a user view. device_channel is a sibling of the
-// ingest marker device_origin, never that key: device_origin stays the mark of
-// a row a laptop hashed and forwarded.
+// user_view is a marker, present only when true (renamed in 0.8 from
+// member_mode; no dual-emit needed since this key lives inside authz.denied's
+// own Data map, not a separate audit row). device_channel is a sibling of
+// the ingest marker device_origin, never that key.
 func Datum(d Decision, p Principal, method string) map[string]any {
 	m := make(map[string]any, len(d.Detail)+len(reservedDatumKeys))
 	for k, v := range d.Detail {

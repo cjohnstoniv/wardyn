@@ -13,20 +13,15 @@ import (
 // match, no regex, no entropy). When normalize is set it additionally matches
 // against bounded decoded variants of the span (normalize.go), narrowing the
 // encoding-evasion residual without closing it.
-//
-// This is the only detector in the conservative v1 cut. Regex/entropy/PII
-// detectors are added in later phases behind their own policy toggles.
 type knownSecretDetector struct {
 	secrets   [][]byte // each >= secretmask.MinLen, deduped (see filterCorpus)
 	normalize bool
 }
 
 func (d *knownSecretDetector) Scan(s Span, dst *[]Finding) {
-	// Field paths are built partly from agent-controlled JSON object keys, so a
-	// secret used AS a key could otherwise ride into the (SIEM-fanned) audit log.
-	// Mask BOTH corpus values (safePath) AND well-known secret FORMATS
-	// (sanitizePath) out of the path so a Finding is content-free by construction
-	// — a regex-shaped key (e.g. "ghp_…") must not leak via the path either.
+	// Mask BOTH corpus values AND well-known secret FORMATS out of the path
+	// so a Finding is content-free by construction — an agent-controlled key
+	// that is itself a secret (or secret-shaped) must not leak via the path.
 	path := sanitizePath(d.safePath(s.FieldPath))
 	raw := []byte(s.Text)
 	for i, sec := range d.secrets {
@@ -49,8 +44,7 @@ func (d *knownSecretDetector) Scan(s Span, dst *[]Finding) {
 		return
 	}
 	// Decoded-variant pass: catches a known secret an agent percent-/base64-/
-	// hex-encoded. Offsets are meaningless in the decoded space, so they are
-	// reported as -1 and the detector name records the decode chain.
+	// hex-encoded. Offsets are meaningless in decoded space, reported as -1.
 	for _, v := range normalizedVariants(s.Text, 2) {
 		vb := []byte(v.text)
 		for i, sec := range d.secrets {
@@ -77,9 +71,8 @@ func (d *knownSecretDetector) safePath(path string) string {
 }
 
 // maskCorpus replaces any operator-declared corpus secret VALUE appearing
-// verbatim in a field path with the masking placeholder, so an agent-controlled
-// JSON key that IS a known secret cannot leak into the (SIEM-fanned) audit. Used
-// both per-detector (safePath) and at the engine's central chokepoint
+// verbatim in a field path with the masking placeholder. Used both
+// per-detector (safePath) and at the engine's central chokepoint
 // (Engine.sanitizeFieldPath) so no detector path can bypass it. Idempotent.
 func maskCorpus(path string, secrets [][]byte) string {
 	if path == "" {

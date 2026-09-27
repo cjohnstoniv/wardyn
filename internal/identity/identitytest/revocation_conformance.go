@@ -12,10 +12,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 )
 
-// RunRevocationConformance holds an identity.RevocationStore to the kill-switch
-// contract, so the in-memory store the provider tests run against and the
-// Postgres store wardynd runs against cannot drift apart. newStore may return a
-// store over shared state: every case works on fresh random run ids and jtis.
+// RunRevocationConformance holds an identity.RevocationStore to the
+// kill-switch contract, so the in-memory and Postgres stores cannot drift
+// apart. newStore may return a store over shared state: every case works on
+// fresh random run ids and jtis.
 func RunRevocationConformance(t *testing.T, newStore func(t *testing.T) identity.RevocationStore) {
 	ctx := context.Background()
 
@@ -42,7 +42,7 @@ func RunRevocationConformance(t *testing.T, newStore func(t *testing.T) identity
 			t.Fatalf("RevokeRun: %v", err)
 		}
 		// Tokens the store has never heard of: the cascade must not depend on
-		// enumerating minted jtis, which is the whole point of a run-level mark.
+		// enumerating minted jtis.
 		for _, jti := range []string{uuid.NewString(), uuid.NewString(), ""} {
 			if !isRevoked(t, s, jti, run) {
 				t.Fatalf("jti %q of a revoked run still verifies: the kill switch did not cascade", jti)

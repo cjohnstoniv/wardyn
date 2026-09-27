@@ -5,11 +5,9 @@ package contentscan
 
 import "regexp"
 
-// piiDetector flags common PII formats (detect_pii). It is BEST-EFFORT and
-// OFF-BY-DEFAULT: PII detection in a coding context has high false-negative
-// recall (~60-70% industry-wide) and is FP-prone, so it is a visibility signal,
-// NEVER a control. Findings are content-free (Sample is the masking placeholder;
-// the PII type lives in the Detector name + Category, not the value).
+// piiDetector flags common PII formats (detect_pii). Best-effort and off-by-default:
+// high false-negative/false-positive rates make it a visibility signal, never a
+// control. Findings are content-free (Sample is a placeholder, not the value).
 type piiDetector struct{}
 
 // piiRule is a simple regex PII rule; validate optionally rejects a regex match
@@ -46,15 +44,13 @@ func (piiDetector) Scan(s Span, dst *[]Finding) {
 				Severity:  rule.severity,
 				Sample:    maskedPlaceholder,
 			})
-			// One finding per (rule, span) is enough signal; stop after the first
-			// validated match to bound output and avoid spamming repeated PII.
+			// One finding per (rule, span) bounds output.
 			break
 		}
 	}
 }
 
-// validLuhn reports whether the digits of s pass the Luhn checksum (cuts most
-// random-number false positives for the credit-card rule).
+// validLuhn reports whether s's digits pass the Luhn checksum (cuts credit-card false positives).
 func validLuhn(s string) bool {
 	sum, alt, n := 0, false, 0
 	for i := len(s) - 1; i >= 0; i-- {
