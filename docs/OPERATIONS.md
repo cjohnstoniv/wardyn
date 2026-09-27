@@ -2603,6 +2603,33 @@ field, and a stored value that no longer passes is dropped from `/healthz`
 rather than published. Like the provider blocks, a body that does not name a
 field carries the stored value forward; name it as `""` to clear it.
 
+### UI apps with more than one user: use host mode
+
+If the UI-sandbox gateway is on and more than one person uses this install, set
+`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` (`uiSandbox.originTemplate` in the chart),
+e.g. `https://run-{run}.ui.example.com`, with wildcard DNS and a wildcard
+certificate. Without it the gateway runs in path mode: every run's relayed app
+is served from ONE browser origin, separated only by a path-scoped cookie. That
+cookie decides which session a request carries, but not what a page may read:
+any relayed page on that origin can script any other page there that is open
+in the same browser. That is the shared-origin residual
+([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18).
+
+Two controls keep another user's app out of that origin in your browser: the
+enter ticket is bound to the browser that minted it, so nobody can push you
+into their app with a link or a form, and a relayed app cannot register a
+service worker outside its own path
+([UI-SANDBOXES.md §3](UI-SANDBOXES.md#3-open-an-app) and
+[Bounds](UI-SANDBOXES.md#bounds)). They leave one boundary to the path cookie alone: your
+own apps can still reach each other. Host mode gives every run its own origin,
+which the browser itself isolates, and it refuses an enter served on any other
+run's host. Path mode is for a single-user or demo install.
+
+Either mode needs the console and the gateway on **the same site** (one
+registrable domain, one scheme): the enter binding is a cookie the console's
+fetch sets on the gateway, and a browser refuses that across sites. Open then
+fails with an error that says so.
+
 ### Every denial that isn't a 404
 
 (This section is the source of record for `authz.denied`'s `reason` values;

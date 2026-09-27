@@ -178,29 +178,34 @@ Your own image serves an app the same way — see
 
 ## 3. Open an app
 
-Two calls: mint a single-use attach ticket (the **same** ticket the browser
-terminal uses — there is no second ticket type), then hand it to the enter
-endpoint on the UI origin — as a `POST` form field (preferred: the ticket never
-lands in a URL, browser history, or a reverse-proxy access log) or, for
-compatibility, as a `GET` query string.
+Three calls: mint a single-use attach ticket (the **same** ticket the browser
+terminal uses — there is no second ticket type), **bind** it to the browser
+that will use it, then hand it to the enter endpoint on the UI origin — as a
+`POST` form field (preferred: the ticket never lands in a URL, browser history,
+or a reverse-proxy access log) or, for compatibility, as a `GET` query string.
 
 ```sh
 TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
 
+# Bind: what the console's own fetch sends. The binding cookie lands in the jar.
+curl -sf -c jar -X POST "$UI_ORIGIN/__wardyn/bind" \
+  -H "Sec-Fetch-Site: same-site" -H "Origin: $WARDYN_URL" --data-urlencode "ticket=$TICKET"
+
 # Preferred: POST, form body — the ticket never appears in a URL.
-curl -sf -X POST "$UI_ORIGIN/__wardyn/enter" \
+curl -sf -b jar -X POST "$UI_ORIGIN/__wardyn/enter" \
   --data-urlencode "run=$RUN_ID" --data-urlencode app=vscode --data-urlencode "ticket=$TICKET"
 
-# Compatibility: GET, query string.
-xdg-open "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
+# Compatibility: GET, query string (still needs the binding cookie).
+curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
 ```
 
 `/healthz` publishes both forms: `ui_sandbox.enter_post_url` is the endpoint
 with **no query string at all** (`run`/`app`/`ticket` go in the
 `application/x-www-form-urlencoded` body instead), and
 `ui_sandbox.enter_url_template` is the `GET` form, with `{run}`, `{app}` and
-`{ticket}` placeholders. Read the origin from one of these rather than
+`{ticket}` placeholders; `ui_sandbox.bind_url` is the bind step. Read the
+origin from one of these rather than
 composing it — it is deliberately not the console's. A ticket in the query
 string on a `POST` is refused outright (no mixed mode): exactly one of the two
 forms is honored per request.
@@ -216,22 +221,35 @@ policy. Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
 Every later request rides that cookie, and nothing else on this listener
 authenticates anything.
 
-No extra CSRF token guards either form, and `POST` adds no risk `GET` did not
-already have. What the ticket stops: a page that does not hold a
-freshly-minted, still-valid ticket for THIS run cannot forge a session for
-someone ELSE's run — the ticket is single-use, ~30s-TTL, and bound to one run
-and one principal, mintable only through an already-authenticated call to
+**CSRF.** The ticket stops a page that does not hold a freshly-minted,
+still-valid ticket for THIS run from forging a session for someone ELSE's run:
+it is single-use, ~30s-TTL, and bound to one run and one principal, mintable
+only through an already-authenticated call to
 `POST /runs/{id}/attach/ticket`.
 
-What it does NOT stop: any Wardyn user can mint a ticket for their OWN run and
-drive a victim's browser to redeem it — by this `POST` form exactly like by the
-unchanged `GET` link — landing the victim's browser on a session for the
-ATTACKER's app (login CSRF / session fixation); the enter endpoint only checks
-that the ticket's principal owns the run it names, never who the browser
-actually belongs to. Host mode ([below](#4-deployment)) bounds this to the
-attacker's own origin — a phishing risk, not a same-origin one. The
-pre-existing shared-origin (path-mode) chain this residual compounds into is
-tracked in #1241, not introduced or widened here.
+The ticket alone would not stop **login CSRF**: a user minting a ticket for
+their OWN run and pushing a victim's browser through the enter hand-off, by a
+link or an auto-submitted form, onto a session for the attacker's app. The
+**browser binding** stops that. Before the enter, the console `POST`s the ticket
+to `/__wardyn/bind` on the UI origin with one credentialed fetch, and the
+gateway answers with an `HttpOnly`, `SameSite=Strict`,
+`Path=/__wardyn/enter` cookie, `wardyn_ui_bind_<id>`, valid for 30 seconds,
+whose value is an HMAC of the ticket under the gateway's session key. Enter
+refuses a ticket that arrives without its binding cookie with the same `403`
+as a bad ticket and a `ui.authorize` / `denied` audit row
+(`reason: "ticket not bound to this browser"`), before the ticket is spent,
+and clears the binding it uses. The bind itself answers only the console:
+the browser must label the fetch `Sec-Fetch-Site: same-site` (an attacker's
+page is `cross-site`, a relayed app is `same-origin`), and with SSO its
+`Origin` must be the console's own host, the host of
+`WARDYN_OIDC_REDIRECT_URL`.
+
+The binding needs the console and the UI origin to be **the same site** (one
+registrable domain, one scheme), e.g. `wardyn.example.com` and
+`run-<id>.ui.example.com`, or `localhost:8080` and `localhost:8081`. A
+cross-site console cannot set a first-party cookie on the gateway at all, and
+**Open** then fails with the console's own error. `localhost` and `127.0.0.1`
+are different sites.
 
 **One session per app, per run.** The app is in the path and the cookie is
 scoped to it, so a run that declares several `ui_apps` can have them all open at
@@ -242,9 +260,12 @@ so the log says which app a human actually opened.
 ### From the console
 
 The run detail page's **UI apps** lane is the affordance for this flow: one row
-per declared app, and an **Open** button that mints the ticket, then submits a
-hidden auto-submitted `POST` form (built from `ui_sandbox.enter_post_url`) that
-opens the app in a new tab — the ticket never touches this page's URL either.
+per declared app, and an **Open** button that mints the ticket, binds it
+(`ui_sandbox.bind_url`), then submits a hidden auto-submitted `POST` form
+(built from `ui_sandbox.enter_post_url`) that opens the app in a new tab — the
+ticket never touches this page's URL either. The console's CSP names the bind
+URL itself in `connect-src`, not the UI origin, so no other request to the
+gateway is allowed from the console page.
 Its states and strings are frozen in
 [design/ui-sandboxes-prompt.md](design/ui-sandboxes-prompt.md). The app is
 never embedded in the console page — an `<iframe>` on the console origin is
@@ -258,7 +279,7 @@ precisely what the second listener exists to prevent.
 | `WARDYN_UI_SANDBOX_ADVERTISE` | the externally-reachable base URL, e.g. `https://wardyn-ui.example.com` (advisory copy; unset falls back to the raw bind address and warns) |
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | how long a relay session stays usable, default `8h` — the relay's sibling of `WARDYN_SSH_ROLE_TTL`. Shortening it binds the cookies already in browsers |
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | optional inbound cookie policy: `allow:<names>` forwards only those cookies to the app, `deny:<names>` strips them (comma-separated, `prefix*` for a prefix). Unset forwards every cookie except `wardyn_*`. Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
-| `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below |
+| `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. Put `{run}` in the first host label: the console's CSP turns that label into a wildcard |
 
 **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
 `-tls-key` as the console, so a distinct hostname needs a certificate that
@@ -404,6 +425,17 @@ that carries a `Domain` attribute is always dropped, so the app's server cannot
 plant a cookie on sibling hosts, and so is one with no name (a browser would
 send its value back verbatim, e.g. as a forged `wardyn_ui_sess`).
 
+**Service workers stay inside their app.** A relayed app may register a
+service worker, but never one that controls more than its own app. The
+browser caps a worker's scope at its script's directory, which through the
+relay is always inside `/r/<run-id>/<app>/`, unless the script's response
+carries `Service-Worker-Allowed`. The relay removes that header from every
+response, and on the worker-script fetch itself (the browser sends
+`Service-Worker: script`) sets it to the app's own prefix. So an editor that
+registers its worker at its own root keeps working, while no app can register
+one at `/`, over the enter path, or over another run's or app's prefix. A
+worker there would see every later request to the shared origin in path mode.
+
 **Both controls act on HTTP headers only.** The relayed page is the sandbox's
 own JavaScript on the relay origin: `document.cookie` can still set a
 `Domain=<parent>` cookie and read every non-HttpOnly cookie a sibling host set
@@ -442,8 +474,12 @@ editor is not idle and the reaper must not stop the run under them.
 
 **Shared origin.** In path mode (no origin template) every run's apps share one
 origin, separated by the path-scoped cookie. That is a real residual, published
-in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 — set
-`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` where wildcard DNS is available.
+in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5: one of a human's
+relayed apps can script another of that same human's apps. The browser
+binding and the service-worker cap keep another user's app out of that origin
+in your browser, but host mode is the boundary the browser itself enforces —
+set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` for any install with more than one
+user, wherever wildcard DNS is available.
 
 ## Native clients (exploratory)
 

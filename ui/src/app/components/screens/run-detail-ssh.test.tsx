@@ -378,6 +378,79 @@ describe("ConnectSSHCard — UI apps lane", () => {
     submitSpy.mockRestore();
   });
 
+  // #1241: before the form POST, the console binds the ticket to this browser
+  // with one credentialed fetch to the gateway's bind_url. The gateway refuses
+  // an enter whose ticket was not bound, so a ticket minted in someone else's
+  // browser cannot be pushed into this one.
+  it("binds the ticket on the gateway with a credentialed fetch before submitting the enter form", async () => {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ui_sandbox: {
+        enabled: true,
+        enter_post_url: "https://run-{run}.ui.example.com/__wardyn/enter",
+        bind_url: "https://run-{run}.ui.example.com/__wardyn/bind",
+      },
+    });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockResolvedValue("tkt_abc123");
+    const order: string[] = [];
+    const fetchMock = vi.fn(async () => {
+      order.push("bind");
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {
+      order.push("submit");
+    });
+    try {
+      renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+      await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+      screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+      await waitFor(() => expect(submitSpy).toHaveBeenCalled());
+      expect(order).toEqual(["bind", "submit"]);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(`https://run-${baseRun.id}.ui.example.com/__wardyn/bind`);
+      expect(init.method).toBe("POST");
+      expect(init.credentials).toBe("include");
+      // The ticket rides the body, never the URL, and nothing of the
+      // console's own session travels to the gateway.
+      expect(String(init.body)).toBe("ticket=tkt_abc123");
+      expect(init.headers).toBeUndefined();
+    } finally {
+      submitSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows an error and never submits the enter form when the gateway refuses the bind", async () => {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ui_sandbox: {
+        enabled: true,
+        enter_post_url: "http://ui.local/__wardyn/enter",
+        bind_url: "http://ui.local/__wardyn/bind",
+      },
+    });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockResolvedValue("tkt_abc123");
+    // A refused bind carries no CORS headers, so the browser rejects the fetch.
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    try {
+      renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+      await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+      screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+      await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
+      expect(screen.getByText(/must be served from the same site/)).toBeInTheDocument();
+      expect(submitSpy).not.toHaveBeenCalled();
+    } finally {
+      submitSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Review F4: an older daemon than this console (dev-setup skew only — the
   // console is normally baked into the daemon serving it) publishes
   // enter_url_template but not enter_post_url. Submitting a form with an

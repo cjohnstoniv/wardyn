@@ -44,7 +44,7 @@ func (h *uiHarness) relayIn(mode uiGatewayMode, extraCookies string) *httptest.R
 	base := h.srv.uiBasePath()
 
 	q := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}}
-	req := httptest.NewRequest(http.MethodGet, base+uiEnterPath+"?"+q.Encode(), nil)
+	req := h.bound(httptest.NewRequest(http.MethodGet, base+uiEnterPath+"?"+q.Encode(), nil), q)
 	req.Host = host
 	enter := httptest.NewRecorder()
 	gw.ServeHTTP(enter, req)
