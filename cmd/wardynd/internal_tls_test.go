@@ -199,7 +199,7 @@ func TestInternalListener_RefusesTLS12Client(t *testing.T) {
 // certificate chains to, and must not appear on a local (loopback http)
 // install or one without a token file.
 func TestPublishHopCA_BesideTheGroundtruthToken(t *testing.T) {
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://127.0.0.1:8443")
 	if err != nil {
 		t.Fatal(err)
 	}

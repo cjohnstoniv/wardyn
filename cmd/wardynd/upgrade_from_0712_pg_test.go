@@ -141,7 +141,7 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 	if err != nil {
 		t.Fatalf("0.7.12 boot: %v", err)
 	}
-	session, err := loadOrCreateSessionKey(ctx, store0712)
+	session, err := loadOrCreateSessionKey(ctx, unlocked(store0712))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,11 +186,11 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		if got := sealedRows(t, pool); !maps.Equal(got, sealed0712) {
 			t.Fatalf("%s rewrote stored secrets: %d rows before, %d after, or their bytes changed", label, len(sealed0712), len(got))
 		}
-		gotSigning, err := loadOrCreateSigningKey(ctx, secrets)
+		gotSigning, err := loadOrCreateSigningKey(ctx, unlocked(secrets))
 		if err != nil {
 			t.Fatalf("%s: signing key: %v", label, err)
 		}
-		gotSession, err := loadOrCreateSessionKey(ctx, secrets)
+		gotSession, err := loadOrCreateSessionKey(ctx, unlocked(secrets))
 		if err != nil {
 			t.Fatalf("%s: session key: %v", label, err)
 		}

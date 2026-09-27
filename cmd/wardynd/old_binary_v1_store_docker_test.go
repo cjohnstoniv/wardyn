@@ -73,10 +73,10 @@ func TestPG_OldBinaryAgainstV1Store(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateSigningKey(ctx, secrets); err != nil {
+	if _, err := loadOrCreateSigningKey(ctx, unlocked(secrets)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateSessionKey(ctx, secrets); err != nil {
+	if _, err := loadOrCreateSessionKey(ctx, unlocked(secrets)); err != nil {
 		t.Fatal(err)
 	}
 	before := sealedRows(t, pool)
