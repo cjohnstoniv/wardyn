@@ -345,12 +345,11 @@ describe("App — a session that ends mid-page (#483)", () => {
   });
 });
 
-// Owner ruling Q457-12 after a resume on an identity the shell never learned
-// (/me failed at mount): the first sign-in carries on as whoever it is
-// (SF-29), and from then on the shell knows who that was — so a DIFFERENT
-// person at a later lapse still gets a fresh page, never the first one's.
-describe("App — a resume on an unknown identity records who came back", () => {
-  async function resumeUnknownAsCj() {
+// Owner ruling Q457-12 when the shell never learned who was signed in (/me
+// failed at mount): nothing proves whoever signs back in is the same person,
+// so it fails closed — a fresh reload, with the write hold kept until then.
+describe("App — a lapse on an unknown identity", () => {
+  it("signing in reloads fresh, even as the same principal, and no write leaves meanwhile", async () => {
     daemon.meFails = true;
     render(
       <MemoryRouter initialEntries={["/runs"]}>
@@ -365,37 +364,11 @@ describe("App — a resume on an unknown identity records who came back", () => 
     await screen.findByRole("dialog");
     daemon.meFails = false;
     await signInWithToken();
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(assign).not.toHaveBeenCalled();
-  }
-
-  it("someone else signing in at a later lapse reloads fresh, and the write hold stays", async () => {
-    await resumeUnknownAsCj();
-    daemon.dead = true;
-    await act(async () => {
-      await wfetch("/again").catch(() => {});
-    });
-    await screen.findByRole("dialog");
-    daemon.me = { ...ME, principal: "someone-else" };
-    await signInWithToken();
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
     await act(async () => {
       await expect(wfetch("/stub-save", { method: "PUT", body: "{}" })).rejects.toMatchObject({ status: 401 });
     });
     expect(count("PUT /api/v1/stub-save")).toBe(0);
-  });
-
-  it("the first person's draft is not what someone else signs in to", async () => {
-    await resumeUnknownAsCj();
-    await user.type(await screen.findByLabelText("Note"), "hello");
-    daemon.dead = true;
-    await user.click(screen.getByRole("button", { name: "Save note" }));
-    await screen.findByRole("dialog");
-    daemon.me = { ...ME, principal: "someone-else" };
-    await signInWithToken();
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(screen.queryByLabelText("Note")).toBeNull();
-    expect(screen.queryByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY })).toBeNull();
   });
 });
 
@@ -470,5 +443,27 @@ describe("App — a deliberate sign-out (#483)", () => {
     await screen.findByText("Admin token", { exact: true });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
+  });
+
+  it("a read that 401s while the logout is still in flight opens no dialog", async () => {
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByLabelText("Note");
+    let endLogout!: (r: Response) => void;
+    heldLogout = new Promise<Response>((r) => (endLogout = r));
+    const headerButtons = within(screen.getByRole("banner")).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await waitFor(() => expect(count("POST /api/v1/auth/logout")).toBe(1));
+    daemon.dead = true;
+    await act(async () => {
+      await wfetch("/in-flight-read").catch(() => {});
+    });
+    await expect(screen.findByRole("dialog", undefined, { timeout: 1000 })).rejects.toThrow();
+    endLogout(json(200, {}));
+    await screen.findByText("Admin token", { exact: true });
   });
 });

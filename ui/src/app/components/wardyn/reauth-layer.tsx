@@ -85,8 +85,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   // still-loading "…" or its own fail-open "unknown" (health.ts's whoami()
   // returns null, so identityResolved/operatorResolved stays false, for both
   // cases — see OperatorResolvedContext's own R4-F110 precedent for this same
-  // class of bug). Comparing against either placeholder always differs from a
-  // real signed-in principal, so every re-sign-in read as "someone else".
+  // class of bug). An unsettled principal cannot prove who signs back in is
+  // the same person, so it counts as someone else (fail closed, below).
   const principalResolved = useOperatorResolved();
   const location = useLocation();
   const navigate = useNavigate();
@@ -128,11 +128,10 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     stopPoll();
     // Owner ruling (Q457-12): someone else signed in. Nothing of the first
     // person's page is shown, saved or submitted as them — it loads fresh.
-    // SF-29: only once `principal` is a settled fact — an unresolved identity
-    // (principalResolved false) makes every re-sign-in look like a stranger,
-    // reloading the page and losing the draft this dialog just promised
-    // nothing here had lost.
-    if (principalResolved && me.principal !== principal) {
+    // Sameness needs a settled first identity: with none (/me never answered
+    // before the lapse), whoever signs in is treated as someone else — the
+    // same person losing a draft in that rare case is the accepted cost.
+    if (!principalResolved || me.principal !== principal) {
       reauth.reloadAs(roleCanReach(location.pathname, me.role) ? location.pathname + location.search : "/runs");
       return;
     }

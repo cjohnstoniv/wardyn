@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// SF-29: `succeed`'s "someone else signed in" branch compared the incoming
+// SF-29: `succeed`'s "someone else signed in" branch compares the incoming
 // /me against `usePrincipal()`, whose value while identity is unresolved
 // (app-shell's still-loading "…", or its fail-open "unknown" once whoami()
 // swallows a failure and returns null — health.ts's whoami()) is never a
-// real principal. Comparing against either placeholder always differs from
-// a genuine signed-in principal, reloading the page and losing the draft
-// this dialog just promised nothing here had lost.
+// real principal. An unknown first identity cannot prove the person signing
+// back in is the same one, so the rule fails closed: a fresh reload, never
+// the first person's page (Q457-12).
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -69,17 +69,16 @@ function renderDialog(reauthOverrides: Partial<Reauth> = {}) {
 }
 
 describe("ReauthLayer — succeed() and an unresolved identity (SF-29)", () => {
-  it("mount with /me unresolved, 401, sign in: adopts the session instead of reloading as a stranger", async () => {
+  it("mount with /me unresolved, 401, sign in: reloads fresh, since sameness cannot be proven", async () => {
     const user = userEvent.setup();
     const { reloadAs, setPhase } = renderDialog();
 
     await user.type(screen.getByLabelText(TOKEN_LABEL), "a-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    // The dialog closes (reauth.setPhase("none")) once succeed() adopts —
-    // waiting for that settles the same promise chain reloadAs would ride.
-    await waitFor(() => expect(setPhase).toHaveBeenCalledWith("none"));
-    expect(reloadAs).not.toHaveBeenCalled();
+    await waitFor(() => expect(reloadAs).toHaveBeenCalledWith("/runs"));
+    // Never adopted: the dialog (and the write hold it keeps) stays up.
+    expect(setPhase).not.toHaveBeenCalledWith("none");
   });
 
   it("still reloads as a stranger once the ORIGINAL principal was actually confirmed", async () => {
