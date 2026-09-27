@@ -329,3 +329,50 @@ describe("SettingsScreen — the Host card's barrier picker offers only what's i
     expect(hostCard.queryByText("Vault")).toBeNull();
   });
 });
+
+// #1200 review P1-1 — the Host card is a SECOND mount of EnvironmentStep's
+// own no-runner/k8s facts, and must keep them byte-identical rather than a
+// compact-picker-only fallback with no fix line.
+// DONE WHEN: a test fails if the canon "No sandbox runner" card, its fix
+// line, or the k8s rows disappear from this card again.
+describe("SettingsScreen — the Host card keeps the canon no-runner card and the k8s rows (P1-1)", () => {
+  it("a driver:'none' host gets the canon card and the operator fix line, and no TierPicker fallback", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(hostCard.getByText(/-runner docker/)).toBeInTheDocument();
+    // Never the compact-picker's own generic fallback beside the real card.
+    expect(hostCard.queryByText(/no barrier is installed/i)).toBeNull();
+  });
+
+  it("a real Docker daemon that is simply down gets the daemon fix line, not the operator one", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(
+      hostCard.getByText(/start the Docker daemon.*so Wardyn can build a barrier/),
+    ).toBeInTheDocument();
+    expect(hostCard.queryByText(/-runner docker/)).toBeNull();
+  });
+
+  it("a k8s driver gets the Runner/Egress-containment rows, even with zero classes", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "k8s", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getByText("Kubernetes")).toBeInTheDocument();
+    expect(hostCard.getByText("Egress containment")).toBeInTheDocument();
+    // Zero classes on a k8s driver is still "no runner" by the shared rule.
+    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+  });
+});

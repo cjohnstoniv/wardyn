@@ -60,6 +60,4 @@ export const TIER_PICKER = {
       CC2: "Wall and Vault are allowed under this profile; Fence is not.",
       CC3: "Only Vault is allowed under this profile — every run is forced onto it.",
     })[floor],
-  ALLOWED_BARRIERS_NOTE:
-    "This control writes min_confinement_class into the same spec the Ceiling editor below edits — egress, grants and autonomy are unchanged, in the same JSON editor as today.",
 };
