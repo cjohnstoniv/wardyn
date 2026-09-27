@@ -42,6 +42,13 @@ import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../l
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import type { AccessResponse } from "../../../lib/types";
 import { AccessPanel } from "./access-panel";
+import { aheadByHours } from "../../../lib/test-clock";
+
+const orgTypes = [
+  { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
+  { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false },
+  { id: "analyst", name: "Analyst", description: "", priority: 10, built_in: false },
+];
 
 function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
   return {
@@ -54,7 +61,7 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-28T00:00:00Z",
+        created_at: aheadByHours(-1),
         created_by: "admin",
       },
     ],
@@ -65,6 +72,7 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
     email_domains_configured: false,
     provider: "Microsoft Entra ID",
     posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true },
+    user_types: [{ id: "standard", name: "Standard user", description: "", priority: 0, built_in: true }],
     ...over,
   };
 }
@@ -138,7 +146,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
             source: "console",
             shadowed: true,
             shadow_cause: "chart",
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -158,7 +166,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
             source: "console",
             shadowed: true,
             shadow_cause: "operator_allowlist",
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -173,7 +181,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
     source: "console" as const,
     shadowed: false,
     shadow_cause: "" as const,
-    created_at: "2026-08-30T00:00:00Z",
+    created_at: aheadByHours(-1),
   };
 
   it("an email-shaped console row gets NO unverified-claim badge when allow_email_mappings is false", () => {
@@ -201,7 +209,32 @@ describe("AccessPanel — merged table (Variant A)", () => {
 
   it("Defaults block: a set default role renders as a chip", () => {
     renderPanel(baseAccess({ default_role: "user" }));
-    expect(within(screen.getByTestId("access-defaults")).getByText(PEOPLE.ROLE_USER)).toBeInTheDocument();
+    expect(within(screen.getByTestId("access-defaults")).getByText("Standard user")).toBeInTheDocument();
+  });
+
+  it("Defaults block: a default naming a user type shows the type's name", () => {
+    renderPanel(baseAccess({ default_role: "portfolio-manager", user_types: orgTypes }));
+    expect(within(screen.getByTestId("access-defaults")).getByText("Portfolio manager")).toBeInTheDocument();
+  });
+
+  // UT-2b, packet A's People rows: a user row shows its TYPE's name; an admin
+  // row keeps the tier; a type the list lacks shows its id rather than a name
+  // it doesn't have.
+  it("a user row's chip names its user type", () => {
+    renderPanel(
+      baseAccess({
+        user_types: orgTypes,
+        mappings: [
+          { value: "Wardyn.Admin", role: "admin", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "Wardyn.Member", role: "user", user_type: "standard", source: "chart", shadowed: false, shadow_cause: "" },
+          { id: "c1", value: "pm-group", role: "user", user_type: "portfolio-manager", source: "console", shadowed: false, shadow_cause: "" },
+          { value: "ghost-group", role: "user", user_type: "contractor", source: "chart", shadowed: false, shadow_cause: "" },
+        ],
+      }),
+    );
+    for (const label of [PEOPLE.ROLE_ADMIN, "Standard user", "Portfolio manager", "contractor"]) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
   });
 
   it("Defaults block: an unset default role renders DEFAULT_ROLE_UNSET", () => {
@@ -240,7 +273,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
             source: "console",
             shadowed: false,
             shadow_cause: "",
-            created_at: "2026-09-01T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
         // Unset so the Defaults block renders DEFAULT_ROLE_UNSET rather than
@@ -511,7 +544,7 @@ describe("AccessPanel — delete mapping", () => {
             source: "console",
             shadowed: false,
             shadow_cause: "",
-            created_at: "2026-08-28T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -581,7 +614,7 @@ function chartPlusTwoConsole(): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-28T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
       {
         id: "c2",
@@ -590,13 +623,65 @@ function chartPlusTwoConsole(): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
   });
 }
 
 describe("AccessPanel — preview panel", () => {
+  const runPreview = async () => {
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "pm-group");
+    await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
+  };
+
+  it("a custom user type reads as its name, and says the built-in type lost", async () => {
+    previewRoleMock.mockResolvedValue({
+      role: "user",
+      user_type: "portfolio-manager",
+      ok: true,
+      matched: [
+        { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "map_row" },
+        { value: "Wardyn.Member", role: "user", user_type: "standard", source: "map_row" },
+      ],
+    });
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    await runPreview();
+    expect(
+      await screen.findByText(
+        `${PREVIEW.RESULT_MATCHED("Portfolio manager", "pm-group, Wardyn.Member")} ${PREVIEW.STANDARD_LOST("Wardyn.Member")}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("a tie names both values, both types and the priority", async () => {
+    previewRoleMock.mockResolvedValue({
+      role: "",
+      ok: false,
+      denial: "user_type_ambiguous",
+      tied: ["analyst", "portfolio-manager"],
+      matched: [
+        { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "map_row" },
+        { value: "quant-group", role: "user", user_type: "analyst", source: "map_row" },
+      ],
+    });
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    await runPreview();
+    expect(
+      await screen.findByText(
+        "Two types tie. quant-group (Analyst) and pm-group (Portfolio manager) both match at priority 10, so this sign-in would be refused. Give one a higher priority.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("a missing type says so instead of 'nothing matched'", async () => {
+    previewRoleMock.mockResolvedValue({ role: "", ok: false, denial: "user_type_unknown", unknown: ["contractor"], matched: [] });
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    await runPreview();
+    expect(await screen.findByText(PREVIEW.RESULT_TYPE_MISSING('"contractor"'))).toBeInTheDocument();
+    expect(screen.queryByText(PREVIEW.RESULT_DENIED)).toBeNull();
+  });
+
   it("RESULT_MATCHED for an ok+matched response", async () => {
     previewRoleMock.mockResolvedValue({ role: "admin", ok: true, matched: [{ value: "Wardyn.Admin", role: "admin", source: "chart" }] });
     renderPanel(baseAccess());

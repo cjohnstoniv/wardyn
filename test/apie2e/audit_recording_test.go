@@ -192,7 +192,7 @@ func TestRecording_UploadThenServe(t *testing.T) {
 	_, _ = h.pool.Exec(ctx, `DELETE FROM agent_runs WHERE id=$1`, runID)
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 // actionsOf collects the actions for diagnostic failure messages.
 func actionsOf(events []types.AuditEvent) []string {

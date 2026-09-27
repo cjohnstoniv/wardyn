@@ -401,11 +401,11 @@ func TestRequireTLSRefusalPreemptsInspection(t *testing.T) {
 		t.Errorf("scan summary = %+v, want none: the body of a refused request is never read", d.Scan)
 	}
 	if n := strings.Count(strings.TrimSpace(buf.String()), "\n"); n != 0 {
-		t.Errorf("decision log = %q, want exactly one row (no scan:blocked, no llm.scan.blind)", buf.String())
+		t.Errorf("decision log = %q, want exactly one row (no scan:blocked, no llm.scan.bypass)", buf.String())
 	}
 }
 
-// NO HOLD AT BOOT. buildInjector runs under the proxy's 30s startupCtx, seconds
+// No hold at boot. buildInjector runs under the proxy's 30s startupCtx, seconds
 // after dispatch refreshed the credential synchronously — a dead credential
 // THERE is a race measured in seconds, not a person who needs to sign in, and a
 // hold would fight the startup canary. A 423 at boot must fail closed exactly

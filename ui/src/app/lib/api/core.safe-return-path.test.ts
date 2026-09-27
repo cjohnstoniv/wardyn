@@ -13,7 +13,8 @@
 import { describe, it, expect } from "vitest";
 import { safeReturnPath } from "./core";
 
-describe("safeReturnPath (H2)", () => {
+describe("safeReturnPath", () => {
+  // ticket: H2
   it("rejects a protocol-relative host (//host)", () => {
     expect(safeReturnPath("//evil.com")).toBe("/runs");
     expect(safeReturnPath("//evil.com/x")).toBe("/runs");

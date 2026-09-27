@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # 06-kind-follow-main.sh — keep the Entra kind cluster on the newest main
-# commit whose CI passed. Run it on a schedule: it deploys (05-kind-deploy.sh)
+# commit whose required checks passed. Run it on a schedule: it deploys (05-kind-deploy.sh)
 # only when that commit is NEWER than the one the cluster is running.
 #
 # "Newest" is main's own first-parent history, never the order CI runs
@@ -41,13 +41,25 @@ IMAGE="$(kubectl --context "${CTX}" -n wardyn get deploy wardyn \
   || { echo "==> ${CTX} runs ${IMAGE}, not a commit 05 deployed; run 05-kind-deploy.sh once by hand" >&2; exit 1; }
 DEPLOYED="$(git -C "${ROOT}" rev-parse --verify "${BASH_REMATCH[1]}^{commit}")"
 
-GREEN="$(gh run list --repo cjohnstoniv/wardyn --branch main --event push --workflow CI \
-  --status success --limit 100 --json headSha --jq '.[].headSha')"
+# "Green" is the bar a merge uses: every REQUIRED status check succeeded on the
+# commit. Judging by the whole run's conclusion let one flaky non-required job
+# (ui-e2e) keep the cluster behind a main that branch protection accepted.
+REQUIRED="$(gh api repos/cjohnstoniv/wardyn/branches/main/protection/required_status_checks \
+  --jq '.contexts[]')"
+[[ -n "${REQUIRED}" ]] || { echo "==> could not read main's required checks" >&2; exit 1; }
+required_green() {
+  local ok ctx
+  ok="$(gh api "repos/cjohnstoniv/wardyn/commits/$1/check-runs?per_page=100" \
+    --jq '.check_runs[] | select(.conclusion == "success") | .name')" || return 1
+  while read -r ctx; do
+    grep -qxF "${ctx}" <<<"${ok}" || return 1
+  done <<<"${REQUIRED}"
+}
 SHA=""
 while read -r c; do
   [[ "${c}" == "${DEPLOYED}" ]] && break
-  if grep -qx "${c}" <<<"${GREEN}"; then SHA="${c}"; break; fi
-done < <(git -C "${ROOT}" rev-list --first-parent -n 200 origin/main)
+  if required_green "${c}"; then SHA="${c}"; break; fi
+done < <(git -C "${ROOT}" rev-list --first-parent -n 30 origin/main)
 
 if [[ -z "${SHA}" ]]; then
   echo "==> ${DEPLOYED} is already deployed; no newer green commit on main"

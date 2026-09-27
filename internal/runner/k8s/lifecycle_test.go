@@ -155,8 +155,8 @@ func TestTeardown_SweepsEverySiblingByLabel(t *testing.T) {
 	}
 }
 
-// TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols is the H3 regression
-// test: an unselected pod is default-allow, so dropping the NetworkPolicies
+// TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols: an unselected pod is
+// default-allow, so dropping the NetworkPolicies
 // while the pod is still Terminating would hand a SIGTERM-trapping agent up
 // to its full grace window of open egress. Proves the ORDERING via the
 // actual sequence of API calls teardown issues (pod delete-collection, then

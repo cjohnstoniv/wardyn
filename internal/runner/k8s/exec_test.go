@@ -213,15 +213,14 @@ func TestWait_ReturnsExitCode(t *testing.T) {
 	}
 }
 
-// TestWait_FailsClosedOnHardWaitingReason is the 0.6.6 regression: an
-// ephemeral exec container stuck Waiting on a Reason that will never resolve
-// on its own (terminalWaitingReasons, canary.go) must return
-// runner.ErrExecNeverStarted PROMPTLY, not poll forever waiting for a
-// Terminated status that will never arrive — the shape that made a k8s
-// connectivity probe hang for its full wait budget whatever the network did,
-// because run.exec had already recorded success (the apiserver accepted the
-// ephemeral container add) with no way to tell "still starting" from "will
-// never start".
+// TestWait_FailsClosedOnHardWaitingReason: an ephemeral exec container stuck
+// Waiting on a Reason that will never resolve on its own
+// (terminalWaitingReasons, canary.go) must return runner.ErrExecNeverStarted
+// promptly, not poll forever waiting for a Terminated status that will never
+// arrive — that would make a k8s connectivity probe hang for its full wait
+// budget whatever the network did, because run.exec has already recorded
+// success (the apiserver accepted the ephemeral container add) with no way to
+// tell "still starting" from "will never start".
 func TestWait_FailsClosedOnHardWaitingReason(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
@@ -317,12 +316,12 @@ func TestAgentStatus_RestartSafe_ReadsLiveFromAPIServer(t *testing.T) {
 	}
 }
 
-// TestAgentStatus_WaitingReasonSurfacedInMessage is the 0.6.6 regression: a
-// Waiting ephemeral container used to report only State: RunStarting with no
-// Reason at all, so neither an operator nor the site-config probe's
-// timed_out detail (site_config_probe.go) could tell "still legitimately
-// starting" from "stuck on a platform problem". Message must now name both
-// the Reason and any Message the apiserver attached.
+// TestAgentStatus_WaitingReasonSurfacedInMessage: a Waiting ephemeral
+// container must report its Reason, not only State: RunStarting, so that an
+// operator and the site-config probe's timed_out detail
+// (site_config_probe.go) can tell "still legitimately starting" from "stuck
+// on a platform problem". Message must name both the Reason and any Message
+// the apiserver attached.
 func TestAgentStatus_WaitingReasonSurfacedInMessage(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)

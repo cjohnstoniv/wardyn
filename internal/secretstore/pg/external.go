@@ -99,11 +99,11 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		return fmt.Errorf("pg secretstore: put %s to %s: %w", ref, s.ext.Name(), err)
 	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
-		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea)
+		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
+		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea, $5)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, updated_at=now()`,
-		s.owner, name, extVersion, s.ext.Name()+":"+loc,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, expires_at=$5, updated_at=now()`,
+		s.owner, name, extVersion, s.ext.Name()+":"+loc, expiresAt(ctx),
 	)
 	if err == nil {
 		err = tx.Commit(ctx)
@@ -140,7 +140,9 @@ func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFun
 
 // lockRow takes the row's store-mode write lock (db.SecretRowLockClass) for
 // the rest of tx. owner and name are text, which holds no NUL, so the key
-// bytes are unambiguous; a crc32 collision only serialises two rows.
+// bytes are unambiguous; a crc32 collision only serialises two rows; two
+// DeleteEverywhere calls could deadlock through one, which Postgres detects
+// and one retries.
 func lockRow(ctx context.Context, tx pgx.Tx, owner, name string) error {
 	key := int32(crc32.ChecksumIEEE([]byte(owner + "\x00" + name)))
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.SecretRowLockClass, key); err != nil {
@@ -179,31 +181,43 @@ func (s *Store) currentRef(ctx context.Context, tx pgx.Tx, name string) (string,
 	return "", nil
 }
 
-// deleteExternal removes the external value behind this view's own pointer
-// row, if it has one, before the caller deletes the row. A pointer into a
-// store this wardynd cannot reach is refused: removing only the row would
-// leave the value behind with nothing pointing at it.
-func (s *Store) deleteExternal(ctx context.Context, name string) error {
+// deleteLocked deletes one row inside tx and reports whether there was one. It
+// takes the row's store-mode write lock first — the lock putExternal holds —
+// so a concurrent Put of the row waits for tx and lands after it, never
+// between the value's removal and the row's (a live value no row points to).
+// A pointer row loses its external value before the row; a pointer into a
+// store this wardynd cannot reach is refused, since removing only the row
+// would leave the value behind with nothing pointing at it. On any error the
+// caller rolls tx back, and the row stays.
+func (s *Store) deleteLocked(ctx context.Context, tx pgx.Tx, owner, name string) (bool, error) {
+	ref := rowRef(owner, name)
+	if err := lockRow(ctx, tx, owner, name); err != nil {
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+	}
+	var version int16
 	var kekID string
-	err := s.pool.QueryRow(ctx,
-		`SELECT kek_id FROM secrets WHERE owned_by=$1 AND name=$2 AND enc_version=$3`,
-		s.owner, name, extVersion,
-	).Scan(&kekID)
+	err := tx.QueryRow(ctx,
+		`SELECT enc_version, kek_id FROM secrets WHERE owned_by=$1 AND name=$2 FOR UPDATE`, owner, name,
+	).Scan(&version, &kekID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return false, nil
 	}
-	ref := rowRef(s.owner, name)
 	if err != nil {
-		return fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
 	}
-	store, loc := splitRef(kekID)
-	if !s.reachable(store) {
-		return fmt.Errorf("pg secretstore: delete %s: it is stored in %q, which this wardynd is not configured to reach; deleting only the row would leave the value behind", ref, store)
+	if version == extVersion {
+		store, loc := splitRef(kekID)
+		if !s.reachable(store) {
+			return false, fmt.Errorf("pg secretstore: delete %s: it is stored in %q, which this wardynd is not configured to reach; deleting only the row would leave the value behind", ref, store)
+		}
+		if err := s.ext.Delete(ctx, owner, name, loc); err != nil {
+			return false, fmt.Errorf("pg secretstore: delete %s from %s (the row is kept): %w", ref, store, err)
+		}
 	}
-	if err := s.ext.Delete(ctx, s.owner, name, loc); err != nil {
-		return fmt.Errorf("pg secretstore: delete %s from %s (the row is kept): %w", ref, store, err)
+	if _, err := tx.Exec(ctx, `DELETE FROM secrets WHERE owned_by=$1 AND name=$2`, owner, name); err != nil {
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
 	}
-	return nil
+	return true, nil
 }
 
 // MigrateLocal is the -migrate-secrets target that seals rows locally.
@@ -232,8 +246,8 @@ type MigrateResult struct {
 // first row it cannot move, naming it, with every earlier row committed.
 func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (MigrateResult, error) {
 	var res MigrateResult
-	if target == MigrateLocal && s.kek == nil {
-		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY")
+	if target == MigrateLocal && s.kek == nil && !s.serviceWrites {
+		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY or WARDYN_KEK=transit")
 	}
 	if target != MigrateLocal && !s.reachable(target) {
 		return res, fmt.Errorf("pg secretstore: migration target %q is not configured", target)
@@ -271,7 +285,8 @@ func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, n
 
 func (s *Store) atTarget(target string, e envelope) bool {
 	if target == MigrateLocal {
-		return e.version == encVersion && e.kekID == s.kek.ID()
+		// Any local row: moving between local keys is -rewrap's, not this.
+		return e.version == encVersion
 	}
 	store, _ := splitRef(e.kekID)
 	return e.version == extVersion && store == target
@@ -327,11 +342,12 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		return true, false, nil
 	}
 
-	wrapped, ct, err := seal(ctx, s.kek, owner, name, plain)
+	k := s.writer(owner, name)
+	wrapped, ct, err := seal(ctx, k, owner, name, plain)
 	if err != nil {
 		return false, false, err
 	}
-	if err := flipRow(ctx, tx, owner, name, encVersion, s.kek.ID(), wrapped, ct); err != nil {
+	if err := flipRow(ctx, tx, owner, name, encVersion, k.ID(), wrapped, ct); err != nil {
 		return false, false, err
 	}
 	store, loc := splitRef(e.kekID)

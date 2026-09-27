@@ -33,7 +33,7 @@ func (f *fakeRefRulesetVerifier) VerifyRefRuleset(_ context.Context, repo string
 }
 
 // refRulesetCheck must NEVER grade "fail" — it is advisory, and an outbound call
-// that errors is UNKNOWN, not a security regression.
+// that errors is unknown, not a security fault.
 func TestRefRulesetCheck_Grading(t *testing.T) {
 	cases := []struct {
 		name       string

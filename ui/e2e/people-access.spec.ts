@@ -57,7 +57,10 @@ async function mockAccessGet(page: Page, body: unknown): Promise<void> {
 }
 
 async function gotoPeopleStep(page: Page): Promise<void> {
-  await page.goto("/setup?step=people");
+  // The People step is admin-funnel-only, which since M-6/D1 lives at
+  // /admin/setup — plain /setup is the User Getting Started now, even for
+  // this harness's single-operator (D1) session.
+  await page.goto("/admin/setup?step=people");
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
 }
 
@@ -145,9 +148,35 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByRole("button", { name: `${PEOPLE.DELETE} Wardyn.Admin` })).toHaveCount(0);
 
     const defaults = page.getByTestId("access-defaults");
-    await expect(defaults.getByText(PEOPLE.ROLE_USER)).toBeVisible();
+    // A "user" default is the built-in type, named as one (0.8).
+    await expect(defaults.getByText(PEOPLE.TYPE_STANDARD)).toBeVisible();
     await expect(defaults.getByText("ops@corp.example")).toBeVisible();
     await expect(defaults.getByText("sre@corp.example")).toBeVisible();
+  });
+
+  // UT-2b: a user row's chip is its user type's name, read from GET /access's
+  // user_types — a Portfolio manager row never reads as a bare "User".
+  test("a user row names its user type", async ({ page }) => {
+    await mockSsoStatus(page);
+    await mockAccessGet(
+      page,
+      baseAccessBody({
+        mappings: [
+          { value: "Wardyn.Admin", role: "admin", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "chart", shadowed: false, shadow_cause: "" },
+        ],
+        default_role: "admin",
+        posture: { map_empty: false, before: "admin", after: "admin", changes: false },
+        user_types: [
+          { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
+          { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false },
+        ],
+      }),
+    );
+    await gotoPeopleStep(page);
+
+    await expect(page.getByText("pm-group")).toBeVisible();
+    await expect(page.getByText("Portfolio manager")).toBeVisible();
   });
 
   test("(b) a shadowed row carries the right badge for both causes", async ({ page }) => {
@@ -537,7 +566,8 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
   // to kill, so the ONE surface an operator uses to check a mapping before
   // trusting it called a security_admin a member. §7.2's casing rule keeps the
   // in-sentence form lowercase.
-  test("(f2) preview: a security_admin verdict says so — never 'member' (R4/F033)", async ({ page }) => {
+  test("(f2) preview: a security_admin verdict says so — never 'member'", async ({ page }) => {
+    // ticket: R4/F033
     await mockSsoStatus(page);
     await mockAccessGet(page, baseAccessBody({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
     await page.route("**/api/v1/access/preview", async (route) => {
@@ -642,7 +672,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
       });
     });
 
-    await page.goto("/setup?step=environment");
+    await page.goto("/admin/setup?step=environment");
     const title = page.getByText(ADMIN_ACCESS_BANNER.TITLE, { exact: true });
     await expect(title).toBeVisible();
     await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY, { exact: true })).toBeVisible();
@@ -653,6 +683,27 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await page.getByLabel(PEOPLE.FIELD_VALUE, { exact: true }).fill("Wardyn.Admin");
     await page.getByRole("button", { name: PEOPLE.ADD_CTA }).click();
     await expect(title).toHaveCount(0);
+  });
+
+  // ---------------------------------------------------------------------
+  // (i2) #491 — the default-role-admin case: a role map IS set, but the
+  // sso_rbac row still warns (cause "default_role"), and the banner shows
+  // BODY_DEFAULT_ROLE in place of BODY — same title, same CTA.
+  // ---------------------------------------------------------------------
+  test("(i2) #491 default-role banner shows BODY_DEFAULT_ROLE, not BODY", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.auth = { ...json.auth, mode: "sso" };
+      const row = { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true, cause: "default_role" };
+      json.checks = [...(json.checks ?? []).filter((c: { id: string }) => c.id !== "sso_rbac"), row];
+      await route.fulfill({ response, json });
+    });
+
+    await page.goto("/admin/setup?step=environment");
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY_DEFAULT_ROLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY, { exact: true })).toHaveCount(0);
   });
 
   // (j) #484 — the help card saves through the REAL PUT /site-config (with
@@ -670,7 +721,13 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await link.fill("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
     await expect(page.getByText("33 / 1000")).toBeVisible();
     await expect(page.getByTestId("sign-in-help").getByRole("link", { name: SIGNIN_HELP.LINK_LABEL })).toBeVisible();
+    // Wait on the real PUT settling, not "Save" going disabled — the button's
+    // disabled expression (sign-in-help-card.tsx) includes `saving`, which
+    // flips true SYNCHRONOUSLY on click, before the request resolves. Reading
+    // /healthz right after toBeDisabled() races the write on the wire.
+    const savePut = page.waitForResponse((r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT");
     await save.click();
+    expect((await savePut).ok()).toBe(true);
     await expect(save).toBeDisabled();
 
     const published = await (await page.request.get("/healthz")).json();
@@ -681,7 +738,9 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(text).toHaveValue(`Ask in #it-helpdesk — it's quick.`);
     await text.fill("");
     await link.fill("");
+    const clearPut = page.waitForResponse((r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT");
     await save.click();
+    expect((await clearPut).ok()).toBe(true);
     await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
     await expect(save).toBeDisabled();
     const cleared = await (await page.request.get("/healthz")).json();

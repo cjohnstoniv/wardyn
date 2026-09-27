@@ -45,8 +45,9 @@ func f245ProfileOf(t *testing.T, srv *Server, path string, session *http.Cookie)
 	return ws.Profile
 }
 
-// TestF245_ScannedProfileIsProjectedPerTier walks the three tiers key by key.
-func TestF245_ScannedProfileIsProjectedPerTier(t *testing.T) {
+// TestScannedProfileIsProjectedPerTier walks the three tiers key by key.
+func TestScannedProfileIsProjectedPerTier(t *testing.T) {
+	// ticket: F245
 	const owner = "sub-ws-owner"
 	for _, tc := range []struct {
 		name    string
@@ -101,9 +102,10 @@ func TestF245_ScannedProfileIsProjectedPerTier(t *testing.T) {
 	}
 }
 
-// TestF245_ListArmProjectsTheProfileToo: the list is the route a member actually
+// TestListArmProjectsTheProfileToo: the list is the route a member actually
 // loads, and it hands out the same document N times.
-func TestF245_ListArmProjectsTheProfileToo(t *testing.T) {
+func TestListArmProjectsTheProfileToo(t *testing.T) {
+	// ticket: F245
 	srv, _ := newTopologyWorkspaceServer(t, "")
 	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces", member, "")
@@ -121,12 +123,13 @@ func TestF245_ListArmProjectsTheProfileToo(t *testing.T) {
 	}
 }
 
-// TestF245_UnparseableProfileFailsClosed: a blob whose fields cannot be
+// TestUnparseableProfileFailsClosed: a blob whose fields cannot be
 // inspected cannot be certified free of the axes above, so it is withheld rather
 // than shipped unread. Pinned because the tempting alternative — pass it through
 // on a decode error — reopens the finding for any profile shape this package
 // does not parse.
-func TestF245_UnparseableProfileFailsClosed(t *testing.T) {
+func TestUnparseableProfileFailsClosed(t *testing.T) {
+	// ticket: F245
 	srv, st := newTopologyWorkspaceServer(t, "")
 	st.ws.Profile = json.RawMessage(`{"egress_domains":[` + r3TopologyEgress) // truncated on purpose
 	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)

@@ -113,7 +113,7 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 	corpSrv.StartTLS()
 	defer corpSrv.Close()
 
-	// A SEPARATE CA for the AGENT-facing leg — this is the proxy's own MITM CA
+	// A separate CA for the agent-facing leg — this is the proxy's own MITM CA
 	// (WARDYN_MITM_CA_PEM the sandbox trusts), unrelated to the corp CA under
 	// test; every MITM test in this package mints one the same way.
 	mitmCertPEM, mitmKeyPEM := genTestCA(t)
@@ -234,7 +234,7 @@ func TestNewServer_WiresTrustedCAPEM(t *testing.T) {
 // TestNewServer_CorpCAConfigNotMutatedByHTTP2 is the regression for the defect
 // that made an HTTP/2 answer reachable on the egress lane in the first place
 // (#360): one *tls.Config handed to several transports, and net/http's HTTP/2
-// support PREPENDING "h2" to it in place on first use. The control-plane client
+// support prepending "h2" to it in place on first use. The control-plane client
 // keeps HTTP/2; after a real round trip over TLS the config the proxy's other
 // control-plane transport holds must still offer nothing.
 // (TestNewServer_WrongControlPlaneCAFailsClosed in hop_tls_test.go is what

@@ -278,7 +278,8 @@ describe("GitTab", () => {
   // F4-F13 (Appendix A V8): the credential-lane group needs roving tabindex
   // and arrow keys, and the selected lane's form must render OUTSIDE the
   // radiogroup — nesting a Save button inside it is an ARIA violation.
-  describe("the credential-lane group has roving tabindex and arrow keys, and its body sits outside it (F4-F13)", () => {
+  describe("the credential-lane group has roving tabindex and arrow keys, and its body sits outside it", () => {
+    // ticket: F4-F13
     it("only the checked lane is a Tab stop; ArrowRight moves selection and focus", async () => {
       render(<Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
       const row = screen.getByTestId("provider-row-github");
@@ -608,7 +609,8 @@ describe("GitTab", () => {
   // The fix threads a setup-status-only refresh through GitTab -> Row ->
   // SecretLane (four sites); an unsaved base-URL edit on a SIBLING field must
   // survive a credential save, so the fix must never become `load()`.
-  describe("a credential save fires the setup-status-only refresh (F4-F2)", () => {
+  describe("a credential save fires the setup-status-only refresh", () => {
+    // ticket: F4-F2
     it("saving a PAT fires onStatusRefresh", async () => {
       setSecretMock.mockReset().mockResolvedValue(undefined);
       const onStatusRefresh = vi.fn();

@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -115,19 +117,24 @@ func adoAccessState(isMechanism, found bool) string {
 // adoEntraRowConfig resolves s.cfg.ADOEntra and reports ok=true only when it
 // names THIS row: a deployment's ADOEntra source can only ever describe one
 // row (ADOEntraSource takes no row argument, ado_entra.go), so a row id
-// mismatch means this particular row is not the per-user one.
-func (s *Server) adoEntraRowConfig(ctx context.Context, rowID string) (ADOEntraConfig, bool) {
+// mismatch means this particular row is not the per-user one. A source that
+// could not be read is an error, never "not per-user": that answer would wave
+// the row through the launch gate ungraded.
+func (s *Server) adoEntraRowConfig(ctx context.Context, rowID string) (ADOEntraConfig, bool, error) {
 	if s.cfg.ADOEntra == nil {
-		return ADOEntraConfig{}, false
+		return ADOEntraConfig{}, false, nil
 	}
 	cfg, found, err := s.cfg.ADOEntra(ctx)
-	if err != nil || !found || cfg.RowID != rowID {
-		return ADOEntraConfig{}, false
+	if err != nil {
+		return ADOEntraConfig{}, false, fmt.Errorf("read the azure devops sign-in configuration: %w", err)
+	}
+	if !found || cfg.RowID != rowID {
+		return ADOEntraConfig{}, false, nil
 	}
 	if err := cfg.validate(); err != nil || !cfg.isLoginApplication() {
-		return ADOEntraConfig{}, false
+		return ADOEntraConfig{}, false, nil
 	}
-	return cfg, true
+	return cfg, true, nil
 }
 
 // perUserADORow is an enabled Azure DevOps row together with the per-user
@@ -139,17 +146,21 @@ type perUserADORow struct {
 
 // perUserADORows is every ENABLED azure_devops row this deployment's
 // ADOEntra source covers — at most one (see the file doc comment).
-func (s *Server) perUserADORows(ctx context.Context, sc types.SiteConfig) []perUserADORow {
+func (s *Server) perUserADORows(ctx context.Context, sc types.SiteConfig) ([]perUserADORow, error) {
 	var out []perUserADORow
 	for _, row := range gitProviderRows(sc) {
 		if row.Kind != types.GitProviderAzureDevOps || row.Disabled {
 			continue
 		}
-		if cfg, ok := s.adoEntraRowConfig(ctx, row.ID); ok {
+		cfg, ok, err := s.adoEntraRowConfig(ctx, row.ID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			out = append(out, perUserADORow{row, cfg})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // perUserADORowsAdmitting is perUserADORows narrowed to the rows that ADMIT
@@ -157,7 +168,7 @@ func (s *Server) perUserADORows(ctx context.Context, sc types.SiteConfig) []perU
 // both gitCredentialRefusal (the gate) and gitCredentialFactForRepos
 // (preflight's informational fact) use, so the two never disagree about
 // which row is in play.
-func (s *Server) perUserADORowsAdmitting(ctx context.Context, sc types.SiteConfig, repos []string) []perUserADORow {
+func (s *Server) perUserADORowsAdmitting(ctx context.Context, sc types.SiteConfig, repos []string) ([]perUserADORow, error) {
 	var out []perUserADORow
 	seen := map[string]bool{}
 	for _, repo := range presentRepos(repos) {
@@ -165,7 +176,10 @@ func (s *Server) perUserADORowsAdmitting(ctx context.Context, sc types.SiteConfi
 			if row.Kind != types.GitProviderAzureDevOps || row.Disabled || seen[row.ID] {
 				continue
 			}
-			cfg, ok := s.adoEntraRowConfig(ctx, row.ID)
+			cfg, ok, err := s.adoEntraRowConfig(ctx, row.ID)
+			if err != nil {
+				return nil, err
+			}
 			if !ok {
 				continue // a row this file cannot prove per-user carries no fact
 			}
@@ -173,7 +187,7 @@ func (s *Server) perUserADORowsAdmitting(ctx context.Context, sc types.SiteConfi
 			out = append(out, perUserADORow{row, cfg})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // scmAccessSourceFor maps a stored blob's Source (ado_entra_store.go) onto
@@ -190,14 +204,20 @@ func scmAccessSourceFor(blobSource string) string {
 }
 
 // scmAccessForRow grades ONE row, already proven per-user by the caller
-// (perUserADORows / perUserADORowsAdmitting), for subject.
-func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject string) SCMAccess {
+// (perUserADORows / perUserADORowsAdmitting), for subject. A secret store that
+// could not be read is an error, never `not_configured`: grading an outage as
+// "you are not connected" sends the person to reconnect a sign-in that is
+// sitting there intact.
+func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject string) (SCMAccess, error) {
 	row := pr.row
 	isMechanism := subject == ""
 	var blob adoEntraBlob
 	var found bool
 	if !isMechanism {
-		blob, found, _ = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID)
+		var err error
+		if blob, found, err = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID); err != nil {
+			return SCMAccess{}, err
+		}
 	}
 	out := SCMAccess{State: adoAccessState(isMechanism, found), Org: adoOrgDisplay(row), Kind: string(row.Kind)}
 	switch {
@@ -212,7 +232,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	if out.State == modelAccessLive || out.State == modelAccessExpiredSignin {
 		out.Source = scmAccessSourceFor(blob.Source)
 	}
-	return out
+	return out, nil
 }
 
 // adoBlobCoversBaseline reports whether a stored sign-in was consented for
@@ -236,36 +256,55 @@ func adoOrgDisplay(row types.GitProvider) string {
 // computeSCMAccessRows is GET /me/scm-access's answer: one SCMAccess per
 // per-user Azure DevOps row. Empty — never nil-vs-absent distinguished on the
 // wire, see handleGetSCMAccess — when there is no such row, as on every
-// deployment whose only Azure DevOps row is `shared`.
-func (s *Server) computeSCMAccessRows(ctx context.Context, subject string) []SCMAccess {
+// deployment whose only Azure DevOps row is `shared`. A site config that
+// could not be read is an error, never "no rows".
+func (s *Server) computeSCMAccessRows(ctx context.Context, subject string) ([]SCMAccess, error) {
 	if s.cfg.Store == nil {
-		return nil
+		return nil, nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read site config: %w", err)
 	}
 	return s.computeSCMAccessRowsFor(ctx, sc, subject)
 }
 
 // computeSCMAccessRowsFor is computeSCMAccessRows over an already-read site
 // config.
-func (s *Server) computeSCMAccessRowsFor(ctx context.Context, sc types.SiteConfig, subject string) []SCMAccess {
-	rows := s.perUserADORows(ctx, sc)
+func (s *Server) computeSCMAccessRowsFor(ctx context.Context, sc types.SiteConfig, subject string) ([]SCMAccess, error) {
+	all, err := s.perUserADORows(ctx, sc)
+	if err != nil {
+		return nil, err
+	}
+	// Only the rows this caller may bring work from (capWorkspaceProvider, the
+	// gate every repository door applies): a refused org reads as no org.
+	rows := capVisible(ctx, s, capWorkspaceProvider, all,
+		func(pr perUserADORow) string { return pr.row.ID })
 	out := make([]SCMAccess, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, s.scmAccessForRow(ctx, row, subject))
+		access, err := s.scmAccessForRow(ctx, row, subject)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, access)
 	}
-	return out
+	return out, nil
 }
 
 // scmAccessValue is the FIRST row of computeSCMAccessRowsFor (at most one
 // exists, see the file doc comment) — the shape SetupStatus.SCMAccess
 // (setup.go) wants inline; it lives here because setup.go is at its size cap.
 // The zero SCMAccess{} when there is none — setup.go's `omitzero` then drops
-// the field.
+// the field — and when the rows could not be read: setup status is a summary,
+// so an unreadable fact is left out rather than failing the whole page or
+// being graded into a state it is not.
 func (s *Server) scmAccessValue(ctx context.Context, sc types.SiteConfig, subject string) SCMAccess {
-	rows := s.computeSCMAccessRowsFor(ctx, sc, subject)
+	rows, err := s.computeSCMAccessRowsFor(ctx, sc, subject)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: reading Azure DevOps access for setup status failed; the fact is left out",
+			slog.Any("err", err))
+		return SCMAccess{}
+	}
 	if len(rows) == 0 {
 		return SCMAccess{}
 	}
@@ -280,7 +319,9 @@ func (s *Server) scmAccessValue(ctx context.Context, sc types.SiteConfig, subjec
 // can never point at different rows. nil when no per-user row admits any of
 // these repos — a GitHub-only run, a deployment with no Azure DevOps row at
 // all, or one whose only Azure DevOps row is shared, all read identically:
-// nothing to say.
+// nothing to say. Also nil when the row or the sign-in could not be read: an
+// informational fact is left out rather than graded from a failed read; the
+// launch gate is what answers that read failure.
 func (s *Server) gitCredentialFactForRepos(ctx context.Context, subject string, repos []string) *SCMAccess {
 	if s.cfg.Store == nil {
 		return nil
@@ -289,11 +330,14 @@ func (s *Server) gitCredentialFactForRepos(ctx context.Context, subject string, 
 	if err != nil || !providersConfigured(sc) {
 		return nil
 	}
-	rows := s.perUserADORowsAdmitting(ctx, sc, repos)
-	if len(rows) == 0 {
+	rows, err := s.perUserADORowsAdmitting(ctx, sc, repos)
+	if err != nil || len(rows) == 0 {
 		return nil
 	}
-	out := s.scmAccessForRow(ctx, rows[0], subject)
+	out, err := s.scmAccessForRow(ctx, rows[0], subject)
+	if err != nil {
+		return nil
+	}
 	return &out
 }
 
@@ -344,10 +388,31 @@ type gitCredentialRefusalError struct{ Org, Sentence string }
 func (e *gitCredentialRefusalError) Error() string { return e.Sentence }
 func (e *gitCredentialRefusalError) Unwrap() error { return errGitCredentialRefused }
 
+// errGitCredentialUnreadable is the gate's answer when the site config, the
+// Azure DevOps sign-in configuration or the person's stored sign-in could not
+// be read. It is a daemon fault, not a refusal the person can repair, so it
+// is never graded into "you are not connected" and never admits the launch.
+var errGitCredentialUnreadable = errors.New("git_credential: could not read the Azure DevOps sign-in state")
+
+// gitCredentialUnreadableReason is the 503's `reason`, the same one the
+// credential resolver answers for the identical read failure (injection_ado.go).
+const gitCredentialUnreadableReason = "roster_unreadable"
+
+// writeGitCredentialUnreadable answers errGitCredentialUnreadable at an HTTP
+// door: 503 with adoResolveRosterUnreadable, the cause logged, never sent.
+func writeGitCredentialUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	slog.ErrorContext(r.Context(), "api: git_credential gate could not read the Azure DevOps sign-in state",
+		slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
+	writeJSON(w, http.StatusServiceUnavailable, gitCredentialErrorBody{
+		Error: adoResolveRosterUnreadable, Reason: gitCredentialUnreadableReason,
+	})
+}
+
 // gitCredentialRefusalForLauncher is the git_credential launch GATE for a
 // caller with no ResponseWriter — a SERVER-SIDE launcher
 // (recordLaunchRefusals, called from launchRecordRun). nil when admitted; a *gitCredentialRefusalError
-// (wrapped) otherwise, for the caller to map to its own door's 422 shape —
+// (wrapped) when refused; errGitCredentialUnreadable (wrapped) when a read it
+// needed failed — for the caller to map to its own door's 422 or 503 shape —
 // record.go's own chain of errors.Is/errors.As mappings is the precedent
 // (errWorkspaceSourceTarget, errAgentNotEnabled, ...).
 //
@@ -360,11 +425,21 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 		return nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil || !providersConfigured(sc) {
-		return nil // a read failure or legacy open mode: the caller's own admission check already answered, or there are no rows to grade
+	if err != nil {
+		return fmt.Errorf("%w: read site config: %w", errGitCredentialUnreadable, err)
 	}
-	for _, row := range s.perUserADORowsAdmitting(ctx, sc, repos) {
-		access := s.scmAccessForRow(ctx, row, subject)
+	if !providersConfigured(sc) {
+		return nil // legacy open mode: there are no rows to grade
+	}
+	rows, err := s.perUserADORowsAdmitting(ctx, sc, repos)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)
+	}
+	for _, row := range rows {
+		access, err := s.scmAccessForRow(ctx, row, subject)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)
+		}
 		switch {
 		case access.State == modelAccessLive:
 			continue
@@ -391,6 +466,10 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 // never re-derive admission itself.
 func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, repos ...string) bool {
 	err := s.gitCredentialRefusalForLauncher(r.Context(), oidcHumanFromContext(r.Context()), repos...)
+	if errors.Is(err, errGitCredentialUnreadable) {
+		writeGitCredentialUnreadable(w, r, err)
+		return true
+	}
 	var gcErr *gitCredentialRefusalError
 	if !errors.As(err, &gcErr) {
 		return false
@@ -413,7 +492,11 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 // subject, the same self-service shape /me/ssh-keys is (routes.go).
 func (s *Server) handleGetSCMAccess(w http.ResponseWriter, r *http.Request) {
 	subject := oidcHumanFromContext(r.Context())
-	rows := s.computeSCMAccessRows(r.Context(), subject)
+	rows, err := s.computeSCMAccessRows(r.Context(), subject)
+	if err != nil {
+		writeServerError(w, r, "read Azure DevOps access", err)
+		return
+	}
 	if rows == nil {
 		rows = []SCMAccess{}
 	}

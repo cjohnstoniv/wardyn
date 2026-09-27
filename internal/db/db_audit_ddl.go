@@ -139,9 +139,9 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 	if len(routes) > 0 {
 		// Short-circuited, and deliberately: the verdict is already decided, and
 		// the two extra round trips below are the only place this function can
-		// fail on a server that answered the first query — a boot that used to
-		// reach a clean refusal must not start failing fatally on the version
-		// probe instead. The routes reported are the ones that fired.
+		// fail on a server that answered the first query — a boot that reaches a
+		// clean refusal must not fail fatally on the version probe instead. The
+		// routes reported are the ones that fired.
 		return routes, nil
 	}
 	// The fourth leg, and it is not a DDL one. The three above ask who can DROP

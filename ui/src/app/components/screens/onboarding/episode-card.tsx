@@ -17,7 +17,7 @@ import { Button } from "../../ui/button";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { EPISODES_COPY as T } from "../../wardyn/copy";
 import { EPISODES, episodeUrl, episodesFor, releasePageUrl, type Episode } from "../../../lib/demo-videos";
-import { useDemoVideoBaseUrl } from "../../../lib/hooks/use-demo-video-base-url";
+import { useDemoVideoBaseUrl } from "../../wardyn/operator-context";
 
 export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string }) {
   const [open, setOpen] = React.useState(false);

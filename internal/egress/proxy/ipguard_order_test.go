@@ -11,12 +11,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Regression (caught live by e2e): a literal blocked IP must be denied by the
-// builtin guard BEFORE the first-use approval path. The original ordering ran
-// policy/approval first, so 169.254.169.254 fell into "unknown host" and
-// raised an approvable egress_domain request — meaning an admin could have
-// approved egress to the cloud metadata service, violating invariant 3
-// (private/link-local/metadata ranges are blocked regardless of policy).
+// A literal blocked IP must be denied by the builtin guard before the
+// first-use approval path (caught live by e2e). With policy/approval first,
+// 169.254.169.254 falls into "unknown host" and raises an approvable
+// egress_domain request — meaning an admin could approve egress to the cloud
+// metadata service, violating invariant 3 (private/link-local/metadata ranges
+// are blocked regardless of policy).
 func TestEvaluate_BlockedLiteralIPBeatsFirstUseApproval(t *testing.T) {
 	spec := types.RunPolicySpec{
 		AllowedDomains:   []string{"github.com"},
@@ -45,7 +45,7 @@ func TestEvaluate_BlockedLiteralIPBeatsFirstUseApproval(t *testing.T) {
 	}
 }
 
-// Regression (W13-S1-3): an operator-declared egress-redirect target that is
+// An operator-declared egress-redirect target that is
 // itself a private/reserved IP literal (a realistic "To" for an on-prem
 // registry — see docs/OPERATIONS.md "network only" redirects and
 // site_config.go's validSiteURLOrHost, which happily persists one) must

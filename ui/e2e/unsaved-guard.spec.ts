@@ -37,7 +37,7 @@ async function gotoDirtyProviders(page: Page): Promise<void> {
   // behind) would never arm this guard's index tracking for the entry it
   // lands on, and a Back out of it would go unguarded regardless of what
   // this test types into the form.
-  await gotoConsole(page);
+  await gotoConsole(page, "admin");
   await sidebarLink(page, "Settings").click();
   await expect(page).toHaveURL(/\/settings$/);
   const card = page.getByTestId("providers-card");

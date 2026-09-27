@@ -54,6 +54,12 @@ export const SIGNIN = {
   EMAIL_VERIFIED_ABSENT:
     "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so Wardyn can't confirm your email on its own. Ask your Wardyn admin to map your role by App Role or group instead.",
   ROLE_CHECK_UNAVAILABLE: "Couldn't check your access — try again, or ask your Wardyn admin.",
+  // 0.8 user types: the role map gives this person two types at the same
+  // priority (Wardyn never picks one), or a type that doesn't exist.
+  USER_TYPE_AMBIGUOUS:
+    "Your account matches two user types with the same priority, so Wardyn won't pick one. Ask your Wardyn admin to give one of them a higher priority.",
+  USER_TYPE_UNKNOWN:
+    "Your account maps to a user type that doesn't exist. Ask your Wardyn admin to create it or change the mapping.",
   OIDC_TRANSIENT:
     "Your identity provider didn't respond in time. This is usually temporary — try signing in again.",
   OIDC_CONFIG:

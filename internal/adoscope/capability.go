@@ -29,6 +29,7 @@ package adoscope
 import (
 	"maps"
 	"slices"
+	"strings"
 )
 
 // Capability is the ONE access name a classified request needs. The set is
@@ -148,15 +149,15 @@ func GrantableCapabilities() []Capability {
 	return slices.Sorted(maps.Keys(grantableCapabilities))
 }
 
-// GrantableCapabilityList is GrantableCapabilities as strings, the shape an
-// error message joins.
-func GrantableCapabilityList() []string {
+// GrantableCapabilityList is GrantableCapabilities as a comma-separated
+// string, the shape an error message wants.
+func GrantableCapabilityList() string {
 	caps := GrantableCapabilities()
-	out := make([]string, len(caps))
+	strs := make([]string, len(caps))
 	for i, c := range caps {
-		out[i] = string(c)
+		strs[i] = string(c)
 	}
-	return out
+	return strings.Join(strs, ", ")
 }
 
 // labels are the plain-language rendering of every capability, in the SECOND

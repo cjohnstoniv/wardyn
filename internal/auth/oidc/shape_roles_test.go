@@ -122,7 +122,8 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 			}
 			merged, _ := mergeRoleMaps(roleMap, admins, nil)
 			for _, c := range sh.ids {
-				role, _, ok := deriveRole(c.roles, c.groups, c.email, merged, admins, sh.env["WARDYN_OIDC_DEFAULT_ROLE"])
+				d := deriveRole(c.roles, c.groups, c.email, merged, admins, sh.env["WARDYN_OIDC_DEFAULT_ROLE"], userTypeIndex(nil))
+				role, ok := d.Role, d.OK()
 				if !ok {
 					role = deny
 				}

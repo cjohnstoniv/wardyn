@@ -129,7 +129,7 @@ func managedSpec() runner.SandboxSpec {
 	return spec
 }
 
-// THE ORDERING IS THE CONTRACT. A copy that lands after ContainerStart races
+// The ordering is the contract. A copy that lands after ContainerStart races
 // the agent's own first instruction: the agent can read the absence, or act,
 // before the ceiling exists. This is the assertion a "read the file back" test
 // cannot make — by the time anything reads it, the copy has happened either

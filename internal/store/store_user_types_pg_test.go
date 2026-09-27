@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -92,5 +93,46 @@ func TestPG_UserTypes_RoundTrip(t *testing.T) {
 	}
 	if err := st.DeleteUserType(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("delete again = %v, want ErrNotFound", err)
+	}
+}
+
+// TestPG_UserTypes_DeleteRefusedWhileATokenCarriesIt: a live API token stamped
+// with a type keeps it from deletion, in the count the handler reports and in
+// the DELETE's own predicate; once the token is revoked the type can go.
+func TestPG_UserTypes_DeleteRefusedWhileATokenCarriesIt(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	suffix := uuid.NewString()[:8]
+	id := "ut-tok-" + suffix
+	if _, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Token type " + suffix}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DeleteUserType(ctx, id) })
+
+	tok, err := st.CreateAPIToken(ctx, types.APIToken{
+		ID: uuid.New(), Principal: "holder-" + suffix, Role: "user", UserType: id, Name: "ci",
+	}, "wdn_"+uuid.NewString())
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	if tok.UserType != id {
+		t.Fatalf("token user_type = %q, want %q read back", tok.UserType, id)
+	}
+
+	if n, err := st.UserTypeTokenStamps(ctx, id); err != nil || n != 1 {
+		t.Fatalf("token stamps = %d, %v; want 1, nil", n, err)
+	}
+	if err := st.DeleteUserType(ctx, id); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("delete with a live token = %v, want ErrConflict", err)
+	}
+
+	if _, err := st.RevokeAPIToken(ctx, tok.ID, "", time.Now().UTC()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if n, err := st.UserTypeTokenStamps(ctx, id); err != nil || n != 0 {
+		t.Fatalf("token stamps after revoke = %d, %v; want 0, nil", n, err)
+	}
+	if err := st.DeleteUserType(ctx, id); err != nil {
+		t.Fatalf("delete after revoke: %v", err)
 	}
 }

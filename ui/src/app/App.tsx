@@ -455,7 +455,8 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
-    if (auth === "authed") refreshBadges();
+    // never rejects (each half is pre-caught above) — fire-and-forget is safe.
+    if (auth === "authed") void refreshBadges();
   }, [auth, refreshBadges]);
 
   // Keep both nav badges live across the whole console, not just while the
@@ -622,7 +623,7 @@ export default function App() {
             const target = me && !roleCanReach(path, me.role) ? "/runs" : path;
             setAuthReason(undefined);
             setAuth("authed");
-            navigate(target, { replace: true });
+            void navigate(target, { replace: true });
           }}
         />
         <Toaster />

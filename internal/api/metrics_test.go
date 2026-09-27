@@ -124,15 +124,15 @@ func TestMetricsSinkDrops(t *testing.T) {
 	}
 }
 
-// ─── the auth lane's silent failures (group B) ───────────────────────────────
+// the auth lane's silent failures (group B)
 
 // TestAuthFailedSuppressionIsCounted is the whole point of the rate limiter
-// being safe to have. auditAuthFailed caps auth.failed audit rows at ~1/sec
+// being safe to have. auditAuthFailed caps auth.fail audit rows at ~1/sec
 // with a small burst, so past that burst the audit trail STOPS describing the
 // volume it is bounding — a credential-stuffing run and a handful of typos
 // leave the same handful of rows, and the attack reads QUIETER the harder it is
 // pushed. The suppressed emits therefore have to be countable, not merely
-// dropped: a flat auth.failed row count with this series climbing is the
+// dropped: a flat auth.fail row count with this series climbing is the
 // signal, and it is a series so it can be alerted on rather than grepped for.
 //
 // Counterfactual: `return` without the increment in auditAuthFailed and the
@@ -152,12 +152,12 @@ func TestAuthFailedSuppressionIsCounted(t *testing.T) {
 
 	rows := 0
 	for _, ev := range h.audit.events {
-		if ev.Action == "auth.failed" {
+		if ev.Action == "auth.fail" {
 			rows++
 		}
 	}
 	if rows == 0 || rows >= attempts {
-		t.Fatalf("auth.failed rows = %d of %d attempts; the fixture must actually exercise SUPPRESSION "+
+		t.Fatalf("auth.fail rows = %d of %d attempts; the fixture must actually exercise SUPPRESSION "+
 			"(some admitted, most dropped) or this test proves nothing", rows, attempts)
 	}
 
@@ -249,15 +249,14 @@ func (scrapePanicStore) Ping(context.Context) error {
 	panic("store read from a scrape")
 }
 
-// TestMetricsScrapeIsAllOrNothing is #323's durable half, and it pins the
-// property that let a nil dereference on the scrape path live in this package
-// unnoticed: a panic PAST the counter block used to leave a committed 200 whose
-// body stopped mid-file, recovered into a 500 that could no longer be written.
-// `go test` exited 0, every existing /metrics assertion still matched (they read
-// series the truncated prefix still carried), and the only trace was a recovered
-// stack in `-v` output nobody reads.
+// TestMetricsScrapeIsAllOrNothing pins that a panic on the scrape path cannot
+// hide: a panic past the counter block must not leave a committed 200 whose body
+// stops mid-file, recovered into a 500 that can no longer be written. `go test`
+// would still exit 0, every other /metrics assertion would still match (they
+// read series the truncated prefix still carries), and the only trace would be a
+// recovered stack in `-v` output nobody reads.
 //
-// So the assertion is not "wardyn_store_up is present" — that was true of the
+// So the assertion is not "wardyn_store_up is present" — that holds for a
 // truncated body too. It is that a half-built exposition never reaches the wire
 // at all: an operator gets a failed scrape, which `up` shows, instead of a
 // healthy one that has quietly shed half its series.

@@ -201,7 +201,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
     // arms it.
     await mockGatedStatus(page, { sso: true });
     await skipHero(page);
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByText("Getting started").first()).toBeVisible();
     await openPermissionsFromPeople(page);
     await page.waitForURL(/\/permissions/);
@@ -224,6 +224,30 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.waitForURL(/\/setup/);
   });
 
+  test("a gated redirect paints the funnel from the status that fired the gate, not a second read (#806)", async ({
+    page,
+  }) => {
+    // SetupScreen used to show "Checking Wardyn's setup…" with no rail until its
+    // OWN /setup/status read answered: a second round trip, serialized after the
+    // one that fired the gate. Every read after the gate's is held here, so the
+    // rail can only appear from the status the console already had. (The
+    // setup-gate CI flake family that raised #806 traced to the gate's redirect
+    // race instead, #469.)
+    await mockGatedStatus(page);
+    let reads = 0;
+    // Registered last, so it sees every read first; the first falls through to
+    // mockGatedStatus, every later one is never answered.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      reads += 1;
+      if (reads === 1) await route.fallback();
+    });
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+  });
+
   test("negative control: an ONBOARDED install with the same warn is never gated", async ({
     page,
   }) => {
@@ -232,9 +256,8 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockGatedStatus(page, { onboarded: true });
     await page.goto("/runs");
     await expect(page).toHaveURL(/\/runs/);
-    await expect(
-      page.getByText(/each confined behind its own barrier/i),
-    ).toBeVisible();
+    // /runs is the User view, whose description is "Your runs · N" (M-7).
+    await expect(page.getByText(/^Your runs · \d+$/)).toBeVisible();
   });
 
   test("negative control: a member is never gated — their checks are redacted", async ({
@@ -335,7 +358,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
       if (r.url().includes("/api/v1/setup/status")) seen.push(r.url());
     });
 
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByText("Getting started").first()).toBeVisible();
     expect(
       seen.some((u) => u.includes("recheck=1")),
@@ -375,7 +398,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
       await route.fulfill({ response, json });
     });
     await skipHero(page);
-    await page.goto("/setup?step=corp_network");
+    await page.goto("/admin/setup?step=corp_network");
 
     const evidence = page.getByText(PROXY);
     await expect(page.getByRole("button", { name: "Re-check" }).first()).toBeVisible();
@@ -405,7 +428,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
       await route.fulfill({ response, json });
     });
     await skipHero(page);
-    await page.goto("/setup?step=corp_network");
+    await page.goto("/admin/setup?step=corp_network");
 
     const recheck = page.getByRole("button", { name: "Re-check" }).first();
     await expect(recheck).toBeVisible();
@@ -438,11 +461,10 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await page.waitForURL(/\/setup/);
     await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
     await expect(page.getByText("Step 1 of 4")).toBeVisible();
-    // "3" (CONFIG_STEPS) is a constant; the demo count is derived live from
-    // stepOrder(status), so it's asserted by pattern, not a hand-kept number.
-    await expect(
-      page.getByText(/^Required before a run can launch\. 3 optional setup steps and \d+ demos follow\.$/),
-    ).toBeVisible();
+    // "3" (CONFIG_STEPS) is a constant. M-6 (D5) retired the "and N demos
+    // follow" clause: demos moved to User Getting Started, so the admin
+    // funnel's own count was always zero — this counter no longer claims it.
+    await expect(page.getByText("Required before a run can launch. 3 optional setup steps follow.")).toBeVisible();
   });
 
   // #161: the Review step partitions on `blocking` first, not on grade — a
@@ -473,7 +495,7 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await expect(blocking.getByText("e2e non-blocking fail")).toHaveCount(0);
   });
 
-  test("the rail keeps Required / Optional setup / Demos apart, and Secrets (not required) is still reachable with the optional-step footer", async ({
+  test("the rail keeps Required / Optional setup apart (no Demos group — M-6/D5), and Secrets (not required) is still reachable with the optional-step footer", async ({
     page,
   }) => {
     await mockGatedStatus(page);
@@ -491,7 +513,9 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await expect(rail.getByText("· 4")).toBeVisible();
     await expect(rail.getByText("Optional setup")).toBeVisible();
     await expect(rail.getByText("· 3")).toBeVisible();
-    await expect(rail.getByText("Demos", { exact: true })).toBeVisible();
+    // M-6 (D5): the admin funnel walks no demo any more, so the rail's third
+    // group never renders — never an empty "Demos · 0" heading over nothing.
+    await expect(rail.getByText("Demos", { exact: true })).toHaveCount(0);
 
     // Prove the mandatory Network gate (the e2e backend has no real sandbox
     // runner, so the probe answers no_runner — the one honest bypass) before
@@ -522,7 +546,7 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
       await route.fulfill({ response, json });
     });
     await skipHero(page);
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
     // exact: Playwright's default text match is substring + case-insensitive,
     // and the honest note below contains "recommended" as a lowercase word.
@@ -540,11 +564,12 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
 // to force horizontal scroll on the WHOLE page the moment it opened, not just
 // clip the popover. ui/popover.tsx's primitive-level
 // max-w-[calc(100vw-2rem)] (this lane) is what keeps it inside the viewport.
-test.describe("egress-redirect endpoint picker at 390px (F3-F8/F7-F7)", () => {
+test.describe("egress-redirect endpoint picker at 390px", () => {
+  // ticket: F3-F8/F7-F7
   test("390px: opening the From picker does not force horizontal scroll", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await skipHero(page);
-    await page.goto("/setup?step=corp_network");
+    await page.goto("/admin/setup?step=corp_network");
     await page.getByRole("tab", { name: /Egress redirection/ }).click();
 
     // Baseline, not an absolute zero-overflow assertion: F7-2 (the shell

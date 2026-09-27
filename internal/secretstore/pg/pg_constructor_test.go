@@ -11,10 +11,10 @@ import (
 	"filippo.io/age"
 )
 
-// Regression: New must accept a generated *age.X25519Identity. The original
-// implementation asserted an anonymous interface with the WRONG Recipient()
-// return type (the age.Recipient interface instead of the concrete
-// *age.X25519Recipient), which can never match and broke wardynd boot.
+// New must accept a generated *age.X25519Identity. An anonymous interface
+// asserting the wrong Recipient() return type (the age.Recipient interface
+// instead of the concrete *age.X25519Recipient) can never match, and breaks
+// wardynd boot.
 func TestNew_AcceptsX25519Identity(t *testing.T) {
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
@@ -24,7 +24,7 @@ func TestNew_AcceptsX25519Identity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New rejected a valid X25519 identity: %v", err)
 	}
-	if !strings.HasPrefix(s.kek.ID(), "local:") {
+	if !strings.HasPrefix(s.kek.ID(), "local/cred:") {
 		t.Fatalf("kek_id %q is not a local KEK", s.kek.ID())
 	}
 	// Seal/open round trip exercises the derived KEK without a DB.

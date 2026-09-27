@@ -133,10 +133,10 @@ func (s *collisionStore) ActiveRunsAtWorkspacePath(_ context.Context, path strin
 // policy bounds, to decide whether to print one sentence that usually is not
 // printed. The predicate is two columns; Postgres can answer it with a WHERE.
 //
-// THE OUTPUT IS IDENTICAL EITHER WAY, which is exactly why this needs a test
+// The output is identical either way, which is exactly why this needs a test
 // that watches the read: every existing assertion about the warning's text
-// passes on both implementations, so nothing stood between the fix and a
-// silent revert to the full scan.
+// passes on both implementations, so without this nothing would stop a silent
+// revert to the full scan.
 func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 	const path = "/srv/shared-workspace"
 	mine, other, done, elsewhere := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -166,7 +166,7 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 		t.Errorf("the read was scoped to %q, want the run's own workspace path %q", st.activePath, path)
 	}
 
-	// AND THE ANSWER IS UNCHANGED, in all three directions the filter decides:
+	// And the answer is unchanged, in all three directions the filter decides:
 	// the other live run collides, the finished one does not, the run being
 	// created is not its own collision, and a run elsewhere is irrelevant.
 	if len(warnings) != 1 {

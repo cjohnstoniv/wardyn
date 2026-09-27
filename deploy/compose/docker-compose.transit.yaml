@@ -1,0 +1,24 @@
+# Key service overlay (docs/OPERATIONS.md "Key service: Vault Transit"): every
+# stored credential stays sealed in Postgres, but its data key is wrapped by
+# your Vault's Transit key instead of the age key. Token-file auth: point
+# WARDYN_VAULT_TOKEN_DIR at the directory your Vault Agent sink (or CSI driver)
+# writes `token` into; wardynd re-reads it whenever Vault answers 403.
+#
+#   WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/run/vault-agent \
+#     docker compose -f docker-compose.yaml -f docker-compose.transit.yaml up -d
+#
+# Keep WARDYN_AGE_KEY set until `wardynd -rewrap` reports no row left under it;
+# then unset it. Vault's CA, if private, comes in through the base file's
+# WARDYN_TRUSTED_CA_FILE.
+services:
+  wardynd:
+    environment:
+      WARDYN_KEK: transit
+      WARDYN_VAULT_ADDR: "${WARDYN_VAULT_ADDR:?set WARDYN_VAULT_ADDR to your Vault's https:// address}"
+      WARDYN_VAULT_NAMESPACE: "${WARDYN_VAULT_NAMESPACE:-}"
+      WARDYN_VAULT_AUTH: token-file
+      WARDYN_VAULT_TOKEN_FILE: /run/wardyn-vault/token
+      WARDYN_VAULT_TRANSIT_MOUNT: "${WARDYN_VAULT_TRANSIT_MOUNT:-transit}"
+      WARDYN_VAULT_TRANSIT_KEY: "${WARDYN_VAULT_TRANSIT_KEY:-wardyn}"
+    volumes:
+      - ${WARDYN_VAULT_TOKEN_DIR:?set WARDYN_VAULT_TOKEN_DIR to the directory your Vault Agent sink writes token into}:/run/wardyn-vault:ro

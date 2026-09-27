@@ -59,7 +59,7 @@ func runDriveDispatchWith(t *testing.T, fr *fakeRunner, drive *types.DriveMount)
 	// fields and became a parameter every door must pass. The zero ceiling is
 	// what every other dispatch test uses — this test is about drive
 	// composition, not governance.
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Drive: drive,
 	})
@@ -100,12 +100,13 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		t.Errorf("run.drive.mount actor = %q, want %q — a member ticked a checkbox, dispatch resolved it into an object",
 			ev.ActorType, types.ActorSystem)
 	}
-	// THE ROW'S ONE RENDERED DETAIL, and the one field whose reader is not the
+	// The row's one rendered detail, and the one field whose reader is not the
 	// operator. The console's Audit tab draws a row from time, actor, action and
 	// Target and reads nothing out of Data, and auditScope lets a run's CREATOR
-	// read their own run's rows — so for a SHARE the target used to hand the
-	// member `/srv/wardyn-drives/alice`, the operator's filesystem layout, on
-	// their own run page. Two sites in this same tree refuse to disclose exactly
+	// read their own run's rows — so for a share a target of
+	// `/srv/wardyn-drives/alice` would hand the member the operator's filesystem
+	// layout on their own run page. Two sites in this same tree refuse to
+	// disclose exactly
 	// that to exactly that reader (driveShareIsBindable names the home, never the
 	// resolved path; applyUserDriveEnv carries the target and the mode and
 	// nothing else), so the target names the DRIVE and the DIRECTORY instead.

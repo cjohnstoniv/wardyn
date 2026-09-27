@@ -49,7 +49,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		doAdmin(t, http.MethodPut, perms+"/enforcement", body)
 	})
 
-	// ─── POST: 201 on a genuinely new natural key ────────────────────────────
+	// POST: 201 on a genuinely new natural key
 	// Subject is deliberately mixed-case: the handler lowercases it so the row
 	// matches the lowercased sub/email the resolver compares against.
 	subject := "Alice+" + uuid.NewString() + "@Corp.example"
@@ -69,7 +69,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		t.Errorf("created grant = %+v (want allow + server-assigned created_by)", created)
 	}
 
-	// ─── POST again, same natural key: 200 and the SAME row, effect flipped ──
+	// POST again, same natural key: 200 and the same row, effect flipped
 	regranted := postGrant(t, grants, http.StatusOK, map[string]any{
 		"subject_type": "user", "subject": subject,
 		"capability": "egress_host", "value": host, "effect": "deny",
@@ -102,7 +102,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		t.Errorf("POST grant with unknown kind status = %d, want 400 (body=%s)", status, raw)
 	}
 
-	// ─── GET /permissions: the admin table carries both rows ─────────────────
+	// GET /permissions: the admin table carries both rows
 	all := getPermissions(t, perms)
 	if !slices.ContainsFunc(all.Grants, func(g types.CapabilityGrant) bool {
 		return g.ID == created.ID && g.Effect == types.CapabilityDeny
@@ -113,7 +113,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		t.Errorf("GET /permissions missing the all-row %s", allGrant.ID)
 	}
 
-	// ─── PUT /permissions/enforcement ────────────────────────────────────────
+	// PUT /permissions/enforcement
 	status, raw = doAdmin(t, http.MethodPut, perms+"/enforcement",
 		mustMarshal(map[string]bool{"egress_host": true, "secret": false}))
 	if status != http.StatusOK {
@@ -135,7 +135,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		t.Errorf("PUT enforcement with unknown kind status = %d, want 400 (body=%s)", status, raw)
 	}
 
-	// ─── GET /me/capabilities: the caller's OWN set ──────────────────────────
+	// GET /me/capabilities: the caller's own set
 	status, raw = doAdmin(t, http.MethodGet, h.srv.URL+"/api/v1/me/capabilities", nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /me/capabilities status = %d, want 200 (body=%s)", status, raw)
@@ -164,7 +164,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 			me.SessionGroups, me.GroupsSnapshotStale)
 	}
 
-	// ─── DELETE: 204, then 404 for the same id ───────────────────────────────
+	// DELETE: 204, then 404 for the same id
 	if status, raw = doAdmin(t, http.MethodDelete, grants+"/"+created.ID.String(), nil); status != http.StatusNoContent {
 		t.Fatalf("DELETE grant status = %d, want 204 (body=%s)", status, raw)
 	}

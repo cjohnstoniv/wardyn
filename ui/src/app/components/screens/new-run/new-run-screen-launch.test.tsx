@@ -53,7 +53,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   };
 });
 // The REAL rail with its props recorded — this file pins only what the screen hands it.
-const railProps: Array<{ launch: { credentialRefused: boolean } }> = [];
+const railProps: Array<{ launch: { credentialRefused: boolean; refusedProvider?: string; onOpenRun: (() => void) | null } }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
   return {
@@ -105,7 +105,7 @@ import { ADO } from "../../../lib/ado-entra-copy";
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 // The Workspace card's drive block reads the shell's ONE GET /me off the
-// context (operator-context's UserDriveContext), not a fetch of its own — so a
+// context (operator-context's MeIdentity.userDrive), not a fetch of its own — so a
 // case states its /me body here, exactly as app-shell hands it down. The
 // default carries NEITHER /me drive bit: no allocation and no door, which is
 // what every case below except the drive ones is, and which must render as
@@ -437,12 +437,40 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     expect(lastRail().launch.credentialRefused).toBe(false);
   });
 
+  // #543: the refusal's own provider travels with it — the door it opens.
+  it("a model_credential 422 naming a provider hands the rail that provider", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "add your token first", "model_credential", "", "corp-gateway"));
+    await user.click(await titled());
+    expect(await screen.findByText("add your token first")).toBeInTheDocument();
+    expect(lastRail().launch.refusedProvider).toBe("corp-gateway");
+  });
+
   it("a 422 without a reason — a policy error — never sets it", async () => {
     createRunMock.mockRejectedValueOnce(new HttpError(422, 'workspaces[0]: unknown secret "prod-db"'));
     const launch = await titled();
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// #725/F4 — a network failure (the fetch itself never reached the server —
+// no HttpError, no body, no status) must never be read as "the run was
+// created but its sandbox did not start": on main, every refusal answers
+// BEFORE the run row is written (internal/api/runs_create_launch.go), so a
+// reason-less failure is precisely the case where no run may exist. The
+// rail must show the raw error and offer no "open the run" affordance.
+describe("NewRunScreen — a network failure never claims a run was created (F4)", () => {
+  it("createRun rejecting with TypeError('Failed to fetch') shows the raw error, opens nothing, and navigates nowhere", async () => {
+    createRunMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+
+    expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
+    expect(railProps[railProps.length - 1].launch.onOpenRun).toBeNull();
+    expect(railProps[railProps.length - 1].launch.credentialRefused).toBe(false);
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -522,7 +550,8 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
   // Review finding F1: the org comes from the 422 body itself, so the dialog
   // names it even with NO preflight verdict ever having run (this screen
   // fires preflight on a debounce; a fast Launch click can beat it there).
-  it("F1: names the org from the 422 body, with no preflight verdict having run", async () => {
+  it("names the org from the 422 body, with no preflight verdict having run", async () => {
+    // ticket: F1
     createRunMock.mockRejectedValueOnce(
       new HttpError(422, "git_credential: you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
     );
@@ -532,7 +561,8 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
     expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
   });
 
-  it("F8: confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+  it("confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+    // ticket: F8
     createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
     adoConnectMock.mockResolvedValueOnce(true);
     const launch = await titled();

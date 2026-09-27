@@ -422,3 +422,60 @@ func TestDelete_UsesTheDerivedPathNeverTheRef(t *testing.T) {
 		t.Fatalf("a delete of alice's row with bob's ref removed bob's value: (%q, %v)", v, err)
 	}
 }
+
+// TestTwoRoles_PlatformPathsUseOnlyThePlatformToken is the recommended
+// configuration (design §2.13 b) against a Vault enforcing the documented
+// two-role policy: every boot-key call — write, read, check, delete, walk —
+// goes out with the platform role's token and every credential call with the
+// other, so neither token ever needs (or is shown to) the other's paths.
+func TestTwoRoles_PlatformPathsUseOnlyThePlatformToken(t *testing.T) {
+	f := newFakeVault(t)
+	f.jwts["sa-jwt"] = "wardyn-credentials"
+	f.platformRole = "wardyn-platform"
+	s, err := New(t.Context(), Config{
+		Addr: f.srv.URL, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn-credentials", RolePlatform: "wardyn-platform",
+		K8sTokenFile: writeFile(t, "sa-jwt\n"), Mount: f.mount, Prefix: "ns1", MaxVersions: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.c.backoff, s.platform.backoff = 0, 0
+	ctx := t.Context()
+	rows := []struct{ owner, name string }{{"", "wardyn-signing-key"}, {"", "github-app-key"}, {"alice", "anthropic-api-key"}}
+	for _, r := range rows {
+		ref, err := s.Put(ctx, r.owner, r.name, "", []byte("v-"+r.name), false)
+		if err != nil {
+			t.Fatalf("Put %s/%s: %v", r.owner, r.name, err)
+		}
+		if got, err := s.Get(ctx, r.owner, r.name, ref); err != nil || string(got) != "v-"+r.name {
+			t.Fatalf("Get %s/%s = (%q, %v)", r.owner, r.name, got, err)
+		}
+		if err := s.Check(ctx, r.owner, r.name, ref); err != nil {
+			t.Fatalf("Check %s/%s: %v", r.owner, r.name, err)
+		}
+	}
+	entries, err := s.Walk(ctx)
+	if err != nil || len(entries) != len(rows) {
+		t.Fatalf("Walk = (%v, %v), want all %d values", entries, err, len(rows))
+	}
+	for _, r := range rows {
+		if err := s.Delete(ctx, r.owner, r.name, ""); err != nil {
+			t.Fatalf("Delete %s/%s: %v", r.owner, r.name, err)
+		}
+	}
+	if f.logins != 2 {
+		t.Errorf("logins = %d, want one per role", f.logins)
+	}
+}
+
+func TestTwoRoles_RefusedWhereTheySeparateNothing(t *testing.T) {
+	for label, cfg := range map[string]Config{
+		"token-file auth": {Auth: AuthTokenFile, TokenFile: "/dev/null", RolePlatform: "wardyn-platform"},
+		"the same role":   {Auth: AuthKubernetes, Role: "wardyn", RolePlatform: "wardyn"},
+	} {
+		cfg.Addr, cfg.Mount, cfg.Prefix, cfg.MaxVersions = "https://vault.example:8200", "wardyn", "ns1", 1
+		if _, err := New(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "WARDYN_VAULT_ROLE_PLATFORM") {
+			t.Errorf("%s: New = %v, want a refusal naming WARDYN_VAULT_ROLE_PLATFORM", label, err)
+		}
+	}
+}

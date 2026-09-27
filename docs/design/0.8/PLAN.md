@@ -419,8 +419,9 @@ canon tables for the console surfaces that shipped without one.
   already says a grade alone never blocks.
 - The Runs board's group header gets one counted chip per wait reason rather than a sentence,
   built from data already in hand, and renders a pinned "checking" chip before the approvals
-  promise resolves instead of an empty map that reads as "nothing is held". A hold older than a
-  named ceiling degrades to "was held — check the run".
+  promise resolves instead of an empty map that reads as "nothing is held". (#509 superseded this
+  entry's own named client-side ceiling — see its own record — with the server's PENDING/EXPIRED
+  state; a hold no longer degrades to "was held" from the board on client elapsed time alone.)
 - Recordings pagination is server-side offsets rather than a client-side cap, because the screen
   filters after the fetch, so a cap re-slices a window that already dropped everything past the
   first thousand rows. It is the console's first paged screen, so it gets a full mock round.

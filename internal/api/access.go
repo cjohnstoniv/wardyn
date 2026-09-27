@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -106,9 +107,13 @@ func (s *Server) requireOIDC(w http.ResponseWriter) bool {
 // GET /access
 
 type accessMappingView struct {
-	ID          string    `json:"id,omitempty"`
-	Value       string    `json:"value"`
+	ID    string `json:"id,omitempty"`
+	Value string `json:"value"`
+	// Role is the tier; UserType the row's type, set only when Role is the
+	// user tier (a chart value naming a type id arrives here split the same
+	// way sign-in splits it).
 	Role        string    `json:"role"`
+	UserType    string    `json:"user_type,omitempty"`
 	Source      string    `json:"source"` // "chart" | "console"
 	Shadowed    bool      `json:"shadowed"`
 	ShadowCause string    `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
@@ -149,6 +154,9 @@ type accessResponse struct {
 	// it, and deriving the name here keeps one implementation of that mapping.
 	Provider string        `json:"provider"`
 	Posture  accessPosture `json:"posture"`
+	// UserTypes is every user type, so the page can name the type on each
+	// row, in the default role and in a preview without a second call.
+	UserTypes []types.UserType `json:"user_types"`
 }
 
 // ssoProviderName derives a human-facing IdP name from an OIDC issuer URL,
@@ -183,16 +191,34 @@ func ssoProviderName(issuer string) string {
 // when unset). changes names the one setting that is worth a UI callout:
 // adding the FIRST mapping (or removing the LAST) can silently move every
 // unmatched human from one of these outcomes to the other.
-func accessRolePosture(a *oidc.Authenticator) (before, after string, changes bool) {
+//
+// Both are mapping targets (accessTarget): arm 1's user is on the built-in
+// type, so a default role naming a custom type is a change too — unmatched
+// people would move from Standard user to that type. after is validated
+// against userTypes (DefaultRoleOutcome) so it never claims a target a real
+// sign-in would refuse with user_type_unknown — the same check
+// accessUnmatchedOutcome already applies for the write-side guards.
+func accessRolePosture(a *oidc.Authenticator, userTypes []types.UserType) (before, after string, changes bool) {
 	before = oidc.RoleAdmin
 	if a.HasOperatorEmails() {
 		before = oidc.RoleUser
 	}
 	after = accessDeniedRole
-	if dr := a.DefaultRole(); dr != "" {
-		after = dr
+	if role, userType, ok := a.DefaultRoleOutcome(userTypes); ok {
+		after = accessTarget(role, userType)
 	}
 	return before, after, before != after
+}
+
+// accessTarget spells a tier and type the way a role-map value does: the
+// tier, except a user on a custom type, which is that type's id. "user" stays
+// the built-in type's spelling, so a deployment with no custom types reads
+// exactly as before.
+func accessTarget(role, userType string) string {
+	if role == oidc.RoleUser && userType != "" && userType != types.UserTypeStandard {
+		return userType
+	}
+	return role
 }
 
 // accessMappingsView merges chart rows (ChartRoleMap) and console rows into
@@ -207,13 +233,20 @@ func accessRolePosture(a *oidc.Authenticator) (before, after string, changes boo
 // response is deterministic across calls with the same underlying state.
 func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oidc.Authenticator) []accessMappingView {
 	out := make([]accessMappingView, 0, len(chart)+len(rows))
-	for value, role := range chart {
-		out = append(out, accessMappingView{Value: value, Role: role, Source: "chart"})
+	for value, target := range chart {
+		mv := accessMappingView{Value: value, Role: target, Source: "chart"}
+		if role, userType, ok := oidc.SplitMappingTarget(target); ok {
+			mv.Role, mv.UserType = role, userType
+		}
+		out = append(out, mv)
 	}
 	for _, m := range rows {
 		mv := accessMappingView{
-			ID: m.ID.String(), Value: m.Value, Role: m.Role, Source: "console",
+			ID: m.ID.String(), Value: m.Value, Role: m.Role, UserType: m.UserType, Source: "console",
 			CreatedBy: m.CreatedBy, CreatedAt: m.CreatedAt,
+		}
+		if m.Role == oidc.RoleUser && m.UserType == "" {
+			mv.UserType = types.UserTypeStandard
 		}
 		if cause := accessCollisionCause(m.Value, chart, a); cause != "" {
 			mv.Shadowed, mv.ShadowCause = true, cause
@@ -241,8 +274,16 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list role mappings", err)
 		return
 	}
+	userTypes, err := s.cfg.Store.ListUserTypes(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list user types", err)
+		return
+	}
+	if userTypes == nil {
+		userTypes = []types.UserType{}
+	}
 	chart := s.cfg.OIDC.ChartRoleMap()
-	before, after, changes := accessRolePosture(s.cfg.OIDC)
+	before, after, changes := accessRolePosture(s.cfg.OIDC, userTypes)
 	// A nil slice marshals to JSON null, but the field is typed string[] on the
 	// wire and the console reads its .length — so an install with no operator
 	// emails must still send [], never null.
@@ -266,6 +307,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 			MapEmpty: s.cfg.OIDC.MergedMapEmpty(toOIDCRoleMappings(rows)),
 			Before:   before, After: after, Changes: changes,
 		},
+		UserTypes: userTypes,
 	})
 }
 
@@ -276,7 +318,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 func toOIDCRoleMappings(rows []types.RoleMapping) []oidc.RoleMapping {
 	out := make([]oidc.RoleMapping, len(rows))
 	for i, m := range rows {
-		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType}
 	}
 	return out
 }
@@ -284,16 +326,17 @@ func toOIDCRoleMappings(rows []types.RoleMapping) []oidc.RoleMapping {
 // accessUnmatchedOutcome is the ONE derivation both write-guards and the GET
 // posture display use to ask "what role does an UNMATCHED signed-in human
 // get against rows": PreviewRoleAgainst with no roles/groups/email,
-// mapped to accessDeniedRole on ok=false. Routing every caller through
+// mapped to accessDeniedRole on a refusal and spelled as a mapping target
+// (accessTarget) otherwise. Routing every caller through
 // mergeRoleMaps+deriveRole this way — rather than a hand-mirrored arm
 // computation keyed on raw row counts — means it can never diverge from what
 // a real login would decide, including when a stored row is shadowed.
-func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
-	role, ok := s.cfg.OIDC.PreviewRoleAgainst(rows, nil, nil, "")
-	if !ok {
+func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping, userTypes []types.UserType) string {
+	d := s.cfg.OIDC.PreviewRoleAgainst(rows, userTypes, nil, nil, "")
+	if !d.OK() {
 		return accessDeniedRole
 	}
-	return role
+	return accessTarget(d.Role, d.UserType)
 }
 
 // shared: canonicalization, candidate-map construction, guards
@@ -369,26 +412,26 @@ func writeAccessCollision(w http.ResponseWriter, value, cause string) {
 }
 
 // accessCandidateRows builds the role-mapping set as it would be after a
-// proposed write — replace/add valueRole (role == "" means: this write is a
+// proposed write — replace/add value's row (a zero write means: this is a
 // DELETE, drop the row instead), leaving every other existing row untouched —
 // so the lockout guard can hand it to PreviewRoleAgainst and ask "would the
 // acting admin still derive admin AFTER this write" without a second store
 // round trip and without reimplementing the upsert-or-delete semantics twice.
-func accessCandidateRows(existing []types.RoleMapping, id, value, role string) []oidc.RoleMapping {
+func accessCandidateRows(existing []types.RoleMapping, id string, write oidc.RoleMapping) []oidc.RoleMapping {
 	out := make([]oidc.RoleMapping, 0, len(existing)+1)
 	replaced := false
 	for _, m := range existing {
-		if (id != "" && m.ID.String() == id) || (id == "" && m.Value == value) {
-			if role != "" {
-				out = append(out, oidc.RoleMapping{Value: value, Role: role})
+		if (id != "" && m.ID.String() == id) || (id == "" && m.Value == write.Value) {
+			if write.Role != "" {
+				out = append(out, write)
 				replaced = true
 			}
 			continue // delete: drop this row from the candidate set
 		}
-		out = append(out, oidc.RoleMapping{Value: m.Value, Role: m.Role})
+		out = append(out, oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType})
 	}
-	if role != "" && !replaced {
-		out = append(out, oidc.RoleMapping{Value: value, Role: role})
+	if write.Role != "" && !replaced {
+		out = append(out, write)
 	}
 	return out
 }
@@ -420,14 +463,18 @@ func accessCandidateRows(existing []types.RoleMapping, id, value, role string) [
 // all), so it gets the distinct accessStaleSnapshot refusal instead — never
 // silently allowed, since a snapshot too stale to verify a NO-OP write is
 // too stale to verify a real demotion either.
-func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping, candidate []oidc.RoleMapping) error {
+//
+// A user type decides nothing here: a tie or a missing type never refuses an
+// admin-tier sign-in (deriveRole puts it on the built-in type), so it trips
+// neither side of this guard.
+func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping, candidate []oidc.RoleMapping, userTypes []types.UserType) error {
 	sub := oidcHumanFromContext(r.Context())
 	if sub == "" {
 		return nil
 	}
 	groups, email := oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())
-	roleBefore, ok := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(existing), nil, groups, email)
-	if !ok || roleBefore != oidc.RoleAdmin {
+	before := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(existing), userTypes, nil, groups, email)
+	if !before.OK() || before.Role != oidc.RoleAdmin {
 		// Same refusal, the caller's own REMEDY. Both lanes now clear this the
 		// same way — the owner's own next sign-in re-stamps role AND the group
 		// snapshot together (store.RefreshAPITokenIdentity, fired from
@@ -441,8 +488,8 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 		}
 		return errors.New(accessStaleSnapshot)
 	}
-	roleAfter, ok := s.cfg.OIDC.PreviewRoleAgainst(candidate, nil, groups, email)
-	if !ok || roleAfter != oidc.RoleAdmin {
+	after := s.cfg.OIDC.PreviewRoleAgainst(candidate, userTypes, nil, groups, email)
+	if !after.OK() || after.Role != oidc.RoleAdmin {
 		return fmt.Errorf("this change would remove your own admin access (checked against your last sign-in)")
 	}
 	return nil
@@ -470,9 +517,45 @@ func writeAccessPostureFlip(w http.ResponseWriter, before, after string) {
 // POST /access/mappings
 
 type roleMappingWriteRequest struct {
-	Value                   string `json:"value"`
-	Role                    string `json:"role"`
+	Value string `json:"value"`
+	Role  string `json:"role"`
+	// UserType names the row's type when Role is the user tier; empty means
+	// the built-in type. Refused on the two admin tiers.
+	UserType                string `json:"user_type,omitempty"`
 	AcknowledgeAccessChange bool   `json:"acknowledge_access_change,omitempty"`
+}
+
+// accessMappingTarget is validMappingTarget at the console's write boundary:
+// the row a POST may write, or the 400 sentence. A user row always names its
+// type (the built-in one when none is given), and the type must exist in
+// userTypes — a row naming no type would refuse every sign-in it decides
+// (user_type_unknown), so it is refused here, before it is saved. A type id is
+// never a tier: a reserved word is refused even though no user_types row can
+// carry one.
+func accessMappingTarget(req roleMappingWriteRequest, value string, userTypes []types.UserType) (oidc.RoleMapping, string) {
+	if !oidc.ValidRole(req.Role) {
+		return oidc.RoleMapping{}, fmt.Sprintf("The role %q isn't valid (want %q, %q or %q).", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser)
+	}
+	if req.Role != oidc.RoleUser {
+		if req.UserType != "" {
+			return oidc.RoleMapping{}, "Only the user role takes a user type."
+		}
+		return oidc.RoleMapping{Value: value, Role: req.Role}, ""
+	}
+	userType := cmp.Or(req.UserType, types.UserTypeStandard)
+	if oidc.UserTypeIDReserved(userType) || !oidc.UserTypeIDWellFormed(userType) {
+		return oidc.RoleMapping{}, fmt.Sprintf("The user type %q isn't a valid id.", userType)
+	}
+	// The built-in type always exists (seeded, never deletable), as it does
+	// for sign-in.
+	if userType != types.UserTypeStandard && !slices.ContainsFunc(userTypes, func(t types.UserType) bool { return t.ID == userType }) {
+		return oidc.RoleMapping{}, accessUnknownUserType(userType)
+	}
+	return oidc.RoleMapping{Value: value, Role: oidc.RoleUser, UserType: userType}, ""
+}
+
+func accessUnknownUserType(id string) string {
+	return fmt.Sprintf("The user type %q doesn't exist. Create it under User types first.", id)
 }
 
 // handleUpsertRoleMapping creates or re-adds one console row, keyed on the
@@ -498,8 +581,14 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !oidc.ValidRole(req.Role) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("role: invalid %q (want %q, %q or %q)", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser))
+	userTypes, err := s.cfg.Store.ListUserTypes(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list user types", err)
+		return
+	}
+	write, msg := accessMappingTarget(req, value, userTypes)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
@@ -527,7 +616,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "list role mappings", err)
 		return
 	}
-	candidate := accessCandidateRows(existing, "", value, req.Role)
+	candidate := accessCandidateRows(existing, "", write)
 
 	// Posture-flip guard: fires iff this write actually moves the
 	// unmatched-human outcome — derived from the REAL merged map via
@@ -535,15 +624,15 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// row-count precondition, which would miss a flip whenever a stored
 	// row was shadowed (see accessUnmatchedOutcome's doc).
 	if !req.AcknowledgeAccessChange {
-		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing))
-		after := s.accessUnmatchedOutcome(candidate)
+		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
+		after := s.accessUnmatchedOutcome(candidate, userTypes)
 		if before != after {
 			writeAccessPostureFlip(w, before, after)
 			return
 		}
 	}
 
-	if lerr := s.accessLockoutErr(r, existing, candidate); lerr != nil {
+	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
 		writeError(w, http.StatusBadRequest, lerr.Error())
 		return
 	}
@@ -553,8 +642,14 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// how the handler tells created from updated, the same trick
 	// handleUpsertCapabilityGrant uses (that table's natural key includes a
 	// caller-supplied id too, but the comparison works identically here).
-	m := types.RoleMapping{ID: uuid.New(), Value: value, Role: req.Role, CreatedBy: principalFromRequest(r)}
+	m := types.RoleMapping{ID: uuid.New(), Value: value, Role: write.Role, UserType: write.UserType, CreatedBy: principalFromRequest(r)}
 	saved, err := s.cfg.Store.UpsertRoleMapping(r.Context(), m)
+	if errors.Is(err, store.ErrNotFound) {
+		// The type was removed between the list above and this write: the
+		// foreign key refused the row.
+		writeError(w, http.StatusBadRequest, accessUnknownUserType(write.UserType))
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "upsert role mapping", err)
 		return
@@ -566,7 +661,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// A demotion made here is effective here. A role mapping decides the role a
 	// LOGIN derives; an outstanding wdn_ token carries a role stamped at MINT
 	// and read verbatim on every request until its owner's OWN next login
-	// re-stamps it (store.RefreshAPITokenRoles) — a real bound, but on their
+	// re-stamps it (store.RefreshAPITokenIdentity) — a real bound, but on their
 	// schedule rather than the operator's, and one that never arrives for
 	// someone who has left. So if this write takes a tier away from the value,
 	// the affected principals' tokens are revoked now rather than announced —
@@ -576,10 +671,11 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// value before the edit acted — so the audit row carries both numbers:
 	// what was outstanding, and what this write actually revoked.
 	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
-	revoked := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate)
+	revoked := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate, userTypes)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale, "tokens_revoked": revoked,
+			"value": saved.Value, "role": saved.Role, "user_type": saved.UserType,
+			"stale_token_snapshots": stale, "tokens_revoked": revoked,
 		})))
 	// Embedded, so the response is a strict SUPERSET of the RoleMapping every
 	// existing client already decodes — the console, pkg/client and the CLI keep
@@ -614,6 +710,11 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "list role mappings", err)
 		return
 	}
+	userTypes, err := s.cfg.Store.ListUserTypes(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list user types", err)
+		return
+	}
 	// The matched row, kept for the audit event below — once deleted,
 	// the store can no longer say which value/role this id ever named.
 	var matched types.RoleMapping
@@ -623,22 +724,22 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 			break
 		}
 	}
-	candidate := accessCandidateRows(existing, id.String(), "", "")
+	candidate := accessCandidateRows(existing, id.String(), oidc.RoleMapping{})
 
 	// acknowledge_access_change is a query param (this route's own
 	// natural-key delete has no body) — ParseBool over a bare == "true"
 	// so "1"/"TRUE"/"T" also work, err (including absent) => false.
 	acknowledge, _ := strconv.ParseBool(r.URL.Query().Get("acknowledge_access_change"))
 	if !acknowledge {
-		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing))
-		after := s.accessUnmatchedOutcome(candidate)
+		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
+		after := s.accessUnmatchedOutcome(candidate, userTypes)
 		if before != after {
 			writeAccessPostureFlip(w, before, after)
 			return
 		}
 	}
 
-	if lerr := s.accessLockoutErr(r, existing, candidate); lerr != nil {
+	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
 		writeError(w, http.StatusBadRequest, lerr.Error())
 		return
 	}
@@ -658,10 +759,11 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// the audit row and the WARN line rather than the wire — a body here would
 	// change this route's status shape for every existing client.
 	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
-	revokedDeleted := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate)
+	revokedDeleted := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate, userTypes)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
-			"value": matched.Value, "role": matched.Role, "stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
+			"value": matched.Value, "role": matched.Role, "user_type": matched.UserType,
+			"stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
 		})))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -676,10 +778,20 @@ type accessPreviewRequest struct {
 }
 
 type accessPreviewResponse struct {
-	Role    string       `json:"role"`
-	OK      bool         `json:"ok"`
-	Matched []oidc.Match `json:"matched"`
-	Error   string       `json:"error,omitempty"`
+	Role string `json:"role"`
+	// UserType is the type the sign-in would carry ("" when refused).
+	UserType string       `json:"user_type,omitempty"`
+	OK       bool         `json:"ok"`
+	Matched  []oidc.Match `json:"matched"`
+	// Denial is why a refused sign-in is refused: no_role,
+	// user_type_ambiguous (Tied names the custom types at the top
+	// priority) or user_type_unknown (Unknown names the missing ids). An
+	// admin sign-in is never refused over a type: it carries Tied or Unknown
+	// with no Denial and lands on the built-in type.
+	Denial  string   `json:"denial,omitempty"`
+	Tied    []string `json:"tied,omitempty"`
+	Unknown []string `json:"unknown,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 // handlePreviewRole runs the SAME derivation a real login would (PreviewRole,
@@ -706,7 +818,7 @@ func (s *Server) handlePreviewRole(w http.ResponseWriter, r *http.Request) {
 		roles, groups, email = nil, oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())
 	}
 
-	role, matched, ok, err := s.cfg.OIDC.PreviewRole(r.Context(), roles, groups, email)
+	d, err := s.cfg.OIDC.PreviewRole(r.Context(), roles, groups, email)
 	if err != nil {
 		writeJSON(w, http.StatusOK, accessPreviewResponse{Matched: []oidc.Match{}, Error: "role_check_unavailable"})
 		return
@@ -714,8 +826,12 @@ func (s *Server) handlePreviewRole(w http.ResponseWriter, r *http.Request) {
 	// A nil slice marshals to JSON null, but the field is typed
 	// AccessPreviewMatch[] on the wire and the console reads its .length — so
 	// a no-match preview must still send [], never null.
+	matched := d.Matches
 	if matched == nil {
 		matched = []oidc.Match{}
 	}
-	writeJSON(w, http.StatusOK, accessPreviewResponse{Role: role, OK: ok, Matched: matched})
+	writeJSON(w, http.StatusOK, accessPreviewResponse{
+		Role: d.Role, UserType: d.UserType, OK: d.OK(), Matched: matched,
+		Denial: d.Denial, Tied: d.Tied, Unknown: d.Unknown,
+	})
 }
