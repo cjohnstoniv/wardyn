@@ -216,6 +216,10 @@ export interface AgentRun {
   // sent as an explicit spec.
   preset?: string;
   preset_version?: number;
+  // AgentRun.CreatedVia (migration 0094, #1142): the registered portal this
+  // run was launched through on its owner's behalf. Absent for a run its
+  // owner launched themselves.
+  created_via?: string;
   // internal/types/attention.go's RunAttention (#1197) — what this LIVE
   // run is waiting on and who (in the caller's own console view) can clear
   // it, projected only when the caller's GET /runs (or GET /me/attention)

@@ -8,8 +8,47 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
+  registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
+  group); the portal then trades the person's own live identity-provider token for a ten-minute,
+  non-refreshable delegated token at `POST /api/v1/token` (RFC 8693 token exchange). The token
+  acts as the person at ordinary user reach — an admin gets no admin reach through it — on a fixed
+  set of run routes (create, preflight, list, read, extend, stop, attach ticket, `GET /me`); every
+  other route answers `403` `delegation_scope`. No impersonation; delegation is recorded as
+  delegation: every audit row it causes has the person as actor and the portal in `data.via`, each
+  exchange writes `delegation.exchange`, and a run it launches carries `created_via`. Revoking the
+  portal, or `POST /sessions/revoke` for the person, ends its tokens on their next request; runs it
+  launched keep running. Migration `0094_delegates` adds the `delegates` and `delegated_tokens`
+  tables, `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`; nothing that
+  worked before newly fails. See OPERATIONS.md, "Delegated run management (portals)".
+- **A run's title is now renameable, and no longer required to launch one (#1197 L2).**
+  `PATCH /runs/{id}/title` lets the run's owner change its title in any run state — owner only,
+  audited as `run.title.set` with the old and new values. New Run's Title field is optional and
+  prefills from the task's own first line (up to 80 characters, cut at a word boundary) until the
+  operator edits it by hand; the "Runs that share a title are grouped together" hint is gone, since
+  exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
+  owner, showing a "Renamed" toast and the new title in place, with no reload.
+
 ### Changed
 
+- **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
+  matrix (#1200).** A new shared `TierPicker` component lists only the tiers this host has installed,
+  each with a one-line strength and an info popover, plus a "Compare barriers" dialog holding the full
+  table for reference — never the governance floor (that's stated in Governance, where it's set, and
+  in each person's own picker, where it binds). The card still shows the canon "No sandbox runner"
+  danger card and its fix line when nothing can launch, and the k8s Runner/Egress-containment rows on
+  a Kubernetes driver, exactly as the Getting-started funnel does. The Governance profile editor gains
+  an "Allowed barriers" control: one radio over the existing `min_confinement_class` ceiling field, so
+  an admin sets the floor without hand-editing the ceiling's JSON.
+- **New Run's Barrier control and member Getting-started's barrier summary now obey the caller's
+  governance ceiling (#1200), exactly where the server would enforce it — never an admin's inline
+  launch (never clamped) or an unassigned member's saved policy (not raised to the deployment
+  default).** A tier the ceiling forbids or the host can't build is dropped from the Barrier control
+  rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
+  admin" only when the governance ceiling actually did the narrowing; none qualifying names the
+  requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
   (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,

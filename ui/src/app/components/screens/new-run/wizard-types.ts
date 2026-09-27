@@ -404,6 +404,31 @@ export function cloneFromAudit(run: ClonableRun, events: AuditEvent[]): RunPrefi
   return runPrefill(run, createRequestFromAudit(events));
 }
 
+// The New Run title's default, while the operator hasn't typed one of their
+// own (#1197 L2, design.md §3.4): the task's own first line, cut at a WORD
+// BOUNDARY within 80 characters — never mid-word, and never past a line break
+// the task itself chose. The server never required a title (runs_create_
+// validate.go's own doc comment); this is the console's default, not a
+// second validation rule.
+const MAX_PREFILLED_TITLE_LEN = 80;
+
+export function titleFromTask(task: string): string {
+  const firstLine = task.split("\n", 1)[0];
+  // F4 (#1197 L2 review): the task field tolerates tab/CR (the multiline
+  // exemption, runFieldCharsAllowed's `multiline` arg) but a title does not
+  // (it is validated non-multiline both here and server-side), so an
+  // interior tab or other control character surviving into the prefill would
+  // get the operator refused on Launch for a title they never typed. Collapse
+  // every run of control characters and whitespace into one space BEFORE the
+  // length/word-boundary cut, so the prefilled title always passes the same
+  // check a hand-typed one does.
+  const collapsed = firstLine.replace(/[\p{Cc}\s]+/gu, " ").trim();
+  if (collapsed.length <= MAX_PREFILLED_TITLE_LEN) return collapsed;
+  const cut = collapsed.slice(0, MAX_PREFILLED_TITLE_LEN);
+  const wordBoundary = cut.lastIndexOf(" ");
+  return (wordBoundary > 0 ? cut.slice(0, wordBoundary) : cut).trim();
+}
+
 /**
  * A fresh wizard, optionally overlaid with a prefill (B4b's clone). The overlay
  * is applied WHOLE over the defaults rather than merged field-by-field: every

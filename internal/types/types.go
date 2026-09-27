@@ -307,6 +307,10 @@ type AgentRun struct {
 	// OperatorOwned is identity.Claims.OperatorOwned, stored (migration 0089)
 	// so dispatch and a revive's re-mint read what create decided.
 	OperatorOwned bool `json:"-"`
+	// CreatedVia is the registered portal (types.Delegate) this run was
+	// launched through on the person's behalf (migration 0094, #1142); nil for
+	// a run its creator launched themselves. The owner is still the person.
+	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the

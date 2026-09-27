@@ -62,6 +62,14 @@ vx vault secrets enable -path=wardyn -version=2 kv >/dev/null
 vx vault secrets enable transit >/dev/null
 vx vault write -f transit/keys/wardyn type=aes256-gcm96 >/dev/null
 vx vault policy write wardyn-kv - >/dev/null <<EOF
+# read on wardyn/config is the documented stanza (docs/OPERATIONS.md's Vault
+# KV Policy section): vaultkv.New's boot-time check that a KV v2 engine is
+# mounted at WARDYN_VAULT_KV_MOUNT (GET wardyn/config) needs it, on every
+# role that opens a KV Store — this harness's role is the only one, so it
+# carries the stanza the docs would otherwise reserve for wardyn-credentials.
+path "wardyn/config" {
+  capabilities = ["read"]
+}
 path "wardyn/data/{{identity.entity.aliases.$ACCESSOR.metadata.service_account_namespace}}/*" {
   capabilities = ["create", "update", "read"]
 }
@@ -79,6 +87,11 @@ vx vault write auth/kubernetes/role/wardyn bound_service_account_names=wardyn bo
 kubectl create namespace "$NS" >/dev/null
 kubectl -n "$NS" create serviceaccount wardyn >/dev/null
 kubectl -n "$NS" create token wardyn --audience vault --duration 1h >"$WORK/jwt"
+# wardynd's own CheckSecretFileMode refuses an other-readable token file it
+# owns (internal/cliutil/secret_file.go); the shell redirect above writes 0644
+# under a default umask, so make it look like a real Vault Agent injection
+# (group-readable 0640) instead of weakening the check.
+chmod 0640 "$WORK/jwt"
 
 kubectl -n vault port-forward svc/vault 0:8200 --address 127.0.0.1 >"$WORK/pf.log" 2>&1 &
 PF_PID=$!

@@ -455,6 +455,22 @@ func (s *Server) ownsRunOrSuperAdmin(r *http.Request, run types.AgentRun) bool {
 	return s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
 }
 
+// ownsRun is the strictest of the three: the run's OWNER alone, with NO admin
+// bypass at all — not even the super admin ownsRunOrSuperAdmin still grants.
+// It exists for the one route that is a display-field write with no security
+// or incident-response warrant behind it (PATCH /runs/{id}/title, #1197 L2,
+// design.md §3.4 and packet H-5 = A: "Rename on the run page (owner only)").
+// An admin or a security_admin on a foreign run gets the byte-identical 404 a
+// non-owner gets — the same no-existence-oracle shape ownsRunOrAdmin's own
+// callers rely on, just with the bypass removed. `run.CreatedBy == ""` is
+// checked explicitly (not merely relying on the string comparison) so a
+// caller with no resolvable principal can never match by two empty strings
+// comparing equal.
+func (s *Server) ownsRun(r *http.Request, run types.AgentRun) bool {
+	p := principalFromRequest(r)
+	return run.CreatedBy != "" && p != "" && run.CreatedBy == p
+}
+
 // getRunAuthorized loads a run and authorizes the caller as its owner or an
 // admin (ownsRunOrAdmin) — the owner-scoped twin of getRunOr404, for every
 // /runs/{id} route a member may reach for their OWN runs (get/kill/profile/

@@ -41,6 +41,9 @@ type AttachTicket struct {
 	ActorType types.ActorType
 	Principal string
 	Role      string
+	// Via is the delegated lane the ticket was minted on (#1142), nil
+	// otherwise; the ticket lane replays it onto the rows it writes.
+	Via *types.DelegationVia
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -52,11 +55,15 @@ type AttachTicket struct {
 // holds only unredeemed tickets inside a 30s TTL, i.e. a handful of rows. Add a
 // sweeper (or an expires_at index) only if mint volume ever makes that false.
 func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error {
+	var viaDelegate, viaGrant *uuid.UUID
+	if t.Via != nil {
+		viaDelegate, viaGrant = &t.Via.Delegate, &t.Via.Grant
+	}
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now,
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9)`,
+		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -75,12 +82,13 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time) (AttachTicket, bool, error) {
 	var t AttachTicket
 	var actorType string
+	var viaDelegate, viaGrant *uuid.UUID
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
@@ -88,5 +96,8 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 		return AttachTicket{}, false, fmt.Errorf("store: consume attach ticket: %w", err)
 	}
 	t.ActorType = types.ActorType(actorType)
+	if viaDelegate != nil && viaGrant != nil {
+		t.Via = &types.DelegationVia{Delegate: *viaDelegate, Grant: *viaGrant}
+	}
 	return t, true, nil
 }

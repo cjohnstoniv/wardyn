@@ -353,6 +353,20 @@ export const runs = {
     return asJson<ProfileProposal>(res);
   },
 
+  // PATCH /api/v1/runs/{id}/title — OWNER ONLY, no admin bypass, any run
+  // state (#1197 L2). Deliberately its own call rather than folded into
+  // setEndAndWait: the two PATCH doors have different authorization tiers
+  // (this one owner only, that one owner-or-SUPER) and different state rules
+  // (this one works on a terminal run, that one refuses).
+  async setTitle(id: string, title: string): Promise<{ id: string; title: string }> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/title`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<{ id: string; title: string }>(res);
+  },
+
   // POST /api/v1/runs/{id}/kill  -> 202 Accepted
   async killRun(id: string): Promise<void> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}/kill`, { method: "POST" });

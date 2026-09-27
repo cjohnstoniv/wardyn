@@ -96,8 +96,7 @@ test.describe("New run — one page", () => {
     await expect(page.getByText(/1[0-9] domains allowed/)).toBeVisible();
 
     // A broken document says so instead of deriving from nothing, and Launch
-    // stops rather than posting a body nobody can read. The title is filled
-    // first so the disable is the SPEC's doing, not the title rule's.
+    // stops rather than posting a body nobody can read.
     await page.getByLabel("Title").fill("e2e smoke");
     await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
     await spec.fill("{ not json");
@@ -143,9 +142,6 @@ test.describe("New run — one page", () => {
     await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
     await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "Saved policy" })).toBeVisible();
-    // The launch gate surfaces ONE problem at a time, earliest first — give
-    // the run a title so the policy problem is the displayed message.
-    await page.getByLabel("Title").fill("mode row e2e");
     // Nothing is picked yet, so Launch says what it is waiting for.
     await expect(page.getByText("Pick a saved policy, or write a custom one.")).toBeVisible();
 
@@ -161,16 +157,14 @@ test.describe("New run — one page", () => {
   // or fail on who ran it. It is pinned in new-run-screen.test.tsx instead,
   // where the SetupStatus is controlled.
 
-  // Every run is named: the title is the grouping key on the Runs board, so
-  // Launch stays disabled — and says why — until there is one.
-  test("Launch waits for a title, and says what it is waiting for", async ({ page }) => {
+  // #1197 L2: a title is no longer required to launch — the server never
+  // enforced one, only this screen did, and now the console default derives
+  // one from the task instead of refusing to launch without one.
+  test("Launch does not require a title", async ({ page }) => {
     await openNewRun(page);
     const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeDisabled();
-    await expect(page.getByText("Give this run a title.")).toBeVisible();
-
-    await page.getByLabel("Title").fill("e2e smoke");
     await expect(launch).toBeEnabled();
+    await expect(page.getByText("Give this run a title.")).toHaveCount(0);
   });
 
   test("launching creates a run and lands on its detail page", async ({ page }) => {
@@ -226,7 +220,7 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
 // one element (a second door would be a Playwright strict-mode violation).
 test.describe("New run — clone from a killed run", () => {
   // ticket: B4b
-  test("clones task/agent/barrier from the killed run, and Launch enables once titled", async ({ page }) => {
+  test("clones task/agent/barrier from the killed run; Title tracks the cloned task", async ({ page }) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     // "e2e fixture 7" is the seeded backend's KILLED run (scripts/e2e-backend.sh)
     // — read its real facts rather than hardcode them, so this test tracks the
@@ -262,10 +256,13 @@ test.describe("New run — clone from a killed run", () => {
       page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: barrierLabel }),
     ).toHaveAttribute("aria-checked", "true");
 
-    // Title does NOT clone (fixture 7 was seeded untitled) — Launch is
-    // withheld until one is given, exactly the fresh-wizard rule.
+    // Title does NOT clone verbatim (fixture 7 was seeded untitled) — but
+    // #1197 L2's prefill fills it from the cloned task, so Launch is already
+    // enabled with no title of the operator's own typed yet.
     const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeDisabled();
+    await expect(page.getByLabel("Title")).toHaveValue(source.task);
+    await expect(launch).toBeEnabled();
+    // Still editable — the operator's own title replaces the derived one.
     await page.getByLabel("Title").fill("cloned from fixture 7");
     await expect(launch).toBeEnabled();
   });
@@ -390,7 +387,8 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await page.getByRole("combobox", { name: "Saved policy" }).click();
     await page.getByRole("option", { name: "e2e rail-height policy" }).click();
     await expect(page.getByText("Tool rules", { exact: true })).toBeVisible();
-    // Launch is disabled with no title ("Give this run a title.") — fill one.
+    // A title isn't required to launch (#1197 L2) — filled anyway so the rail
+    // this test measures matches what an operator actually fills in.
     await page.getByLabel("Title").fill("e2e rail-height");
 
     // Reachable via scroll — not "fits with no scroll needed" (the rail is
