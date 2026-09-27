@@ -140,7 +140,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
       // render; they are NOT persisted (the durable record is the run.create
       // audit row's own clamp warnings), so they are gone the moment the
       // member reloads that page.
-      navigate(`/runs/${encodeURIComponent(created.id)}`, { state: { launchWarnings: created.warnings ?? [] } });
+      void navigate(`/runs/${encodeURIComponent(created.id)}`, { state: { launchWarnings: created.warnings ?? [] } });
     } catch (e) {
       const server = getErrorMessage(e);
       // B9 renders the SERVER's sentence verbatim: with none, the strip says
