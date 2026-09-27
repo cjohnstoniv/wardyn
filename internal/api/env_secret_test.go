@@ -72,23 +72,23 @@ func TestFilterMemberGrants_EnvSecretIsAdminOnly(t *testing.T) {
 	}
 	listed := envSecretGrant("CORP_API_TOKEN", "corp-token")
 
-	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{listed})
+	kept, warns, code, err := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{listed})
 	if len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
 		t.Fatalf("default posture: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) — env_secret is admin-only",
 			len(kept), len(warns), code, err)
 	}
 
 	t.Setenv(envAllowMemberEnvSecret, "1")
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{listed}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{listed}); len(kept) != 1 {
 		t.Fatalf("posture open, ceiling-listed pairing: kept=%d, want 1", len(kept))
 	}
 	// Still bounded by the ceiling pairing once open: the NAME is part of the
 	// match, so an operator-blessed secret cannot be re-homed to a variable the
 	// operator never wrote.
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("OTHER_VAR", "corp-token")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("OTHER_VAR", "corp-token")}); len(kept) != 0 {
 		t.Fatalf("posture open, unlisted variable name: kept=%d, want 0", len(kept))
 	}
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("CORP_API_TOKEN", "prod-db-password")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("CORP_API_TOKEN", "prod-db-password")}); len(kept) != 0 {
 		t.Fatalf("posture open, unlisted secret: kept=%d, want 0", len(kept))
 	}
 }
@@ -154,7 +154,7 @@ type envSecretCeilingStore struct {
 	policy  types.RunPolicy
 }
 
-func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.profile == nil {
 		return nil, types.CapabilitySubjectUser, store.ErrNotFound
 	}
@@ -178,25 +178,29 @@ func (s *envSecretCeilingStore) ListCapabilityGrants(context.Context) ([]types.C
 func (s *envSecretCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
 }
 
+func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the
 // admin-only posture at the seam that decides a real run, not at
-// filterMemberGrants' front door.
+// filterUserGrants' front door.
 //
-// TestFilterMemberGrants_EnvSecretIsAdminOnly above calls filterMemberGrants
+// TestFilterMemberGrants_EnvSecretIsAdminOnly above calls filterUserGrants
 // DIRECTLY, so it cannot see whether anything reaches it — and for the default
 // posture nothing did: the stored/default branch of resolveRunPolicy gates the
 // whole member pipeline on `ceiling.Profile != nil`, so an UNASSIGNED member
 // selecting a stored row (or taking the deployment default) kept the grant
 // verbatim and resolveEnvSecretGrants wrote the operator's raw secret value into
 // their sandbox env. THREAT-MODEL.md §5.1a, docs/ENV.md's
-// WARDYN_ALLOW_MEMBER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
+// WARDYN_ALLOW_USER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
 // state the control without qualification.
 //
 // Four arms over the two axes that gate it — assignment (the bug) and the route
@@ -472,5 +476,15 @@ func TestDispatchEnvSplit_BedrockCredentialsLeaveEnv(t *testing.T) {
 				t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
 			}
 		})
+	}
+}
+
+// TestEnvAllowMemberEnvSecret_Name pins the name this package reads to the new
+// spelling cmd/wardynd's deprecated-alias table (env_aliases_test.go) copies
+// WARDYN_ALLOW_MEMBER_ENV_SECRET into; a drift here would leave the alias
+// setting a variable nothing reads.
+func TestEnvAllowMemberEnvSecret_Name(t *testing.T) {
+	if envAllowMemberEnvSecret != "WARDYN_ALLOW_USER_ENV_SECRET" {
+		t.Errorf("envAllowMemberEnvSecret = %q, want WARDYN_ALLOW_USER_ENV_SECRET", envAllowMemberEnvSecret)
 	}
 }

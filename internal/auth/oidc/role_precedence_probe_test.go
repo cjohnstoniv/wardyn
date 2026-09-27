@@ -7,7 +7,7 @@
 // role_mappings_test.go / derive_rank_test.go. Pure table test — no store, no
 // signed ID token, no IdP.
 //
-// INVARIANT UNDER TEST: role precedence across the THREE config sources and the
+// Invariant under test: role precedence across the three config sources and the
 // IdP's claims is exactly (deriveRole and mergeRoleMaps in derive.go):
 //
 //	source:  operator allowlist  >  chart WARDYN_OIDC_ROLE_MAP  >  console rows
@@ -23,7 +23,7 @@
 //
 //	cd <repo root> && \
 //	cp local/review-0.7/deep/F2-sso-to-ceiling/role_precedence_probe_test.go internal/auth/oidc/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestF2_' -count=1 -p 4 -v ; \
+//	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestRoleMapPrecedence_' -count=1 -p 4 -v ; \
 //	rm -f internal/auth/oidc/role_precedence_probe_test.go
 package oidc_test
 
@@ -33,7 +33,8 @@ import (
 	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-func TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
+func TestRoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
+	// ticket: F2
 	const (
 		bob   = "bob@corp.example"
 		alice = "alice@corp.example"
@@ -160,12 +161,13 @@ func TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
 	}
 }
 
-// TestF2_RoleMapArm1_NoMapMeansAllowlistOnly pins arm 1 (deriveRole's
+// TestRoleMapPrecedence_NoMapMeansAllowlistOnly pins arm 1 (deriveRole's
 // empty-roleMap branch in derive.go): with an EMPTY merged map the allowlist
 // alone splits admin/member, and with neither source EVERY human is admin —
 // the posture under which no ceiling ever binds anyone (effectiveCeiling
 // short-circuits on isOperator).
-func TestF2_RoleMapArm1_NoMapMeansAllowlistOnly(t *testing.T) {
+func TestRoleMapPrecedence_NoMapMeansAllowlistOnly(t *testing.T) {
+	// ticket: F2
 	merged, _ := writoidc.MergeRoleMapsForTest(nil, []string{"ops@corp.example"}, nil)
 	if len(merged) != 0 {
 		t.Fatalf("merged = %v, want empty", merged)

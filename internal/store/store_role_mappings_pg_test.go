@@ -124,3 +124,46 @@ func TestPG_RoleMappings_ListOldestFirst(t *testing.T) {
 		t.Errorf("list order = %v indices for insert order a,b,c; want ascending (oldest first)", mineIdx)
 	}
 }
+
+// TestPG_RoleMappings_UserType: a user row names its type, a re-add changes
+// the type in place, a tier row carries none, and a type the table does not
+// hold is ErrNotFound from the foreign key — the caller's "that type doesn't
+// exist", never a store fault.
+func TestPG_RoleMappings_UserType(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewPG(runsPGPool(t))
+	suffix := uuid.NewString()[:8]
+	typeID := "ut-rm-" + suffix
+	if _, err := st.CreateUserType(ctx, types.UserType{ID: typeID, Name: "Role map type " + suffix, Priority: 3}); err != nil {
+		t.Fatalf("create type: %v", err)
+	}
+	value := "test-value-" + uuid.NewString()
+
+	row := roleMapping(value, "user")
+	row.UserType = typeID
+	saved, err := st.UpsertRoleMapping(ctx, row)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = st.DeleteRoleMapping(ctx, saved.ID)
+		_ = st.DeleteUserType(ctx, typeID)
+	})
+	if saved.UserType != typeID {
+		t.Fatalf("saved user_type = %q, want %q", saved.UserType, typeID)
+	}
+
+	row.UserType = types.UserTypeStandard
+	if saved, err = st.UpsertRoleMapping(ctx, row); err != nil || saved.UserType != types.UserTypeStandard {
+		t.Fatalf("re-add on standard = %+v, %v; want the type changed in place", saved, err)
+	}
+	if saved, err = st.UpsertRoleMapping(ctx, roleMapping(value, "admin")); err != nil || saved.UserType != "" {
+		t.Fatalf("re-add as admin = %+v, %v; want no type on a tier row", saved, err)
+	}
+
+	missing := roleMapping("test-value-"+uuid.NewString(), "user")
+	missing.UserType = "no-such-type-" + suffix
+	if _, err := st.UpsertRoleMapping(ctx, missing); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("insert naming a missing type = %v, want ErrNotFound", err)
+	}
+}

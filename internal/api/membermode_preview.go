@@ -3,8 +3,8 @@
 
 package api
 
-// membermode_preview.go — "view as a NEW member (not signed in)", the second
-// posture of member mode.
+// membermode_preview.go — "view as a NEW user (not signed in)", the second
+// posture of the user view (renamed in 0.8 from member mode).
 //
 // It lives in its own file rather than in membermode.go because the whole
 // argument for the one guard it publishes is a screen long, and because
@@ -21,7 +21,7 @@ import (
 
 // DRAFT (M2 canon pending)
 const (
-	// memberPreviewSignInRefusal is the 409 POST /setup/harness-login answers
+	// userViewPreviewSignInRefusal is the 409 POST /setup/harness-login answers
 	// inside the preview. A capture made here would land on the ADMIN'S OWN
 	// namespace — the preview hides their credential, it does not give them a
 	// second identity to capture into — so allowing the launch would let the
@@ -30,7 +30,7 @@ const (
 	// whose roster row is `shared` still answers the member's own
 	// harness_login_not_per_user 403: that is what a real member meets, and the
 	// preview exists to show what a real member meets.
-	memberPreviewSignInRefusal = "Exit member mode to sign in to AWS — the capture would land on your own identity."
+	userViewPreviewSignInRefusal = "Exit the user view to sign in to AWS — the capture would land on your own identity."
 )
 
 // previewHidesOwnCredential reports whether THIS request is being made inside
@@ -58,7 +58,7 @@ const (
 // absent is the fail-closed answer everywhere it lands. The writers
 // (storeAWSSSOBlob, the run-token upload routes) never consult it, and the one
 // door that could have written inside the preview — the login launch — is
-// refused with memberPreviewSignInRefusal above.
+// refused with userViewPreviewSignInRefusal above.
 //
 // It is a request-scoped fact. It rides the context published by
 // oidc.contextWithPrincipal, so it is visible exactly as long as the request's
@@ -74,7 +74,7 @@ func previewHidesOwnCredential(ctx context.Context) bool {
 	return oidc.MemberPreviewNoCredential(ctx)
 }
 
-// memberPreviewApplies reports whether the no-credential posture would MEAN
+// userPreviewApplies reports whether the no-credential posture would MEAN
 // anything on this deployment for this caller: the model-access agent's roster
 // row has to name a credential PER PERSON.
 //
@@ -100,7 +100,7 @@ func previewHidesOwnCredential(ctx context.Context) bool {
 // variant banner until they exit. The cookie is the record of what they asked
 // for, and re-reading the roster on every render to expire a banner would put a
 // store read on every screen.
-func (s *Server) memberPreviewApplies(ctx context.Context, r *http.Request) bool {
+func (s *Server) userPreviewApplies(ctx context.Context, r *http.Request) bool {
 	scope, ok := s.awsSSOScopeForAgent(ctx, modelAccessAgent,
 		runIdentitySubject(ctx, principalFromRequest(r)))
 	return ok && scope.perUser

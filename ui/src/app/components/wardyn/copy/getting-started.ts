@@ -52,6 +52,17 @@ export const MEMBER_GETTING_STARTED = {
   // AGENTS.SIGN_IN_AWS so a lookup by the visible name still finds it (pinned in
   // member-getting-started.test.tsx).
   SIGN_IN_AWS_ARIA_SUMMARY: "Sign in to AWS — from What's set up for you",
+  // M-6 (D5, admin-member-modes-design.md §4.8): demos are sandbox runs, a
+  // user act, so they moved here from the admin funnel — same section labels
+  // (SETUP.PHASE_DEMOS_*, modes-b.html), reused rather than retyped, since
+  // both name the exact same two Demo.section groups (demo-catalog.ts).
+  DEMOS_EGRESS_TITLE: "Egress demos",
+  DEMOS_SECRETS_TITLE: "Secrets demos",
+  DEMO_OPEN: "Open",
+  // Packet M-B (modes-b.html): the "Your model connections · in Your account"
+  // row, which links to /account.
+  MODEL_CONNECTIONS: "Your model connections",
+  MODEL_CONNECTIONS_WHERE: "in Your account",
 } as const;
 
 // DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator
@@ -82,12 +93,5 @@ export const RUNS_WAIT = {
   // before it resolves, so this stands alone rather than reading as "nothing
   // is held" (the empty-Map default's lie).
   CHECKING: "Checking…",
-  // The card's own sentence once a hold isHeld no longer counts as live (the
-  // 60-minute stale-hold ceiling, lib/types/approvals.ts) — replaces the
-  // per-run reason line, not the group's chip below.
-  STALE_CARD: "Was held — check the run",
-  // The header's uncounted-elsewhere chip for the same fact, at group
-  // granularity: a degraded claim, not silence about what happened here.
-  STALE_GROUP: (n: number) => (n === 1 ? "1 was held" : `${n} were held`),
 } as const;
 

@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPortQualifiedOnlyHostIsNotCredentialedOnPort80 (W6-S3) pins the premise
+// TestPortQualifiedOnlyHostIsNotCredentialedOnPort80 pins the premise
 // the port-80 injection arm has always been written under and that B10-F1
 // silently removed: that a host bound for injection had a BARE allowlist entry,
 // which is "silent about the port" and so reads port 80 as the default port of
@@ -74,12 +74,12 @@ func TestPortQualifiedOnlyHostIsNotCredentialedOnPort80(t *testing.T) {
 	})
 }
 
-// TestAllowedExactHostHonoursAPortQualifiedWildcardDeny (W6-S5) closes the
+// TestAllowedExactHostHonoursAPortQualifiedWildcardDeny closes the
 // asymmetry B10-F1's any-port arm left behind: it shadows a port-qualified
 // EXACT deny but not a port-qualified WILDCARD one, so `deny *.corp:8443`
 // could not cancel `allow m.corp:8443` at bind time — unlike AuthoredPortFor,
 // which consults both. Alone it is a mis-bind (evalHost still denies the
-// port); with W6-S3's port-80 arm it was the same leak one door over.
+// port); with the port-80 arm above it would be the same leak one door over.
 func TestAllowedExactHostHonoursAPortQualifiedWildcardDeny(t *testing.T) {
 	if CompilePolicy(types.RunPolicySpec{
 		AllowedDomains: []string{"m.corp:8443"}, DeniedDomains: []string{"*.corp:8443"},

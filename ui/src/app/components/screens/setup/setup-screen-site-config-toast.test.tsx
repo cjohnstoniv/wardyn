@@ -113,7 +113,8 @@ async function saveDetectedProxy(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: /use detected proxy/i }));
 }
 
-describe("SetupScreen — the Corporate-network save toast (F6-F6)", () => {
+describe("SetupScreen — the Corporate-network save toast", () => {
+  // ticket: F6-F6
   it("warns on dangling_secret_refs, as an ADDITIONAL toast beside the step's own success toast", async () => {
     putSiteConfigMock.mockResolvedValue({
       siteConfig: { upstream_proxy_url: "http://proxy.corp.acme.com:8080" },

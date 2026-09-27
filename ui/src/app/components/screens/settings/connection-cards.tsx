@@ -40,22 +40,21 @@ import { isPerUserSsoRow } from "../../../lib/workspace-providers-copy";
 import { isPerUserBearerRow } from "../../../lib/model-access";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
-import { HarnessLoginPane } from "./harness-login-pane";
-import { MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
+import { MODEL_LEDE } from "../../../lib/model-providers-copy";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 
 // Canon strings (local/ux-0.5-mock/CANON-STRINGS.md § Settings). Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
 // deleted and shrinks with it.
 export const S = {
   MODEL_TITLE: "Model provider",
-  MODEL_LEDE: "Agent runs need one. Governed commands don't.",
+  MODEL_LEDE,
   // The old footer said "Keys never enter the sandbox" full stop, which is true
   // of the subscription lane, both api-key lanes, and Bedrock's BEARER key — the
   // proxy injects a static header on the wire for all four. It is NOT true of
@@ -415,22 +414,13 @@ export function ModelProviderCard({
   const [lane, setLane] = React.useState<ModelLane>(
     subRow ? "subscription" : keyRow ? "api_key" : bedrockRow ? "bedrock" : "subscription",
   );
-  const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
-  // One closer for the REFRESH, behind every way out of
-  // the login dialog. CAPTURE_CHECK_UNREACHABLE leaves the pane on its error
-  // phase with the capture possibly LANDED — onDone never fires, so without
-  // this the card kept reading not-connected until a manual page reload.
-  // Cancel/Escape make no claim either way; they just cost one GET.
-  //
-  // The pane's own Cancel is the only path that KILLS the login sandbox
-  // run (HarnessLoginPane owns that; it holds the run id). Escape and an
-  // overlay click close the dialog and unmount the pane — deliberately NOT
-  // lifted here, because a kill issued from the card would race the pane's own
-  // and would claim knowledge of a run this component never had.
-  const closeLogin = React.useCallback(() => {
-    setLoginOpen(null);
-    onChanged();
-  }, [onChanged]);
+  // Both sign-in buttons open the shell's one door (#544 — this card mounted
+  // its own dialog before). `onClosed` re-reads this screen's status behind
+  // every way out: CAPTURE_CHECK_UNREACHABLE leaves the pane on its error phase
+  // with the capture possibly LANDED — onDone never fires — and Cancel/Escape
+  // make no claim either way; they just cost one GET.
+  const door = useModelAccessDoor();
+  const openLogin = (login: "anthropic" | "aws") => door.openDoor({ for: { login }, onClosed: onChanged });
   const [busy, setBusy] = React.useState(false);
   const { disabled: harnessBusy, showSpinner: harnessSpinning } = useDeferredBusy(busy);
 
@@ -599,7 +589,7 @@ export function ModelProviderCard({
                 Unavailable in this deployment — {status.auth.shared_subscription_reason}
               </p>
             ) : (
-              <Button size="sm" disabled={!operator} onClick={() => setLoginOpen("anthropic")}>
+              <Button size="sm" disabled={!operator} onClick={() => openLogin("anthropic")}>
                 Sign in
               </Button>
             )}
@@ -711,7 +701,7 @@ export function ModelProviderCard({
                   one) and drops the door. */}
               {!mechanismPrincipal && (
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
+                  <Button size="sm" variant="secondary" disabled={!operator} onClick={() => openLogin("aws")}>
                     Sign in with SSO
                   </Button>
                   <span className="text-meta text-muted-foreground">
@@ -723,67 +713,6 @@ export function ModelProviderCard({
           </LaneBody>
         )}
       </Card>
-
-      {/* This dialog hosts a live PTY, which makes it unlike every other dialog
-          in the console, in three ways worth spelling out:
-
-          1. NO TRANSFORM. DialogContent centres itself with
-             translate(-50%,-50%), and a transformed ancestor becomes the
-             containing block for `position: fixed` DESCENDANTS. AttachTerminal's
-             fullscreen is `fixed inset-0`, so inside the default dialog it
-             rendered at the dialog's size instead of the viewport's — the
-             fullscreen button silently did almost nothing. Measured: a host
-             with `transform: translate(0,0)` gives a `fixed inset-0` child
-             512px; `transform: none` gives it the full 2548px viewport. Note
-             `transform-none`, NOT `translate-x-0` — a zeroed translate is still
-             a transform and still traps `fixed`. Centring is inset-0 + m-auto
-             + h-fit, which needs no transform at all.
-          2. WIDER via an inline `style`, not a class. The base carries
-             `w-full` and `sm:max-w-lg`; a competing `max-w-*` class is the same
-             specificity, so which one wins is decided by utility order in the
-             compiled stylesheet — measured, `sm:max-w-lg` won both `max-w-3xl`
-             and `sm:max-w-[72rem]`. An inline style beats every class, so the
-             width is a fact rather than a race.
-          3. `min-w-0` on the pane. DialogContent is a GRID, and a grid item
-             defaults to `min-width: auto`, so it refuses to shrink below its
-             content's min-content width. The login terminal is pinned to 512
-             columns (LOGIN_PTY_COLS — a wrapped OAuth URL breaks the login), so
-             without this the terminal shoved the dialog past the viewport edge
-             and painted over the page. */}
-      <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && closeLogin()}>
-        <DialogContent
-          className="scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
-          // `translate` and `transform` are SEPARATE CSS properties in Tailwind
-          // v4: translate-x-[-50%] emits `translate: -50% -50%`, which
-          // `transform: none` does not reset. Left applied it shifted this
-          // dialog half its own size up and to the left of where margin:auto
-          // had centred it — measured left 122px against a computed
-          // margin-left of 698px. Cleared here, where nothing can outrank it.
-          style={{
-            width: "min(96vw, 72rem)",
-            maxWidth: "min(96vw, 72rem)",
-            translate: "none",
-            transform: "none",
-          }}
-        >
-          {/* ONE spelling with the button that opens it and with the shell
-              strip's own door (W0-mock ruling 5): the dialog title and the
-              control that opens it must never name the sign-in differently. */}
-          <DialogTitle>
-            {loginOpen === "aws" ? MODEL_ACCESS_BANNER.DIALOG_TITLE : "Sign in to Claude"}
-          </DialogTitle>
-          {loginOpen && (
-            <div className="min-w-0">
-              <HarnessLoginPane
-                provider={loginOpen}
-                startURLManaged={perUserSso}
-                onDone={closeLogin}
-                onCancel={closeLogin}
-              />
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

@@ -302,7 +302,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 			t.Errorf("audit data = %v, want tokens_revoked 2 — the audit trail is the system of record for a demotion", data)
 		}
 
-		// AND THE COUNT IS NOT THE WHOLE RECORD (B5-F3 residual). The
+		// And the count is not the whole record (B5-F3 residual). The
 		// unanswerable-snapshot arm revokes EVERY elevated stamp it cannot
 		// re-derive — sub-dan's token names no group at all — so "2" alone
 		// cannot answer "whose credentials did that edit kill". Each revoked

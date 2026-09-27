@@ -3,22 +3,21 @@
 
 package db
 
-// PIN for the reopened half of the finding that a migration run which does not
-// reach its tail permanently and silently strips an operator's ENABLE ALWAYS
-// hardening off audit_events_chain.
+// Pin for the other exit through which a migration run that does not reach its
+// tail could strip an operator's ENABLE ALWAYS hardening off
+// audit_events_chain.
 //
-// The loop-error arm is covered by TestPG_MigrateKeepsAnAlwaysTriggerAcrossAFAILEDMigration.
-// This is the SIBLING EXIT that arm's fix could not reach: the restore was
-// deferred, but deferred ONTO THE CALLER'S CONTEXT. wardynd gives connect-and-
-// migrate a deadline, and migrateOn logs every file's elapsed time precisely so
-// a slow one is visible before that deadline turns it fatal — so a context that
-// expires between two migrations is a designed-for exit, not an exotic one. On
-// that exit the deferred restore was handed the dead context: both of its
-// statements failed before reaching the wire, it could only log that it could
-// not tell, and 0056-0058 had already committed their DROP TRIGGER + CREATE
-// TRIGGER. The hardening was gone, and gone for good, exactly as on the arm that
-// was fixed — the next boot's capture reads the reverted 'O' as the shipped
-// state and those files are recorded applied.
+// The loop-error arm is covered by
+// TestPG_MigrateKeepsAnAlwaysTriggerAcrossAFAILEDMigration. This is the sibling
+// exit: a restore deferred onto the caller's context. wardynd gives
+// connect-and-migrate a deadline, and migrateOn logs every file's elapsed time
+// precisely so a slow one is visible before that deadline turns it fatal — so a
+// context that expires between two migrations is a designed-for exit, not an
+// exotic one. Handed the dead context, a deferred restore's statements would
+// both fail before reaching the wire, it could only log that it could not tell,
+// and 0056-0058 would already have committed their DROP TRIGGER + CREATE
+// TRIGGER: the hardening gone for good, since the next boot's capture reads the
+// reverted 'O' as the shipped state and those files are recorded applied.
 //
 // The cancellation is driven deterministically rather than by timing: the
 // executor below cancels the run at the moment migrateOn asks whether the file
@@ -101,7 +100,7 @@ func TestPG_MigrateKeepsAnAlwaysTriggerWhenTheBootContextIsCancelled(t *testing.
 	defer cancel()
 	ex := &cancelAtMigration{migrationExecutor: pool, at: cancelAt, cancel: cancel}
 
-	err := migrateOn(runCtx, ex)
+	err := migrateOn(runCtx, ex, false)
 	if err == nil {
 		t.Fatalf("migrateOn returned nil; the probe did not reproduce a cancelled run and so cannot test that exit")
 	}

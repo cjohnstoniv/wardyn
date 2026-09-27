@@ -101,7 +101,8 @@ function walkTsx(dir: string): string[] {
   });
 }
 
-describe("light-theme WCAG AA contrast (C004)", () => {
+describe("light-theme WCAG AA contrast", () => {
+  // ticket: C004
   it("white button text on --primary is >= 4.5:1", () => {
     expect(ratio(WHITE, token("primary"))).toBeGreaterThanOrEqual(4.5);
   });
@@ -229,7 +230,8 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("dark --destructive equals --danger (F7-F15 — was #dc2626 vs #f87171, silently different)", () => {
+    it("dark --destructive equals --danger (was #dc2626 vs #f87171, silently different)", () => {
+      // ticket: F7-F15
       expect(dtoken("destructive")).toBe(dtoken("danger"));
     });
 
@@ -429,7 +431,8 @@ describe("light-theme WCAG AA contrast (C004)", () => {
 // 81 unguarded sites at once. ONE global block in theme.css covers all of
 // them without touching a single call site (Playwright's suite re-run is the
 // regression control — nothing here changes non-reduced-motion behaviour).
-describe("prefers-reduced-motion — one global guard (F7-F5)", () => {
+describe("prefers-reduced-motion — one global guard", () => {
+  // ticket: F7-F5
   it("theme.css declares a global @layer base reduced-motion block that neutralizes animation/transition", () => {
     const layerBaseStart = css.indexOf("@layer base");
     expect(layerBaseStart, "@layer base not found in theme.css").toBeGreaterThanOrEqual(0);

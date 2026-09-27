@@ -16,13 +16,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ssoLoginRunStore is a minimal store.Store returning a fixed run from GetRun
 // plus that run's audit trail from QueryAuditEvents — the two reads the
 // sso-token upload handler makes against trusted server state (the run kind,
-// and the operator's own start URL recorded on harness.login.started).
+// and the operator's own start URL recorded on harness.login.start).
 // siteCfg is the third read (0.7.2): the agent roster says WHOSE namespace a
 // capture lands in, so the handler asks for it on every upload. The zero value
 // is legacy open mode — the operator namespace, i.e. these cases unchanged.
@@ -45,13 +46,13 @@ func (s ssoLoginRunStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]t
 	return s.events, nil
 }
 
-// ssoLoginStartedEvents is the harness.login.started row launchHarnessLoginRun
+// ssoLoginStartedEvents is the harness.login.start row launchHarnessLoginRun
 // writes for runID, carrying the operator's declared access-portal URL. The
 // upload handler binds the uploaded start_url to it (F006).
 func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent {
 	return []types.AuditEvent{{
 		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
-		Action: "harness.login.started", Target: runID.String(), Outcome: "success",
+		Action: "harness.login.start", Target: runID.String(), Outcome: "success",
 		Data: mustJSON(map[string]any{"provider": awsSSOProvider, "sso_start_url": startURL}),
 	}}
 }
@@ -95,7 +96,7 @@ func newSSOUploadSrv(t *testing.T) (*Server, *memSecrets, string, uuid.UUID) {
 	return srv, sec, h.mintRunToken(t, runID), runID
 }
 
-const validSSOBody = `{
+var validSSOBody = `{
 	"access_token": "aws-sso-access-token-value",
 	"refresh_token": "aws-sso-refresh-token-value",
 	"client_id": "client-id",
@@ -104,12 +105,12 @@ const validSSOBody = `{
 	"region": "us-west-2",
 	"account_id": "123456789012",
 	"role_name": "WardynBedrockRole",
-	"expires_at": "2100-01-01T00:00:00Z"
+	"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 }`
 
 // TestUploadSSOToken_HappyPath: a well-formed SSO token blob is stored under
 // the reserved aws harness secret with server-stamped provenance, and a
-// harness.credential.captured audit event is written.
+// harness.credential.capture audit event is written.
 func TestUploadSSOToken_HappyPath(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -147,8 +148,8 @@ func TestUploadSSOToken_HappyPath(t *testing.T) {
 	if blob.CapturedAt.IsZero() {
 		t.Error("CapturedAt was not server-stamped")
 	}
-	if !auditHas(h.audit.events, "harness.credential.captured") {
-		t.Error("no harness.credential.captured audit event")
+	if !auditHas(h.audit.events, "harness.credential.capture") {
+		t.Error("no harness.credential.capture audit event")
 	}
 }
 
@@ -157,7 +158,7 @@ func TestUploadSSOToken_HappyPath(t *testing.T) {
 // AWS-side replacement for the Anthropic prefix guard.
 func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
-	incomplete := `{"access_token":"tok-only","region":"us-west-2","expires_at":"2100-01-01T00:00:00Z"}`
+	incomplete := `{"access_token":"tok-only","region":"us-west-2","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`
 
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, incomplete)
 	if w.Code != http.StatusBadRequest {
@@ -168,22 +169,21 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	}
 }
 
-// TestUploadSSOToken_HalfResolvedCaptureRejected is the W5-S1-4 regression:
-// wardyn-aws-sso's account/role resolution (`aws sso list-accounts` /
-// list-account-roles) is best-effort and can come up empty (no accounts, a
-// timeout, a malformed response) while every OTHER field is well-formed. Before
-// the fix, awsSSOBlob.valid() didn't require account_id/role_name, so this
-// half-resolved capture was accepted and stored — and resolveBedrockAuth
+// TestUploadSSOToken_HalfResolvedCaptureRejected: wardyn-aws-sso's account/role
+// resolution is best-effort and can come up empty (no accounts, a timeout, a
+// malformed response) while every other field is well-formed.
+// awsSSOBlob.valid() requires account_id/role_name because resolveBedrockAuth
 // selects a stored SSO credential ahead of the host-mode ~/.aws mount and
-// static-key lanes, so a capture that can never satisfy GetRoleCredentials
-// would silently pre-empt lanes that might have actually worked.
+// static-key lanes: a half-resolved capture that can never satisfy
+// GetRoleCredentials would silently pre-empt lanes that might have actually
+// worked.
 func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
 	halfResolved := `{
 		"access_token": "aws-sso-access-token-value",
 		"start_url": "https://my-sso.awsapps.com/start",
 		"region": "us-west-2",
-		"expires_at": "2100-01-01T00:00:00Z"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, halfResolved)
@@ -195,22 +195,21 @@ func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 	}
 }
 
-// TestUploadSSOToken_MaliciousStartURLRejected is a W15-d defense-in-depth
-// regression: before the fix, only blob.valid()'s non-empty check ran on
-// start_url, so a newline-bearing value would later be baked VERBATIM, with no
-// escaping, into every subsequent Bedrock run's ~/.aws/config INI
-// (awsSSOConfigFileContents, runs_bedrock.go's fmt.Sprintf) — smuggling extra
-// INI keys/sections into a file shared across every run that credential mode
-// serves, since the blob is captured ONCE and reused thereafter. start_url now
-// takes the same https-URL/no-whitespace guard the operator's own pre-login
-// input already takes (validateSSOStartURL, harnesscred.go).
+// TestUploadSSOToken_MaliciousStartURLRejected is defense in depth: a
+// non-empty check alone on start_url would let a newline-bearing value be
+// baked verbatim, with no escaping, into every subsequent Bedrock run's
+// ~/.aws/config INI (awsSSOConfigFileContents, runs_bedrock.go's fmt.Sprintf)
+// — smuggling extra INI keys/sections into a file shared across every run that
+// credential mode serves, since the blob is captured once and reused
+// thereafter. start_url takes the same https-URL/no-whitespace guard the
+// operator's own pre-login input takes (validateSSOStartURL, harnesscred.go).
 func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
 	malicious := `{
 		"access_token": "aws-sso-access-token-value",
 		"start_url": "https://my-sso.awsapps.com/start\n[profile evil]\nregion=us-east-1",
 		"region": "us-west-2",
-		"expires_at": "2100-01-01T00:00:00Z"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, malicious)
@@ -223,7 +222,7 @@ func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 }
 
 // TestUploadSSOToken_ControlCharsInAccountOrRoleRejected is the other half of
-// the same W15-d defense-in-depth guard: sso_account_id, sso_role_name, and
+// the same defense-in-depth guard: sso_account_id, sso_role_name, and
 // sso_region ride the identical unescaped INI template near start_url
 // (awsSSOConfigFileContents), so a newline in any is exactly as dangerous
 // and must be rejected the same way (repoFieldSafe — the same control-
@@ -232,10 +231,11 @@ func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 // sso_start_url, so an injected duplicate sso_start_url via region would win
 // under last-key-wins parsing and silently defeat the StartURL guard.
 func TestUploadSSOToken_ControlCharsInAccountOrRoleRejected(t *testing.T) {
+	expiresAt := testutil.FutureRFC3339(24 * 30)
 	cases := map[string]string{
-		"account_id": `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"2100-01-01T00:00:00Z","account_id":"123456789012\n[profile evil]"}`,
-		"role_name":  `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"2100-01-01T00:00:00Z","role_name":"AdminRole\n[profile evil]"}`,
-		"region":     `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2\nsso_start_url = https://attacker.example.com/start","expires_at":"2100-01-01T00:00:00Z"}`,
+		"account_id": `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"` + expiresAt + `","account_id":"123456789012\n[profile evil]"}`,
+		"role_name":  `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"` + expiresAt + `","role_name":"AdminRole\n[profile evil]"}`,
+		"region":     `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2\nsso_start_url = https://attacker.example.com/start","expires_at":"` + expiresAt + `"}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

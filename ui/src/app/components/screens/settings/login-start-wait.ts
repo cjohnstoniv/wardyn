@@ -67,8 +67,7 @@ export const RUN_POLL_MIN_FAILURES = 15;
 // there is no node and, with the image already local, nothing pulls; on a first
 // install nothing was upgraded; and the same sentence narrates the ANTHROPIC
 // flow, whose image is the ordinary agent one. What holds in every one of those
-// is that a first start MAY need to pull — same wording as
-// LOGIN_SANDBOX_STARTING's, one fact said one way.
+// is that a first start MAY need to pull.
 export const LOGIN_SANDBOX_SLOW_START =
   "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes.";
 

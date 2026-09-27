@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -16,13 +17,15 @@ import (
 )
 
 // userTypeStore is an in-memory user_types table: the seeded built-in row plus
-// whatever a test writes. refs is what UserTypeReferences answers, and
-// deleteConflict makes the store's own delete refuse (a row written between
-// the handler's check and the DELETE).
+// whatever a test writes. refs is what UserTypeReferences answers, tokens what
+// UserTypeTokenStamps answers (tokensErr fails that read), and deleteConflict
+// makes the store's own delete refuse (a row written between the handler's
+// check and the DELETE).
 type userTypeStore struct {
 	store.Store
 	rows           map[string]types.UserType
-	refs           int
+	refs, tokens   int
+	tokensErr      error
 	deleteConflict bool
 }
 
@@ -80,12 +83,16 @@ func (s *userTypeStore) UpdateUserType(_ context.Context, t types.UserType) (typ
 
 func (s *userTypeStore) UserTypeReferences(context.Context, string) (int, error) { return s.refs, nil }
 
+func (s *userTypeStore) UserTypeTokenStamps(context.Context, string) (int, error) {
+	return s.tokens, s.tokensErr
+}
+
 func (s *userTypeStore) DeleteUserType(_ context.Context, id string) error {
 	t, ok := s.rows[id]
 	if !ok {
 		return store.ErrNotFound
 	}
-	if t.BuiltIn || s.refs > 0 || s.deleteConflict {
+	if t.BuiltIn || s.refs > 0 || s.tokens > 0 || s.deleteConflict {
 		return store.ErrConflict
 	}
 	delete(s.rows, id)
@@ -178,7 +185,7 @@ func TestUserTypeRefusalsStartWithACapital(t *testing.T) {
 			t.Errorf("refusal %q does not start with a capital letter", msg)
 		}
 	}
-	for _, u := range []userTypeInUse{{chart: true}, {defaultRole: true}, {rows: 1}, {chart: true, rows: 2}} {
+	for _, u := range []userTypeInUse{{chart: true}, {defaultRole: true}, {rows: 1}, {chart: true, rows: 2}, {tokens: 1}, {tokens: 3}} {
 		if msg := u.refusal(); msg[0] < 'A' || msg[0] > 'Z' {
 			t.Errorf("delete refusal %q does not start with a capital letter", msg)
 		}
@@ -265,7 +272,7 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		name           string
 		roleMap        map[string]string
 		defaultRole    string
-		refs           int
+		refs, tokens   int
 		deleteConflict bool
 		id             string
 		want           string
@@ -293,6 +300,15 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 				"3 permission, profile or drive rows name it. Remap it in your chart, then remove those rows.",
 		},
 		{
+			name: "one live API token", id: "contractor", tokens: 1,
+			want: "It can't be removed yet: 1 API token carries it. Revoke the token or wait for its holder to sign in again.",
+		},
+		{
+			name: "the chart and live API tokens", id: "contractor", roleMap: map[string]string{"ext-group": "contractor"}, tokens: 2,
+			want: "It can't be removed yet: your chart still maps to it, and 2 API tokens carry it. " +
+				"Remap it in your chart, then revoke the tokens or wait for their holders to sign in again.",
+		},
+		{
 			name: "a row written after the check", id: "contractor", deleteConflict: true,
 			want: "It can't be removed yet: something started naming it just now. Reload and try again.",
 		},
@@ -300,7 +316,7 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newUserTypeStore()
 			st.rows[contractor.ID] = contractor
-			st.refs, st.deleteConflict = tc.refs, tc.deleteConflict
+			st.refs, st.tokens, st.deleteConflict = tc.refs, tc.tokens, tc.deleteConflict
 			var auth *oidc.Authenticator
 			if tc.roleMap != nil {
 				auth = newAccessAuth(t, tc.roleMap, tc.defaultRole, nil, nil)
@@ -322,10 +338,23 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		})
 	}
 
-	// THE CONTROL: the same deployment with nothing naming the type removes it.
+	// An unreadable token count refuses the delete: a type a token may still
+	// carry is never removed on a guess.
 	st := newUserTypeStore()
 	st.rows[contractor.ID] = contractor
-	srv, _ := userTypeServer(t, st, newAccessAuth(t, map[string]string{"ext-group": "admin"}, "", nil, nil))
+	st.tokensErr = errors.New("pg: connection refused")
+	srv, h := userTypeServer(t, st, nil)
+	if w := do(t, srv, http.MethodDelete, "/api/v1/user-types/contractor", adminToken, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("DELETE with the token count unreadable = %d %s, want 500", w.Code, w.Body.String())
+	}
+	if _, ok := st.rows[contractor.ID]; !ok || len(auditActions(h, "user_type.delete")) != 0 {
+		t.Fatal("the type was removed although its token stamps could not be counted")
+	}
+
+	// THE CONTROL: the same deployment with nothing naming the type removes it.
+	st = newUserTypeStore()
+	st.rows[contractor.ID] = contractor
+	srv, _ = userTypeServer(t, st, newAccessAuth(t, map[string]string{"ext-group": "admin"}, "", nil, nil))
 	if w := do(t, srv, http.MethodDelete, "/api/v1/user-types/contractor", adminToken, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("DELETE unnamed = %d %s, want 204", w.Code, w.Body.String())
 	}

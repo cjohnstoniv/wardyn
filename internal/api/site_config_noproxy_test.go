@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -40,10 +41,10 @@ func TestValidateUpstreamProxyNoProxy(t *testing.T) {
 	}
 }
 
-// TestRedirectProbeTo pins gap 4's decision: WHICH url probe 1 requests and
-// whether it swaps the TCP target. A hostname To must stay byte-identical to
-// the pre-fix probe.
+// TestRedirectProbeTo pins which url probe 1 requests and whether it swaps
+// the TCP target. A hostname To must stay byte-identical: no swap.
 func TestRedirectProbeTo(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	cases := []struct {
 		name          string
 		red           types.EgressRedirect
@@ -142,6 +143,7 @@ func TestRedirectProbeTo(t *testing.T) {
 // curl's own code, probe 2 still exits 250 (redirectProbeBypassCode) and 251
 // stays the proxy probe's alone.
 func TestRedirectProbeScriptKeepsItsSentinels(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if !strings.Contains(redirectProbeScript, "exit 250") {
 		t.Error("probe 2's explicit bypass sentinel (250) is gone")
 	}
@@ -170,6 +172,7 @@ func TestRedirectProbeScriptKeepsItsSentinels(t *testing.T) {
 // path already does — verifies cleanly. httptest + a cert scoped to the From
 // host only stands in for the endpoint.
 func TestRedirectProbe_LiteralIPCertIsScopedToFromHost(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	const fromHost = "mirror.example.test"
 	cert, pool := certForHost(t, fromHost)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

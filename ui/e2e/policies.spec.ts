@@ -130,7 +130,7 @@ function uniqueName(prefix: string) {
 // ---- specs ---------------------------------------------------------------
 
 test.beforeEach(async ({ page }) => {
-  await gotoConsole(page);
+  await gotoConsole(page, "admin");
   await navTo(page, "Policies");
   // Screen header proves we navigated.
   await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
@@ -511,7 +511,8 @@ test("create form surfaces the reserved user-drive target refusal (HTTP 400)", a
 // splice has no real SSO session, so its access stays the permissive "url"
 // tier and it still passes the view gate straight through; only a member's
 // role check is unconditional, admin-member-modes-design.md §2.1).
-test.describe("Policies — member and security-admin reads (X2-F12)", () => {
+test.describe("Policies — member and security-admin reads", () => {
+  // ticket: X2-F12
   test("a member is refused the admin view before the list ever loads", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
@@ -525,7 +526,7 @@ test.describe("Policies — member and security-admin reads (X2-F12)", () => {
     page,
   }) => {
     await mockSecurityAdminRole(page);
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Policies");
     await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON).first()).toBeVisible();

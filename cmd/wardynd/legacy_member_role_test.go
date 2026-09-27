@@ -42,7 +42,8 @@ func TestParseDefaultRoleAliasesLegacyMember(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Errorf("a current value logged a warning:\n%s", buf.String())
 	}
-	for _, v := range []string{oidc.RoleSecurityAdmin, "owner"} {
+	// "Owner" is not a type id either (ids are lowercase slugs).
+	for _, v := range []string{oidc.RoleSecurityAdmin, "Owner", "denied"} {
 		if _, err := parseDefaultRole(v); err == nil {
 			t.Errorf("parseDefaultRole(%q) accepted it", v)
 		}

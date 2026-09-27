@@ -4,8 +4,20 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -88,5 +100,81 @@ func TestClone_DeepCopiesToolRules(t *testing.T) {
 
 	if orig.ToolRules[0].Effect != types.ToolHold {
 		t.Fatal("mutating the CLONE's tool_rules changed the ORIGINAL — Clone is aliasing the slice, so one run's policy edit would leak into another's")
+	}
+}
+
+// toolgateContractDir holds the proxy's recorded answers to the tool-approval
+// route. cmd/wardyn-toolgate's contract test feeds these same bytes to the gate,
+// so a drift on either side of the seam fails a test instead of shipping.
+const toolgateContractDir = "testdata/toolgate-contract"
+
+// TestToolRulesAtTheLocalRoute drives the run's tool_rules through the real
+// tool-approval route: `allow` and `deny` are answered by the proxy itself —
+// no approval row, no control-plane call — and logged under their own rule
+// source; `hold` (here via "*") still raises a human approval.
+func TestToolRulesAtTheLocalRoute(t *testing.T) {
+	cases := []struct {
+		tool       string
+		wantStatus int
+		golden     string
+		wantCP     bool
+		wantSource string
+		wantDec    egress.Decision
+	}{
+		{"Read", http.StatusOK, "approved.json", false, ruleSourceToolAllow, egress.Allow},
+		{"WebFetch", http.StatusOK, "denied.json", false, ruleSourceToolDeny, egress.Deny},
+		{"Bash", http.StatusCreated, "held.json", true, ruleSourceApprovals, egress.Allow},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			var cpCalls int
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cpCalls++
+				_, _ = io.Copy(io.Discard, r.Body)
+				// The control plane's answer to a raise: the created row, as
+				// handleInternalRequestApproval writes it.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{
+					ID:             uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+					RunID:          uuid.MustParse("66666666-7777-8888-9999-000000000000"),
+					Kind:           types.ApprovalToolCall,
+					RequestedScope: json.RawMessage(`{"tool":"Bash","cmd":"make test"}`),
+					State:          types.ApprovalPending,
+					RequestedAt:    time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC),
+				})
+			}))
+			defer cp.Close()
+
+			p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+			p.policy = CompilePolicy(types.RunPolicySpec{ToolRules: []types.ToolRule{
+				{Tool: "Read", Effect: types.ToolAllow},
+				{Tool: "WebFetch", Effect: types.ToolDeny},
+				{Tool: "*", Effect: types.ToolHold},
+			}})
+
+			body := `{"kind":"tool_call","payload":{"tool":"` + tc.tool + `","cmd":"make test"}}`
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, routeApprovalsCreate, strings.NewReader(body)))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if (cpCalls > 0) != tc.wantCP {
+				t.Fatalf("control-plane calls = %d, want contacted=%v — a policy decision must not create an approval row, and a hold must", cpCalls, tc.wantCP)
+			}
+			d := lastDecision(t, buf)
+			if d.RuleSource != tc.wantSource || d.Decision != tc.wantDec {
+				t.Fatalf("decision = %s/%s, want %s/%s", d.RuleSource, d.Decision, tc.wantSource, tc.wantDec)
+			}
+			want, err := os.ReadFile(filepath.Join(toolgateContractDir, tc.golden))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(rec.Body.Bytes(), want) {
+				t.Fatalf("response drifted from %s (wardyn-toolgate's contract test reads that file):\n got %s\nwant %s",
+					tc.golden, rec.Body.Bytes(), want)
+			}
+		})
 	}
 }

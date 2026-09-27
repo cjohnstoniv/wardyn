@@ -42,6 +42,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import {
   audit as auditApi,
+  canonicalAuditAction,
   createRequestFromAudit,
   egressFromAudit,
   exitCodeFromAudit,
@@ -77,6 +78,7 @@ import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
   RECORDING_DISABLED_DESC,
   RECORDING_DISABLED_TITLE,
@@ -104,22 +106,19 @@ type Tab = "overview" | "approvals" | "audit" | "recording";
 export function RunDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
   const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
-  // The run's session.recording events, indexed SEPARATELY from the
-  // general audit trail — that trail is fetched oldest-first with a hard
-  // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording
-  // events can crowd out later ones (or vice versa: an early one falls off)
-  // before the recording picker ever sees them. A tiny second, filtered
-  // fetch spends its own 1000-row budget on just this action.
+  // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
+  // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
   // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
   // trail — the first ones the 1000-row cap on `audit` above pushes off —
-  // scoped-fetched the same way session.recording is, so the exit code and
+  // scoped-fetched the same way session.recording.write is, so the exit code and
   // ending derivation stay known past that cap.
   const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -179,7 +178,9 @@ export function RunDetailScreen() {
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
-        auditApi.listAudit(id, "session.recording"),
+        // "session.recording" names the ACTION FAMILY, prefixing both the old
+        // and new action names — not itself a legacy action name (Conductor ruling, #1062).
+        auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
         .then(([r, g, runApprovals, a, recA]) => {
           if (r.status === "rejected") {
@@ -209,11 +210,13 @@ export function RunDetailScreen() {
           // on THIS tick's own fresh state (not a stale last-known ref), so
           // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
-            Promise.all([
-              auditApi.listAudit(id, "run.complete"),
-              auditApi.listAudit(id, "run.kill"),
-              auditApi.listAudit(id, "run.autostop"),
-            ]).then((lists) => setEndingAudit(lists.flat()));
+            // Best-effort like the allSettled above: a rejected listAudit
+            // leaves endingAudit at its last-good value, never unhandled.
+            void Promise.all([
+              auditApi.listAudit(id, { action: "run.complete" }),
+              auditApi.listAudit(id, { action: "run.kill" }),
+              auditApi.listAudit(id, { action: "run.autostop" }),
+            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
         })
@@ -237,7 +240,7 @@ export function RunDetailScreen() {
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
-    load(true);
+    void load(true);
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
@@ -286,7 +289,7 @@ export function RunDetailScreen() {
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
-    copyAsync(url).then((ok) => {
+    void copyAsync(url).then((ok) => {
       if (ok) toast.success("Link copied");
       else toast.error("Couldn't copy the link — copy it from the address bar.");
     });
@@ -301,7 +304,7 @@ export function RunDetailScreen() {
         description: getErrorMessage(err),
       });
     } finally {
-      load(false);
+      void load(false);
     }
   };
 
@@ -315,7 +318,7 @@ export function RunDetailScreen() {
       toast.warning(CLONE_UNREADABLE);
       return;
     }
-    navigate("/runs/new", { state: { prefill } });
+    void navigate("/runs/new", { state: { prefill } });
   };
 
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
@@ -326,7 +329,7 @@ export function RunDetailScreen() {
       else await approvalsApi.deny(decide.id, reason, ...args);
       toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
-      load(false);
+      void load(false);
       return true;
     } catch (err) {
       toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
@@ -348,7 +351,7 @@ export function RunDetailScreen() {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      load(false);
+      void load(false);
     } catch (err) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
@@ -424,7 +427,7 @@ export function RunDetailScreen() {
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
-            onClone={onClone}
+            onClone={view === "user" ? onClone : undefined}
           />
 
           <RunDetailCommandBar
@@ -456,7 +459,7 @@ export function RunDetailScreen() {
               scrolls, which e2e asserts. */}
           <TabsContent value="overview" className="mt-0 flex min-h-0 flex-1 flex-col">
             <Cockpit
-              run={run}
+              run={run} view={view}
               terminal={terminal}
               grants={grants}
               egress={egress}
@@ -528,8 +531,7 @@ export function RunDetailScreen() {
 // terminal, it does not build it, because building it needs the attach /
 // recording / approvals graph that lives here.
 function Cockpit({
-  run,
-  terminal,
+  run, view, terminal,
   grants,
   egress,
   audit,
@@ -541,6 +543,7 @@ function Cockpit({
   onGoRecording,
 }: {
   run: RunDetail;
+  view: ConsoleView; // M-7: no relaunch/SSH/credential door in admin view.
   terminal: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
@@ -562,7 +565,7 @@ function Cockpit({
   // pane reads it below.
   const createRequest = createRequestFromAudit(audit);
   // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
-  // decide any of these", and authorizeMemberDecision (approvals.go:392)
+  // decide any of these", and authorizeUserDecision (approvals.go:392)
   // early-returns for the security tier — so a security admin can decide every
   // one of them and must never be told otherwise. The SUPER-only surfaces on
   // this page (attach, take-over) read useOperator in their own components.
@@ -610,7 +613,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} adminView={view === "admin"} />
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -635,7 +638,7 @@ function Cockpit({
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
-          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} />
+          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} adminView={view === "admin"} />
         </div>
       )}
     </>
@@ -645,8 +648,7 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
-    // The ssh widget's gate is owner-or-admin, like the card it places.
-    operator,
+    operator, view, // ssh widget: owner-or-admin AND the user view (M-7).
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's
@@ -662,14 +664,14 @@ function Cockpit({
   return <RunCanvas ctx={ctx} />;
 }
 
-// Every human attach session is recorded and masked, but under a COMPOSITE cast
-// key the console never asked for — so it is write-only without an index.
-// There is no list-casts endpoint (and no Store.List to add one on): the
-// index is a session.recording-FILTERED audit fetch — not the
-// general trail, whose own 1000-row cap a chatty run can blow through —
-// where the event's TARGET is that very key.
+// Every human attach session is recorded under a COMPOSITE cast key the
+// console never asked for; the index is the action_prefix="session.recording"
+// fetch above (not the capped general trail), keyed on the event's TARGET.
+// The filter is an EXACT match on the CANONICAL name (canonicalAuditAction),
+// not the prefix — a plain startsWith would also admit session.recording.other.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
-  return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
+  const seen = new Set<string>(); // dedup, belt-and-braces
+  return audit.filter((e) => canonicalAuditAction(e.action) === "session.recording.write" && e.outcome === "success" && e.target && !seen.has(e.id) && seen.add(e.id));
 }
 
 // Approvals tab (this run's approvals)
@@ -689,7 +691,7 @@ function ApprovalsTab({
   onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
 }) {
   // useSecurityOperator (0.7 §B): the only thing this reads is
-  // canDecideApproval, which mirrors authorizeMemberDecision's early return
+  // canDecideApproval, which mirrors authorizeUserDecision's early return
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
   const principal = usePrincipal();
@@ -912,7 +914,7 @@ function RecordingTab({
    *  cast means "it can't", not "it hasn't yet". */
   recordingDisabled: boolean;
   runId: string;
-  // The run's interactive attach sessions (session.recording audit events).
+  // The run's interactive attach sessions (session.recording.write audit events).
   sessions: AuditEvent[];
   selected: string;
   onSelect: (key: string) => void;

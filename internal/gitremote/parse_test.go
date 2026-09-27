@@ -67,7 +67,7 @@ func TestParseRemoteURL(t *testing.T) {
 
 // End-to-end through a real tree: the detected GitHub set and the operator's
 // "other hosts" warning are what actually ship, so pin them, not just the
-// parser. Every URL here used to contribute a bogus host.
+// parser. None of these URLs may contribute a bogus host.
 func TestDetect_PoisonedHostFormsAreNotWarnedAbout(t *testing.T) {
 	root := t.TempDir()
 	writeRepo(t, root,

@@ -159,7 +159,7 @@ func shannonEntropy(s string) float64 {
 
 // maxFieldPathBytes bounds one Finding's FieldPath.
 //
-// TRUST BOUNDARY (F075 fix-up): the per-request findings cap bounds the NUMBER
+// TRUST BOUNDARY: the per-request findings cap bounds the NUMBER
 // of findings, not their SIZE, and a FieldPath is built by walkValue (extract.go)
 // as `path + "." + key` out of AGENT-CONTROLLED JSON keys — sanitized, never
 // truncated. The scan budget counts span TEXT (values), so a body of enormous

@@ -179,7 +179,7 @@ func TestSSHKeysREST_ScopedToOwnPrincipal(t *testing.T) {
 	}
 }
 
-// TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured pins W25-W25.4-2: a key
+// TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured pins that a key
 // registered under the non-human admin-token principal (docs/SSH.md's plain
 // curl + $WARDYN_ADMIN_TOKEN recipe) can NEVER authorize an SSO human's run —
 // sshAuth's owner-only gate compares run.CreatedBy (the OIDC sub) against the
@@ -190,7 +190,8 @@ func TestSSHKeysREST_ScopedToOwnPrincipal(t *testing.T) {
 func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
 	h := newHarness(t)
 	st := newSSHMemStore()
-	cfg := baseTestConfig(h, st)
+	// capStore: a signed-in non-admin's POST asks the `feature` resolver.
+	cfg := baseTestConfig(h, &capStore{Store: st})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
@@ -233,7 +234,8 @@ func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
 func TestSSHKeysREST_RoleStampedAtRegistration(t *testing.T) {
 	h := newHarness(t)
 	st := newSSHMemStore()
-	cfg := baseTestConfig(h, st)
+	// capStore: a signed-in non-admin's POST asks the `feature` resolver.
+	cfg := baseTestConfig(h, &capStore{Store: st})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 

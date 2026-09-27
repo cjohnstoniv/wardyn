@@ -419,7 +419,7 @@ func TestNegCtl_ProbedNonRecorder(t *testing.T) {
 // guarded helper test with WARDYN_NEGCTL set so it actually executes. The helper
 // is expected to FAIL (the gate fires), so the subprocess must exit non-zero. A
 // zero exit means the gate did not catch the dishonest driver — wantFailMsg is
-// reported. Using -count=1 avoids a cached pass masking a regression.
+// reported. Using -count=1 keeps a cached pass from masking a failure.
 func assertNegativeControlFails(t *testing.T, child, wantFailMsg string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run", "^"+child+"$", "-test.count=1", "-test.v")

@@ -12,13 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestComposeEnvbuildBuildNetworkIsolatedFromControlPlane is the regression for
-// W10-S1-2: deploy/compose/docker-compose.yaml used to default
+// TestComposeEnvbuildBuildNetworkIsolatedFromControlPlane:
+// deploy/compose/docker-compose.yaml must not default
 // WARDYN_ENVBUILD_BUILD_NETWORK to the SAME `wardyn-internal` bridge that
 // postgres and wardynd's admin API sit on. The envbuild build container runs
 // attacker-controlled code (devcontainer RUN/feature/onCreate steps —
-// Builder's own package doc), so that made it an in-network peer able to dial
-// postgres/the admin API by compose service name. This parses the real
+// Builder's own package doc), so that would make it an in-network peer able
+// to dial postgres/the admin API by compose service name. This parses the
+// real
 // compose file (no `docker` build tag needed — it never touches a daemon) and
 // asserts the build-network default resolves to a DIFFERENT top-level network
 // than the one postgres/wardynd are members of.

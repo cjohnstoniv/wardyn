@@ -100,12 +100,9 @@ func securityAdminWorkspaceExpectations() map[string]securityAdminWorkspaceExpec
 			why:            "promoting a workspace's observed egress is named in the securityOps rationale",
 		},
 
-		// The record route USED TO BE HERE, recorded-not-endorsed: it admitted a
-		// security_admin over any member's workspace and launched a run in it.
-		// The policy lane re-tiered it to operatorOnly, so it left classSecurity
-		// and left this derived set on its own — which is what the stale-entry
-		// note above is for. Entry removed; TestRecordWorkspaceIsSuperAdminOnly
-		// (security_admin_test.go) is where that route is pinned now.
+		// The record route is not here: it is operatorOnly, not classSecurity,
+		// so it is not in this derived set. TestRecordWorkspaceIsSuperAdminOnly
+		// (security_admin_test.go) is where that route is pinned.
 	}
 }
 
@@ -146,8 +143,8 @@ func TestSecurityAdminOnForeignWorkspace(t *testing.T) {
 	for key := range expectations {
 		if !derived[key] {
 			// A note, not a failure: the tier split is edited by more than one
-			// lane, and a route leaving classSecurity is the fix landing, not a
-			// regression. Delete the entry when you see this.
+			// lane, and a route leaving classSecurity is a deliberate re-tier,
+			// not a fault. Delete the entry when you see this.
 			t.Logf("NOTE: expectation for %q is stale — that route is no longer a classSecurity workspace route", key)
 		}
 	}

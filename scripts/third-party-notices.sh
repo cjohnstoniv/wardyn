@@ -39,9 +39,9 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 # ── Go: the production build is -tags docker,k8s ─────────────────────────────
 GOFLAGS=-tags=docker,k8s go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" \
-  report ./cmd/... > "$tmp/go.csv" 2>/dev/null
+  report ./cmd/... > "$tmp/go.csv" 2>> "$tmp/go-licenses.err"
 GOFLAGS=-tags=docker,k8s go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" \
-  save ./cmd/... --save_path="$tmp/gotexts" --force >/dev/null 2>&1
+  save ./cmd/... --save_path="$tmp/gotexts" --force >/dev/null 2>> "$tmp/go-licenses.err"
 
 # ── UI: prod dependencies only ───────────────────────────────────────────────
 (cd ui && pnpm licenses list --prod --json) > "$tmp/ui.json"
@@ -166,6 +166,12 @@ drift=$(git status --porcelain --untracked-files=all -- "$NOTICES" "$TEXTS")
 if [ -n "$drift" ]; then
   echo "ERROR: third-party notices are out of date. Run: make notices ARGS=fix"
   echo "$drift"
+  git diff --stat -- "$NOTICES" "$TEXTS"
+  git diff -U0 -- "$NOTICES" | head -n 200 || true
+  if [ -s "$tmp/go-licenses.err" ]; then
+    echo "go-licenses stderr:"
+    head -n 100 "$tmp/go-licenses.err"
+  fi
   exit 1
 fi
 echo "notices: up to date ($(grep -c '^| `' "$NOTICES") entries)"

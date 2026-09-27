@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
-// ── store tests ──────────────────────────────────────────────────────────────
+// store tests
 
 // TestNew_DefaultIsPG pins the S3 default flip: an empty selector must
 // resolve to "pg", not "fs", and "fs" must remain explicitly selectable so
@@ -93,7 +93,7 @@ func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 	}
 }
 
-// ── handler tests ─────────────────────────────────────────────────────────────
+// handler tests
 
 // allowAllAuthorizer is the test stub for recording.Authorizer: the mechanics
 // under test here are the Handler's own route/store plumbing and its

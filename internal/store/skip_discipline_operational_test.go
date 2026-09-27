@@ -3,12 +3,12 @@
 
 package store_test
 
-// THE PIN FOR "AN UNREACHABLE SERVER IS A FAILURE, NOT A SKIP".
+// The pin for "an unreachable server is a failure, not a skip".
 //
-// The audit-chain isolation pin used to call t.Skipf when it could not connect
-// or ping, so a lane whose Postgres was simply down reported `--- SKIP` -> `ok`
-// -> exit 0 with the ordering invariant never exercised — a green that means
-// "not run" and reads exactly like a green that means "proven".
+// An isolation pin that calls t.Skipf when it cannot connect or ping lets a lane
+// whose Postgres is simply down report `--- SKIP` -> `ok` -> exit 0 with the
+// ordering invariant never exercised — a green that means "not run" and reads
+// exactly like a green that means "proven".
 //
 // A pin against that is worth only as much as its own counterfactual, and a
 // source grep is not one: it survives the rename that reintroduces the hole.

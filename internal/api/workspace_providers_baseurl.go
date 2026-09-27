@@ -20,27 +20,15 @@ import (
 // normalizeProviderBaseURL puts a base URL in the ONE form the match rule
 // compares against: lowercase scheme and authority, the path rebuilt from its
 // non-empty segments, and — on github.com only — the path folded to lowercase.
-//
-// It is STRING SURGERY rather than a url.Parse/String round trip on purpose:
-// re-serializing percent-ENCODES the characters shellSafeSiteString exists to
-// refuse, so a base URL carrying a backtick normalized into one that passed the
-// injection gate. Normalization must never launder a string past the validator
-// that runs after it — and the path is therefore never DECODED here either; a
-// percent-escape in it is refused by validateProviderBaseURLs instead. (An
-// azure_devops row's path reaches here already in adoscope's canonical
-// spelling — normalizeWorkspaceProviders — which re-escapes only whitespace,
-// "%" and structure, so every character the validator must see is literal.)
-//
-// Rebuilding the path from segments is what keeps "stored" and "canonical" the
-// same string: "https://github.com//acme" counted as one segment at the write
-// boundary and was then matched RAW, so it claimed github.com kind-wide while
-// admitting nothing anyone would ever clone.
-//
-// The github.com fold is the one case-INSENSITIVE forge the tree knows about:
-// GitHub treats /Acme and /acme as one org, so a base URL written /Acme that
-// refused every /acme clone URL would read as a working policy and silently
-// stop every repo. Azure DevOps project paths ARE case-sensitive and are left
-// alone, as is any self-hosted host (whose rule nothing here can know).
+// STRING SURGERY, not a url.Parse/String round trip: re-serializing
+// percent-ENCODES the characters shellSafeSiteString refuses, laundering a
+// backtick past the validator that runs after it. The path is never DECODED
+// either; validateProviderBaseURLs refuses a percent-escape (an azure_devops path
+// arrives in adoscope's canonical spelling, normalizeWorkspaceProviders).
+// Rebuilding from segments keeps "stored" and "canonical" one string
+// ("https://github.com//acme" must not claim github.com kind-wide). github.com
+// is the one case-INSENSITIVE forge known; Azure DevOps project paths ARE
+// case-sensitive and, like any self-hosted host, are left alone.
 func normalizeProviderBaseURL(raw string) string {
 	s := strings.TrimSpace(raw)
 	i := strings.Index(s, "://")

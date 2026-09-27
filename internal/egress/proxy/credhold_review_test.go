@@ -12,6 +12,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -45,7 +46,10 @@ func reviewInjector(t *testing.T, is *injectionServer, reader approvalReader) *i
 // a NEW counted workflow with a FRESH full budget.
 func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")                  // the clamp's floor
+	// The floor stays well above the follower's own ctx, so the follower can
+	// only come back early by its OWN ctx — never by the leader's hold ending.
+	shrinkReauthFloor(t, 1*time.Second)
+	shortBudget(t, "1ms")                  // clamped UP to the (shrunk) floor
 	is := newInjectionServer(t, 1_000_000) // the control plane answers 423 forever
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := reviewInjector(t, is, reader)
@@ -57,9 +61,9 @@ func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t 
 	}()
 	waitForWorkflowDeadline(t, inj.reauth) // the leader is inside its hold
 
-	// The follower: an SDK that hangs up after 300 ms. Per the contract it
-	// must return ~300 ms later with ctx.Err() and open no workflow.
-	fctx, fcancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// The follower: an SDK that hangs up after 100 ms. Per the contract it
+	// must return ~100 ms later with ctx.Err() and open no workflow.
+	fctx, fcancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer fcancel()
 	start := time.Now()
 	_, _, ferr := inj.resolveCtx(fctx, reviewHost)
@@ -71,8 +75,8 @@ func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t 
 	inj.reauth.mu.Unlock()
 
 	t.Logf("follower returned after %v with err=%v; counted workflows=%d", felapsed.Round(100*time.Millisecond), ferr, counted)
-	if felapsed > 2*time.Second {
-		t.Errorf("follower took %v — it queued on reMu instead of joining the leader's cancellable wait", felapsed.Round(time.Second))
+	if felapsed > 500*time.Millisecond || !errors.Is(ferr, context.DeadlineExceeded) {
+		t.Errorf("follower took %v (err=%v) — it was not released by its own ctx: it queued on reMu instead of joining the leader's cancellable wait", felapsed.Round(time.Millisecond), ferr)
 	}
 	if counted != 1 {
 		t.Errorf("counted workflows = %d, want 1: the queued caller started a fresh full-budget workflow for the SAME lapse", counted)
@@ -85,7 +89,8 @@ func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t 
 // workflow with a SECOND full budget — N callers, N budgets, one lapse.
 func TestReview_QueuedLiveFollowerOpensASecondFullBudgetWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")
+	shrinkReauthFloor(t, 200*time.Millisecond)
+	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor; two sequential waits below
 	is := newInjectionServer(t, 1_000_000)
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := reviewInjector(t, is, reader)
@@ -99,11 +104,13 @@ func TestReview_QueuedLiveFollowerOpensASecondFullBudgetWorkflow(t *testing.T) {
 	inj.reauth.mu.Lock()
 	counted := inj.reauth.counted
 	inj.reauth.mu.Unlock()
-	t.Logf("follower returned after %v with err=%v; counted workflows=%d", elapsed.Round(time.Second), ferr, counted)
+	t.Logf("follower returned after %v with err=%v; counted workflows=%d", elapsed.Round(time.Millisecond), ferr, counted)
 	if counted != 1 {
 		t.Errorf("counted workflows = %d, want 1 — the queued caller opened a fresh full-budget hold for the SAME lapse", counted)
 	}
-	if elapsed > 12*time.Second {
-		t.Errorf("one lapse held callers for %v with a 10s budget — two sequential budgets, not one shared workflow", elapsed.Round(time.Second))
+	// Relative to the floor: one shared workflow ends near 1x the budget, two
+	// sequential budgets near 2x.
+	if elapsed > minCredentialReauthTimeout*3/2 {
+		t.Errorf("one lapse held callers for %v with a %v budget — two sequential budgets, not one shared workflow", elapsed.Round(time.Millisecond), minCredentialReauthTimeout)
 	}
 }

@@ -93,7 +93,7 @@ func installCanaryReactor(t *testing.T, cs *fake.Clientset, unenforced bool) {
 }
 
 // installCanaryReactorExitCodes is installCanaryReactor generalized to an
-// ARBITRARY phase B exit code — the M1 regression test scripts 128 (a
+// arbitrary phase B exit code — the unexpected-exit-code test scripts 128 (a
 // StartError shape) to prove that only exactly 0 or 1 is ever read as a
 // verdict; anything else is indeterminate.
 func installCanaryReactorExitCodes(t *testing.T, cs *fake.Clientset, phaseAExit, phaseBExit int32) {
@@ -177,8 +177,7 @@ var deleteCollectionGVKs = map[string]schema.GroupVersionKind{
 // delete each), so this reactor teaches the fake the same trick — using
 // cs.Tracker() directly, never the typed clientset, since calling back
 // through the clientset from inside a reactor re-enters Fake's non-reentrant
-// lock (see installCanaryReactor's doc for the deadlock this caused once
-// already).
+// lock (see installCanaryReactor's doc for the deadlock that causes).
 func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 	t.Helper()
 	cs.PrependReactor("delete-collection", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {

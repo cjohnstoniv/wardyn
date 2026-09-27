@@ -8,8 +8,10 @@ import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "../ui/button";
 import { health } from "../../lib/api/health";
 import { useRoleResolved } from "./operator-context";
+import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import {
   CONSOLE_VIEW,
+  OPEN_IN_USER_VIEW,
   VIEW_ADMIN_TOKEN,
   VIEW_REFUSAL,
   VIEW_TO_ADMIN,
@@ -97,12 +99,116 @@ export function viewLanding(base: "/setup" | "/runs", access: ViewAccess): strin
   return base;
 }
 
-// The one way a view changes on SSO: flip the session's clamp, then reload the
-// whole console, because every screen on it was fetched under the other role.
-// M-2's switch and its cross-view links call this too.
-export async function switchView(to: ConsoleView, target: string): Promise<void> {
-  await health.setMemberMode(to === "user");
+// The view a page is in for this principal: an SSO session's clamp decides it,
+// a single-operator install's URL does (D1), and a one-view principal has one.
+export function currentView(access: ViewAccess, pathView: ConsoleView): ConsoleView {
+  if (access === "url") return pathView;
+  return access === "session-admin" || access === "admin-only" ? "admin" : "user";
+}
+
+export function viewHome(view: ConsoleView): string {
+  return view === "admin" ? "/admin" : "/runs";
+}
+
+// A run's own detail path in the given view — the Admin monitor's link
+// target everywhere a run is opened FROM the Admin view (board card, table
+// row, the approvals queue's run link), so that link never doubles as an
+// unannounced view switch (ViewGate's TWIN rule sends the plain /runs/:id
+// path to the User view for a "url"-access install, and refuses it for an
+// admin-only token — see viewVerdict). OpenInUserView is the one deliberate
+// exception, since crossing views is its whole job: with a `runId` it targets
+// that run in the User view; without one (since c52adb584) it targets this
+// page's own User-view twin instead.
+export function runPath(view: ConsoleView, id: string): string {
+  return view === "admin" ? `/admin/runs/${encodeURIComponent(id)}` : `/runs/${encodeURIComponent(id)}`;
+}
+
+// Where a tab lands once its session is found in the other view (§2.4): the
+// same object in that view when it has a twin, else that view's home. `rest`
+// is the search and hash, kept on a twin as ViewGate's own redirect keeps them.
+export function viewTarget(to: ConsoleView, path: string, rest = ""): string {
+  const p = screenPath(path);
+  if (!TWIN.test(p)) return viewHome(to);
+  return `${to === "admin" ? `/admin${p}` : p}${rest}`;
+}
+
+// The fast path for other tabs (§2.4). One instance per page, used for both
+// sending and listening: a channel never delivers to the instance that posted,
+// so the switching tab does not also answer its own message.
+export const VIEW_CHANNEL = "wardyn-console-view";
+let channel: BroadcastChannel | null = null;
+export function viewChannel(): BroadcastChannel | null {
+  if (!channel && typeof BroadcastChannel !== "undefined") channel = new BroadcastChannel(VIEW_CHANNEL);
+  return channel;
+}
+
+// The one way a view changes on SSO: flip the session's clamp, tell the other
+// tabs, then reload the whole console, because every screen on it was fetched
+// under the other role. The switch, the interstitials and the preview call it;
+// the unsaved guard has already been asked by then, so the reload must not ask
+// again (a "Stay" there would leave the session and the page in two views).
+let switching = false;
+/** True while this tab is switching itself, so its own re-sync stays out of the
+ *  way of the reload it is about to make. */
+export function isSwitching(): boolean {
+  return switching;
+}
+
+export async function switchView(to: ConsoleView, target: string, noCredential = false): Promise<void> {
+  releaseUnloadGuard(true);
+  switching = true;
+  try {
+    await health.setMemberMode(to === "user", noCredential);
+  } catch (e) {
+    releaseUnloadGuard(false);
+    switching = false;
+    throw e;
+  }
+  viewChannel()?.postMessage(to);
   window.location.assign(target);
+}
+
+/** M-7 (§4.6, QM-7): what the Admin view gives in place of a personal door on
+ *  the admin's own run — with `runId`, that run in the User view; without it
+ *  (#543's failed-run block and approvals card), this same page there, where
+ *  the door opens. ViewSwitch's rule: a single-operator install only
+ *  navigates; an SSO session flips its clamp first, and says so when that
+ *  fails. The admin token is not a person and has no User view, so it gets
+ *  nothing. Stops the click, since the rows it sits in open the run in this
+ *  view. */
+export function OpenInUserView({ runId, className }: { runId?: string; className?: string } = {}) {
+  const access = useViewAccess();
+  const navigate = useNavigate();
+  const { pathname, search, hash } = useLocation();
+  const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
+  if (access === "admin-only") return null;
+  const target = runId ? `/runs/${encodeURIComponent(runId)}` : viewTarget("user", pathname, `${search}${hash}`);
+  const go = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (access === "url") {
+      void navigate(target);
+      return;
+    }
+    setBusy(true);
+    setFailed(false);
+    switchView("user", target).catch(() => {
+      setBusy(false);
+      setFailed(true);
+    });
+  };
+  return (
+    <>
+      <Button size="sm" variant="outline" className={className} disabled={busy} onClick={go}>
+        {OPEN_IN_USER_VIEW}
+      </Button>
+      {failed && (
+        <span role="alert" className="text-xs text-danger">
+          {CONSOLE_VIEW.SWITCH_FAILED}
+        </span>
+      )}
+    </>
+  );
 }
 
 function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {

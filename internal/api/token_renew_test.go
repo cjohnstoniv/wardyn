@@ -67,11 +67,12 @@ func newRenewHarness(t *testing.T) (*harness, *Server, *renewStore, uuid.UUID) {
 	return h, srv, st, runID
 }
 
-// TestRenewU070_ValidRunRenewsAndFreshTokenWorks is the CORE counterfactual: a
+// TestValidRunRenewsAndFreshTokenWorks is the CORE counterfactual: a
 // live run trades its still-valid token for a fresh one, and the fresh token is
 // accepted on a DIFFERENT internal endpoint. Without the renew route this 404s
 // (chi has no such path) and the run has no way to ever get a new token.
-func TestRenewU070_ValidRunRenewsAndFreshTokenWorks(t *testing.T) {
+func TestValidRunRenewsAndFreshTokenWorks(t *testing.T) {
+	// ticket: U070
 	h, srv, _, runID := newRenewHarness(t)
 	old := h.mintRunToken(t, runID)
 
@@ -108,10 +109,11 @@ func TestRenewU070_ValidRunRenewsAndFreshTokenWorks(t *testing.T) {
 	}
 }
 
-// TestRenewU070_RevokedRunRefusedFailClosed proves gate #1: a KILLED run whose
+// TestRevokedRunRefusedFailClosed proves gate #1: a KILLED run whose
 // identity was revoked can never renew. Revocation is run-scoped, so the token
 // it still physically holds is dead on arrival.
-func TestRenewU070_RevokedRunRefusedFailClosed(t *testing.T) {
+func TestRevokedRunRefusedFailClosed(t *testing.T) {
+	// ticket: U070
 	h, srv, _, runID := newRenewHarness(t)
 	tok := h.mintRunToken(t, runID)
 
@@ -131,11 +133,12 @@ func TestRenewU070_RevokedRunRefusedFailClosed(t *testing.T) {
 	}
 }
 
-// TestRenewU070_TerminalRunRefusedFailClosed proves gate #2, the one that is NOT
+// TestTerminalRunRefusedFailClosed proves gate #2, the one that is NOT
 // covered by revocation: revokeRunCascade is best-effort, so a run can go
 // terminal with its revocation write having failed. The token still verifies —
 // and must still be refused, because the run's authority is over.
-func TestRenewU070_TerminalRunRefusedFailClosed(t *testing.T) {
+func TestTerminalRunRefusedFailClosed(t *testing.T) {
+	// ticket: U070
 	h, srv, st, runID := newRenewHarness(t)
 	tok := h.mintRunToken(t, runID)
 
@@ -160,10 +163,11 @@ func TestRenewU070_TerminalRunRefusedFailClosed(t *testing.T) {
 	}
 }
 
-// TestRenewU070_UnknownRunAndNoStoreRefused covers the remaining fail-closed
+// TestUnknownRunAndNoStoreRefused covers the remaining fail-closed
 // paths: a token naming a run the store does not have, and a Server with no
 // store at all (we cannot prove the run is alive => we do not renew).
-func TestRenewU070_UnknownRunAndNoStoreRefused(t *testing.T) {
+func TestUnknownRunAndNoStoreRefused(t *testing.T) {
+	// ticket: U070
 	h, srv, _, _ := newRenewHarness(t)
 
 	// Valid signature/audience, but the run does not exist.
@@ -180,10 +184,11 @@ func TestRenewU070_UnknownRunAndNoStoreRefused(t *testing.T) {
 	}
 }
 
-// TestRenewU070_RejectsBadTokens pins the auth boundary: the renew route is not
+// TestRejectsBadTokens pins the auth boundary: the renew route is not
 // a way around it. An admin token, a ground-truth-audience token, and no token
 // at all must all fail — otherwise renew would be a token-laundering endpoint.
-func TestRenewU070_RejectsBadTokens(t *testing.T) {
+func TestRejectsBadTokens(t *testing.T) {
+	// ticket: U070
 	h, srv, _, _ := newRenewHarness(t)
 
 	if w := do(t, srv, http.MethodPost, "/api/v1/internal/token/renew", "", ""); w.Code != http.StatusUnauthorized {

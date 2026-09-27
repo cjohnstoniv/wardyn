@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
 // TestPG_TierRenameRewritesEveryStoredMember applies the tier rename over a
@@ -95,6 +97,19 @@ func TestPG_TierRenameRewritesEveryStoredMember(t *testing.T) {
 
 	if _, err := pool.Exec(ctx, `UPDATE ssh_public_keys SET role = 'admin' WHERE fingerprint = 'SHA256:c'`); err == nil {
 		t.Error("a capped key was promoted to admin after the rename; the re-created cap must refuse it")
+	}
+
+	// A new capped registration (#584's write) still lands under the new word;
+	// capped + the retired word or a privileged role is refused by the
+	// re-created cap.
+	const cappedKey = `INSERT INTO ssh_public_keys (fingerprint, principal, public_key, role, capped) VALUES ($1, 'n@example.com', 'k', $2, true)`
+	if _, err := pool.Exec(ctx, cappedKey, "SHA256:n-user", oidc.RoleUser); err != nil {
+		t.Errorf("a new capped key with role %q was refused after the rename: %v", oidc.RoleUser, err)
+	}
+	for _, r := range []string{"member", oidc.RoleAdmin, oidc.RoleSecurityAdmin} {
+		if _, err := pool.Exec(ctx, cappedKey, "SHA256:n-"+r, r); err == nil {
+			t.Errorf("a new capped key with role %q was accepted after the rename", r)
+		}
 	}
 
 	// A type a saved mapping names cannot be deleted out from under it.

@@ -45,7 +45,8 @@ function renderRow(run: Partial<AgentRun>) {
   );
 }
 
-describe("RunContextRow — headline defers to the canonical rowHeadline chain (F1-F9)", () => {
+describe("RunContextRow — headline defers to the canonical rowHeadline chain", () => {
+  // ticket: F1-F9
   it("a nameless NON-interactive run reads as the fallback dash, never 'Interactive session'", async () => {
     renderRow({ title: undefined, task: "", workspace_path: undefined, interactive: false });
     expect(await screen.findByText("—")).toBeInTheDocument();

@@ -22,7 +22,7 @@ import (
 // SAME chi.Walk-proven routeMatrix TestAuthzMatrix executes once.
 //
 // The shapes differ only in the three knobs the daemon reads at this layer —
-// the admin token, WARDYN_SSO_ONLY and WARDYN_MEMBER_MODE — so each is that
+// the admin token, WARDYN_SSO_ONLY and WARDYN_USER_DESKTOP — so each is that
 // config over the maximally-mounted matrix server. Which role a sign-in
 // DERIVES on each shape is the other half, pinned against the shipped config
 // files by internal/auth/oidc's TestShippedShapeRoleDerivation; the live role
