@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// A run's sealed proxy config (#1176, migration 0091): what a revive rebuilds
+// A run's sealed proxy config (#1176, migration 0093): what a revive rebuilds
 // the run's proxy from, so the proxy container never holds it at rest.
 package store
 

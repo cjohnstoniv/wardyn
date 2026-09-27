@@ -1752,7 +1752,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
     it. The proxy exits non-zero when no config arrives, and the container has no restart policy.
   - A kept run's proxy is stopped and removed, not kept.
   - A revive rebuilds the proxy from a new per-run `run_proxy_configs` row (migration
-    `0091_run_proxy_configs`). The
+    `0093_run_proxy_configs`). The
     row is sealed with AES-256-GCM under a new `wardyn-run-config-key` boot key, which the secret
     store keeps under its key-encryption key like every boot key. The row is deleted when the run
     goes terminal, with a purge at boot and on the orphan-sweep cadence as the backstop. The

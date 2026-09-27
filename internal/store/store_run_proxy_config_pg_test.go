@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunProxyConfigs (#1176, migration 0091): a run's sealed proxy config
+// TestPG_RunProxyConfigs (#1176, migration 0093): a run's sealed proxy config
 // is written, replaced, read and deleted by run; the purge removes exactly the
 // rows of terminal runs; and a deleted run takes its row with it. Asserts only
 // on its own rows: the database is shared (runsPGPool).

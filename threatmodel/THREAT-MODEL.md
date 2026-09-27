@@ -2190,7 +2190,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     stopped proxy started again by hand gets none and exits non-zero. When a
     run is kept (ended, or lost to a reboot or an outage) its proxy is stopped
     and removed, not kept. A revive rebuilds the proxy from the
-    `run_proxy_configs` row (migration 0091, `internal/api/run_proxy_config.go`):
+    `run_proxy_configs` row (migration 0093, `internal/api/run_proxy_config.go`):
     the rendered config sealed with AES-256-GCM under the
     `wardyn-run-config-key` boot key and bound to its run. That key is kept in
     the secret store like every boot key, so the secret store's own
