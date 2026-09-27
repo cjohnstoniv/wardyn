@@ -54,6 +54,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap := "", ""
+	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode, ssoOnly := false, false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
@@ -70,6 +71,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 		oidcClientSecret:        &oidcClientSecret,
 		oidcRedirectURL:         &oidcRedirectURL,
 		oidcEmailDomains:        &oidcEmailDomains,
+		oidcExtraScopes:         &oidcExtraScopes,
 		oidcOperatorEmails:      &oidcOperatorEmails,
 		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
 		oidcRoleMap:             &oidcRoleMap,

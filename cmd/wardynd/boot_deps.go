@@ -371,6 +371,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			ClientSecret:        *f.oidcClientSecret,
 			RedirectURL:         *f.oidcRedirectURL,
 			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
+			ExtraScopes:         splitCSV(*f.oidcExtraScopes),
 			SecureCookies:       secureCookies,
 			RoleMap:             roleMap,
 			DefaultRole:         defaultRole,

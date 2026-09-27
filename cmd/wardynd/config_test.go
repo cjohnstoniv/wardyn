@@ -843,6 +843,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
+	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
@@ -858,6 +859,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		oidcClientSecret:        &oidcClientSecret,
 		oidcRedirectURL:         &oidcRedirectURL,
 		oidcEmailDomains:        &oidcEmailDomains,
+		oidcExtraScopes:         &oidcExtraScopes,
 		oidcOperatorEmails:      &oidcOperatorEmails,
 		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
 		oidcRoleMap:             &oidcRoleMap,

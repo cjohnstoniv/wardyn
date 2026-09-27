@@ -2291,6 +2291,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_MEMBER_MODE` and its sibling `WARDYN_MEMBER_*` variables) keeps working and warns at
   boot through 0.8.x; it is removed in 0.9.
 
+### Added
+
+- **Opt-in extra OIDC scopes, `WARDYN_OIDC_EXTRA_SCOPES` (#1101).** The authorization request was
+  fixed at `openid profile email`, so a `WARDYN_OIDC_ROLE_MAP` row keyed on a `groups` claim value
+  decided nothing on an IdP that gates that claim behind an explicit scope grant. This CSV
+  (default empty, unchanged) appends scopes to the request — most commonly `groups` — validated at
+  **boot** against the provider's own discovery `scopes_supported`: an unadvertised scope refuses
+  boot by name rather than failing every human's login with `invalid_scope`. A provider that
+  publishes no `scopes_supported` at all is not refused (that field is optional in OIDC
+  discovery); boot warns and requests it unchecked. Configuring `groups` also silences the
+  existing boot- and login-time warnings about a `groups`-keyed role-map row on a
+  `groups`-scope-gating provider — the scope is now actually being asked for.
+
 ## [0.7.12] — 2026-09-23
 
 ### Security
