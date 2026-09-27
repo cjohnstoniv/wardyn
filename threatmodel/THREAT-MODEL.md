@@ -97,8 +97,9 @@ invitation, not an embarrassment.
    COULD bind it, and whether it does is a scoping DECISION rather than an
    impossibility. 0.7.2 takes that decision and wires the SAME parser
    (`confinePush`, one step both brokers call, reusing the
-   `brokered:git:branch-ns*` rule sources) to the git_pat lane behind
-   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, **default off** — the opposite
+   `brokered:git:branch-ns*` rule sources) to the git_pat lane behind the pat scope of
+   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` (folded by #203 from the standalone
+   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`), **default off** — the opposite
    default from the App lane, because a PAT carries whatever scope the operator
    issued and Wardyn cannot narrow it, so the namespace there is a convention
    imposed on a credential Wardyn does not bound, over forges whose push-ref
@@ -153,8 +154,9 @@ invitation, not an embarrassment.
    because the push's own discovery request has already minted it.
    Same structural bound as branch-namespace confinement: unenforceable on an
    `ssh_key` push (no receive-pack parser sits on git's SSH transport), and
-   enforced on `git_pat` regardless of `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`
-   — that switch is WHERE-only and never gates WHAT a `git_pat` push may
+   enforced on `git_pat` regardless of the pat scope of
+   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`
+   — that scope is WHERE-only and never gates WHAT a `git_pat` push may
    touch.
 
 5. **Audit integrity** — the append-only control-plane log, eBPF ground truth,

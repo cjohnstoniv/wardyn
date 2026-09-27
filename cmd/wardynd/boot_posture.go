@@ -80,7 +80,7 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 //     enrolment token is exactly that kind of long-lived, replayable
 //     credential, dispatched with a request to orgURL, and a plaintext URL
 //     would send it in cleartext to any peer on the path. allowPlaintextListen
-//     (WARDYN_ALLOW_PLAINTEXT_LISTEN) is the SAME override refusePlaintextListen
+//     (WARDYN_LISTEN_ALLOW_PLAINTEXT) is the SAME override refusePlaintextListen
 //     already uses for wardynd's own listen address — one escape hatch, not a
 //     second one to keep in sync.
 //
@@ -110,7 +110,7 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 		return fmt.Errorf("refusing to start: WARDYN_ORG_URL %q is not https:// and its host is not loopback — "+
 			"the device credential travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
 			"sends that credential in cleartext to any peer on the path; use https://, point WARDYN_ORG_URL at a "+
-			"loopback host for local testing, or set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", orgURL)
+			"loopback host for local testing, or set WARDYN_LISTEN_ALLOW_PLAINTEXT=true to override", orgURL)
 	}
 	return nil
 }
@@ -177,7 +177,7 @@ func validateSSOOnlyPosture(ssoOnly, oidcConfigured bool, adminToken string, loc
 // empty operator allowlist is not a default — it is an ambiguity in which every
 // person the IdP lets in silently holds the admin token's power. Refuse, with
 // WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST as the explicit override (the
-// WARDYN_ALLOW_PLAINTEXT_LISTEN precedent). UNCONDITIONAL — not conditioned on
+// WARDYN_LISTEN_ALLOW_PLAINTEXT precedent). UNCONDITIONAL — not conditioned on
 // the bind address the way the plaintext rule is: a loopback bind bounds who can
 // reach the port, not who the IdP authenticates.
 //

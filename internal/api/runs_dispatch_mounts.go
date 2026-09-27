@@ -251,7 +251,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		// Exclude the proxy itself and loopback from proxy traversal. DERIVED
 		// from proxyURL, not the literal "wardyn-proxy": that name is
 		// only the default per-run sidecar alias, and -proxy-url /
-		// WARDYN_PROXY_URL_OVERRIDE moves it. With an override the sandbox's own
+		// WARDYN_SANDBOX_PROXY_URL moves it. With an override the sandbox's own
 		// HTTP_PROXY named a host that was NOT in its NO_PROXY, so a
 		// proxy-aware client reaching the proxy's local /wardyn/... routes tried
 		// to reach the proxy THROUGH the proxy — while a name that resolves to

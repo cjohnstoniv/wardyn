@@ -4176,10 +4176,11 @@ one reader and rejected outright by another.
 Two independent controls sit on the brokered git lanes (`github_token`,
 `git_pat`), and an operator tuning one must not assume it moves the other.
 
-- **WHERE a push may land.** Branch-namespace confinement
-  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, on by default for the App lane;
-  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, off by default for `git_pat`) —
-  see [docs/ENV.md](ENV.md) for both rows.
+- **WHERE a push may land.** Branch-namespace confinement — ONE var,
+  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` (#203 folds the former, standalone
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` into its `{app,pat}` scope): App
+  lane on by default, `git_pat` lane (the `pat` scope) off by default — see
+  [docs/ENV.md](ENV.md) for the row.
 - **WHAT a push may touch.** `push_rules` (`deny_paths`,
   `max_inspect_pack_mib`) — a policy field, not an env var, set per run. An
   operator ceiling that sets `push_rules` is a floor, not a cap: an unset
@@ -4200,9 +4201,9 @@ The residuals an operator should plan for:
   `push_rules` while `ssh_key` is the run's only git-capable grant is legal
   but graded a medium-risk item on the Review rail rather than blocked.
 - **On `git_pat`, only WHERE is behind a switch.** Branch-namespace
-  confinement on the `git_pat` lane is off by default and needs
-  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every
-  `git_pat` push whatever that switch is set to. Neither changes the PAT
+  confinement on the `git_pat` lane is off by default and needs the `pat`
+  scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to
+  every `git_pat` push whatever that scope is set to. Neither changes the PAT
   itself: it keeps whatever scope the operator issued it with.
 - **A first push to a new branch enumerates the whole new tree.** Under
   branch-namespace confinement the pushed commit's parent stays on the forge,

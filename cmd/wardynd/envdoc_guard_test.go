@@ -413,6 +413,21 @@ func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
 	}
 }
 
+// envDocRetired lists WARDYN_* names a rename or merge removed from the read
+// surface entirely, where the replacement's own docs/ENV.md row still spells
+// the OLD name for cross-reference (so an operator who remembers it can find
+// where it went) — unlike envDocAllow, these are not test-only and have no
+// reader anywhere, in test Go or otherwise. Keep in sync with the CHANGELOG's
+// "Renamed in 0.8" table.
+var envDocRetired = map[string]bool{
+	// #203: folded into WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's {app,pat} scope.
+	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": true,
+	// #203: renamed (docs/ENV.md's "Renamed in 0.8" table names the new spelling).
+	"WARDYN_ALLOW_PLAINTEXT":        true,
+	"WARDYN_ALLOW_PLAINTEXT_LISTEN": true,
+	"WARDYN_PROXY_URL_OVERRIDE":     true,
+}
+
 // TestEnvDoc_ReverseEveryRowHasReader ratchets the other direction: every
 // WARDYN_* row in docs/ENV.md must still have a live reader in the tree.
 // Deleting the last reader of a var but leaving its row → fail. Prevents doc rot
@@ -429,6 +444,9 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 		}
 		if envDocShellOnly[v] {
 			continue // compose/scripts config; no Go reader by design
+		}
+		if envDocRetired[v] {
+			continue // renamed/merged away; kept as a cross-reference only
 		}
 		if !seen[v] {
 			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only, or envDocShellOnly if compose/scripts read it)", v, envDocRoots)

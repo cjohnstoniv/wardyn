@@ -2988,6 +2988,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   chart alias (`WARDYN_OIDC_ROLE_MAP`/`WARDYN_OIDC_DEFAULT_ROLE` still accepting `member`,
   `WARDYN_MEMBER_MODE` and its sibling `WARDYN_MEMBER_*` variables) keeps working and warns at
   boot through 0.8.x; it is removed in 0.9.
+- **Five overlapping/collided env vars renamed, clean break, no alias period (#203).** Wardyn has
+  no users yet (owner ruling, #205/#203/#206), so these land directly: no
+  `cliutil.EnvAlias` compatibility shim and no boot warning naming the old spelling. Setting the
+  old name after upgrading is simply inert — nothing refuses boot over it, it is just not read.
+  `WARDYN_ALLOW_PLAINTEXT` (CLI) → `WARDYN_CLI_ALLOW_PLAINTEXT`; `WARDYN_ALLOW_PLAINTEXT_LISTEN`
+  (daemon) → `WARDYN_LISTEN_ALLOW_PLAINTEXT`; the two were named alike but meant different things.
+  `WARDYN_PROXY_URL_OVERRIDE` → `WARDYN_SANDBOX_PROXY_URL`, naming what it sets rather than what it
+  overrides. `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` folds into
+  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s new `{app,pat}` scope — one push branch-namespace control
+  split by credential kind is now one var: a bare value (the same word list as before) still binds
+  the App lane only, exactly as it did before the merge; `app:<word>,pat:<word>` sets either or both
+  lanes explicitly, and a scope left unnamed keeps its own pre-merge default (App on, PAT off).
+  `WARDYN_SUBSCRIPTION_INJECT` keeps its name, but `scripts/stage-claude-creds.sh`'s parser is
+  realigned to the same on/off word list `wardynd` itself uses (`cliutil.EnvBool`) instead of
+  recognizing only the literal `off` — the two readers of that one var disagreed on 3 of its 4 "off"
+  spellings, which could silently mis-stage a credential; a garbage value now exits 2 there too,
+  matching `wardynd`'s own fail-closed contract instead of guessing. `WARDYN_RUNNER_TARGET` keeps
+  its name, moved to `docs/ENV.md`'s Test / internal-only section (it was never operator
+  configuration). Full old → new table: `docs/ENV.md`'s "Renamed in 0.8" section.
 
 ### Added
 
