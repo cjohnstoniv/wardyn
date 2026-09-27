@@ -69,3 +69,57 @@ func TestGrade_PushRulesUnenforceableWithSSHOnly(t *testing.T) {
 		t.Errorf("graded %+v with an all-zero push_rules: nothing to warn about", it)
 	}
 }
+
+// TestGrade_PushRulesOnANonGitHubPATForge pins issue #508 F2: the broker can
+// clear a path a push left unchanged only by reading github.com, so on any
+// other git_pat forge a deny_paths entry reaching a path the repository holds
+// refuses every push. Fail-closed and legal, so graded, not refused — but
+// graded, because the refusal otherwise arrives silently at the first push.
+func TestGrade_PushRulesOnANonGitHubPATForge(t *testing.T) {
+	run := RunInput{Interactive: true}
+	pat := func(host string) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantGitPAT, RequiresApproval: true,
+			Scope: []byte(`{"host":"` + host + `","secret_name":"pat"}`)}
+	}
+	spec := func(rules *types.PushRulesSpec, grants ...types.GrantSpec) types.RunPolicySpec {
+		return types.RunPolicySpec{MinConfinementClass: types.CC2, AutoStopAfterSec: 3600,
+			PushRules: rules, EligibleGrants: grants}
+	}
+	deny := &types.PushRulesSpec{DenyPaths: []string{"infra/**"}}
+
+	it := itemFor(Grade(run, spec(deny, pat("GitLab.Example.com"))), "push_rules")
+	if it == nil {
+		t.Fatal("deny_paths on a non-GitHub git_pat forge is not graded")
+	}
+	if it.Level != RiskMedium || it.Value != "deny_paths on gitlab.example.com" {
+		t.Errorf("graded %+v, want medium on gitlab.example.com", it)
+	}
+	if !strings.Contains(it.Rationale, "gitlab.example.com") || !strings.Contains(it.Rationale, "refuse any push") {
+		t.Errorf("rationale %q does not name the host and the refusal", it.Rationale)
+	}
+
+	for name, s := range map[string]types.RunPolicySpec{
+		"git_pat on github.com":     spec(deny, pat("github.com")),
+		"github_token":              spec(deny, types.GrantSpec{Kind: types.GrantGitHubToken, RequiresApproval: true}),
+		"no push_rules":             spec(nil, pat("gitlab.example.com")),
+		"max_inspect_pack_mib only": spec(&types.PushRulesSpec{MaxInspectPackMiB: 8}, pat("gitlab.example.com")),
+		"all-zero push_rules":       spec(&types.PushRulesSpec{}, pat("gitlab.example.com")),
+		"no git grant":              spec(deny),
+		"unparseable git_pat scope": spec(deny, types.GrantSpec{Kind: types.GrantGitPAT, Scope: []byte(`nope`)}),
+	} {
+		if it := itemFor(Grade(run, s), "push_rules"); it != nil {
+			t.Errorf("%s: graded %+v, want no push_rules row", name, it)
+		}
+	}
+
+	// One row per distinct forge, whatever the spelling.
+	var rows int
+	for _, it := range Grade(run, spec(deny, pat("gitlab.example.com"), pat("GITLAB.example.com."), pat("dev.azure.com"), pat("github.com"))) {
+		if it.Field == "push_rules" {
+			rows++
+		}
+	}
+	if rows != 2 {
+		t.Errorf("push_rules rows = %d, want 2 (gitlab.example.com, dev.azure.com)", rows)
+	}
+}

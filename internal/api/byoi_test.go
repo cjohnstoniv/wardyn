@@ -64,7 +64,7 @@ func TestBYOI_MemberDenied403(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
 	h.srv.router = h.srv.routes()
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	bodies := map[string]string{
 		"image":             `{"agent":"claude-code","image":"ubuntu:24.04"}`,
@@ -94,13 +94,13 @@ func TestBYOI_MemberDenied403(t *testing.T) {
 	}
 	// createRunUnconfiguredStore (inline_policy_test.go), set HERE rather than
 	// for the whole test: this devcontainer_repo probe degrades past validation
-	// and reaches CreateRun for real, which used to dereference a nil Store
-	// (#338) — this answers it with a controlled error instead. Every probe
-	// above stops at its own 4xx/403 without ever touching the store, so
-	// leaving Store nil for them keeps the fast, well-trodden no-Store path
-	// this harness uses everywhere else. The 500 below is that controlled
-	// errCreateRunNoStoreConfigured, not a crash, so it is now the exact code
-	// to assert rather than just "not 403".
+	// and reaches CreateRun for real, which must not dereference a nil Store —
+	// this answers it with a controlled error instead. Every probe above stops
+	// at its own 4xx/403 without ever touching the store, so leaving Store nil
+	// for them keeps the fast, well-trodden no-Store path this harness uses
+	// everywhere else. The 500 below is that controlled
+	// errCreateRunNoStoreConfigured, not a crash, so it is the exact code to
+	// assert rather than just "not 403".
 	h.srv.cfg.Store = createRunUnconfiguredStore{}
 	if w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", admin, bodies["devcontainer_repo"]); w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin devcontainer_repo: code = %d, want 500 (errCreateRunNoStoreConfigured — never 403)", w.Code)

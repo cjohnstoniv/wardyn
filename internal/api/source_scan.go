@@ -324,7 +324,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(ws.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
 		return
 	}
 	// #386 review follow-up N4: a scan clones a repo server-side too — the

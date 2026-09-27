@@ -109,14 +109,14 @@ func TestUnreadableClaimMarksSnapshotPartial(t *testing.T) {
 // Counterfactual: drop the unanswerableWidensRole branch from CallbackHandler
 // and leg 2 mints a cookie with Role=admin.
 func TestUnreadableClaimDoesNotWidenTheDefaultRole(t *testing.T) {
-	roleMap := map[string]string{"walled-contractors": writoidc.RoleMember}
+	roleMap := map[string]string{"walled-contractors": writoidc.RoleUser}
 
 	t.Run("claim readable: walled to member", func(t *testing.T) {
 		env := newIdPEnv(t)
 		auth := env.newRoleAuth(t, roleMap, writoidc.RoleAdmin, nil)
 		_, sess := doRoleCallback(t, env, auth, "contractor@corp.example", nil, []string{"walled-contractors"})
-		if sess.Role != writoidc.RoleMember {
-			t.Fatalf("role = %q, want %q — the control leg must be walled, or the unreadable leg proves nothing", sess.Role, writoidc.RoleMember)
+		if sess.Role != writoidc.RoleUser {
+			t.Fatalf("role = %q, want %q — the control leg must be walled, or the unreadable leg proves nothing", sess.Role, writoidc.RoleUser)
 		}
 	})
 
@@ -143,12 +143,12 @@ func TestUnreadableClaimDoesNotWidenTheDefaultRole(t *testing.T) {
 	// claim could have produced less than member.
 	t.Run("unreadable claim + default member still signs in", func(t *testing.T) {
 		env := newIdPEnv(t)
-		auth := env.newRoleAuth(t, roleMap, writoidc.RoleMember, nil)
+		auth := env.newRoleAuth(t, roleMap, writoidc.RoleUser, nil)
 		env.buildIDTokenRawClaim(t, "sub-contractor2", "contractor2@corp.example", "groups", "walled-contractors")
 		w, sess := doCallback(t, auth)
-		if sess.Role != writoidc.RoleMember {
+		if sess.Role != writoidc.RoleUser {
 			t.Fatalf("role = %q (status %d, %q), want %q — a malformed claim must not lock out a deployment whose default cannot widen",
-				sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleMember)
+				sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleUser)
 		}
 	})
 }

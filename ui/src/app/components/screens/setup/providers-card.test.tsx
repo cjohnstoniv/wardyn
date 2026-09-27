@@ -73,7 +73,7 @@ beforeEach(() => {
 });
 
 describe("ProvidersCard", () => {
-  it("counts ENABLED rows, never hosts, and its link goes to /providers", async () => {
+  it("counts ENABLED rows, never hosts, and its link goes to /admin/providers", async () => {
     getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme"), row("acme-labs")]));
     renderCard();
 
@@ -82,7 +82,7 @@ describe("ProvidersCard", () => {
     expect(screen.getByText(PROVIDERS.CARD_LEAD)).toBeInTheDocument();
 
     await userEvent.click(screen.getByText(PROVIDERS.CARD_OPEN));
-    expect(navigateMock).toHaveBeenCalledWith("/providers");
+    expect(navigateMock).toHaveBeenCalledWith("/admin/providers");
   });
 
   it("a disabled row does not count toward the summary", async () => {

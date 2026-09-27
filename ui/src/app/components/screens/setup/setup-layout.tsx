@@ -96,11 +96,11 @@ export function SetupLayout({
   // (corp-network-egress.tsx), which are already `disabled={!operator}`. This
   // shell has no idea of the role otherwise, so the caller passes it once.
   operator: boolean;
-  // #213 — the counter's honest "N optional setup steps and M demos follow"
-  // subline, live-derived by the caller (steps.ts's optionalStepCounts) so it
-  // never goes stale the way a hand-kept count would. Absent renders the
-  // number alone, for callers (and tests) that don't need the subline.
-  requiredSummary?: { config: number; demos: number };
+  // #213 — the counter's honest "N optional setup steps follow" subline,
+  // live-derived by the caller (steps.ts's optionalStepCounts) so it never
+  // goes stale the way a hand-kept count would. Absent renders the number
+  // alone, for callers (and tests) that don't need the subline.
+  requiredSummary?: { config: number };
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -192,8 +192,7 @@ export function SetupLayout({
                 </div>
                 {requiredSummary && (
                   <div className="mt-0.5 normal-case">
-                    Required before a run can launch. {requiredSummary.config} optional setup steps and{" "}
-                    {requiredSummary.demos} demos follow.
+                    Required before a run can launch. {requiredSummary.config} optional setup steps follow.
                   </div>
                 )}
               </>
@@ -266,13 +265,16 @@ export function SetupLayout({
                   </div>
                 )}
                 {nextGate?.blocked && nextGate.action ? (
-                  <Button
-                    onClick={nextGate.action.onClick}
-                    disabled={!operator}
-                    title={!operator ? OPERATOR_ONLY_REASON : undefined}
-                  >
-                    {nextGate.action.label}
-                  </Button>
+                  // #459: standing alone in the footer — helper text under it,
+                  // not a title tooltip a disabled control can't surface.
+                  <div className="space-y-1">
+                    <Button onClick={nextGate.action.onClick} disabled={!operator}>
+                      {nextGate.action.label}
+                    </Button>
+                    {!operator && (
+                      <p className="text-right text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
+                    )}
+                  </div>
                 ) : (
                   <Button
                     onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}

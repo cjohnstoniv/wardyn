@@ -39,7 +39,7 @@ var wantScratch = map[string]string{
 // WHOLE-volume mount of a disk-backed emptyDir whose SizeLimit is the run's
 // own disk_mib.
 //
-// THE MEDIUM IS THE SUBTLE ONE. `medium: Memory` would make the emptyDir a
+// The medium is the subtle one. `medium: Memory` would make the emptyDir a
 // tmpfs counted against the container's MEMORY limit instead of its ephemeral
 // storage — the pod would OOM-kill on a big clone rather than be evicted for
 // disk, and disk_mib would still bound nothing. Empty medium is the disk-backed
@@ -157,8 +157,8 @@ func TestCreateSandbox_ScratchReachesTheAgentsOwnContainer(t *testing.T) {
 	}
 }
 
-// TestCreateSandbox_NoMountCarriesASubPath is a REGRESSION PIN, green the day it
-// was written, and it is the one assertion a fake clientset can still make about
+// TestCreateSandbox_NoMountCarriesASubPath is a standing pin, and it is the one
+// assertion a fake clientset can still make about
 // a rule only a real apiserver enforces: "Subpath mounts are not allowed for
 // ephemeral containers" (corev1.VolumeMount's own contract). Exec copies the
 // main container's mounts VERBATIM, so a subPath added anywhere in this package

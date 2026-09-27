@@ -34,8 +34,8 @@ func TestOnboardingComplete_MarksInstallOnce(t *testing.T) {
 		t.Fatalf("completion must persist OnboardingCompletedAt via the store, got %+v", fake.putSeen)
 	}
 	first := *fake.putSeen.OnboardingCompletedAt
-	if len(audit.events) != 1 || audit.events[0].Action != "setup.onboarding.completed" {
-		t.Fatalf("want exactly one setup.onboarding.completed audit event, got %+v", audit.events)
+	if len(audit.events) != 1 || audit.events[0].Action != "setup.onboarding.complete" {
+		t.Fatalf("want exactly one setup.onboarding.complete audit event, got %+v", audit.events)
 	}
 
 	// Idempotent: the FIRST completion is the fact of record. A re-finish
@@ -59,11 +59,11 @@ func TestPutSiteConfig_CannotTouchOnboardingState(t *testing.T) {
 	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{OnboardingCompletedAt: &stamped}}
 	srv, _ := newSiteConfigHarness(t, fake)
 
-	// A client that tries to SET it does not get to: the write succeeds (the
+	// A client that tries to set it does not get to: the write succeeds (the
 	// document's other fields are the point of the request) and the submitted
-	// mark is dropped, never persisted. The invariant is "cannot SET, CLEAR or
-	// MOVE the mark", which the carry-forward enforces — the 400 that used to
-	// stand here enforced nothing extra and broke two documented recovery flows
+	// mark is dropped, never persisted. The invariant is "cannot set, clear or
+	// move the mark", which the carry-forward enforces — a 400 here would
+	// enforce nothing extra and break two documented recovery flows
 	// (TestPutSiteConfig_IgnoresASubmittedMarkOnTheRecoveryFlows).
 	w := do(t, srv, http.MethodPut, "/api/v1/site-config",
 		adminToken, `{"onboarding_completed_at":"2026-01-01T00:00:00Z"}`)

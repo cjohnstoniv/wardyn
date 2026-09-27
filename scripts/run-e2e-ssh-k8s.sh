@@ -24,7 +24,13 @@
 #   - authorization, both arms (the compose lane's counterpart checks): a
 #     second principal's MEMBER key is refused on a run it does not own and
 #     the refusal is audited, while a third principal's ADMIN-role key reaches
-#     that same run with data.override=true on the ssh.auth row
+#     that same run with data.override=true on the ssh.authenticate row
+#   - in-place promotion (#131): a `wardyn attach` client mints its own
+#     ticket and holds the terminal over the WEB WebSocket, a second `ssh -tt`
+#     joins and is admitted read-only (the notice on ITS stderr), the web
+#     holder drops, and the ssh client is promoted on the SAME socket — the
+#     session.promote audit row AND a keystroke from that ssh session
+#     actually reaching the shell are both asserted
 #
 # NOT RUN BY CI: no workflow invokes `make test-e2e-ssh-k8s` — it needs a kind
 # cluster this script deliberately does not create. It is a MANUAL proof, run
@@ -44,7 +50,11 @@
 # This script does NOT create or delete the cluster: it runs against the one
 # `make kind-quickstart` leaves behind (deploy/kind/quickstart.sh), and cleans
 # up only what it created (its run, its key). GUARD: self-skips unless
-# WARDYN_TEST_K8S=1, the same knob the other cluster-dependent lanes use.
+# WARDYN_TEST_K8S=1, the same knob the other cluster-dependent lanes use — AND
+# self-skips (out loud, exit 0) if WARDYN_TEST_K8S=1 is set but no wardyn
+# install exists in the expected context/namespace, so "asked for but nothing
+# to run against" reports the same as "not asked for" rather than as a red
+# that looks like a real defect.
 set -uo pipefail
 
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
@@ -68,8 +78,15 @@ CONTEXT="kind-wardyn-quickstart"
 NAMESPACE="wardyn"
 BASE="http://127.0.0.1:8080"
 
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment wardyn >/dev/null 2>&1 || \
-  die "no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster)"
+# WARDYN_TEST_K8S=1 says "run the cluster-dependent lane"; it does not say a
+# cluster is actually up. A cluster that was asked for but is not there is
+# the SAME "nothing to prove against" case as the guard above, so it gets the
+# same treatment: an out-loud skip (exit 0), never a silent one and never a
+# red that looks like a real defect.
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment wardyn >/dev/null 2>&1 || {
+  echo "run-e2e-ssh-k8s: no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping." >&2
+  exit 0
+}
 
 # The install's own admin token, read the way quickstart.sh re-reads it.
 ADMIN_TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardyn-auth \
@@ -84,6 +101,10 @@ fail() { note "[FAIL]" "$1"; FAILED=1; }
 skip() { note "[skip]" "$1"; }
 
 teardown() {
+  [[ -n "${WEB_PID:-}" ]] && kill "${WEB_PID}" >/dev/null 2>&1 || true
+  [[ -n "${SSH2_PID:-}" ]] && kill "${SSH2_PID}" >/dev/null 2>&1 || true
+  exec 4>&- 4<&- 2>/dev/null || true
+  exec 5>&- 5<&- 2>/dev/null || true
   # Kill the run so the cluster reaps its pod; drop the key we registered.
   # The CLUSTER is never touched — it is the caller's, not ours.
   if [[ -n "${RUN_ID:-}" ]]; then
@@ -287,9 +308,9 @@ if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, publi
 else
   denial_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/foreign_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo should-never-run" 2>&1)"
   denial_rc=$?
-  n="$(audit_probe "[.[] | select(.action==\"ssh.auth\" and .outcome==\"failure\" and .target==\"${FOREIGN_FP}\" and .data.reason==\"not the run owner\")]")"
+  n="$(audit_probe "[.[] | select(.action==\"ssh.authenticate\" and .outcome==\"failure\" and .target==\"${FOREIGN_FP}\" and .data.reason==\"not the run owner\")]")"
   if [[ "${denial_rc}" -ne 0 && "${denial_out}" != *"should-never-run"* && "${n}" -ge 1 ]]; then
-    pass "member-key denial: non-owner, non-admin key refused on k8s (rc=${denial_rc}) and audited ssh.auth failure reason=\"not the run owner\""
+    pass "member-key denial: non-owner, non-admin key refused on k8s (rc=${denial_rc}) and audited ssh.authenticate failure reason=\"not the run owner\""
   else
     fail "member-key denial: rc=${denial_rc} out='${denial_out}' audited_denial_rows=${n}"
   fi
@@ -309,15 +330,111 @@ if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, publi
 else
   override_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/admin_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo wardyn-override-ok" 2>&1)"
   override_rc=$?
-  n="$(audit_probe "[.[] | select(.action==\"ssh.auth\" and .outcome==\"success\" and .target==\"${ADMIN_FP}\" and .data.override==true)]")"
+  n="$(audit_probe "[.[] | select(.action==\"ssh.authenticate\" and .outcome==\"success\" and .target==\"${ADMIN_FP}\" and .data.override==true)]")"
   if [[ "${override_rc}" -eq 0 && "${override_out}" == *"wardyn-override-ok"* && "${n}" -ge 1 ]]; then
-    pass "admin override: admin-role key reached a run it does not own on k8s, ssh.auth success audited with data.override=true"
+    pass "admin override: admin-role key reached a run it does not own on k8s, ssh.authenticate success audited with data.override=true"
   else
     fail "admin override: rc=${override_rc} out='${override_out}' audited_override_rows=${n}"
   fi
 fi
 
-# ── 8. the two deliberate skips, named, not silent ──────────────────────────
+# ── 8. in-place promotion (#131): web holds, ssh observes read-only, web
+#    drops, ssh is promoted on its own socket ─────────────────────────────
+# `wardyn attach` is the exact client the console's terminal uses: it mints
+# its own single-use ticket (POST /runs/{id}/attach-ticket) and dials the WS
+# attach endpoint with it. Built once here, on the host — the CLI talks
+# straight to BASE, exactly like `ssh_run` above; it needs no image and no
+# pod of its own.
+go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "build wardyn CLI failed"
+
+# Hold the web terminal. Its stdin is one end of a FIFO this script keeps
+# open at fd 5 (read+write, so it never sees EOF) -- the client sends no
+# keystrokes; it only occupies the writer slot until killed below.
+mkfifo "${TMPDIR}/web_stdin"
+exec 5<>"${TMPDIR}/web_stdin"
+WARDYN_URL="${BASE}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMPDIR}/wardyn" attach "${RUN_ID}" \
+  <"${TMPDIR}/web_stdin" >"${TMPDIR}/web_attach.log" 2>&1 &
+WEB_PID=$!
+
+held=0
+for _ in $(seq 1 15); do
+  status=$(api GET "/api/v1/runs/${RUN_ID}/attach-holder")
+  src="$(jq -r '.source // empty' "${TMPDIR}/resp.json" 2>/dev/null)"
+  [[ "${src}" == "web" ]] && { held=1; break; }
+  sleep 1
+done
+if [[ "${held}" -eq 1 ]]; then
+  pass "promotion: web attach holds the terminal (GET attach-holder source=web)"
+else
+  fail "promotion: web attach never registered as the writer (log: $(cat "${TMPDIR}/web_attach.log"))"
+fi
+
+# A second session, an ssh -tt observer, on its own FIFO (fd 4) so it can be
+# driven in two acts: read the read-only notice now, then send a real
+# keystroke once promoted, later.
+mkfifo "${TMPDIR}/ssh2_in"
+exec 4<>"${TMPDIR}/ssh2_in"
+timeout 90 ssh -tt "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" \
+  <"${TMPDIR}/ssh2_in" >"${TMPDIR}/ssh2_out.log" 2>"${TMPDIR}/ssh2_err.log" &
+SSH2_PID=$!
+
+readonly_seen=0
+for _ in $(seq 1 15); do
+  grep -q "wardyn: read-only" "${TMPDIR}/ssh2_err.log" 2>/dev/null && { readonly_seen=1; break; }
+  sleep 1
+done
+if [[ "${readonly_seen}" -eq 1 ]]; then
+  pass "promotion: ssh observer admitted read-only, notice on stderr ($(grep 'wardyn: read-only' "${TMPDIR}/ssh2_err.log"))"
+else
+  fail "promotion: ssh observer never saw the read-only notice on stderr (log: $(cat "${TMPDIR}/ssh2_err.log"))"
+fi
+
+# Drop the web holder. `wardyn attach` wires SIGTERM to a clean detach
+# (cmd/wardyn/attach.go's runAttach / signal.NotifyContext).
+kill "${WEB_PID}" >/dev/null 2>&1 || true
+wait "${WEB_PID}" 2>/dev/null || true
+WEB_PID=""
+
+promoted_notice=0
+for _ in $(seq 1 15); do
+  grep -q "wardyn: you now hold this terminal" "${TMPDIR}/ssh2_err.log" 2>/dev/null && { promoted_notice=1; break; }
+  sleep 1
+done
+if [[ "${promoted_notice}" -eq 1 ]]; then
+  pass "promotion: ssh observer's stderr carries the promotion notice after the web holder dropped"
+else
+  fail "promotion: no promotion notice on the ssh observer's stderr after the web holder dropped (log: $(cat "${TMPDIR}/ssh2_err.log"))"
+fi
+
+n="$(audit_probe '[.[] | select(.action=="session.promote" and .outcome=="success" and .data.source=="ssh")]')"
+if [[ "${n}" -ge 1 ]]; then
+  pass "audit: session.promote row recorded for the ssh observer on k8s (${n})"
+else
+  fail "audit: no session.promote row for the ssh observer on k8s"
+fi
+
+# The assertion that matters: a keystroke from the NOW-promoted ssh session
+# reaches the shell. The audit row above only proves the server announced a
+# promotion; only the shell's own echo of this command proves it granted one.
+printf 'echo wardyn-k8s-promoted-keystroke-marker\n' >&4
+keystroke_seen=0
+for _ in $(seq 1 15); do
+  grep -q "wardyn-k8s-promoted-keystroke-marker" "${TMPDIR}/ssh2_out.log" 2>/dev/null && { keystroke_seen=1; break; }
+  sleep 1
+done
+if [[ "${keystroke_seen}" -eq 1 ]]; then
+  pass "promotion: a keystroke from the promoted ssh session reached the shell on k8s (its own echo came back)"
+else
+  fail "promotion: keystroke from the promoted ssh session never reached the shell on k8s (out: $(cat "${TMPDIR}/ssh2_out.log"))"
+fi
+
+printf 'exit\n' >&4
+wait "${SSH2_PID}" 2>/dev/null || true
+SSH2_PID=""
+exec 4>&- 4<&-
+exec 5>&- 5<&-
+
+# ── 9. the two deliberate skips, named, not silent ──────────────────────────
 skip "sftp: an IMAGE contract, not a substrate one — the gateway execs /usr/lib/openssh/sftp-server INSIDE the sandbox (docs/SSH.md 'Image contract (BYOI)'), and on a cluster that image is whatever WARDYN_AGENT_IMAGES points at. Proven against Wardyn's own image by 'make test-e2e-ssh'."
 skip "-L forwarding: same contract, same binary convention (socat inside the sandbox). The substrate code underneath it is the Runner.ExecStream lane sections 3-4 above already exercise on k8s. Proven end-to-end by 'make test-e2e-ssh'."
 

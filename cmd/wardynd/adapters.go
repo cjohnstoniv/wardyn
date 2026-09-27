@@ -255,11 +255,9 @@ type pgRoleMappings struct {
 }
 
 // ListRoleMappings delegates to the store — this adapter exists only so
-// internal/auth/oidc, which must stay dependency-free of internal/types (see
-// oidc.RoleMapping's own doc comment), never imports internal/store either.
-// The conversion from types.RoleMapping (id/timestamps/provenance) to
-// oidc.RoleMapping (bare Value/Role) happens here, the one place both types
-// are in scope.
+// internal/auth/oidc never imports internal/store. The conversion from
+// types.RoleMapping (id/timestamps/provenance) to oidc.RoleMapping (bare
+// Value/Role/UserType) happens here, the one place both types are in scope.
 func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapping, error) {
 	rows, err := store.NewPG(r.pool).ListRoleMappings(ctx)
 	if err != nil {
@@ -267,7 +265,7 @@ func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMappi
 	}
 	out := make([]oidc.RoleMapping, len(rows))
 	for i, m := range rows {
-		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType}
 	}
 	return out, nil
 }
@@ -311,8 +309,11 @@ func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.Approval
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return s.st.ListApprovals(ctx, state)
 }
-func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, s.st, runID, reason)
+}
+func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, s.st, id, actor, reason)
 }
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return s.st.CountApprovalsForRun(ctx, runID)
@@ -458,7 +459,7 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	ev.Target = store.CapAuditTarget(ev.Target)
 	if m.reg != nil {
 		// A run-less event (ev.RunID == nil —
-		// policy.inline, secret.*, an admin action) must still fall back to the
+		// policy.inline.apply, secret.*, an admin action) must still fall back to the
 		// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered
 		// via AddGlobal) rather than bypass masking entirely — the guard here
 		// is `m.reg != nil` alone, never also `ev.RunID != nil`. The uuid.Nil
@@ -560,13 +561,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
 	// own was the skew that stopped actively-attached runs (B8-F2).
 	//
+	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
+	// the ended-run grace decides when its files go, not auto_stop_after_sec.
+	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
 		SELECT id, updated_at, auto_stop_after_sec, now()
 		FROM agent_runs
-		WHERE state = $1`
+		WHERE state = $1 AND lost_at IS NULL`
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("wardynd: list running with policy: %w", err)
@@ -648,7 +652,8 @@ func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), b
 
 // lifecycleStopper adapts the runner + store to lifecycle.Stopper. StopRun wins
 // the idle-guarded RUNNING->STOPPED transition FIRST (so a run touched after the
-// reaper's snapshot, or already moved terminal, is left alone), then gracefully
+// reaper's snapshot, already moved terminal, or with an open request still inside
+// its wait (store.openHoldSQL) is left alone), then gracefully
 // stops the sandbox and runs the revoke cascade, surfacing any teardown/revoke
 // failure to the reaper. It is idempotent: a missing sandbox or already-stopped
 // run is not an error (the runner's StopSandbox is itself idempotent).
@@ -691,8 +696,9 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// `wardyn attach` TouchRun (which bumps updated_at, state stays RUNNING) between
 	// the scan and here means the run is NOT idle — the guarded CAS then no-ops
 	// (applied=false) and we tear nothing down and revoke nothing, preserving the
-	// keepalive. If a concurrent kill/complete already moved the run terminal, the
-	// CAS also no-ops and we leave that path's teardown/revocation untouched.
+	// keepalive. If a concurrent kill/complete already moved the run terminal, or
+	// an open request is still inside its wait (store.openHoldSQL), the CAS also
+	// no-ops and we leave the run and any teardown/revocation untouched.
 	applied, uerr := store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
@@ -711,7 +717,9 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// APPROVALS FIRST, before the destructive teardown, for the same reason
 	// handleKillRun cancels before KillSandbox: a PENDING approval is the one
 	// piece of this cascade a human is looking at, and an idle-stopped run is
-	// typically idle BECAUSE its agent is parked on a wait_for_review hold. Run
+	// often idle BECAUSE its agent is parked on a hold — once that hold's wait
+	// has passed, since the CAS refuses while an open request is still inside
+	// its wait (store.openHoldSQL). Run
 	// AFTER the guarded CAS for the same reason the revokes are: a stop that lost
 	// the CAS must not cancel a still-live run's questions. Best-effort and
 	// non-blocking like the revokes (the server logs + audits its own failure);
@@ -824,6 +832,31 @@ func runSecretSweeper(ctx context.Context, srv *api.Server, interval time.Durati
 					slog.Int("runs", n),
 				)
 			}
+		}
+	}
+}
+
+// credentialSweepInterval is how often expired stored credentials are deleted
+// (credential-storage design §2.7): daily, so a lapsed sign-in outlives its
+// expiry by at most a day.
+const credentialSweepInterval = 24 * time.Hour
+
+// runCredentialSweeper deletes expired stored credentials once at start and
+// then every interval, until ctx is cancelled. Unlike the sweepers above the
+// first sweep does not wait a tick: a daemon restarted daily would otherwise
+// never sweep. Several replicas may sweep at once; each row is deleted, and
+// audited, by the one that wins its lock.
+func runCredentialSweeper(ctx context.Context, srv *api.Server, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if n := srv.SweepExpiredCredentials(ctx); n > 0 {
+			slog.InfoContext(ctx, "wardynd: deleted expired stored credentials", slog.Int("deleted", n))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

@@ -510,6 +510,11 @@ type RecordingOptions struct {
 	// DefaultRouteProbe uses, so a driver CI without a recorder substrate does
 	// not hard-fail, but a driver CI that wires the probe verifies the contract.
 	RecordingProbe RecordingProbe
+	// MutateSpec, when non-nil, edits the recording sandbox's spec after the
+	// confinement class is pinned and before CreateSandbox. A recording
+	// driver's proxy needs a control plane to upload the cast to, which
+	// minimalSpec does not carry; the caller supplies it here.
+	MutateSpec func(*runner.SandboxSpec)
 }
 
 // CheckRecordingCapability is the recording-capability honesty gate. It is an
@@ -573,6 +578,9 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 
 	spec := minimalSpec(opts.image())
 	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+	if opts.MutateSpec != nil {
+		opts.MutateSpec(&spec)
+	}
 
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {

@@ -20,13 +20,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── clone-grant FK ordering (verify/record) ─────────────────────────────────
+// clone-grant FK ordering (verify/record)
 
-// fkGrantStore is the fake this regression needs: unlike the other api fakes
-// (whose CreateGrant has NO referential integrity — which is why an always-
-// failing grant INSERT survived the whole unit suite), it enforces exactly what
-// Postgres enforces — credential_grants.run_id REFERENCES agent_runs(id),
-// immediate — by rejecting a grant whose run row does not exist yet.
+// fkGrantStore is the fake this test needs: unlike the other api fakes (whose
+// CreateGrant has no referential integrity, so an always-failing grant INSERT
+// passes the whole unit suite), it enforces exactly what Postgres enforces —
+// credential_grants.run_id REFERENCES agent_runs(id), immediate — by
+// rejecting a grant whose run row does not exist yet.
 type fkGrantStore struct {
 	store.Store
 	importStateFake
@@ -50,7 +50,7 @@ func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, r
 }
 
 // GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
-// access unconditionally (W20-W20-llm-transport-matrix-1), reaching
+// access unconditionally, reaching
 // defaultAgentRunsIntegration's GetSiteConfig read on every call — the
 // embedded nil store.Store would otherwise panic here.
 func (s *fkGrantStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -153,14 +153,14 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	}
 }
 
-// TestLaunchRecordRun_RequiredSecretRowRidesAlong is the W8-S1-2 regression: a
-// workspace's REQUIRED secret: contract row must ride a record/verify session
-// the same way it rides a real run — the Verify carry card (step-requirements.tsx)
-// promises "N required secrets ride proxy-side", but launchRecordRun used to
-// hand-roll only the integration: case (requiredIntegrationIDs), silently
-// dropping every secret: row. Local-dir workspace (no repo source) isolates
-// the assertion to exactly the one grant the required secret produces — a repo
-// source would also add its own github_token clone grant.
+// TestLaunchRecordRun_RequiredSecretRowRidesAlong: a workspace's required
+// secret: contract row must ride a record/verify session the same way it rides
+// a real run — the Verify carry card (step-requirements.tsx) promises "N
+// required secrets ride proxy-side", so launchRecordRun must not hand-roll
+// only the integration: case (requiredIntegrationIDs) and drop every secret:
+// row. Local-dir workspace (no repo source) isolates the assertion to exactly
+// the one grant the required secret produces — a repo source would also add
+// its own github_token clone grant.
 func TestLaunchRecordRun_RequiredSecretRowRidesAlong(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()
@@ -224,27 +224,27 @@ func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launchRecordRun: %v", err)
 	}
-	rows := audit.find("run.workspace.requirement.secret")
+	rows := audit.find("run.requirement.grant")
 	if len(rows) != 1 {
-		t.Fatalf("record launch wrote %d run.workspace.requirement.secret rows; want 1", len(rows))
+		t.Fatalf("record launch wrote %d run.requirement.grant rows; want 1", len(rows))
 	}
 	if rows[0].Target != "acme-deploy-key" || rows[0].RunID == nil || *rows[0].RunID != run.ID {
 		t.Errorf("audit row target=%q run=%v; want acme-deploy-key bound to run %s", rows[0].Target, rows[0].RunID, run.ID)
 	}
 }
 
-// TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey pins the fix for a grant that
-// could never mint. The scan/record clone grant used to carry `"repos": []`
-// while the broker allowlist it is reached through was keyed from the CLONE
-// URL — two different answers to "which repo is this token for". The real
-// minter refuses an empty list outright (GitHub installation tokens are
-// per-installation; the owner comes from the first repo), so every GitHub HTTPS
-// scan/record clone 502'd at handleGitBroker once a real GitHub App was
-// configured. No test saw it because FakeGitHubMinter did not reproduce that
-// precondition (it does now — internal/broker.TestMintForGrant_EmptyRepoScopeFails).
+// TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey pins a grant that can
+// actually mint. The scan/record clone grant's `repos` scope and the broker
+// allowlist it is reached through are both keyed from the clone URL — one
+// answer to "which repo is this token for". The real minter refuses an empty
+// list outright (GitHub installation tokens are per-installation; the owner
+// comes from the first repo), so a grant carrying `"repos": []` would 502
+// every GitHub HTTPS scan/record clone at handleGitBroker once a real GitHub
+// App is configured. FakeGitHubMinter reproduces that precondition
+// (internal/broker.TestMintForGrant_EmptyRepoScopeFails).
 //
-// The invariant this pins is the one that was broken: the grant's scope.repos
-// and the broker map key are THE SAME repo, derived from the same function.
+// The invariant: the grant's scope.repos and the broker map key are the same
+// repo, derived from the same function.
 func TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()
@@ -283,13 +283,12 @@ func TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey(t *testing.T) {
 	}
 }
 
-// ─── ephemeral workspace targets (WARDYN_EPHEMERAL_DIRS) ─────────────────────
+// ephemeral workspace targets (WARDYN_EPHEMERAL_DIRS)
 
-// TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch pins audit row
-// 56's fix at its source: an ephemeral workspace source has no mount/clone —
-// wireWorkspaceSource must return its Target in ephemeralDirs (for the caller
-// to thread into dispatchParams.EphemeralDirs) rather than silently dropping
-// it, which is what the ephemeral case used to do.
+// TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch: an ephemeral
+// workspace source has no mount/clone, so wireWorkspaceSource must return its
+// Target in ephemeralDirs (for the caller to thread into
+// dispatchParams.EphemeralDirs) rather than silently dropping it.
 func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec
@@ -315,20 +314,18 @@ func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
 	}
 }
 
-// TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget pins the
-// reconcile-wave1 fix: an ephemeral source never passes through ValidateMount
-// (there is no mount, just WARDYN_EPHEMERAL_DIRS -> mkdir -p inside the
-// sandbox), so wireWorkspaceSource is the only gate standing between a legacy
-// row's target and the sandbox.
+// TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget: an ephemeral
+// source never passes through ValidateMount (there is no mount, just
+// WARDYN_EPHEMERAL_DIRS -> mkdir -p inside the sandbox), so wireWorkspaceSource
+// is the only gate standing between a legacy row's target and the sandbox.
 //
-// STRENGTHENED (R1): it used to assert the bad target was DROPPED and the good
-// one surfaced. Dropping is now a REFUSAL, and the change is deliberate — the
-// guard moved above the type switch so it covers repo and local_dir too, and
-// for those a drop is not an option: seedRequestWorkspace, the create path's
-// sibling over the same stored rows, 422s the identical workspace, and the repo
-// half's late drop (buildRepoRecords) was already silent enough to start a
-// session with a repo that never cloned. A workspace cannot be legal on one run
-// door and quietly broken on the other, so both now refuse and say which source.
+// A bad target is refused, not dropped, and the guard sits above the type
+// switch so it covers repo and local_dir too — for those a drop is not an
+// option: seedRequestWorkspace, the create path's sibling over the same stored
+// rows, 422s the identical workspace, and a late drop in buildRepoRecords would
+// be silent enough to start a session with a repo that never cloned. A
+// workspace cannot be legal on one run door and quietly broken on the other, so
+// both refuse and say which source.
 func TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec

@@ -17,10 +17,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// counterfactual: the live completion watcher (startCompletionWatcher) and
-// the boot reconciler (reconcileFinalize) are the two run-finalize paths that
-// used to inline the SAME terminal sequence and had to be hand-kept in sync.
-// They now both route through finalizeRunTail, so this test drives each path and
+// counterfactual: the live completion watcher (startCompletionWatcher) and the
+// boot reconciler (reconcileFinalize) are the two run-finalize paths, and both
+// route through finalizeRunTail rather than each inlining the same terminal
+// sequence to be hand-kept in sync. This test drives each path and
 // asserts the identical terminal side effects: a success audit, exactly one
 // revoke-cascade, and exactly one sandbox teardown. If either caller stops
 // calling the shared tail (re-inlines and drops, e.g., the revoke or the
@@ -199,8 +199,8 @@ func (r *execNeverStartedRunner) stopCount() int {
 	return r.stops
 }
 
-// TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly is the 0.6.6
-// regression: a Wait error wrapping runner.ErrExecNeverStarted is proof the
+// TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly: a Wait error
+// wrapping runner.ErrExecNeverStarted is proof the
 // agent exec will never reach a terminal state on its own — it must NOT be
 // treated as a transient probe error and handed off to reconcileWatch (which
 // would retry the identical dead end forever). The run must instead fail
@@ -216,8 +216,32 @@ func TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly(t *testing.T) {
 
 	srv.startCompletionWatcher(run.ID, "ref-never-started", "exec-1")
 
+	// The watcher's CAS to FAILED and its finalizeRunTail side effects (the
+	// audit write, StopSandbox) are sequential in the SAME goroutine, but that
+	// sequence keeps running after the CAS — so a poll that stops on state
+	// alone can observe FAILED a step before the audit event or the
+	// StopSandbox call it implies. Poll the joint condition instead: state,
+	// audit and teardown must all have landed before any of them is asserted.
+	failures, sawExecStartedFalse := 0, false
+	ready := func() bool {
+		failures, sawExecStartedFalse = 0, false
+		for _, ev := range audit.eventsFor(run.ID, "run.complete") {
+			if ev.Outcome != "failure" {
+				continue
+			}
+			failures++
+			var d struct {
+				ExecStarted *bool `json:"exec_started"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			if d.ExecStarted != nil && !*d.ExecStarted {
+				sawExecStartedFalse = true
+			}
+		}
+		return st.State() == types.RunFailed && rn.stopCount() == 1 && failures >= 1
+	}
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && st.State() != types.RunFailed {
+	for time.Now().Before(deadline) && !ready() {
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -226,22 +250,6 @@ func TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly(t *testing.T) {
 	}
 	if rn.stopCount() != 1 {
 		t.Errorf("StopSandbox calls = %d, want exactly 1 (finalized through the normal terminal tail)", rn.stopCount())
-	}
-
-	failures := 0
-	sawExecStartedFalse := false
-	for _, ev := range audit.eventsFor(run.ID, "run.complete") {
-		if ev.Outcome != "failure" {
-			continue
-		}
-		failures++
-		var d struct {
-			ExecStarted *bool `json:"exec_started"`
-		}
-		_ = json.Unmarshal(ev.Data, &d)
-		if d.ExecStarted != nil && !*d.ExecStarted {
-			sawExecStartedFalse = true
-		}
 	}
 	if failures != 1 {
 		t.Errorf("run.complete failure events = %d, want exactly 1 (no duplicate audit)", failures)

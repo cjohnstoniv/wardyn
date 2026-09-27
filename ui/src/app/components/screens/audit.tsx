@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
+import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
@@ -68,11 +69,11 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
 // Event-kind bucketing. AuditEvent.action is an open dotted-verb string the
 // backend owns (internal/types/types.go); these are the REAL prefixes/values
 // wardynd emits today:
-//   egress.allow / egress.deny / egress.pending, llm.scan.<action>
+//   egress.allow / egress.deny / egress.hold, llm.scan.<action>
 //   kernel.process.exec / kernel.network.connect / kernel.file.write / ...
 //   credential.mint / credential.revoke, identity.mint / identity.revoke,
 //   secret.read / secret.write / secret.delete, integration.*,
-//   run.llm.subscription_inject
+//   run.subscription.inject
 //   approval.decide / approval.expire
 //   run.kill
 //   everything else — run.create/build/dispatch/complete/..., session.*,
@@ -112,12 +113,12 @@ function eventKind(e: AuditEvent): EventKind {
     // header/credentials) — writing, deleting or adopting one belongs beside
     // secret.*/credential.*, not lumped into the lifecycle catch-all.
     action.startsWith("integration.") ||
-    // run.llm.subscription_inject is the managed-subscription credential
+    // run.subscription.inject is the managed-subscription credential
     // being injected proxy-side — a credential event wearing a run.* prefix,
-    // not a run lifecycle step. (run.llm.bedrock stays in the lifecycle
+    // not a run lifecycle step. (run.bedrock.configure stays in the lifecycle
     // catch-all: it's dispatch-time model-access wiring, not itself named a
     // credential family the way the other rows in this branch are.)
-    action === "run.llm.subscription_inject"
+    action === "run.subscription.inject"
   ) {
     return "credentials";
   }
@@ -132,17 +133,17 @@ const ACTION_VERB: Record<string, string> = {
   "run.create": "created the run",
   "run.build": "built the sandbox image",
   "run.dispatch": "dispatched the run",
-  "run.interactive": "started the run idle for attach",
+  "run.interactive.start": "started the run idle for attach",
   "run.exec": "executed the agent task",
   "run.complete": "completed",
   "run.kill": "killed the run",
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
-  "run.workspace.collision": "detected a workspace directory collision",
-  "run.workspace.requirement.egress": "applied a workspace's required egress to the run",
-  "run.workspace.requirement.secret": "granted a workspace's required secret to the run",
-  "run.workspace.requirement.integration": "applied a workspace's required integration to the run",
+  "run.workspace.collide": "detected a workspace directory collision",
+  "run.requirement.allow": "applied a workspace's required egress to the run",
+  "run.requirement.grant": "granted a workspace's required secret to the run",
+  "run.requirement.inject": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
   "run.compose": "produced a run proposal",
   "run.compose.clarify": "asked a clarifying question",
@@ -151,13 +152,13 @@ const ACTION_VERB: Record<string, string> = {
   "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
-  "run.llm.bedrock": "configured Bedrock model access for the run",
+  "run.bedrock.configure": "configured Bedrock model access for the run",
   // Deliberately NOT "the managed subscription credential": the same action
   // fires for source="subscription" (the operator's own resident Anthropic
   // OAuth token) as for source="managed" (the Wardyn-captured one), and only
   // the event's data carries which — naming one mode would be false on half
   // the rows.
-  "run.llm.subscription_inject": "injected the subscription credential at the proxy",
+  "run.subscription.inject": "injected the subscription credential at the proxy",
   "secret.read": "read a secret into the run",
   "secret.write": "stored a secret",
   "secret.delete": "deleted a secret",
@@ -166,20 +167,20 @@ const ACTION_VERB: Record<string, string> = {
   "policy.create": "created a policy",
   "policy.update": "updated a policy",
   "policy.delete": "deleted a policy",
-  "policy.inline": "applied an inline policy",
+  "policy.inline.apply": "applied an inline policy",
   "session.attach": "attached to the run's terminal",
   "session.detach": "detached from the run's terminal",
-  "session.recording": "recorded the terminal session",
+  "session.recording.write": "recorded the terminal session",
   "recording.upload": "uploaded the run recording",
-  "ssh.auth": "an ssh authentication attempt against a run's terminal",
+  "ssh.authenticate": "an ssh authentication attempt against a run's terminal",
   "ssh.exec": "ran a command over the run's ssh channel",
-  "ssh.sftp": "an sftp session against the run's sandbox",
+  "ssh.sftp.transfer": "an sftp session against the run's sandbox",
   "ssh.forward": "an ssh port forward into the run's sandbox",
   "kernel.process.exec": "observed a process exec",
   "kernel.network.connect": "observed a network connect",
   "kernel.file.write": "observed a write to a sensitive path",
-  "kernel.sensor.heartbeat": "sensor heartbeat",
-  "kernel.sensor.blind": "kernel sensor blind — no ground truth for this run",
+  "kernel.sensor.ping": "sensor heartbeat",
+  "kernel.sensor.bypass": "kernel sensor blind — no ground truth for this run",
   // DEADCODE-4: the tier-1/tier-2/integration surfaces' own actions — shipped
   // with zero rows here, so they rendered as raw dotted strings.
   "source.write": "added a source",
@@ -304,7 +305,7 @@ export function AuditScreen() {
     // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
     // events, so an event list structurally cannot show them — a dead sensor
     // reads exactly like a quiet one. health() never rejects.
-    healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
+    void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
     return api.listAudit(runFilter || undefined).then(setEvents);
   }, [runFilter]);
 
@@ -526,7 +527,7 @@ export function AuditScreen() {
             // events, they're just not reachable from this unfiltered view.
             <EmptyState
               icon={ScrollText}
-              title="The full audit feed is admin-only."
+              title={AUDIT.MEMBER_FEED_TITLE}
               description="You can still see a run's own trail: open the run and use its Audit tab — its “open full Audit” link brings that run's events here."
               action={
                 <Button variant="outline" onClick={() => navigate("/runs")}>
@@ -690,7 +691,7 @@ function EventOutcome({ e }: { e: AuditEvent }) {
 }
 
 // Kernel ground-truth health. The event list itself can only ever show a LIVE
-// sensor (kernel.sensor.heartbeat rows): "unavailable" (no sensor ever) and
+// sensor (kernel.sensor.ping rows): "unavailable" (no sensor ever) and
 // "degraded" (stale beat) are the ABSENCE of events, so they render as an empty
 // list indistinguishable from a quiet window — exactly the blindness that has to
 // stay visible. Nothing is claimed when the daemon doesn't report the field.

@@ -6,6 +6,8 @@
 // Run cockpit (/runs/:id) — the terminal-first live-run screen. Every string
 // the redesign introduces lands HERE first, so the four Terminal states and the
 // evidence widgets can't drift into inventing their own vocabulary.
+import { RUN_WAIT } from "./run-wait";
+
 export const RUN_COCKPIT = {
   // --- Terminal widget, four states (design board 2d) ---
   // 1. You hold the PTY.
@@ -130,8 +132,9 @@ export const RUN_COCKPIT = {
   // (a wait_for_review first-use gate — the connection is parked until someone
   // decides). Only the second earns the urgency, and the command bar is the one
   // place that fact is visible without scrolling or clicking.
-  waiting: (n: number) => `${n} waiting`,
-  waitingHeld: (n: number) => `${n} waiting · sandbox held`,
+  // Split into run-wait.ts (#498) — see that file's comment. Spread rather
+  // than retyped so this stays the one definition.
+  ...RUN_WAIT,
   // Phase-2 layout controls (the canvas + its edit-mode toolbar).
   layoutPreset: (preset: string) => `layout: ${preset}`,
   addWidget: "Add widget",

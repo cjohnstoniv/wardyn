@@ -303,7 +303,8 @@ describe("YourModelKey", () => {
   // credential_source, so this band behaves like per_user for hasOwn/reveal
   // purposes even though `status.model_access` here is the deployment-wide
   // answer (the caller is not graded per-principal on a shared row).
-  describe("shared row with a Bedrock mechanism (REVIEW-1.md I1/R2(b))", () => {
+  describe("shared row with a Bedrock mechanism", () => {
+    // ticket: REVIEW-1.md I1/R2(b)
     const sharedBedrockHarness: SetupHarnessTool[] = [
       { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, mechanism: "bedrock_sso" },
     ];
@@ -328,7 +329,8 @@ describe("YourModelKey", () => {
       expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
     });
 
-    it("llmReady true, anything else -> provided chip/body, reveal HIDDEN (I1's own deviation, now fixed)", () => {
+    it("llmReady true, anything else -> provided chip/body, reveal HIDDEN", () => {
+      // ticket: I1
       render(
         <YourModelKey
           llmReady={true}

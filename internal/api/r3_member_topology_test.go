@@ -28,7 +28,7 @@ func TestMemberCannotReadOperatorTopologyRoutes(t *testing.T) {
 	cfg := baseTestConfig(h, r3PlainStore{})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
-	member := ssoSession(t, "sub-plain-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "member@corp.example", oidc.RoleUser)
 
 	for _, path := range []string{
 		"/api/v1/site-config",

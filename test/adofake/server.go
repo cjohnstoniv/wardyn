@@ -61,6 +61,7 @@ const (
 	EndpointWorkItemsPatch    Endpoint = "workitems.patch"
 	EndpointConnectionData    Endpoint = "connectiondata.get"
 	EndpointProjectsGet       Endpoint = "projects.get"
+	EndpointRepositoriesGet   Endpoint = "repositories.get"
 	EndpointPatsList          Endpoint = "tokens.pats.list"
 	EndpointPatsCreate        Endpoint = "tokens.pats.create"
 	EndpointPatsUpdate        Endpoint = "tokens.pats.update"
@@ -424,6 +425,8 @@ func (s *Server) handler() http.Handler {
 		s.requireScope(EndpointConnectionData, ScopeProjectRead, s.handleConnectionData))
 	mux.HandleFunc("GET /{org}/_apis/projects",
 		s.requireScope(EndpointProjectsGet, ScopeProjectRead, s.handleProjectsGet))
+	mux.HandleFunc("GET /{org}/{project}/_apis/git/repositories",
+		s.requireScope(EndpointRepositoriesGet, ScopeCodeRead, s.handleRepositoriesGet))
 
 	// Token lifecycle — see pats.go.
 	//

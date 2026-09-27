@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// TestResidualDoc_MintRouteHonesty_GoDoc guards against W19-W19a-5
-// regressing on the CODE side: the package doc's "Caller authentication"
+// TestResidualDoc_MintRouteHonesty_GoDoc guards the code side of this
+// residual: the package doc's "Caller authentication"
 // RESIDUAL paragraph must say plainly that the per-run caller-auth secret
 // only binds a caller going through THIS BINARY, and that the proxy's local
 // mint route (POST
@@ -37,7 +37,7 @@ func TestResidualDoc_MintRouteHonesty_GoDoc(t *testing.T) {
 }
 
 // TestResidualDoc_MintRouteHonesty_ThreatModel is the THREAT-MODEL.md half of
-// W19-W19a-5: §5.1a's git_pat row must carry the same honesty clause as the
+// §5.1a's git_pat row must carry the same honesty clause as the
 // Go doc above (TestResidualDoc_MintRouteHonesty_GoDoc), so the two can't
 // drift — a reader of either one gets the true picture.
 func TestResidualDoc_MintRouteHonesty_ThreatModel(t *testing.T) {

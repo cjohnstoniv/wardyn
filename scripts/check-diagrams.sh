@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md)
+DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
 
@@ -90,7 +90,7 @@ FAILED	internal/types/types.go
 KILLED	internal/types/types.go
 STOPPED	internal/types/types.go
 minted_jti	internal/broker/broker.go
-kernel.sensor.blind	internal/api/runs_dispatch.go
+kernel.sensor.bypass	internal/api/runs_dispatch.go
 /api/v1/internal/groundtruth	internal/api/server.go
 wardyn.run-id	cmd/wardyn-tetragon-ingest/main.go
 MANIFEST
@@ -112,9 +112,9 @@ done <<'PROSE'
 WAITING_FOR_CONFIRMATION	internal/types/types.go	ARCHITECTURE.md
 UpdateRunStateIf	internal/api/runs_lifecycle.go	ARCHITECTURE.md
 wait_for_review	internal/types/policy.go	ARCHITECTURE.md
-Internal: true	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
-agent-run --idle	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
-wardyn-proxy:	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
+Internal: true	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
+agent-run --idle	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
+wardyn-proxy:	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
 HTTP_PROXY	internal/api/runs_dispatch_mounts.go	threatmodel/THREAT-MODEL.md
 # doc half only: the code half is pinned harder by TestRequiredTools_CanonicalUnion.
 agent-run-lib.sh	internal/envbuild/builder.go	docs/ENVBUILD.md

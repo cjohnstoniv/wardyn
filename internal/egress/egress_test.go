@@ -25,7 +25,7 @@ func TestDecisionConstants(t *testing.T) {
 	}{
 		{"allow", Allow, "allow"},
 		{"deny", Deny, "deny"},
-		{"pending", Pending, "pending"},
+		{"pending", Pending, "hold"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -257,7 +257,7 @@ func TestValidHeaderName(t *testing.T) {
 	}
 }
 
-// THE PIN'S QUERY ARM IS UNAMBIGUOUS BY CONSTRUCTION (security re-round
+// The pin's query arm is unambiguous by construction (security re-round
 // SHOULD-1). Pinned here as well as through both proxy lanes, because this is
 // where the rule is decided and the shapes are easier to read without a server
 // in the way.

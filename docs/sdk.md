@@ -31,9 +31,11 @@ func main() {
     // 1. Create a client. Token is the AdminToken configured in wardynd.
     c := client.New("https://wardyn.example.com", "my-admin-token")
 
-    // 2. Submit a run. Returns client.CreateRunResult: the created
-    //    client.AgentRun (state PENDING or RUNNING), embedded, plus any
-    //    ADVISORY warnings — the run is live either way, so surface them.
+    // 2. Submit a run. Answers as soon as the run row exists, so the result's
+    //    client.AgentRun (embedded) reads state PENDING — the image build and
+    //    dispatch continue server-side; poll or GetRun for RUNNING/FAILED.
+    //    Also carries any ADVISORY warnings — the run is live either way, so
+    //    surface them.
     created, err := c.CreateRun(ctx, client.CreateRunRequest{
         Agent: "claude-code",
         Repo:  "org/repo",
@@ -140,6 +142,49 @@ if errors.As(err, &apiErr) {
 }
 ```
 
+### `Reason`: branch on this, never on `Error()`'s prose
+
+A route may also send a machine-readable `reason` alongside its `error`
+sentence — `apiErr.Reason` carries it, `""` when the route sends none. Match
+on `Reason`, never on the human sentence: the sentence is free to reword
+without notice, `Reason` is not.
+
+```go
+if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
+    // relaunch the run — its credential was dispatched with a provider row
+    // that has since changed.
+}
+```
+
+**Coverage is being phased in lane by lane (#204, #656), not uniform yet.**
+Today the three credential-injection resolve arms behind `GET
+/api/v1/internal/injection/{grantID}` — Azure DevOps, AWS SSO and Bedrock
+bearer — send a reason on every refusal; most other routes, including
+deciding an Azure DevOps approval, still send `error` alone, so
+`apiErr.Reason == ""` does not mean "no error", only "this route has not been
+converted yet". Every lane's reasons are drawn from the same closed set
+(`internal/api/reasons.go`), so a reason two lanes share (the dispatch-time-
+snapshot family below, or the hold-chain terminal/exhausted pair) always
+means the same thing regardless of which lane sent it:
+
+| Reason | Meaning |
+|---|---|
+| `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO, Bedrock bearer. |
+| `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
+| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO, Bedrock bearer. |
+| `run_unreadable` | The run row itself could not be read. AWS SSO, Bedrock bearer. |
+| `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO, Bedrock bearer. |
+| `store_error` | The credential store read failed. AWS SSO. |
+| `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). Azure DevOps. |
+| `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
+| `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
+| `per_user_bearer_absent` / `bearer_absent` | The roster names a per-user bearer this owner has none of, or no `bedrock-api-key` secret is in the store. Bedrock bearer. |
+| `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |
+| `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. Azure DevOps; `approvals_unreadable` also AWS SSO's re-auth hold. |
+| `signin_closed` / `signin_holds_exhausted` | The hold chain has gone terminal (cancelled, expired, denied) or hit its per-run cap — see `injection_ado_signin.go`'s sign-in hold and `injection_awssso.go`'s re-auth hold, the same shape under two names. |
+| `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
+| `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
+
 ## Local dev: principal override
 
 `X-Wardyn-Principal` overrides the server-side principal attribution:
@@ -191,9 +236,11 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
 
 Beyond `run_id`, the audit query accepts server-side predicates:
 `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
-`actor` (exact), `actor_type` (`human|agent|system`), and `outcome`
-(`success|denied|failure`) — they compose, and the CLI mirrors them on
-`wardyn audit`.
+`actor` (exact), `actor_type` (`human|agent|system`), `outcome`
+(`success|denied|failure`), and `origin` (`device|organisation`: the rows an
+enrolled laptop forwarded, each carrying a top-level `device_id`, or the
+organisation's own) — they compose, and the CLI mirrors all but `origin` on
+`wardyn audit`, whose per-run trail never holds a forwarded row.
 
 The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
 trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to

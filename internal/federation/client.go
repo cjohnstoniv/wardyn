@@ -36,10 +36,23 @@ const requestTimeout = 60 * time.Second
 // device id the organisation's routes are keyed on, the wdd_ bearer, and the
 // SHA-256 of the enrolment token that bought them. The last is how boot tells
 // a fresh token (re-enrol) from the spent one MDM leaves in place (keep).
+//
+// ResetPending and Name make the post-enrolment reset (ResetFederation, the
+// device.local.enrol row, then clearing ResetPending) resumable across a
+// crash: they are set true/non-empty only when this credential is freshly
+// generated, and durably stored BEFORE the reset runs. A boot that reads a
+// credential with ResetPending still true (its own prior attempt was
+// interrupted between that Put and finishing the reset) resumes the reset
+// without spending the enrolment token again. Once the reset completes,
+// ResetPending is persisted false and never set again for this credential, so
+// a later genuine revocation of this same identity is never cleared by a
+// restart.
 type Credential struct {
 	DeviceID             uuid.UUID `json:"device_id"`
 	Token                string    `json:"token"`
 	EnrolmentTokenSHA256 string    `json:"enrolment_token_sha256"`
+	ResetPending         bool      `json:"reset_pending,omitempty"`
+	Name                 string    `json:"name,omitempty"`
 }
 
 // TokenSHA256 is hex(sha256(token)), the form Credential records.
@@ -50,21 +63,28 @@ func TokenSHA256(token string) string {
 
 // StatusError is a non-2xx answer from the organisation. RetryAfter is the
 // parsed Retry-After header (seconds or HTTP-date form), zero when absent or
-// unparseable.
+// unparseable. WWWAuthenticate is the raw WWW-Authenticate header, empty when
+// absent — how Revoked tells the organisation's own 401 from a 401 injected by
+// something on the path that is not the organisation (a captive portal, a
+// misconfigured proxy).
 type StatusError struct {
-	Code       int
-	RetryAfter time.Duration
-	Message    string
+	Code            int
+	RetryAfter      time.Duration
+	Message         string
+	WWWAuthenticate string
 }
 
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("organisation answered %d: %s", e.Code, e.Message)
 }
 
-// Revoked reports the definitive "this credential is dead" answers: 401 from
-// deviceAuth (revoked and unknown are deliberately one answer there) and 410.
+// Revoked reports the definitive "this credential is dead" answers: 410, and a
+// 401 that carries deviceAuth's own realm (revoked and unknown are
+// deliberately one answer there). A bare 401 without that realm is not the
+// organisation revoking this device — see forwarder.go's refused.
 func (e *StatusError) Revoked() bool {
-	return e.Code == http.StatusUnauthorized || e.Code == http.StatusGone
+	return e.Code == http.StatusGone ||
+		(e.Code == http.StatusUnauthorized && strings.Contains(e.WWWAuthenticate, `realm="wardyn-device"`))
 }
 
 // Client calls the organisation's device routes.
@@ -130,7 +150,7 @@ func (c *Client) post(ctx context.Context, path, bearer string, in any, want int
 	if resp.StatusCode != want {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return &StatusError{Code: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
-			Message: strings.TrimSpace(string(msg))}
+			Message: strings.TrimSpace(string(msg)), WWWAuthenticate: resp.Header.Get("WWW-Authenticate")}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
 }

@@ -83,12 +83,15 @@ func TestFront_SignInThenAzureDevOps(t *testing.T) {
 	}
 
 	getJSON(t, c, "https://dev.azure.com/contoso/_apis/projects?api-version=7.1", bearer, &doc)
-	req, _ := http.NewRequest(http.MethodGet, "https://dev.azure.com/contoso/proj/_git/app/info/refs?service=git-upload-pack", nil)
-	req.Header.Set("Authorization", "Bearer "+bearer)
-	if resp, err = c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("git advertise: %v %v", err, resp)
+	// The -project/-repo pair, and the spaced pair every lane can reach (#485).
+	for _, repo := range []string{"proj/_git/app", "Payments%20Platform/_git/Card%20Auth%20(v2).Service"} {
+		req, _ := http.NewRequest(http.MethodGet, "https://dev.azure.com/contoso/"+repo+"/info/refs?service=git-upload-pack", nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		if resp, err = c.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("git advertise %s: %v %v", repo, err, resp)
+		}
+		_ = resp.Body.Close()
 	}
-	_ = resp.Body.Close()
 
 	// Anything but the two names is refused at the CONNECT.
 	if _, err := c.Get("https://example.com/"); err == nil {
@@ -100,8 +103,8 @@ func TestFront_SignInThenAzureDevOps(t *testing.T) {
 	}
 	getJSON(t, http.DefaultClient, front.URL+"/_seen", "", &seen)
 	m := seen.Callers["sub-m"]
-	if m.Authorized != 2 || m.Endpoints["projects.get"] != 1 || m.Endpoints["git.advertise"] != 1 {
-		t.Errorf("/_seen member = %+v, want the REST read and the advertisement", m)
+	if m.Authorized != 3 || m.Endpoints["projects.get"] != 1 || m.Endpoints["git.advertise"] != 2 {
+		t.Errorf("/_seen member = %+v, want the REST read and the two advertisements", m)
 	}
 	if _, ok := seen.Callers["sub-a"]; ok || len(seen.Callers) != 1 {
 		t.Errorf("/_seen callers = %+v, want the member only", seen.Callers)

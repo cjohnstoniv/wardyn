@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,25 +77,35 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	ctx := r.Context()
+	rctx, row := secretstore.SiteAudited(ctx)
 	fail := func(status int, reason, body string) bool {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", bedrockAPIKeySecret, "failure",
-			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
-		writeError(w, status, body)
+			mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID}, row))))
+		// reason reaches the wire now (#656, following #204's ADO-lane
+		// precedent): the same machine class already recorded on the audit
+		// row, so the proxy can branch on it instead of string-matching the
+		// human sentence in body.
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 
 	var recorded bedrockBearerSnapshot
 	if !s.grantSnapshot(ctx, claims.RunID, grantID, &recorded) || recorded.CredentialSource == "" {
-		return fail(http.StatusForbidden, "missing_scope_snapshot", bedrockBearerNotRecorded)
+		return fail(http.StatusForbidden, reasonMissingScopeSnapshot, bedrockBearerNotRecorded)
 	}
 	run, rerr := s.cfg.Store.GetRun(ctx, claims.RunID)
 	if rerr != nil {
-		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
+		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, credentialReauthRunUnreadableBody)
+	}
+	if run.ModelProviderID != "" {
+		// A run that chose a model provider is credentialed by its arm alone
+		// (resolveProviderKeyInjection), never the roster's key.
+		return fail(http.StatusForbidden, "provider_run", bedrockBearerNotRecorded)
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
-		return fail(http.StatusServiceUnavailable, "roster_unreadable", credentialReauthStoreErrorBody)
+		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, credentialReauthStoreErrorBody)
 	}
 	// The recorded namespace must still be the one the roster names for this
 	// run's OWN subject (the run token, not the grant, is authority for who that
@@ -103,14 +114,18 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	// resolveAWSSSOInjection enforces for the session lane.
 	scope := awsSSOScopeFor(siteCfg, run.Agent, claims.Sub)
 	if bedrockBearerSnapshotOf(scope) != recorded || !scope.readsBearer() {
-		return fail(http.StatusForbidden, "scope_changed", credentialReauthScopeChangedRefusal)
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal)
 	}
-	secret := s.bedrockBearerFor(ctx, scope)
+	secret, rerr := s.bedrockBearerRead(rctx, scope)
+	if rerr != nil {
+		status, reason, body := storeReadRefusal(bedrockAPIKeySecret, rerr)
+		return fail(status, reason, body)
+	}
 	if len(secret) == 0 {
 		if scope.perUser {
-			return fail(http.StatusFailedDependency, "per_user_bearer_absent", bedrockBearerNamespaceNotOwn)
+			return fail(http.StatusFailedDependency, reasonPerUserBearerAbsent, bedrockBearerNamespaceNotOwn)
 		}
-		return fail(http.StatusFailedDependency, "bearer_absent", bedrockBearerOperatorAbsent)
+		return fail(http.StatusFailedDependency, reasonBearerAbsent, bedrockBearerOperatorAbsent)
 	}
 
 	formatted := formatInjectionValue(minted.Injection.Format, secret)
@@ -124,15 +139,16 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	// under shared those differ, and the trail must name the one billed.
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", bedrockAPIKeySecret, "success",
-		mustJSON(map[string]any{
+		mustJSON(withStoreRow(map[string]any{
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
 			"owner": recorded.OwnerSubject, "credential_source": recorded.CredentialSource,
-		})))
+		}, row))))
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host:   minted.Injection.Host,
-		Header: minted.Injection.Header,
-		Value:  formatted,
-		JTI:    minted.JTI,
+		Host:      minted.Injection.Host,
+		Header:    minted.Injection.Header,
+		Value:     formatted,
+		JTI:       minted.JTI,
+		ExpiresAt: s.storedKeyExpiry(minted),
 	})
 	return true
 }

@@ -28,7 +28,7 @@ type policyRequest = client.PolicyRequest
 // runs validatePolicySpec over the spec before any store write — policies are
 // admin-gated config and a bad spec must never be persisted. Any problem is
 // returned as a human-readable message the handler surfaces with HTTP 400.
-func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest, string) {
+func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader) (policyRequest, string) {
 	var req policyRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return policyRequest{}, msg
@@ -37,6 +37,13 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest,
 	if req.Name == "" {
 		return policyRequest{}, "name is required"
 	}
+	repos := make([]string, len(req.Spec.WorkspaceRepos))
+	for i, wr := range req.Spec.WorkspaceRepos {
+		repos[i] = wr.Repo
+	}
+	// A read error leaves no hosts: admission refuses at launch, as for a run.
+	hosts, _ := ado.forAddresses(repos...)
+	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos, hosts)
 	if err := validatePolicySpec(req.Spec); err != nil {
 		return policyRequest{}, "invalid policy spec: " + err.Error()
 	}
@@ -53,21 +60,39 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest,
 // at the router — a stored policy is selectable CONTENT, and a security admin
 // who could author one could pair any operator secret with egress of their
 // choosing and simply select it.
+//
+// "Available to" (capPolicy): anyone below the security tier gets only the
+// rows the launch door would let them select (capVisible), filtered BEFORE the
+// window so the page and X-Wardyn-Truncated count nothing they cannot see. The
+// security tier sees every row for the same reason it sees them unredacted: it
+// writes each policy's Available to list and cannot do it against rows it is
+// not shown. Selecting one is still capability-bounded at the door.
+//
+// ponytail: a filtered reader fetches every row and windows in Go, as
+// GET /integrations does; stored policies are an admin-authored handful.
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
 		return
 	}
+	ctx := r.Context()
+	security := s.isSecurityOperator(ctx)
 	var pageFn func(store.Page) ([]types.RunPolicy, error)
-	if pg, ok := s.cfg.Store.(store.Pager); ok {
+	if pg, ok := s.cfg.Store.(store.Pager); ok && security {
 		pageFn = func(p store.Page) ([]types.RunPolicy, error) {
-			ps, err := pg.ListPoliciesPage(r.Context(), p)
-			return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
+			ps, err := pg.ListPoliciesPage(ctx, p)
+			return redactPoliciesForRead(ps, security), err
 		}
 	}
 	servePage(w, r, page, pageFn, func() ([]types.RunPolicy, error) {
-		ps, err := s.cfg.Store.ListPolicies(r.Context())
-		return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
+		ps, err := s.cfg.Store.ListPolicies(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !security {
+			ps = capVisible(ctx, s, capPolicy, ps, func(p types.RunPolicy) string { return p.ID.String() })
+		}
+		return redactPoliciesForRead(ps, security), nil
 	})
 }
 
@@ -83,6 +108,12 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeServerError(w, r, "get policy", err)
+		return
+	}
+	// Below the security tier, answered as the launch door answers this id
+	// (runs.policy): the list leaves it out, so the read by id must too.
+	if !s.isSecurityOperator(r.Context()) && s.denyUserCapability(w, r, capPolicy, p.ID.String(), "policies.read",
+		"Stored policy "+p.ID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
 		return
 	}
 	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isSecurityOperator(r.Context())))
@@ -121,7 +152,7 @@ type defaultPolicyResponse struct {
 func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) {
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		writeCeilingError(w, err)
+		writeCeilingError(w, r, err)
 		return
 	}
 	resp := defaultPolicyResponse{
@@ -139,7 +170,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 // value (an operator authors workspace_secret_names instead — see
 // types.LLMInspectionSpec), so a stored row should never carry one — but a READ
 // path must never re-expose it if that invariant is ever violated (a migration,
-// a direct DB edit, ...). Mirrors the run.policy.effective audit redaction
+// a direct DB edit, ...). Mirrors the run.policy.resolve audit redaction
 // (runs_dispatch.go) — same shape, different chokepoint. Does not mutate p's
 // own LLMInspection (a fresh copy is substituted), so a caller holding the
 // original is never surprised by an in-place edit.
@@ -153,7 +184,7 @@ func redactPolicyForRead(p types.RunPolicy, operator bool) types.RunPolicy {
 // gets the same redaction without a fake wrapper row.
 func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicySpec {
 	if !operator {
-		spec = redactSpecForMember(spec)
+		spec = redactSpecForUser(spec)
 	}
 	li := spec.LLMInspection
 	if li == nil || len(li.WorkspaceSecretValues) == 0 {
@@ -180,7 +211,7 @@ func redactPoliciesForRead(ps []types.RunPolicy, operator bool) []types.RunPolic
 // member reaches because the ceiling is what clamps them.
 var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hosts_secret_ref"}
 
-// redactSpecForMember strips the two operator-only details a policy spec
+// redactSpecForUser strips the two operator-only details a policy spec
 // carries out of a MEMBER-reachable read: the host filesystem paths behind
 // workspace_mounts[].source (the blessed ~/.claude credential mount among
 // them) and the stored-secret names on the eligible grants. Everything else —
@@ -190,7 +221,7 @@ var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hos
 // Copies before it edits: the default policy is server config held for the
 // process's whole life, so an in-place edit here would redact it permanently
 // for the operator too.
-func redactSpecForMember(spec types.RunPolicySpec) types.RunPolicySpec {
+func redactSpecForUser(spec types.RunPolicySpec) types.RunPolicySpec {
 	if len(spec.WorkspaceMounts) > 0 {
 		mounts := slices.Clone(spec.WorkspaceMounts)
 		for i := range mounts {
@@ -240,7 +271,7 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
 // with the created policy, or 400 on an invalid body/spec.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	req, msg := decodePolicyRequest(w, r)
+	req, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -299,7 +330,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, msg := decodePolicyRequest(w, r)
+	req, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return

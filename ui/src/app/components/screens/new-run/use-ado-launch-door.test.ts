@@ -23,7 +23,8 @@ vi.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => toastSuccessMo
 import { useAdoLaunchDoor } from "./use-ado-launch-door";
 import { HttpError } from "../../../lib/api/core";
 
-describe("useAdoLaunchDoor + useAdoConnect (F1)", () => {
+describe("useAdoLaunchDoor + useAdoConnect", () => {
+  // ticket: F1
   beforeEach(() => {
     getMineMock.mockReset();
     toastSuccessMock.mockReset();

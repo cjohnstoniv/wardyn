@@ -71,6 +71,7 @@ import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { DrivesScreen } from "./drives-screen";
 import { question, sizeText } from "./display";
+import { aheadByHours } from "../../../lib/test-clock";
 
 function drive(over: Partial<UserDriveListItem> = {}): UserDriveListItem {
   return {
@@ -80,8 +81,8 @@ function drive(over: Partial<UserDriveListItem> = {}): UserDriveListItem {
     home_template: "email_local",
     reclaim: "retain",
     grant_count: 2,
-    created_at: "2026-08-28T00:00:00Z",
-    updated_at: "2026-08-28T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     ...over,
   };
 }
@@ -110,7 +111,7 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
         priority: 10,
         size_mib_override: 16384,
         enabled: true,
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
     host_roots_configured: false,
@@ -324,14 +325,16 @@ describe("DrivesScreen — the editor collapses the allocation form (one teal at
   });
 });
 
-describe("DrivesScreen — the editor offers only this runner's backends (Q3)", () => {
+describe("DrivesScreen — the editor offers only this runner's backends", () => {
+  // ticket: Q3
   const openNew = async () => {
     await screen.findByText(HOMES.name);
     await userEvent.click(screen.getByRole("button", { name: DRIVES.NEW_CTA }));
     return screen.findByTestId("drives-drive-editor");
   };
 
-  it("Kubernetes offers its pair and neither Docker one, and the managed claim's size is REQUIRED (Q7)", async () => {
+  it("Kubernetes offers its pair and neither Docker one, and the managed claim's size is REQUIRED", async () => {
+    // ticket: Q7
     renderScreen();
     const editor = await openNew();
 
@@ -372,24 +375,24 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     expect(createDriveMock).not.toHaveBeenCalled();
   });
 
-  it("a share disables the derived directory name and moves off it rather than authoring a refusal", async () => {
-    renderScreen();
+  it("a share (host_path) disables the derived directory name and moves off it rather than authoring a refusal", async () => {
+    renderScreen(snapshot({ runner_target: "docker", host_roots_configured: true }));
     const editor = await openNew();
-    // The derived id is legal on the managed default.
+    // The derived id is legal on the managed default (docker_volume).
     expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).not.toBeDisabled();
 
-    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_HOST_PATH));
 
     expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toBeDisabled();
-    // A share's directories are named by the corporation's own directory, so
-    // the selection moved with the backend instead of waiting for the 400.
+    // host_path's directories are named by whoever owns the share, so the
+    // selection moved with the backend instead of waiting for the 400.
     expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toHaveAttribute("aria-pressed", "true");
     // …and the share loses the storage class, gains nothing else.
     expect(within(editor).queryByLabelText(DRIVES.FIELD_STORAGE_CLASS)).not.toBeInTheDocument();
   });
 
   it("a FRESH editor on a managed backend already has the subject-bearing names disabled", async () => {
-    renderScreen();
+    renderScreen(snapshot({ runner_target: "docker", host_roots_configured: true }));
     const editor = await openNew();
     // The mirror of the rule above, and the reason is not symmetry: Wardyn
     // mints a managed drive's volume itself, and a claim-derived name is not
@@ -403,33 +406,52 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     // Going out to a share and back must not leave `sub` selected on a managed
     // backend: the choice moves with the backend in BOTH directions, so the
     // round trip cannot author a row the server refuses.
-    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_HOST_PATH));
     expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toHaveAttribute("aria-pressed", "true");
 
-    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC));
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_DOCKER_VOLUME));
     expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
     expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("a managed backend disables the subject-bearing names and moves off them — the mirror of the share rule", async () => {
-    renderScreen();
+    renderScreen(snapshot({ runner_target: "docker", host_roots_configured: true }));
     const editor = await openNew();
 
     // Start on a share so a subject-bearing template is legitimately selected.
-    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_HOST_PATH));
     expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toHaveAttribute("aria-pressed", "true");
 
     // Back to managed: the home segment is concatenated into the object name
     // that `docker volume ls` and `kubectl get pvc` print, so publishing the
     // subject there is refused by the API for both email_local and sub. The
     // console must not offer a menu that 400s.
-    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC));
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_DOCKER_VOLUME));
 
     expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
     expect(within(editor).getByText(DRIVES.HOME_EMAIL_LOCAL).closest("button")).toBeDisabled();
     // …and the selection moved rather than waiting to be refused.
     expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).not.toBeDisabled();
     expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // #808 — k8s_pvc_static is a THIRD case, not a mirror of host_path's "every
+  // share disables hash" rule: an admin provisions the claim, but Wardyn still
+  // NAMES it, so `hash` is available and the server's own default/recommended
+  // template here; only `email_local` (folding two principals onto one
+  // pre-created claim) is refused.
+  it("k8s_pvc_static keeps hash enabled (the server's own default) and only disables email_local", async () => {
+    renderScreen();
+    const editor = await openNew();
+
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+
+    // hash STAYS selected — not moved to `sub` as a plain share would be.
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).not.toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).not.toBeDisabled();
+    // The one template the server always refuses on this backend.
+    expect(within(editor).getByText(DRIVES.HOME_EMAIL_LOCAL).closest("button")).toBeDisabled();
   });
 
   it("Docker with no WARDYN_USER_DRIVE_HOST_ROOTS disables host_path WITH ITS REASON, never offers-and-refuses", async () => {
@@ -479,7 +501,8 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
   });
 });
 
-describe("DrivesScreen — the re-home confirm dialog (UD-rehome, U3)", () => {
+describe("DrivesScreen — the re-home confirm dialog", () => {
+  // ticket: UD-rehome U3
   it("a 409 on an edit opens the confirm dialog over the server's text, and confirming retries with ?confirm=rehome", async () => {
     const conflict =
       'this drive is allocated to 2 subjects and this change re-homes them: backend "k8s_pvc_static" -> "k8s_pvc". Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome.';

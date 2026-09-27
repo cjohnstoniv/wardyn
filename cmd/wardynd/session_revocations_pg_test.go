@@ -29,7 +29,7 @@ func TestPGSessionRevocations_CutoffIsATimestampNotAFlag(t *testing.T) {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed session-revocation test")
 	}
 	ctx := t.Context()
-	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second)
+	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second, false)
 	if err != nil {
 		t.Fatalf("connectAndMigrate: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestPGSessionRevocations_MatchesEitherIdentity(t *testing.T) {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed session-revocation test")
 	}
 	ctx := t.Context()
-	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second)
+	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second, false)
 	if err != nil {
 		t.Fatalf("connectAndMigrate: %v", err)
 	}

@@ -66,7 +66,7 @@ func TestAuditMemberScope_QueryAndExportAgree(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	member := ssoSession(t, auditMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, auditMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	cases := []struct {

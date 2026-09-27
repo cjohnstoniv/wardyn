@@ -4,9 +4,19 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, renderHook, screen } from "@testing-library/react";
 
-import { OperatorProvider, useCanMutate, useMemberLocalDirRoot, useOperator } from "./operator-context";
+import {
+  OperatorProvider,
+  useCanMutate,
+  useConfinementPosture,
+  useMemberLocalDirRoot,
+  useOperator,
+  useOperatorResolved,
+  usePrincipal,
+  useSecurityOperator,
+  useUserDrive,
+} from "./operator-context";
 
 function Probe() {
   return <span>operator:{String(useOperator())}</span>;
@@ -61,6 +71,23 @@ describe("operator-context", () => {
   it("useMemberLocalDirRoot defaults to null with no <OperatorProvider> above it", () => {
     render(<RootProbe />);
     expect(screen.getByText("root:null")).toBeInTheDocument();
+  });
+
+  // Every unwrapped default in one table: an unresolved /me, a failed read
+  // and every test that mounts a screen directly read exactly these. The
+  // operator tiers fail open; principal, root and drive fail closed; the
+  // posture fails quiet.
+  it.each([
+    ["useOperator", useOperator, true],
+    ["useOperatorResolved", useOperatorResolved, true],
+    ["useSecurityOperator", useSecurityOperator, true],
+    ["usePrincipal", usePrincipal, ""],
+    ["useMemberLocalDirRoot", useMemberLocalDirRoot, null],
+    ["useUserDrive", useUserDrive, { drive: null, deniedByProfile: "", unavailable: "" }],
+    ["useConfinementPosture", useConfinementPosture, ""],
+  ] as const)("%s reads its default with no <OperatorProvider> above it", (_name, hook, want) => {
+    const { result } = renderHook(() => hook());
+    expect(result.current).toStrictEqual(want);
   });
 
   it("OperatorProvider(memberLocalDirRoot=...) threads the configured root through", () => {

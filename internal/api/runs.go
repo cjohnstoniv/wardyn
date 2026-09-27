@@ -132,7 +132,7 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 	// Audited whenever it happens, not only when it is said out loud: the
 	// operator's record of a collision must not shrink because the caller who
 	// caused it owns none of the runs it collided with.
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collision",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collide",
 		workspacePath, "success", mustJSON(map[string]any{"other_runs": others})))
 	if len(visible) == 0 {
 		// Nothing to name that this caller may see. The advisory sentence is
@@ -219,20 +219,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Posture-gated autonomy, resolved ONCE and enforced at both doors
-	// (handlePreflightRun calls the SAME gate). Sited immediately after the
-	// enforced class because that class is the posture's third axis — and
-	// before the mint, so a refusal leaves no run row, and before
-	// createRunAuditData and the dispatchParams literal below, which both read
-	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
-	// and stops on false; its warnings join the 201 list further down.
-	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
-	// from; unionRunEgress below dispatches from the same value.
-	autonomy, autonomyWarns, scmSite, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
-	if !ok {
-		return
-	}
-
 	// No cross-mechanism fallback, at the door: when the org declared how this
 	// agent reaches its model and the lane that would carry this run is not that
 	// one, refuse HERE — before a run row, an identity or a grant exists — rather
@@ -254,8 +240,48 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// model credential is the captured-AWS-SSO lane — resolving it a second
 	// way here would risk the two surfaces disagreeing about whether a run
 	// carries the advisory.
-	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+	//
+	// Ahead of the autonomy gate because that gate grades THIS resolution: the
+	// Bedrock model credential is handed to the run at dispatch, and a secrets
+	// axis graded without it froze the level a rung too high (#504).
+	// The model-provider choice first: with a provider block, it is the run's
+	// provider that decides its lane, and one whose credential its owner does
+	// not hold is refused here rather than at dispatch. mpChoice is
+	// this run's ONLY source for ModelProviderID below and for the run.create
+	// audit snapshot (#527) — mpChoice.chosen is false, with a zero
+	// mpChoice.provider, on every "today's path" return (no block, or a block
+	// serving no provider for this agent), so ModelProviderID freezes "" there,
+	// same as a legacy row.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	if !ok {
+		return
+	}
+	// Under a provider block the chosen provider's arm, or nothing, credentials
+	// the run, so the roster's declared-mechanism gate, which grades the legacy
+	// lanes, does not apply; a Bedrock provider's run is graded with its
+	// owner's Bedrock credential (modelCredential).
+	modelCred := mpChoice.modelCredential()
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+		return
+	}
+
+	// Posture-gated autonomy, resolved ONCE and enforced at both doors
+	// (handlePreflightRun calls the SAME gate). Sited after the enforced class
+	// because that class is the posture's third axis, after the model-credential
+	// gate because its resolution is graded on the secrets axis — and before the
+	// mint, so a refusal leaves no run row, and before
+	// createRunAuditData and the dispatchParams literal below, which both read
+	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
+	// and stops on false; its warnings join the 201 list further down.
+	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
+	// from; unionRunEgress below dispatches from the same value.
+	// adoGrade is what the gate RESOLVED about the per-person Azure DevOps lane;
+	// it rides to dispatch on the ceiling so the credential dispatch authors can
+	// only be the one this level was graded against (adoEntraGrade).
+	// bedrockGrade is the same freeze for the Amazon Bedrock model credential
+	// the gate graded from modelCred (bedrockCredGrade).
+	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
+	if !ok {
 		return
 	}
 
@@ -297,7 +323,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// freezing them on the row would mirror a computation into a column
 		// nothing reads back.
 		AutonomyLevel: autonomy.Level,
+		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
+		// below instead (AgentRun.ModelProviderID's own doc explains why).
+		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
+		ModelProviderID: mpChoice.provider.ID,
+		UserType:        runCreatorUserType(ctx),
 	}
+	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		writeServerError(w, r, "create run", err)
@@ -326,7 +358,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// run is narrower than what the caller asked for, and launch is the ONLY
 	// place a member sees that — preflight, which carries the same notes, is
 	// never called by the console. The strings are
-	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
+	// narrowUserInlinePolicy's/filterUserGrants' own: they name the kind
 	// and the dropped VALUE (a host, a secret NAME), never a secret value.
 	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(r, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
 	if taskWarning != "" {
@@ -375,10 +407,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor))))
+		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
-	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
+	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject, mpChoice)...)
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
@@ -413,11 +445,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-	go s.finishCreateRunLaunch(context.WithoutCancel(ctx), createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling), gw: gw,
+	launch := createRunLaunch{
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
 		bedrockRef: bedrockRef, runToken: id.Token, created: created,
-	})
+	}
+	launchCtx := context.WithoutCancel(ctx)
+	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
 }
 
 // seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then
@@ -460,7 +494,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		writeError(w, code, "workspace_id: "+seedErr.Error())
 		return nil, false
 	}
-	if s.denyMemberSeededImage(w, r, seededImageOwner, req.Image) {
+	if s.denyUserSeededImage(w, r, seededImageOwner, req.Image) {
 		return nil, false
 	}
 	if msg := s.validateImageBuildRequest(*req); msg != "" {
@@ -494,7 +528,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	if s.admitRepoSources(w, r, repos...) {
 		return nil, false
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
+	if s.denyUserWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
 		return nil, false
 	}
 	if gate && s.gitCredentialRefusal(w, r, repos...) {
@@ -534,13 +568,17 @@ func (s *Server) repoSourceWarnings(ctx context.Context, runID uuid.UUID, spec t
 // spec through the SAME helper preflight's checklist uses, so the two agree.
 // Extracted from handleCreateRun for the function-size gate.
 func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest, spec types.RunPolicySpec,
-	present map[string]bool, bedrockRef *types.WorkspaceBedrockRef, ssoSubject string,
+	present map[string]bool, bedrockRef *types.WorkspaceBedrockRef, ssoSubject string, mp runProviderChoice,
 ) []string {
 	if !runNeedsModelWarning(req) {
 		return nil
 	}
-	if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject); la != nil && la.Provisioned {
+	la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject, mp)
+	switch {
+	case la != nil && la.Provisioned:
 		return nil
+	case mp.governs && la != nil:
+		return []string{la.Note}
 	}
 	return []string{s.noModelAccessWarningFor(req.Agent)}
 }
@@ -567,8 +605,16 @@ func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest,
 // credential is delivered to the sandbox at DISPATCH, after `enforced` is
 // already resolved, so it is never an eligible grant and never on the run row
 // either; this event is its only provenance record too.
+//
+// mp (#527): the run's own model-provider choice, {id, kind} — the run row
+// freezes the id alone (AgentRun.ModelProviderID), so this event is the only
+// provenance for the KIND at the moment of choice, since a provider's kind
+// can change later (a kind change mints a fresh UID, #521) and the row would
+// then read a kind the id no longer has. Omitted entirely when mp.chosen is
+// false — no provider block, or a block serving no provider for this agent —
+// same as every other conditional field above.
 func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, reqCC types.ConfinementClass, jti string,
-	clampWarnings []string, autonomy types.AutonomyResolution, belowFloor bool,
+	clampWarnings []string, autonomy types.AutonomyResolution, belowFloor bool, mp runProviderChoice,
 ) map[string]any {
 	confinementSource := "defaulted"
 	if reqCC != "" {
@@ -607,7 +653,7 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// Every way launch NARROWED what the caller asked for (resolveRunPolicy's
 		// clamp + capability notes). Request-scoped like the fields above, and this
 		// RUN-BOUND row is the only place a member can read them back: an inline
-		// policy's own policy.inline row carries no run id, and run.policy.effective
+		// policy's own policy.inline.apply row carries no run id, and run.policy.resolve
 		// carries the merged policy, not the list of tightenings that produced it.
 		// The run-detail "Effective policy" widget reads exactly this.
 		data["clamp_warnings"] = clampWarnings
@@ -630,6 +676,9 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// everything else — no SSO-delivered credential, or one whose enforced
 		// confinement already meets CC3.
 		data["credential_confinement"] = credentialConfinementBelowFloor
+	}
+	if mp.chosen {
+		data["model_provider"] = map[string]any{"id": mp.provider.ID, "kind": mp.provider.Kind}
 	}
 	return data
 }
@@ -663,7 +712,13 @@ type createRunResponse struct {
 // subject is the CALLER's run-identity subject — whose captured AWS SSO session
 // this run would resolve under a per_user roster row. "" is the operator
 // namespace, i.e. every deployment that never declared per_user.
-func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef, subject string) *composeLLMAccess {
+//
+// mp is the run's model-provider choice: under a provider block the verdict is
+// the provider's alone, since no legacy lane serves the run.
+func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef, subject string, mp runProviderChoice) *composeLLMAccess {
+	if mp.governs {
+		return providerLLMAccess(req.Agent, mp)
+	}
 	llmSpec := spec
 	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
 	// Which lanes this run has available — resolved by the same helper the

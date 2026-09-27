@@ -11,8 +11,11 @@ import { ADO } from "./ado-entra-copy";
 
 // scmAccessChip follows modelAccessChip's own "say nothing rather than
 // invent" rule (member-getting-started.tsx): a state this console does not
-// recognise, or `not_applicable` (unreachable from a browser session —
-// §7.5 freezes no chip for it), renders nothing.
+// recognise renders nothing. `not_applicable` (an admin-token or local-mode
+// caller, scmaccess.go's `isMechanism := subject == ""`) IS reachable
+// from a browser session (#458) — §7.5 simply freezes no chip for it, since
+// Q458-1 draws it as one plain line, not a chip; ado-connection.tsx (its
+// only mount) renders ADO.NOT_APPLICABLE_BODY for that state directly.
 export function scmAccessChip(
   state: string,
   source?: string,

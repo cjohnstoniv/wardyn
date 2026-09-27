@@ -9,7 +9,8 @@ import { existsSync, readFileSync } from "node:fs";
 // F7-F16 — before this, index.html had no <link rel="icon"> and public/ held
 // only the two licence files: every tab showed the browser's generic
 // blank-page icon. vitest's cwd is the `ui/` package root (vitest.config.ts).
-describe("favicon (F7-F16)", () => {
+describe("favicon", () => {
+  // ticket: F7-F16
   it("public/favicon.svg exists", () => {
     expect(existsSync("public/favicon.svg")).toBe(true);
   });

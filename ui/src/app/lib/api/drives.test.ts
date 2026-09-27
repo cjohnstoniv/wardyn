@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { drives } from "./drives";
+import { drives, homeTemplateDisabled } from "./drives";
 
 // R4/F092 — getDrives() is a PROJECTION, not a pass-through: it rebuilds the
 // body as a fresh object literal so nil Go slices become arrays every caller can
@@ -69,5 +69,32 @@ describe("drives.getDrives() — the disclosure keys survive the projection", ()
 
     fetchMock.mockResolvedValueOnce(body());
     expect((await drives.getDrives()).disabled).toBe(false);
+  });
+});
+
+// homeTemplateDisabled mirrors ManagedBackendRejectsTemplate /
+// ShareBackendRejectsTemplate (internal/types/user_drive.go). It is keyed on
+// who NAMES the object, not on the managed/share split — k8s_pvc_static is a
+// share by Kind() but is still Wardyn-named, so it is a THIRD case, not the
+// managed backends' twin (#808).
+describe("homeTemplateDisabled — the one predicate the editor and the server share", () => {
+  it("docker_volume/k8s_pvc (managed, Wardyn-named): only hash", () => {
+    for (const b of ["docker_volume", "k8s_pvc"] as const) {
+      expect(homeTemplateDisabled(b, "hash")).toBe(false);
+      expect(homeTemplateDisabled(b, "sub")).toBe(true);
+      expect(homeTemplateDisabled(b, "email_local")).toBe(true);
+    }
+  });
+
+  it("k8s_pvc_static (share, but still Wardyn-named): hash and sub, never email_local", () => {
+    expect(homeTemplateDisabled("k8s_pvc_static", "hash")).toBe(false);
+    expect(homeTemplateDisabled("k8s_pvc_static", "sub")).toBe(false);
+    expect(homeTemplateDisabled("k8s_pvc_static", "email_local")).toBe(true);
+  });
+
+  it("host_path (share, not Wardyn-named): sub and email_local, never hash", () => {
+    expect(homeTemplateDisabled("host_path", "hash")).toBe(true);
+    expect(homeTemplateDisabled("host_path", "sub")).toBe(false);
+    expect(homeTemplateDisabled("host_path", "email_local")).toBe(false);
   });
 });

@@ -26,11 +26,12 @@ func (s *touchStore) TouchRun(_ context.Context, id uuid.UUID) error {
 }
 
 // TestInternalDecisionTouchesRun pins the idle clock to real agent activity.
-// The reaper measures idleness as the age of agent_runs.updated_at, and only
-// the interactive attach keepalive used to bump it — so a NON-interactive run
-// was hard-killed at its auto_stop_after_sec cap while actively working, under
-// an audit event claiming it was idle (internal/lifecycle). The blind case is
-// asserted too because it returns early, before the egress audit write.
+// The reaper measures idleness as the age of agent_runs.updated_at, so agent
+// activity must bump it, not only the interactive attach keepalive — otherwise
+// a non-interactive run is hard-killed at its auto_stop_after_sec cap while
+// actively working, under an audit event claiming it was idle
+// (internal/lifecycle). The blind case is asserted too because it returns
+// early, before the egress audit write.
 func TestInternalDecisionTouchesRun(t *testing.T) {
 	h := newHarness(t)
 	st := &touchStore{}
@@ -47,7 +48,7 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	// the egress audit write) — but a burst inside touchDebounce coalesces to ONE
 	// UPDATE on the hot agent_runs row, so the second decision here is debounced.
 	blind := `{"request":{"host":"api.anthropic.com","method":"CONNECT"},"decision":"allow",` +
-		`"scan":{"scanned":false,"coverage":"tunneled-opaque","action":"blind"}}`
+		`"scan":{"scanned":false,"coverage":"tunneled-opaque","action":"bypass"}}`
 	if w := do(t, srv, http.MethodPost, path, tok, blind); w.Code != http.StatusAccepted {
 		t.Fatalf("blind decision code = %d, want 202", w.Code)
 	}
@@ -71,5 +72,22 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	}
 	if len(st.touched) != 3 || st.touched[1] != runID || st.touched[2] != otherID {
 		t.Fatalf("TouchRun calls = %v, want aged re-touch then the other run", st.touched)
+	}
+
+	// credential:reauth-timeout is the proxy's OWN signal that a re-auth hold's
+	// wait ran out with nobody there (RL-5) — it reports that nobody answered,
+	// not real agent activity, so it must never touch, even well past the
+	// debounce window and even as a DENY (which every other rule_source's DENY
+	// still touches).
+	srv.lastTouchMu.Lock()
+	srv.lastTouch[runID] = srv.lastTouch[runID].Add(-2 * touchDebounce)
+	srv.lastTouchMu.Unlock()
+	timeout := `{"request":{"host":"portal.sso.us-east-1.amazonaws.com","method":"CONNECT"},` +
+		`"decision":"deny","rule_source":"credential:reauth-timeout"}`
+	if w := do(t, srv, http.MethodPost, path, tok, timeout); w.Code != http.StatusAccepted {
+		t.Fatalf("reauth-timeout decision code = %d, want 202", w.Code)
+	}
+	if len(st.touched) != 3 {
+		t.Fatalf("TouchRun calls after a credential:reauth-timeout decision = %v, want no new touch (still 3)", st.touched)
 	}
 }
