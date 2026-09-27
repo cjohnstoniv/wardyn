@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
+  all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
+  button while a 201's advisory `warnings[]` sit listed in the rail; it always calls
+  `navigate('/runs/:id', { state: { launchWarnings } })`, and the removed hold's `OPEN_RUN_CTA` is
+  gone with it. The run page reads the warnings out of router state and renders them in the rail's
+  own advisory-block shape, dismissible, with a note that they will not survive a reload. A PENDING
+  run with no `status_detail` yet now says "Queued — Wardyn is getting this run ready." under the
+  status chip (widened from STARTING-only to STARTING || PENDING) instead of showing nothing, until
+  the server's own stage line replaces it. `createRun` drops the 5-minute `LAUNCH_DEADLINE_MS` and
+  rides the plain default deadline instead, now that `POST /runs` dispatches asynchronously (#121);
+  `preflightRun` is unchanged.
+
 ### Fixed
 
 - **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
@@ -2408,6 +2422,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
+- **The launch advisory does not survive a reload (#125).** A launched run's advisory `warnings[]`
+  ride router state onto the run page, which is gone the moment that page reloads; the durable
+  record stays the `run.create` audit row's own clamp warnings, on the Audit tab. Still open at 0.8.
 - **A run's autonomy posture omits the egress dispatch adds after the gate.** `resolveRunAutonomy`
   grades every lane `unionRunEgress` adds, but not the model-provider hosts egress dispatch resolves
   from global configuration afterward — a Bedrock run's `bedrock-runtime.<region>.amazonaws.com`, for
