@@ -119,6 +119,12 @@ describe("sign-in-copy — the doc's inline-JSX rows, pinned against sign-in.tsx
     if (!anchor) throw new Error(`${where}: no anchor regex for this doc row`);
     const match = anchor.exec(SIGN_IN_TSX);
     if (!match) throw new Error(`${where}: anchor regex found no match in sign-in.tsx`);
-    expect(match[1]).toBe(expected);
+    // A `{NAME}` placeholder (#488 lifted two of these into exported
+    // constants) resolves to that constant's literal in the same file.
+    const placeholder = /^\{([A-Z_]+)\}$/.exec(match[1]);
+    const literal = placeholder
+      ? new RegExp(`^export const ${placeholder[1]} = "(.+)";$`, "m").exec(SIGN_IN_TSX)?.[1]
+      : match[1];
+    expect(literal).toBe(expected);
   });
 });
