@@ -149,6 +149,7 @@ func TestUIGateway_BindIsOnlyForTheConsole(t *testing.T) {
 		"no fetch metadata":                           bindRequest(ticket, map[string]string{"Origin": console}),
 		"a same-site host that is not the console":    bindRequest(ticket, map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "https://blog.example.com"}),
 		"same-site with no Origin":                    bindRequest(ticket, map[string]string{"Sec-Fetch-Site": "same-site"}),
+		"the console host over the wrong scheme":      bindRequest(ticket, map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "http://console.example.com"}),
 		"a ticket in the query": func() *http.Request {
 			r := bindRequest(ticket, map[string]string{"Sec-Fetch-Site": "same-site", "Origin": console})
 			r.URL.RawQuery = "ticket=" + ticket
@@ -190,6 +191,29 @@ func TestUIGateway_BindIsOnlyForTheConsole(t *testing.T) {
 		t.Fatalf("bind response leaks the ticket: %v", rec.Header())
 	}
 
+	// Host mode, SSO on: another run's app origin is same-site with this run's
+	// gateway host, and must still get no binding — only the console does.
+	t.Run("host mode: a sibling run's origin is not the console", func(t *testing.T) {
+		h.srv.cfg.UIOriginTemplate = "https://run-{run}.ui.example.com"
+		defer func() { h.srv.cfg.UIOriginTemplate = "" }()
+		gw := h.srv.UIGatewayHandler()
+		for origin, want := range map[string]int{
+			"https://run-" + uuid.New().String() + ".ui.example.com": http.StatusForbidden,
+			console: http.StatusNoContent,
+		} {
+			req := bindRequest(ticket, map[string]string{"Sec-Fetch-Site": "same-site", "Origin": origin})
+			req.Host = h.srv.uiRunOrigin(h.run.ID)
+			rec := httptest.NewRecorder()
+			gw.ServeHTTP(rec, req)
+			if rec.Code != want {
+				t.Fatalf("Origin %s: %d %s, want %d", origin, rec.Code, rec.Body.String(), want)
+			}
+			if want == http.StatusForbidden && (len(rec.Result().Cookies()) != 0 || rec.Header().Get("Access-Control-Allow-Origin") != "") {
+				t.Fatalf("Origin %s: refused bind still set %v / ACAO %q", origin, rec.Header().Values("Set-Cookie"), rec.Header().Get("Access-Control-Allow-Origin"))
+			}
+		}
+	})
+
 	t.Run("without SSO, same-site is the rule", func(t *testing.T) {
 		h.srv.cfg.OIDCRedirectURL = ""
 		rec := httptest.NewRecorder()
@@ -203,6 +227,36 @@ func TestUIGateway_BindIsOnlyForTheConsole(t *testing.T) {
 			t.Fatalf("cross-site bind without SSO: %d %v", rec.Code, rec.Header().Values("Set-Cookie"))
 		}
 	})
+}
+
+// TestUIGateway_BindRefusalIsAuditedWithItsReason: the console cannot read a
+// refused bind (no CORS headers), so the gateway's audit trail is where an
+// operator learns which rule refused it and what the browser sent.
+func TestUIGateway_BindRefusalIsAuditedWithItsReason(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	h.srv.cfg.OIDCRedirectURL = "https://console.example.com/auth/callback"
+	for _, hdr := range []map[string]string{
+		{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"},
+		{"Sec-Fetch-Site": "same-site", "Origin": "https://blog.example.com"},
+	} {
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, bindRequest("t", hdr))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%v: %d, want 403", hdr, rec.Code)
+		}
+	}
+	for key, want := range map[string]string{
+		"reason":         uiBindReasonNotSameSite,
+		"sec_fetch_site": "cross-site",
+		"origin":         "https://blog.example.com",
+	} {
+		if !h.audit.hasDataValue(key, want) {
+			t.Fatalf("no ui.authorize/denied row with %s=%q: %s", key, want, h.audit.dataReasons())
+		}
+	}
+	if !h.audit.hasDataValue("reason", uiBindReasonOriginNotConsole) {
+		t.Fatalf("no row for the non-console Origin: %s", h.audit.dataReasons())
+	}
 }
 
 // TestUIGateway_HealthzPublishesBindURL: the console finds the bind step

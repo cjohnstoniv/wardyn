@@ -241,8 +241,11 @@ as a bad ticket and a `ui.authorize` / `denied` audit row
 and clears the binding it uses. The bind itself answers only the console:
 the browser must label the fetch `Sec-Fetch-Site: same-site` (an attacker's
 page is `cross-site`, a relayed app is `same-origin`), and with SSO its
-`Origin` must be the console's own host, the host of
-`WARDYN_OIDC_REDIRECT_URL`.
+`Origin` must be the console's own origin (scheme and host) from
+`WARDYN_OIDC_REDIRECT_URL`. A refused bind is audited as `ui.authorize` /
+`denied` with `reason` `bind_not_same_site` or `bind_origin_not_console` plus
+the `sec_fetch_site` and `origin` the browser sent, since the console itself can
+only report that the gateway did not accept it.
 
 The binding needs the console and the UI origin to be **the same site** (one
 registrable domain, one scheme), e.g. `wardyn.example.com` and
@@ -440,10 +443,15 @@ worker there would see every later request to the shared origin in path mode.
 own JavaScript on the relay origin: `document.cookie` can still set a
 `Domain=<parent>` cookie and read every non-HttpOnly cookie a sibling host set
 for the parent domain, so the policy keeps only **HttpOnly** sibling cookies
-away from the app. The real bound is the relay host's registrable domain: it
-must not share one with anything whose non-HttpOnly cookies matter. Host mode
-(`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) on a registrable domain of its own is the
-answer. `X-Forwarded-*` is removed and deliberately not
+away from the app. The real bound is the relay host's registrable domain, and
+because the enter binding needs the console and the relay on one site, that
+domain is the console's too. Keep nothing else whose non-HttpOnly cookies matter
+on it. The console's own cookies (`wardyn_session`, `wardyn_oidc_state`,
+`wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-` prefix, so a relayed
+page can plant a `Domain=` cookie of the same name, which the console reads
+whenever the browser holds no live one of its own (signed out, expired, or
+mid-login): login CSRF onto the console, open as #1258. Host mode keeps each run on a host
+of its own under that site. `X-Forwarded-*` is removed and deliberately not
 re-added — the sandbox has no business learning the operator's IP — and every
 gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
 ticket cannot leak to whatever the app links to.

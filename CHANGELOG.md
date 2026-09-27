@@ -1715,7 +1715,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   binding cookie on the UI origin, and `GET` and `POST` enter both refuse a ticket that arrives
   without it (the bad-ticket `403`, plus a `ui.authorize` / `denied` row with reason
   `ticket not bound to this browser`). The bind answers only a same-site fetch and, with SSO, only
-  the console's own origin. `/healthz`'s `ui_sandbox` block gains `bind_url`, and the console's CSP
+  the console's own origin (scheme and host); a refused bind is audited with its reason. The one-site
+  rule means the relay can no longer sit on a registrable domain of its own, so a relayed page can
+  plant `Domain=` cookies the console reads (#1258). `/healthz`'s `ui_sandbox` block gains `bind_url`, and the console's CSP
   `connect-src` names that one URL. **Breaking:** the console and the UI origin must now be the
   same site (one registrable domain, one scheme; `localhost` and `127.0.0.1` differ), and a script
   that drives enter must bind first (docs/UI-SANDBOXES.md §3). The relay also removes
@@ -1758,9 +1760,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   With the gateway on, boot refuses a malformed value and an `allow:` entry naming a `wardyn_*`
   cookie, which is never forwarded. Both controls act on headers only: the relayed page's own
   JavaScript can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies through
-  `document.cookie`, so a relay host must not share a registrable domain with anything whose
-  non-HttpOnly cookies matter — host mode on a registrable domain of its own is the answer. See
-  docs/UI-SANDBOXES.md, "Header hygiene".
+  `document.cookie`. The relay shares its registrable domain with the console (#1241 requires one
+  site), so keep anything else whose non-HttpOnly cookies matter off that domain; the console's own
+  cookies are the open case (#1258). See docs/UI-SANDBOXES.md, "Header hygiene".
 
 - **A kept run's token is refused at every `/internal` door the moment the run is kept (#1176).**
   A run its lease ended, or one lost to a reboot or an outage, stays `RUNNING` with its identity

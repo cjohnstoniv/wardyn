@@ -21,7 +21,7 @@
 // host, and a shared parent-domain cookie would reach every sibling host too).
 //
 // What stops an attacker's page doing the same bind in the victim's browser:
-//   - uiBindOriginOK: the bind must be a same-site fetch (Fetch Metadata, which
+//   - uiBindRefusal: the bind must be a same-site fetch (Fetch Metadata, which
 //     page script cannot write) and, when SSO is configured, carry the console's
 //     own Origin. An attacker's page is cross-site, so it gets no cookie.
 //   - SameSite=Strict: even a binding planted by a cross-site top-level
@@ -40,7 +40,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -107,7 +110,17 @@ func (s *Server) handleUIBind(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if !s.uiBindOriginOK(r) {
+	if reason := s.uiBindRefusal(r); reason != "" {
+		// Audited because the console cannot say why: a refused bind carries no
+		// CORS headers, so its fetch fails exactly as an unreachable gateway
+		// does. Rate-bound like every other unauthenticated refusal here.
+		if s.authFailedLimiter.allow(s.cfg.Now()) {
+			s.auditUI(nil, types.ActorHuman, "unknown", "ui.authorize", "", "denied", map[string]any{
+				"reason":         reason,
+				"sec_fetch_site": uiAuditHeader(r, "Sec-Fetch-Site"),
+				"origin":         uiAuditHeader(r, "Origin"),
+			})
+		}
 		writeError(w, http.StatusForbidden, "the UI gateway only binds a ticket for the Wardyn console")
 		return
 	}
@@ -136,34 +149,60 @@ func (s *Server) handleUIBind(w http.ResponseWriter, r *http.Request) {
 		Secure:   s.cfg.OIDCSecureCookies,
 	})
 	// The console reads the status, so the fetch must be a readable CORS
-	// response; uiBindOriginOK has already decided this Origin may have it.
+	// response; uiBindRefusal has already decided this Origin may have it.
 	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Add("Vary", "Origin")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// uiBindOriginOK decides who may bind. The fetch must be labelled "same-site"
-// by the browser: the console and the gateway are two hosts of one site, while
-// an attacker's page is "cross-site" and the gateway's own relayed pages (the
-// sandbox's code) are "same-origin". A missing label refuses — every browser
-// the console supports sends it, and this check fails closed.
+// The reasons a bind is refused, as the ui.authorize/denied row names them:
+// stable identifiers for a SIEM rule, not copy.
+const (
+	uiBindReasonNotSameSite      = "bind_not_same_site"
+	uiBindReasonOriginNotConsole = "bind_origin_not_console"
+)
+
+// uiBindRefusal decides who may bind, returning "" to allow or the audit reason
+// to refuse. The fetch must be labelled "same-site" by the browser: the console
+// and the gateway are two hosts of one site, while an attacker's page is
+// "cross-site" and the gateway's own relayed pages (the sandbox's code) are
+// "same-origin". A missing label refuses — every browser the console supports
+// sends it, and this check fails closed.
 //
-// With SSO the Origin must also be the console's own host, read off the OIDC
-// redirect URL exactly as csrf.go's second accepted name is. That narrows
-// "same-site" to the console alone: not a sibling host on the same domain, and
-// not another run's host in host mode. Without SSO there is one principal and
-// no other user's session to push into a browser, so same-site is the rule.
-func (s *Server) uiBindOriginOK(r *http.Request) bool {
+// With SSO the Origin must also be the console's own origin, read off the OIDC
+// redirect URL: scheme and host (csrf.go's originHost, so a default port
+// compares equal). That narrows "same-site" to the console alone: not a
+// sibling host on the same domain, and not another run's host in host mode.
+// Unlike csrf.go's r.Host rule, both sides here are the browser's own view, so
+// the scheme is compared. Without SSO there is one principal and no other
+// user's session to push into a browser, so same-site is the rule.
+func (s *Server) uiBindRefusal(r *http.Request) string {
 	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-site") {
-		return false
+		return uiBindReasonNotSameSite
 	}
 	if s.cfg.OIDCRedirectURL == "" {
-		return true
+		return ""
 	}
-	origin, ok := originHost(r.Header.Get("Origin"))
-	console, ok2 := originHost(s.cfg.OIDCRedirectURL)
-	return ok && ok2 && asciiEqualFold(origin, console)
+	origin, console := strings.TrimSpace(r.Header.Get("Origin")), s.cfg.OIDCRedirectURL
+	oHost, ok := originHost(origin)
+	cHost, ok2 := originHost(console)
+	oURL, err := url.Parse(origin)
+	cURL, err2 := url.Parse(strings.TrimSpace(console))
+	if !ok || !ok2 || err != nil || err2 != nil || !asciiEqualFold(oHost, cHost) || !asciiEqualFold(oURL.Scheme, cURL.Scheme) {
+		return uiBindReasonOriginNotConsole
+	}
+	return ""
+}
+
+// uiAuditHeader is a request header as an audit value: attacker-supplied, so
+// bounded.
+func uiAuditHeader(r *http.Request, name string) string {
+	v := r.Header.Get(name)
+	if len(v) > 256 {
+		v = v[:256]
+	}
+	return v
 }
 
 // uiTicketBound reports whether this browser holds the binding cookie for

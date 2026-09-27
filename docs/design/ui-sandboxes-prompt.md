@@ -84,7 +84,8 @@ row, not a UI tweak.
    browser (#1241): one `fetch(bind_url, {method: "POST", credentials:
    "include", body: ticket=<t>})`, never through the API client. A refused bind
    is S5 with "The UI-sandbox gateway did not accept this browser. The console
-   and the gateway must be served from the same site."
+   and the gateway must be served from the same site; an admin finds the exact
+   reason in the audit log (ui.authorize)."
 4. Submit a hidden form POSTing run/app/ticket to the enter endpoint on the UI
    origin, `target="_blank"`, `rel="noopener"` — or, only against an older
    daemon with no `enter_post_url`, `window.open` the GET enter URL instead.

@@ -417,7 +417,7 @@ async function bindTicket(url: string, ticket: string) {
   }
   if (!ok) {
     throw new Error(
-      "The UI-sandbox gateway did not accept this browser. The console and the gateway must be served from the same site.",
+      "The UI-sandbox gateway did not accept this browser. The console and the gateway must be served from the same site; an admin finds the exact reason in the audit log (ui.authorize).",
     );
   }
 }
