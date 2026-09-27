@@ -327,6 +327,29 @@ func TestAPITokenAuth_RevokedIsRefused(t *testing.T) {
 	}
 }
 
+// TestAPITokenAuth_PersonlessRowIsRefused: a token row with no principal is
+// refused exactly like an unknown token. Admitted, it would publish no human
+// and so read as the admin-token lane, which is the operator.
+func TestAPITokenAuth_PersonlessRowIsRefused(t *testing.T) {
+	srv, st, _ := apiTokenTestServer(t)
+	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
+	raw, created := mintToken(t, srv, sess, "ci")
+	st.mu.Lock()
+	row := st.byID[created.ID]
+	row.Principal = ""
+	st.byID[created.ID] = row
+	st.mu.Unlock()
+
+	w := do(t, srv, http.MethodGet, "/api/v1/me", raw, "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("person-less token: code = %d, want 401; body=%s", w.Code, w.Body.String())
+	}
+	unknown := do(t, srv, http.MethodGet, "/api/v1/me", apiTokenPrefix+"never-issued", "")
+	if w.Body.String() != unknown.Body.String() {
+		t.Errorf("person-less body %q differs from unknown-token body %q", w.Body.String(), unknown.Body.String())
+	}
+}
+
 // TestAPITokenAuth_WrongHashIsRefused: a `wdn_`-prefixed bearer that hashes to
 // no stored row is refused, including one that differs from a LIVE token by a
 // single character — the lookup is over the hash, never a prefix or a name.
