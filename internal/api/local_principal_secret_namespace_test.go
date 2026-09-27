@@ -27,12 +27,12 @@ type mintSubjectRecorder struct {
 	sponsors []string
 }
 
-func (m *mintSubjectRecorder) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string) (identity.RunIdentity, error) {
+func (m *mintSubjectRecorder) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
 	m.mu.Lock()
 	m.subjects = append(m.subjects, humanSub)
 	m.sponsors = append(m.sponsors, sponsor)
 	m.mu.Unlock()
-	return m.Provider.MintRunIdentity(ctx, runID, humanSub, sponsor, audience)
+	return m.Provider.MintRunIdentity(ctx, runID, humanSub, sponsor, audience, operatorOwned)
 }
 
 func (m *mintSubjectRecorder) seen() (subjects, sponsors []string) {

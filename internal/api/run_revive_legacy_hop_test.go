@@ -172,9 +172,9 @@ type mintCountingIdentity struct {
 	mints int
 }
 
-func (c *mintCountingIdentity) MintRunIdentity(ctx context.Context, runID uuid.UUID, sub, sponsor, aud string) (identity.RunIdentity, error) {
+func (c *mintCountingIdentity) MintRunIdentity(ctx context.Context, runID uuid.UUID, sub, sponsor, aud string, operatorOwned bool) (identity.RunIdentity, error) {
 	c.mints++
-	return c.Provider.MintRunIdentity(ctx, runID, sub, sponsor, aud)
+	return c.Provider.MintRunIdentity(ctx, runID, sub, sponsor, aud, operatorOwned)
 }
 
 // countingImages counts proxy image preparations.

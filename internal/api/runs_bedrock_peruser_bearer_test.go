@@ -340,7 +340,7 @@ func TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant(t *testing.T)
 	if len(kept) == 1 {
 		t.Errorf("member-authored bedrock-api-key grant to api.openai.com with a custom header was admitted")
 	}
-	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
 	t.Logf("validateInlineSecretRefs code=%d err=%v", code2, verr)
 }
 

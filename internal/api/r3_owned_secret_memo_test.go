@@ -235,7 +235,7 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 		},
 		"validateInlineSecretRefs": func(t *testing.T, srv *Server, ctx context.Context, n int) {
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
-			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", spec); err != nil {
+			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", "sub-gov-bob", spec); err != nil {
 				t.Fatalf("n=%d: code=%d %v", n, code, err)
 			}
 		},

@@ -34,6 +34,11 @@ type Claims struct {
 	Sub string
 	// Sponsor is the accountable human owner (defaults to Sub).
 	Sponsor string
+	// OperatorOwned says the run's owner is the operator itself (the admin
+	// token, local mode), not a person. Decided at run creation from what
+	// authenticated the request — never from Sub, which an IdP could spell
+	// like the admin token — and signed into the token.
+	OperatorOwned bool
 	// JTI uniquely identifies this token for revocation/audit join.
 	JTI string
 	// Audience the token was minted for (RFC 8707 discipline).
@@ -80,8 +85,9 @@ type Provider interface {
 	// Name returns "embedded" or "spire" — surfaced in UI/audit so the
 	// trust boundary is always visible.
 	Name() string
-	// MintRunIdentity creates the run's identity. audience binds the token.
-	MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string) (RunIdentity, error)
+	// MintRunIdentity creates the run's identity. audience binds the token;
+	// operatorOwned becomes Claims.OperatorOwned.
+	MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (RunIdentity, error)
 	// Verify authenticates a presented token and returns its claims.
 	// Revoked or expired tokens must fail closed.
 	Verify(ctx context.Context, token, expectedAudience string) (*Claims, error)

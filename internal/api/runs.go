@@ -301,7 +301,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
 	// which no request header can move.
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience)
+	operatorOwned := operatorOwnedRequest(ctx)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience, operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return
@@ -339,6 +340,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		UserType:        runCreatorUserType(ctx),
 		Preset:          req.Preset,
 		PresetVersion:   req.PresetVersion,
+		OperatorOwned:   operatorOwned,
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)

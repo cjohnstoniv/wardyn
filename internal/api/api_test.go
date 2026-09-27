@@ -354,7 +354,7 @@ func baseTestConfig(h *harness, st store.Store) Config {
 
 func (h *harness) mintRunToken(t *testing.T, runID uuid.UUID) string {
 	t.Helper()
-	id, err := h.idp.MintRunIdentity(context.Background(), runID, "alice@example.com", "", internalAudience)
+	id, err := h.idp.MintRunIdentity(context.Background(), runID, "alice@example.com", "", internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint run identity: %v", err)
 	}

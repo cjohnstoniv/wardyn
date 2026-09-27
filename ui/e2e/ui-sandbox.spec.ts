@@ -94,7 +94,7 @@ test.describe("Run detail — UI apps lane", () => {
     expect(url.pathname).toBe("/__wardyn/enter");
     expect(url.searchParams.get("run")).toBe(runId);
     expect(url.searchParams.get("app")).toBe("vscode");
-    // A real single-use ticket from POST /runs/{id}/attach-ticket, not a
+    // A real single-use ticket from POST /runs/{id}/attach/ticket, not a
     // placeholder the template left behind.
     expect(url.searchParams.get("ticket") ?? "").not.toBe("{ticket}");
     expect((url.searchParams.get("ticket") ?? "").length).toBeGreaterThan(16);

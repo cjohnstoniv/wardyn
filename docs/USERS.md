@@ -309,6 +309,21 @@ Your own row is visible only to you and to
 your own runs — another member can never read or inject it, even by naming it in
 their own inline policy.
 
+**Per-person credentials: `owner_only`.** Any stored secret a grant names —
+an `api_key`, `git_pat`, `ssh_key` or `env_secret` grant — resolves your own row
+first and, if you have none, the operator's row of that name. For a credential
+that belongs to one person (a personal access token, a personal API key) that
+fallback hands the admin's identity to everyone who has not stored their own,
+so the grant should say `"owner_only": true` (see
+[POLICIES.md](POLICIES.md), the eligible-grant fields). Such a grant reads your
+row and nothing else: with no row of your own the launch is refused and says
+which secret to store; store it under the same name via `PUT /secrets/<name>`,
+signed in as yourself, and launch again (an admin's own writes land in the
+operator namespace, so an admin stores theirs from the user view). A stored policy an admin writes may name a secret nobody has
+stored yet — each person's run checks their own. Ask your admin to mark
+per-person grants `owner_only`; the run's `credential.mint` audit row
+(`secret_scope`: `own` or `operator`) shows which row a mint used.
+
 - **Signing in to AWS yourself.** The `PUT /secrets` bound above is about
   STORING an AWS key. It is not the only route to Bedrock: if your admin's agent
   roster marks your agent's row `per_user`, the AWS SSO session a run

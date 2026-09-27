@@ -478,7 +478,7 @@ func TestAdminProxyWindow(t *testing.T) {
 func TestReviveRun_RevokesTheRetiringToken(t *testing.T) {
 	f := newReviveFixture(t)
 	ctx := context.Background()
-	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience)
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint the retiring token: %v", err)
 	}
@@ -518,7 +518,7 @@ func TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive(t *testing.T) {
 	f := newReviveFixture(t)
 	f.st.run.LostAt, f.st.run.LostReason = nil, "" // live
 	ctx := context.Background()
-	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience)
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint the retiring token: %v", err)
 	}

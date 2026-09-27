@@ -101,7 +101,7 @@ func TestInlineSecretRefs_NamesTheGrantKind(t *testing.T) {
 		{types.GrantAPIKey, apiKeyGrant("api.anthropic.com", "missing-key"), "api_key"},
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
-			code, err := srv.validateInlineSecretRefs(context.Background(), "",
+			code, err := srv.validateInlineSecretRefs(context.Background(), "", "",
 				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}})
 			if err == nil {
 				t.Fatalf("code = %d, want a refusal for a missing secret", code)
@@ -120,7 +120,7 @@ func TestInlineSecretRefs_NoStoreNamesTheGrantKind(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, nil)) // no Secrets
 
-	_, err := srv.validateInlineSecretRefs(context.Background(), "",
+	_, err := srv.validateInlineSecretRefs(context.Background(), "", "",
 		types.RunPolicySpec{EligibleGrants: []types.GrantSpec{gitPATGrant("dev.azure.com", "ado-pat")}})
 	if err == nil {
 		t.Fatal("a grant needing a secret store was accepted with no store configured")

@@ -890,6 +890,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
+- **Three route families renamed for one consistent shape (#658), each old path kept as a chi
+  alias for one minor: `GET /runs/{id}/attach-holder` → `attach/holder`, `POST
+  /runs/{id}/attach-ticket` → `attach/ticket`, `POST /runs/{id}/profile` → `profile/synthesize`.**
+  The SDK and CLI now call the new paths. The Helm chart's `userDrives.enabled` is renamed to
+  `drives.enabled` (a clean break, no alias — see `deploy/helm/wardyn/README.md`'s "User drives"
+  section); a `helm upgrade --reuse-values` from an older release must set `drives` explicitly,
+  and the chart refuses to render while `userDrives.enabled` is still `true`. The nested reclaim
+  switch follows the same rename, `drives.reclaim.enabled` (see "Storage reclaim" below).
+  See `docs/sdk.md`'s "Renamed in 0.8" table.
 - **The Helm chart and the compose stack give `wardynd` 70 seconds to stop (#554).** An orderly
   stop drains HTTP for up to 15s (waiting for background work even if that drain times out), waits
   up to 35s for detached work (a run launch, a superseded sign-in's teardown), then flushes the
@@ -980,6 +989,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `provider_access` rows on `GET /setup/status` gain `added_at` and `last_used_at` for their
   own credential.
 
+- **The key services now have a live suite (T-33, #693).** `make test-kek-conformance` runs the
+  Vault Transit key-encryption key and the Vault KV store against the official `hashicorp/vault`
+  and `openbao/openbao` dev images, and the PR `conformance` job runs it. It checks that a wrap is
+  bound to its row, that rotation and `min_decryption_version` retire old versions, and that
+  `-rewrap` resumes and is idempotent. A deleted key is refused outright; a paused server is
+  transient within a minute and blocks boot. Every read is one decrypt in the server's audit log.
+  `make test-kek-conformance-kind` installs Vault from its Helm chart on kind and logs in with
+  Kubernetes auth. It stores one secret of each kind and runs the key-encryption-key suite; the
+  nightly `kek-conformance` job runs both. A skipped test fails either run. New unit and Postgres
+  cases pin the first-boot seam: under the local key, Transit and both external stores, a tampered
+  or lost value is never reported as not-found, and boot mints no platform key over one. They also
+  check that Kubernetes auth re-reads the service-account token at each login, and that the Vault
+  client's TLS config is its own.
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
@@ -1609,6 +1631,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   compose, set `WARDYN_CONTROL_PLANE_URL` to the internal listener and point
   `WARDYN_CONTROL_PLANE_CA_FILE` at the published file. THREAT-MODEL B6 no longer lists a plaintext
   residual for current-version callers.
+- **A secret grant can opt out of the operator-row fallback with `owner_only` (#1106).** An
+  `api_key`, `git_pat`, `ssh_key` or `env_secret` grant marked `"owner_only": true` resolves its
+  secret from the run owner's own row only; a member with none is refused at launch with a named
+  reason instead of being served the operator row of that name, and a row removed after launch is
+  refused at mint. A grant without the flag keeps the fallback. A run with no person behind it
+  (the admin token, local mode) reads the operator row as its own; that is decided from what
+  authenticated the creating request, recorded on the run (migration
+  `0089_agent_runs_operator_owned`, false for every existing run) and signed into the run's token,
+  never from the creator's name, so a person whose sign-in subject is spelled `admin-token` is
+  still a person. An `owner_only` on a pairing
+  in the deployment ceiling or a governance profile binds a member's proposal for it, and a
+  profile may not drop it. `credential.mint` (`git_pat`, `ssh_key`) and `run.env_secret.resolve`
+  now record `secret_scope` (`own` or `operator`). **Upgrading:** upgrade the proxy image
+  together with wardynd before marking any grant `owner_only` — an older proxy refuses a policy
+  carrying the key, so such a run fails at proxy start.
+- **Storing a named policy no longer checks its secret grants against the operator namespace
+  (#1123).** `POST`/`PUT /api/v1/policies` refused a grant naming a secret the admin had not
+  stored as an operator row, forcing the very fallback row a per-person credential must not
+  have. A stored policy's secret references are now checked for shape only; existence is checked
+  at run-create in the run owner's namespace, as before. An inline policy submitted with a run
+  keeps its existence check.
 - **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
   Both resolve an authored secret name through the run owner's namespace, falling back to the
   operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
@@ -1665,6 +1708,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
   0 and mark themselves non-dumpable at start, so a crash writes no core file and another
   process of the same user cannot read their memory or environment.
+- **A derived Azure DevOps or AWS SSO access token is now held to the stored-key lease too
+  (#1083).** Both arms advertise an access token's own expiry, which can outlast the ten-minute
+  lease #589 gave stored keys, so a token minted just before a credential was erased or refused
+  could go on being served for up to its own hour. Both now cap the advertised expiry at
+  `min(token expiry, stored-key lease)`, and every cached Azure DevOps access token for an owner
+  is evicted the moment their credential is — on erase, on the daily expiry sweep, and when a
+  dead sign-in (`invalid_grant`) is deleted — so a stale cache entry can no longer outlive the
+  credential it was derived from.
 - **Security-API follow-ups (#724).** The sign-in help link is `https://` only: a new `http://`
   link is refused at save, and one already stored surfaces as the setup warning
   `sign_in_help_url` (#489). A second enabled Azure DevOps (Entra) row stored before the write
@@ -2038,7 +2089,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   behind. `POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim <drive-id> --subject <s>
   --yes`) destroys the storage object one person's allocation resolved to, irreversibly. Four rails
   hold it: on Kubernetes the daemon does not hold the `delete` verb on claims at all unless the new
-  Helm value `userDrives.reclaim.enabled` is set (**default `false`** — leave it off and the Role is
+  Helm value `drives.reclaim.enabled` is set (**default `false`** — leave it off and the Role is
   byte-for-byte what it was, and every attempt ends in the apiserver's own 403); the route is
   super-admin only; it is refused `409` while a run still holds the object, while a reclaim is
   already in flight, or when the object answering to that name is not this drive's (the driver

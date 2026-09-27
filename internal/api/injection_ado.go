@@ -26,6 +26,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -39,6 +40,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -108,6 +110,19 @@ func (c *adoEntraAccessCache) put(key string, a ADOEntraAccess) {
 		c.m = map[string]ADOEntraAccess{}
 	}
 	c.m[key] = a
+}
+
+// forget drops everything held for owner, tokens and consent refusals alike,
+// so the next resolve reads the store again. Every key starts with the owner
+// and a NUL (adoEntraAccessFor, adoConsentKey). Called wherever a person's
+// stored sign-in is deleted: a token cached from it would otherwise outlive it
+// by up to its own lifetime.
+func (c *adoEntraAccessCache) forget(owner string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prefix := owner + "\x00"
+	maps.DeleteFunc(c.m, func(k string, _ ADOEntraAccess) bool { return strings.HasPrefix(k, prefix) })
+	maps.DeleteFunc(c.refused, func(k string, _ time.Time) bool { return strings.HasPrefix(k, prefix) })
 }
 
 // adoEntraAccessFor returns a live access token for owner, redeeming only when
@@ -296,12 +311,14 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
+	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
+	// sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
 		Header:    adoEntraInjectHeader,
 		Value:     value,
 		JTI:       minted.JTI,
-		ExpiresAt: access.ExpiresAt.UnixMilli(),
+		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
 		// Informational only: the proxy's gate pins the organisation from the
 		// dispatch-time ADOGrant in its own configuration, not from this.
 		Organisation: snapshot.Organisation,

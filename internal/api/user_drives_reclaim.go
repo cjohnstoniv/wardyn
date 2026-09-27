@@ -20,7 +20,7 @@
 //
 //  1. On Kubernetes wardynd does not even hold the verb unless an operator
 //     grants it: the chart's Role carries `persistentvolumeclaims: [get,
-//     create]` and adds `delete` only under `userDrives.reclaim.enabled`
+//     create]` and adds `delete` only under `drives.reclaim.enabled`
 //     (deploy/helm/wardyn/templates/rbac.yaml), so a stock install answers the
 //     apiserver's own 403 underneath everything below.
 //  2. SUPER-ADMIN ONLY, like every other /drives route and for a sharper
