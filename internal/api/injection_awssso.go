@@ -285,6 +285,9 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			"purpose": "proxy-injection-sso", "grant_id": grantID, "jti": minted.JTI,
 			"owner": snapshot.OwnerSubject, "credential_source": snapshot.CredentialSource,
 		})))
+	if scope.namespaced() {
+		s.stampCredentialUse(ctx, scope.owner, scope.ssoSecret())
+	}
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
 		Header:    minted.Injection.Header,

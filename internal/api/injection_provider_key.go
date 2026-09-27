@@ -142,6 +142,7 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "source": "provider",
 			"owner": rec.OwnerSubject, "provider": p.ID, "provider_uid": rec.ProviderUID,
 		}, row))))
+	s.stampCredentialUse(ctx, rec.OwnerSubject, name)
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: host, Header: header, Value: formatted, JTI: minted.JTI,
 		ExpiresAt: time.Now().Add(providerKeyRecheck).UnixMilli(),

@@ -953,6 +953,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every API, sign-in, terminal and recording URL from one helper. Cookies are scoped to the base,
   boot refuses a malformed value or a `WARDYN_OIDC_REDIRECT_URL` outside it, and `/healthz`'s
   `ui_sandbox.enter_url_template` carries it in shared-origin mode. Unset, nothing changes.
+- **Stored-credential metadata and an admin inventory (#591).** A run's credential sink now
+  stamps `last_used_at` on the person's stored model-provider credential it resolves (at most
+  once a minute per row). `GET /api/v1/model-providers/credentials` (admin or `security_admin`)
+  lists each person × provider credential with its state, store, when it was added and last
+  used, plus counts; it reads row metadata only, never a value. Each person's
+  `provider_access` rows on `GET /setup/status` gain `added_at` and `last_used_at` for their
+  own credential.
+
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
