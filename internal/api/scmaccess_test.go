@@ -186,12 +186,12 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		}
 	})
 
-	t.Run("per-user row, never signed in: one row, not_configured, row-is-newer cause", func(t *testing.T) {
+	t.Run("per-user row, never signed in: one row, not_configured, no cause", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
 		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
-		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != scmAccessCauseRowIsNewer || rows[0].Kind != string(types.GitProviderAzureDevOps) {
-			t.Fatalf("got %+v, want one row state=not_configured cause=row_is_newer kind=azure_devops", rows)
+		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != "" || rows[0].Kind != string(types.GitProviderAzureDevOps) {
+			t.Fatalf("got %+v, want one row state=not_configured, no cause, kind=azure_devops", rows)
 		}
 	})
 
@@ -482,6 +482,10 @@ func adoOperatorSession(t *testing.T) *http.Cookie {
 	return ssoSession(t, "sub-ado-op", "op@corp.example", oidc.RoleAdmin)
 }
 
+// adoOperatorToken is the same operator on the lane a named admin launches
+// through: an SSO session in the Admin view cannot (refuseAdminViewLaunch).
+func adoOperatorToken(st *ownerStore) string { return st.humanToken("sub-ado-op", oidc.RoleAdmin) }
+
 func adoCreateWorkspace(t *testing.T, st *ownerStore, sources ...types.WorkspaceSource) uuid.UUID {
 	t.Helper()
 	return st.put(types.Workspace{Sources: sources})
@@ -508,9 +512,9 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 		wsID := adoCreateWorkspace(t, st, types.WorkspaceSource{
 			Type: types.WorkspaceSourceTypeRepo, Source: scmTestADORepo, Target: "/home/agent/work",
 		})
-		cookie := adoOperatorSession(t)
+		op := adoOperatorToken(st)
 		body := `{"agent":"claude-code","task":"do the thing","workspace_id":"` + wsID.String() + `"}`
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 		assertGitCredential422(t, w)
 		if fr.createCalls != 0 {
 			t.Errorf("CreateSandbox calls = %d, want 0", fr.createCalls)
@@ -526,9 +530,9 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 			types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: "https://github.com/acme/widgets", Target: "/home/agent/first"},
 			types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: scmTestADORepo, Target: "/home/agent/second"},
 		)
-		cookie := adoOperatorSession(t)
+		op := adoOperatorToken(st)
 		body := `{"agent":"claude-code","task":"do the thing","workspace_id":"` + wsID.String() + `"}`
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 		assertGitCredential422(t, w)
 		if fr.createCalls != 0 {
 			t.Errorf("CreateSandbox calls = %d, want 0", fr.createCalls)
@@ -547,9 +551,9 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 		// and not itself keyed on workspace_id (indexWorkspacesBySource matches
 		// by repo string against every onboarded workspace).
 		adoCreateWorkspace(t, st, types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: scmTestADORepo})
-		cookie := adoOperatorSession(t)
+		op := adoOperatorToken(st)
 		body := `{"agent":"claude-code","task":"do the thing","inline_policy":{"min_confinement_class":"CC2","allow_all_egress":true,"workspace_repos":[{"repo":"` + scmTestADORepo + `"}]}}`
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 		assertGitCredential422(t, w)
 		if fr.createCalls != 0 {
 			t.Errorf("CreateSandbox calls = %d, want 0", fr.createCalls)
@@ -567,9 +571,9 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
 		}
-		cookie := adoOperatorSession(t)
+		op := adoOperatorToken(st)
 		body := `{"agent":"claude-code","task":"do the thing","inline_policy":{"min_confinement_class":"CC2","allow_all_egress":true,"workspace_repos":[{"repo":"` + scmTestADORepo + `"}]}}`
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
 		}
@@ -585,10 +589,10 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 func TestGitCredentialGate_PreflightNeverRefuses(t *testing.T) {
 	srv, st, _ := adoRunHarness(t, true)
 	adoCreateWorkspace(t, st, types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: scmTestADORepo})
-	cookie := adoOperatorSession(t)
+	op := adoOperatorToken(st)
 	body := `{"agent":"claude-code","task":"do the thing","inline_policy":{"min_confinement_class":"CC2","allow_all_egress":true,"workspace_repos":[{"repo":"` + scmTestADORepo + `"}]}}`
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", cookie, body)
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", op, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -597,7 +601,7 @@ func TestGitCredentialGate_PreflightNeverRefuses(t *testing.T) {
 	}
 
 	// The identical body still 422s at launch.
-	launch := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+	launch := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 	assertGitCredential422(t, launch)
 }
 
@@ -609,10 +613,10 @@ func TestGitCredentialGate_PreflightNeverRefuses(t *testing.T) {
 // TestGitCredentialGate_FreeTextRepo_PreflightNeverRefuses, each restored
 // after confirming a failure.
 func TestGitCredentialGate_FreeTextRepo(t *testing.T) {
-	srv, _, _ := adoRunHarness(t, true)
-	cookie := adoOperatorSession(t)
+	srv, st, _ := adoRunHarness(t, true)
+	op := adoOperatorToken(st)
 	body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 	assertGitCredential422(t, w)
 	if !strings.Contains(w.Body.String(), `"org":"`+scmTestADOOrg+`"`) {
 		t.Errorf("body = %s, want the org (F1)", w.Body.String())
@@ -620,10 +624,10 @@ func TestGitCredentialGate_FreeTextRepo(t *testing.T) {
 }
 
 func TestGitCredentialGate_FreeTextRepo_PreflightNeverRefuses(t *testing.T) {
-	srv, _, _ := adoRunHarness(t, true)
-	cookie := adoOperatorSession(t)
+	srv, st, _ := adoRunHarness(t, true)
+	op := adoOperatorToken(st)
 	body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", cookie, body)
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", op, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -637,10 +641,10 @@ func TestGitCredentialGate_FreeTextRepo_PreflightNeverRefuses(t *testing.T) {
 // git_credential fact at all, even though the deployment HAS a per-user row
 // (which a member could reach on a DIFFERENT run).
 func TestGitCredentialFact_OnlyThisRunsOwnRepos(t *testing.T) {
-	srv, _, _ := adoRunHarness(t, true)
-	cookie := adoOperatorSession(t)
+	srv, st, _ := adoRunHarness(t, true)
+	op := adoOperatorToken(st)
 	body := `{"agent":"claude-code","task":"do the thing","repo":"https://github.com/acme/widgets"}`
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", cookie, body)
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", op, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
@@ -654,8 +658,9 @@ func TestGitCredentialFact_OnlyThisRunsOwnRepos(t *testing.T) {
 // gets NEITHER scm_access NOR git_credential anywhere — /setup/status and
 // /runs/preflight read exactly as they did before this issue existed.
 func TestByteIdentical_SharedADORow(t *testing.T) {
-	srv, _, _ := adoRunHarness(t, false) // false: no ADOEntra source at all — a plain PAT row
+	srv, st, _ := adoRunHarness(t, false) // false: no ADOEntra source at all — a plain PAT row
 	cookie := adoOperatorSession(t)
+	op := adoOperatorToken(st)
 
 	t.Run("/setup/status carries no scm_access", func(t *testing.T) {
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", cookie, "")
@@ -669,7 +674,7 @@ func TestByteIdentical_SharedADORow(t *testing.T) {
 
 	t.Run("/runs/preflight carries no git_credential, even for a run on that row's repo", func(t *testing.T) {
 		body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", cookie, body)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", op, body)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 		}
@@ -680,7 +685,7 @@ func TestByteIdentical_SharedADORow(t *testing.T) {
 
 	t.Run("POST /runs on that row's repo launches — a shared row is untouched by this gate", func(t *testing.T) {
 		body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", op, body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201 (a shared row is never gated); body=%s", w.Code, w.Body.String())
 		}

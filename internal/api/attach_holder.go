@@ -32,7 +32,7 @@ import (
 )
 
 // The two transports that can hold a run's PTY, as reported by GET
-// /runs/{id}/attach-holder and the attach-mode control frame. "ssh" is not
+// /runs/{id}/attach/holder and the attach-mode control frame. "ssh" is not
 // decoration: a CLI holder over the SSH gateway (sshgateway_channels.go) is
 // invisible to the browser unless it registers here too, and a browser that
 // confidently reports "nobody is attached" while somebody is typing is worse
@@ -207,7 +207,7 @@ func (h *attachHolder) size() (cols, rows uint16) {
 	return h.cols, h.rows
 }
 
-// attachHolderView is the wire shape for BOTH GET /runs/{id}/attach-holder and
+// attachHolderView is the wire shape for BOTH GET /runs/{id}/attach/holder and
 // the holder half of the attach-mode control frame — one Go type, one TS type
 // for the UI lane. A nil receiver is the "nobody holds it" answer, so the read
 // path never has to branch.
@@ -432,7 +432,7 @@ func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder
 }
 
 // attachHolderFor returns runID's WRITER, or nil when nobody holds it — never
-// a queued observer. It feeds GET /runs/{id}/attach-holder and the attach-mode
+// a queued observer. It feeds GET /runs/{id}/attach/holder and the attach-mode
 // frame's holder field, and both answer one question: whose keystrokes reach
 // this terminal.
 func (s *Server) attachHolderFor(runID uuid.UUID) *attachHolder {
@@ -513,7 +513,7 @@ func attachTakeoverReason(principal string) string {
 	return reason
 }
 
-// handleAttachHolder serves GET /api/v1/runs/{id}/attach-holder — "who has this
+// handleAttachHolder serves GET /api/v1/runs/{id}/attach/holder — "who has this
 // run's terminal right now":
 //
 //	{"held":false}

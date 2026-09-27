@@ -136,7 +136,7 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "wardyn",
 		Short:         "Wardyn control-plane CLI",
-		Version:       version.Version,
+		Version:       version.String(),
 		SilenceErrors: true,
 		// SilenceUsage is deferred to PersistentPreRun so a structural USAGE
 		// error (unknown flag, unknown command, wrong arg count — all raised
@@ -189,6 +189,7 @@ func rootCmd() *cobra.Command {
 		policyCmd(client),
 		workspaceCmd(client),
 		sourceCmd(client),
+		driveCmd(client),
 		secretCmd(client),
 		attachCmd(client),
 		sshCmd(client),
@@ -198,6 +199,8 @@ func rootCmd() *cobra.Command {
 		setupCmd(client),
 		siteConfigCmd(client),
 		driveCmd(client),
+		presetCmd(client),
+		governanceCmd(client),
 		sessionsCmd(client),
 		deviceCmd(client),
 		supportBundleCmd(client),

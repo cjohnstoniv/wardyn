@@ -396,7 +396,7 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 			return &ownerRefusal{status: http.StatusBadGateway, reason: "owner_unverifiable",
 				msg: "read the run's proxy config to re-check its owner's authority: " + err.Error()}
 		default:
-			if cfg, err = proxy.LoadConfigBytes(raw); err != nil {
+			if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
 				return &ownerRefusal{status: http.StatusConflict, reason: "owner_unverifiable",
 					msg: "the run's proxy config does not load: " + err.Error()}
 			}

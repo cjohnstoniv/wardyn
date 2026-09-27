@@ -1,0 +1,28 @@
+-- The onboarded workspaces this run RESOLVED to at create time, denormalized
+-- off the resolved policy spec (referencedWorkspaces over spec.WorkspaceMounts
+-- + spec.WorkspaceRepos). Exactly the trick 0006 pulled with workspace_path,
+-- and for the same stated reason: so a later caller need not re-resolve the
+-- policy — which it could not do anyway, since agent_runs stores only policy_id
+-- and an inline-policy run has no policy row at all.
+--
+-- NULL has a THIRD meaning besides "plain run" and "internal step run": any
+-- run created by a pre-0041 binary — no backfill is possible (inline-policy
+-- runs have no policy row to re-resolve), so `always` is refused on those
+-- rows with the honest "no recorded workspace link" message until the next
+-- run-create writes the column. Self-healing per deployment, one upgrade
+-- window wide.
+--
+-- DISTINCT FROM workspace_id, which stays the scan/verify/record-only TRUSTED
+-- linkage that sandbox uploads authorize on and that a user run must never
+-- claim. This column is a read-only convenience: it grants nothing, it is never
+-- sandbox input, and it is only consulted to answer "which workspace does an
+-- `always` approval decision persist to".
+--
+-- Also distinct from workspace_path, which cannot do this job: that is a single
+-- host directory, empty for every repo-backed workspace and blind to the second
+-- and later workspaces of a multi-workspace run.
+--
+-- NULL/empty = this run references no onboarded workspace (a plain run, or one
+-- of the internal step runs that do not go through handleCreateRun), in which
+-- case `always` is refused and the console greys the option out.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workspace_ids UUID[];

@@ -201,7 +201,7 @@ func ccSeed(t *testing.T, env ...string) string {
 //
 // Without the seed an interactive bedrock run met the CLI's own first-use
 // screens (theme picker, then "Security notes") before it could reach the model
-// — which is why ui/e2e/live/sso-member.spec.ts could only ever launch an
+// — which is why ui/e2e/walk/sso-member.spec.ts could only ever launch an
 // autonomous run.
 func TestSeedClaudeOnboarding_WritesUnderBedrock(t *testing.T) {
 	home := ccSeed(t, "CLAUDE_CONFIG_DIR=", "CLAUDE_CODE_USE_BEDROCK=1")
@@ -297,7 +297,7 @@ func TestSeedClaudeOnboarding_SilentOnAnUnwritableTarget(t *testing.T) {
 //     confirmation, whose default selection is `No, exit`.
 //
 // Seeding either would not even buy an unattended seeded run (measured on claude
-// 2.1.231, local/v075/evidence/w0-spike/RESULT.md: pre-accepting trust still
+// 2.1.231: pre-accepting trust still
 // leaves the bypass confirmation in the way). It would only pre-answer a
 // security question on the operator's behalf. Asserted in EVERY mode, including
 // the auto-tools + agent-start combination that is the tempting one.

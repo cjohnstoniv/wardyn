@@ -159,6 +159,27 @@ func (o *Orchestrator) ProbeDrive(ctx context.Context, mount types.DriveMount) (
 	return runner.DriveProbe{}, errors.New("orchestrator: no wired substrate supports drive probing")
 }
 
+// ReclaimDrive implements runner.DriveReclaimer by delegating to the first
+// wired substrate that implements it — the same single fan-out ProbeDrive and
+// ImagePresent take.
+//
+// It does NOT try the next substrate on a refusal, and that is deliberate on
+// the one call here that destroys data: a second attempt would ask a
+// DIFFERENT substrate to delete an object named by a drive the first one
+// already refused, which is how a reclaim aimed at one deployment's storage
+// lands on another's. A drive's backend is scoped to this deployment's
+// dispatch target before the API ever calls this (driveMountFor's
+// backend/target check), so with the one substrate production wires there is
+// nothing to fall through to.
+func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	for _, s := range o.substrates {
+		if dr, ok := s.(runner.DriveReclaimer); ok {
+			return dr.ReclaimDrive(ctx, mount)
+		}
+	}
+	return "", errors.New("orchestrator: no wired substrate can reclaim drive storage")
+}
+
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.

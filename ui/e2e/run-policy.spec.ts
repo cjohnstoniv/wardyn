@@ -7,7 +7,7 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, navToRoute } from "./fix
 
 // E2E coverage for "Make a policy from this run" (X2-F6) — run-detail.tsx's
 // Audit tab button opens profile-review.tsx's ProfileReview sheet
-// (POST /runs/{id}/profile), and its Save dialog persists the synthesized
+// (POST /runs/{id}/profile/synthesize), and its Save dialog persists the synthesized
 // inline_policy via POST /policies (profile-review.tsx's SavePolicyDialog).
 // Had zero e2e — this proves the real round trip: the saved policy is a REAL
 // row the /policies screen lists, not just a client-side success toast.
@@ -37,7 +37,7 @@ test.describe("Run detail — Make a policy from this run", () => {
     await navTo(page, "Runs");
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     await page.getByRole("tab", { name: "Audit" }).click();
     await page.getByRole("button", { name: "Make a policy from this run" }).click();

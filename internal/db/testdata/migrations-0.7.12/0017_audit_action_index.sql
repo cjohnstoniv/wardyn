@@ -1,0 +1,17 @@
+-- Index the audit-event lookup that the UNAUTHENTICATED /healthz probe runs on
+-- every poll.
+--
+-- store.LatestAuditEventByAction issues `SELECT ... FROM audit_events
+-- WHERE action=$1 ORDER BY seq DESC LIMIT 1` to find the latest
+-- kernel.sensor.heartbeat that drives eBPF-ground-truth health. audit_events is
+-- append-only and grows without bound, and 0001 indexed only (run_id) and (time)
+-- — so this query was a full sequential scan + top-N sort of the entire table on
+-- every /healthz hit. On an unauthenticated endpoint that is a trivial DoS
+-- amplifier as the audit log grows.
+--
+-- A composite btree on (action, seq DESC) turns it into an index scan to the
+-- action then the first row backward — no heap scan, no sort. NOTE: a *partial*
+-- index (WHERE action LIKE 'kernel.%') would NOT help: the query binds action as
+-- a parameter ($1), so the planner cannot prove the partial predicate holds and
+-- would ignore it. The full composite is the correct shape.
+CREATE INDEX IF NOT EXISTS audit_events_action_seq_idx ON audit_events (action, seq DESC);

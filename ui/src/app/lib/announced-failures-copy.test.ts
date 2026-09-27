@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RAIL, RECORDING_DISABLED_TITLE } from "../components/wardyn/copy/new-run-rail";
@@ -38,6 +39,14 @@ const stripQuotes = (s: string): string => s.replace(/^"(.*)"$/, "$1");
 const rawDoc = parseFrozenTables(DOC, /^## Frozen strings/);
 const doc = new Map([...rawDoc].map(([key, value]) => [stripKeyNote(key), stripQuotes(value)]));
 
+// #497's preflight fallback is an inline literal in use-launch.ts with no
+// exported constant, so it is read out of the source text, anchored on the
+// setPreflightError call it feeds.
+const PREFLIGHT_FALLBACK =
+  /setPreflightError\(getErrorMessage\(e\) \|\| "([^"]*)"\)/.exec(
+    readFileSync(resolve(process.cwd(), "src/app/components/screens/new-run/use-launch.ts"), "utf8"),
+  )?.[1] ?? "";
+
 const rendered: Record<string, string> = {
   "RAIL.LAUNCH_ERROR_LABEL": RAIL.LAUNCH_ERROR_LABEL,
   "RAIL.PREFLIGHT_ERROR_LABEL": RAIL.PREFLIGHT_ERROR_LABEL,
@@ -47,11 +56,12 @@ const rendered: Record<string, string> = {
   "RECORDINGS.EMPTY_BODY": RECORDINGS.EMPTY_BODY,
   RECORDING_DISABLED_TITLE: RECORDING_DISABLED_TITLE,
   "AUDIT.MEMBER_FEED_TITLE": AUDIT.MEMBER_FEED_TITLE,
+  "Preflight error fallback": PREFLIGHT_FALLBACK,
 };
 
 describe("announced-failures-copy — announced-failures-canon.md, #490", () => {
-  it("finds all 8 frozen keys in the doc", () => {
-    expect(doc.size).toBe(8);
+  it("finds all 9 frozen keys in the doc", () => {
+    expect(doc.size).toBe(9);
   });
 
   it.each(Object.keys(rendered))("%s is byte-exact", (key) => {

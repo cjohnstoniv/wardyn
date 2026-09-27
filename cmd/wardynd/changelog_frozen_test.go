@@ -59,10 +59,14 @@ var changelogPreexistingCorrections = map[string]string{
 	"0.4.1": "66aa886f2a0703c8c05435cd205d42e3c850a7f6", // (same commit)
 	"0.4.2": "66aa886f2a0703c8c05435cd205d42e3c850a7f6", // (same commit)
 	"0.6.2": "7fc9d85f68b10169a9077ac82a66497dae7ff6a1", // fix(sbom): merge the UI lockfile, and correct what 0.6.2 claimed
-	"0.7.0": "89762aa766f52bbb3af7e1d14350be8cd1f14a86", // fix(docs): address blind-review findings D-1..D-10
+	// #461 dropped both sections' private ~/.claude / local/ review-ledger
+	// citations (the R1-R7 hardening-pass table, the 0.7.2 triage-sheet
+	// references) in favour of prose and one Known-gaps list — an
+	// issue-directed edit to a released section, not a silent drift.
+	"0.7.0": "44df95c4483504a2001301e0abb42b16c0fcf17d", // docs(461): drop private-path citations from the hardening-pass section
 	// fix(compose): correct the writable-member-mount claim, add /srv/src
 	// bind — authored as 3c64194c0 off main; this is the squash that landed it.
-	"0.7.2": "8a69d8d2325b824a576d6fa03288014ff9ae0018", // Backport 17 merged fixes from main into 0.7.10 (#404)
+	"0.7.2": "44df95c4483504a2001301e0abb42b16c0fcf17d", // docs(461): drop private-path citations from the 0.7.2 triage references
 }
 
 // TestChangelogReleasedSectionsAreFrozen pins every released CHANGELOG.md

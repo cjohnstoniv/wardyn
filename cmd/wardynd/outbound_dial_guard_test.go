@@ -34,7 +34,7 @@ package main
 // allowlist would answer a question this guard does not ask. Same reasoning
 // keeps in-sandbox helper binaries (wardyn-toolgate, wardyn-git-helper,
 // wardyn-aws-sso, the UI reverse-proxy gateway) out of scope: each reaches a
-// KNOWN ON-SEGMENT address (Proxy: nil, B11a-F13) or deliberately rides the
+// KNOWN ON-SEGMENT address (Proxy: nil) or deliberately rides the
 // SANDBOX's own HTTP_PROXY (which is wardyn-proxy, already governed here).
 //
 // Test helpers need no entry: _test.go files are never scanned at all.

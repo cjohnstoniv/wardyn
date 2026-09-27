@@ -34,7 +34,7 @@ const uiRoot = path.resolve(__dirname, "../..");
 // primary split guard).
 const ENTRY_BUDGET_BYTES = 560 * 1024;
 
-async function buildOnce(): Promise<Rollup.OutputChunk[]> {
+async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
   // Vite only defaults NODE_ENV to "production" for a build when it is UNSET,
   // and vitest has already set it to "test". Left alone, `process.env.NODE_ENV`
   // inlines as "test", React resolves its development bundle, and the entry
@@ -52,15 +52,21 @@ async function buildOnce(): Promise<Rollup.OutputChunk[]> {
       build: { write: false },
     })) as Rollup.RollupOutput | Rollup.RollupOutput[];
     const out = Array.isArray(result) ? result[0] : result;
-    return out.output.filter((o): o is Rollup.OutputChunk => o.type === "chunk");
+    return out.output;
   } finally {
     process.env.NODE_ENV = prevNodeEnv;
   }
 }
 
+// One build for every assertion below: it is the slow part.
+let built: ReturnType<typeof build_> | undefined;
+const buildOnce = () => (built ??= build_());
+const chunksOf = (out: Awaited<ReturnType<typeof build_>>) =>
+  out.filter((o): o is Rollup.OutputChunk => o.type === "chunk");
+
 describe("UI bundle is route-code-split", () => {
   it("keeps the terminal stack out of the entry chunk and the entry under budget", async () => {
-    const chunks = await buildOnce();
+    const chunks = chunksOf(await buildOnce());
     const entry = chunks.find((c) => c.isEntry);
     expect(entry, "no entry chunk in build output").toBeDefined();
 
@@ -88,5 +94,29 @@ describe("UI bundle is route-code-split", () => {
       `entry chunk ${Math.round(entryBytes / 1024)}kB exceeds the ${ENTRY_BUDGET_BYTES / 1024}kB budget — ` +
         `something in the eager App -> AppShell -> RunsScreen graph is statically importing a lazy route`,
     ).toBeLessThan(ENTRY_BUDGET_BYTES);
+  }, 180_000);
+});
+
+// WARDYN_BASE_PATH: one bundle serves at the host root or under a sub-path,
+// so no URL the build emits may be root-absolute. index.html's are relative
+// ("./"), and the daemon rewrites exactly those to the base it serves under
+// (internal/api's serveIndex); the chunks and stylesheets resolve theirs
+// against their own URL. A "/assets/…" anywhere would skip the base.
+describe("UI bundle carries no root-absolute asset URL", () => {
+  it("emits every index.html asset URL relative, and none rooted in a chunk or stylesheet", async () => {
+    const out = await buildOnce();
+    const index = out.find((o): o is Rollup.OutputAsset => o.type === "asset" && o.fileName === "index.html");
+    expect(index, "no index.html in build output").toBeDefined();
+    const html = String(index!.source);
+    const urls = [...html.matchAll(/\b(?:src|href)="([^"]*)"/g)].map((m) => m[1]);
+    expect(urls.length).toBeGreaterThan(1);
+    expect(urls.filter((u) => !u.startsWith("./")), "index.html asset URLs the daemon cannot rebase").toEqual([]);
+    expect(html).toContain('data-wardyn-base=""');
+
+    const rooted = out
+      .filter((o) => o.fileName !== "index.html")
+      .filter((o) => /["'(]\/assets\//.test(o.type === "chunk" ? o.code : String(o.source)))
+      .map((o) => o.fileName);
+    expect(rooted, "root-absolute /assets/ URLs in the bundle").toEqual([]);
   }, 180_000);
 });

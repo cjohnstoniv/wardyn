@@ -326,6 +326,24 @@ its entry says so:
   too heavy for every PR, so it runs in `nightly.yml`'s `ui-sandbox-e2e-live`
   job rather than `ci.yml`, and remains runnable by hand. Needs Docker;
   self-skips unless `WARDYN_TEST_DOCKER=1`.
+- **`WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh`** (`scripts/lib/
+  kind-sso-walk-ado.sh`) — live Azure DevOps SSO walk on kind: the console
+  signs in against a fake Entra tenant instead of Dex, the member's login
+  captures their Azure DevOps credential, and their run redeems it (REST +
+  `git ls-remote`) through the proxy's gate and broker. It needs its own kind
+  cluster, image tag and port (`deploy/kind/sso/README.md`, "The Azure DevOps
+  profile"), so it runs in `nightly.yml`'s `kind-sso-ado-walk` job rather than
+  `ci.yml`, and remains runnable by hand. Needs `kubectl`/`helm`/`kind`;
+  self-skips unless `WARDYN_TEST_K8S=1`.
+- **`scripts/compose-sso-roles.sh`** — the role walk on both compose-shaped SSO
+  deployments (`mprime`, the desktop member-mode envelope, and `compose-sso`,
+  the plain `docker compose --profile sso` stack), hermetic and local: every
+  Dex identity — admin, allowlist-only operator, security admin, two members
+  and one that matches no role — signed in through the real console on each
+  shape. It brings up its own uniquely-named compose project per shape and
+  tears it down on every exit path, so it runs in `nightly.yml`'s
+  `compose-sso-roles` job rather than `ci.yml`, and remains runnable by hand.
+  Needs Docker; self-skips unless `WARDYN_TEST_SSO_ROLES=1`.
 - **`scripts/run-e2e-ssh-k8s.sh`** (`make test-e2e-ssh-k8s`) — the SSH
   gateway proven against a **Pod** rather than a container: the run's sandbox
   confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec
@@ -359,6 +377,12 @@ every pull request and every push to `main`. What it runs short of is runner
 slots, not the length of any one run: with many pull requests open, a run waits
 in the queue far longer than it executes. So the budget is counted in checks and
 runner-minutes as well as minutes.
+
+`pull_request:` carries no `branches:` filter — that field matches the PR's
+*base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>`
+branches (#90), not on `main`, so a filtered trigger gave a stacked PR no
+checks at all. `push:` stays narrow to `main`, `master`, `release/**` and
+`feature/**`, since every commit already gets a run from its own PR.
 
 **Before and after #211**, measured from the GitHub Actions API: job times over
 the 60 most recent completed `ci.yml` runs as of 2026-09-21 05:00Z (a "green run" is one
@@ -400,11 +424,15 @@ would save the 40 s and give up the per-spec isolation `scripts/run-ui-e2e.sh`
 exists to provide.
 
 **Per-job budget.** A job's budget is its `timeout-minutes`, at least twice its
-measured maximum with a ten-minute floor. Minutes, successful runs only:
+measured maximum with a ten-minute floor. Minutes, successful runs only. The old
+`build` samples (26 runs, median 18.4, maximum 18.9 minutes) preceded the tag-set
+split below; timings for the current aggregator and the new jobs remain pending:
 
 | Check | Runs | Median | Max | Timeout |
 |---|---|---|---|---|
-| `build` | 26 | 18.4 | 18.9 | 40 |
+| `changes` | – | pending | pending | 10 |
+| `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
+| `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `ui-e2e` | 42 | 9.2 | 10.1 | 25 |
 | `test-pg` | 31 | 5.0 | 5.2 | 15 |

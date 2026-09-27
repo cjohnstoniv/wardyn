@@ -26,7 +26,13 @@ const secretOrgDeviceCredential = "wardyn-org-device-credential"
 // bootHybrid is hybrid enrolment's boot step (issue #103): with no org URL it
 // does nothing and returns nil. Otherwise it loads the stored device
 // credential, or enrols with the enrolment token and stores one, then starts
-// the audit forwarder on rootCtx and returns its status accessor.
+// the audit forwarder on rootCtx and returns it.
+//
+// The returned Forwarder's goroutine runs until rootCtx ends; a caller that
+// cancels rootCtx (a test's own cancel, or the daemon's shutdown) must join it
+// via <-fwd.Done() before treating that as complete — see serveAndShutdown and
+// issue #1131, where a test that only cancelled and returned left the
+// forwarder still logging when a later test swapped the process logger.
 //
 // Every failure refuses the boot rather than running unenrolled: no credential
 // and no token names the token; an enrolment that fails — the org unreachable
@@ -41,7 +47,7 @@ const secretOrgDeviceCredential = "wardyn-org-device-credential"
 // is pushed again. Re-enrolment is the ONLY thing that clears that mark: a
 // laptop the organisation revoked comes back up still refusing new runs, the
 // organisation reachable or not.
-func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets secretKeyStore, st federation.Store, rec audit.Recorder) (func() federation.Status, error) {
+func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets bootKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
 	if orgURL == "" {
 		return nil, nil
 	}
@@ -105,7 +111,7 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 			"device_id", cred.DeviceID)
 	}
 	go fwd.Run(rootCtx)
-	return fwd.Status, nil
+	return fwd, nil
 }
 
 // checkPostureAndBootHybrid is validateMemberModePosture then bootHybrid, one
@@ -113,11 +119,23 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 // already vetted by validateHybridPosture (validateBootPosture, before
 // connectAndMigrate).
 func checkPostureAndBootHybrid(ctx, rootCtx context.Context, f *bootFlags, localMode, oidcConfigured bool,
-	secrets secretKeyStore, st federation.Store, rec audit.Recorder) (func() federation.Status, error) {
+	secrets bootKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
 	if err := validateMemberModePosture(*f.memberMode, localMode, oidcConfigured); err != nil {
 		return nil, err
 	}
 	return bootHybrid(ctx, rootCtx, *f.orgURL, *f.orgEnrolToken, secrets, st, rec)
+}
+
+// orgFederationStatusFunc adapts a possibly-nil forwarder (bootHybrid returns
+// nil when WARDYN_ORG_URL is unset) to api.Config.OrgFederation's shape: a nil
+// func, not a method value bound to a nil *Forwarder, which would panic on
+// its first call. Extracted out of run() rather than inlined there so a
+// simple nil check does not push it over the gocyclo cap.
+func orgFederationStatusFunc(fwd *federation.Forwarder) func() federation.Status {
+	if fwd == nil {
+		return nil
+	}
+	return fwd.Status
 }
 
 func parseOrgCredential(b []byte) (federation.Credential, bool) {

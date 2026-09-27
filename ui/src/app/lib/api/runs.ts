@@ -198,12 +198,14 @@ export const runs = {
     return asJson<RunDetail>(res);
   },
 
-  // POST /api/v1/runs/{id}/attach-ticket — mint a single-use, short-TTL ticket
-  // the attach WebSocket accepts as ?ticket= (browsers cannot put the admin
-  // bearer on a WS handshake). Minted through this NORMAL authenticated call;
-  // consumed on first WS connect, so each (re)connect mints a fresh one.
+  // POST /api/v1/runs/{id}/attach/ticket (renamed from attach-ticket in 0.8 —
+  // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
+  // for one minor) — mint a single-use, short-TTL ticket the attach WebSocket
+  // accepts as ?ticket= (browsers cannot put the admin bearer on a WS
+  // handshake). Minted through this NORMAL authenticated call; consumed on
+  // first WS connect, so each (re)connect mints a fresh one.
   async attachTicket(runId: string): Promise<string> {
-    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach-ticket`, {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/ticket`, {
       method: "POST",
     });
     const body = await asJson<{ ticket: string }>(res);
@@ -222,14 +224,14 @@ export const runs = {
   // active run) — the run still launched; callers surface warnings without
   // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
   // callbacks keep working.
+  //
+  // #125/#121: the default deadline, not LAUNCH_DEADLINE_MS — POST /runs is
+  // async now (dispatch happens after this call answers), so this no longer
+  // blocks through CreateSandbox server-side the way the constant's own note
+  // describes. preflightRun below still runs that resolution synchronously and
+  // keeps the longer deadline.
   async createRun(input: RunWireInput): Promise<CreateRunResult> {
-    // LAUNCH_DEADLINE_MS, not the default: this call blocks through
-    // CreateSandbox server-side (see the constant's own note).
-    const res = await wfetch(
-      "/runs",
-      { method: "POST", body: JSON.stringify(runWireBody(input)) },
-      LAUNCH_DEADLINE_MS,
-    );
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
     return asJson<CreateRunResult>(res);
   },
 
@@ -241,9 +243,12 @@ export const runs = {
   // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
   // error as a quiet "preflight unavailable" and never block Review.
   async preflightRun(input: RunWireInput): Promise<PreflightResult> {
-    // Same deadline as createRun: preflight runs the same resolution (mounts,
-    // grants, the blast-radius raise) against the same store, so a deployment
-    // slow enough to need it on the launch needs it on the dry run too.
+    // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
+    // (mounts, grants, the blast-radius raise) against the same store that
+    // createRun's own dispatch does — createRun itself dropped this deadline
+    // once POST /runs became async (#125/#121), but preflight's own work here
+    // is still synchronous, so a deployment slow enough to need the longer
+    // bound on a real launch needs it on the dry run too.
     const res = await wfetch(
       "/runs/preflight",
       { method: "POST", body: JSON.stringify(runWireBody(input)) },
@@ -265,12 +270,14 @@ export const runs = {
     return asJson<PolicyGrade>(res);
   },
 
-  // POST /api/v1/runs/{id}/profile — Recording-Mode profile synthesis (ADVISORY,
-  // read-only). Replays the run's observed behaviour into a PROPOSED least-
-  // privilege run + inline_policy plus the raw observations + Wardyn's
-  // deterministic risk assessment. Never creates a run or mints a credential.
+  // POST /api/v1/runs/{id}/profile/synthesize (renamed from /profile in 0.8 —
+  // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
+  // for one minor) — Recording-Mode profile synthesis (ADVISORY, read-only).
+  // Replays the run's observed behaviour into a PROPOSED least-privilege run
+  // + inline_policy plus the raw observations + Wardyn's deterministic risk
+  // assessment. Never creates a run or mints a credential.
   async profileRun(id: string): Promise<ProfileProposal> {
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}/profile`, { method: "POST" });
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/profile/synthesize`, { method: "POST" });
     return asJson<ProfileProposal>(res);
   },
 
@@ -316,12 +323,14 @@ export const runs = {
     return asJson<RunResources>(res);
   },
 
-  // GET /api/v1/runs/{id}/attach-holder — who currently holds the run's shared
-  // tmux PTY. `held:false` means "nobody is attached through THIS daemon";
-  // the registry is in-process (see internal/api/attach_holder.go), so the UI
-  // must not phrase it as a stronger claim than that.
+  // GET /api/v1/runs/{id}/attach/holder (renamed from attach-holder in 0.8 —
+  // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
+  // for one minor) — who currently holds the run's shared tmux PTY.
+  // `held:false` means "nobody is attached through THIS daemon"; the registry
+  // is in-process (see internal/api/attach_holder.go), so the UI must not
+  // phrase it as a stronger claim than that.
   async getAttachHolder(runId: string): Promise<AttachHolder> {
-    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach-holder`, { method: "GET" });
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/holder`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AttachHolder>(res);
   },

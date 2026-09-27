@@ -35,14 +35,13 @@
 # every exit path, success or failure — never touches any other stack.
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "run-e2e-ui-sandbox: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent UI-sandbox e2e (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
+  skip_lane "run-e2e-ui-sandbox: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent UI-sandbox e2e (skipping)."
+fi
 wardyn_pick_docker_host
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
@@ -162,7 +161,7 @@ api() {
 # mint_ticket RUN_ID -> prints the single-use ticket on stdout
 mint_ticket() {
   local rid="$1" st
-  st=$(api POST "/api/v1/runs/${rid}/attach-ticket")
+  st=$(api POST "/api/v1/runs/${rid}/attach/ticket")
   [[ "${st}" == "200" ]] || { fail "mint attach ticket for ${rid}: status ${st}: $(cat "${TMPDIR}/resp.json")"; return 1; }
   jq -r '.ticket' "${TMPDIR}/resp.json"
 }

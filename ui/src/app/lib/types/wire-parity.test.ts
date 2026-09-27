@@ -167,6 +167,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  it("SetupProviderAccess (`provider_access`): full parity with the TS mirror", () => {
+    const providerAccessGo = readFileSync(join(root, "internal/api/provider_access.go"), "utf8");
+    const goTags = goJSONTags(providerAccessGo, "SetupProviderAccess");
+    expect(goTags.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(tsInterfaceTopKeys(setupTs, "SetupProviderAccess"))).toEqual(new Set(goTags));
+  });
+
   it("ApprovalRequest (`Approval`): full parity with the TS mirror", () => {
     const goTags = goJSONTags(typesGo, "ApprovalRequest");
     expect(goTags.length).toBeGreaterThanOrEqual(10);

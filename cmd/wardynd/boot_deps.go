@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -233,6 +234,10 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 		DriveProbeImage:     *f.driveProbeImage,
 		ConfinementRuntimes: confRuntimes,
 		UserDriveHostRoots:  driveHostRoots,
+		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
+		// rather than letting the substrate hardcode Record — "off" must mean no
+		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
+		Record: substrate.RecordEnabled(*f.recordingSel),
 	})
 	if err != nil {
 		// Discriminate WHY substrate.New failed before printing the
@@ -303,7 +308,7 @@ type optionalFeatures struct {
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
 // verbatim from run() — construction order and log lines are unchanged.
-func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, secureCookies bool, subPostureOK bool) (optionalFeatures, error) {
+func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, bootKeys bootKeyStore, secureCookies bool, subPostureOK bool) (optionalFeatures, error) {
 	var of optionalFeatures
 
 	// Recording store (pluggable seam; default "pg" — see boot_flags.go). pg
@@ -332,7 +337,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// is scoped to it) — validateOperatorPosture needs it after the block closes.
 	var hasRoleMap bool
 	if *f.oidcIssuer != "" {
-		sessKey, kerr := loadOrCreateSessionKey(bootCtx, secrets)
+		sessKey, kerr := loadOrCreateSessionKey(bootCtx, bootKeys)
 		if kerr != nil {
 			return of, kerr
 		}
@@ -370,7 +375,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			ClientID:            *f.oidcClientID,
 			ClientSecret:        *f.oidcClientSecret,
 			RedirectURL:         *f.oidcRedirectURL,
+			BasePath:            *f.basePath,
 			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
+			ExtraScopes:         splitCSV(*f.oidcExtraScopes),
 			SecureCookies:       secureCookies,
 			RoleMap:             roleMap,
 			DefaultRole:         defaultRole,
@@ -532,7 +539,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// guard). loadOrCreateSSHHostKey follows the identical loadOrCreateSecret
 	// pattern as the signing/session keys above.
 	if *f.sshListen != "" {
-		hostKey, herr := loadOrCreateSSHHostKey(bootCtx, secrets)
+		hostKey, herr := loadOrCreateSSHHostKey(bootCtx, bootKeys)
 		if herr != nil {
 			return of, herr
 		}
@@ -547,7 +554,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// minted ONLY when the gateway is enabled, the same discipline as the SSH
 	// host key above.
 	if *f.uiListen != "" {
-		uiKey, kerr := loadOrCreateUISessionKey(bootCtx, secrets)
+		uiKey, kerr := loadOrCreateUISessionKey(bootCtx, bootKeys)
 		if kerr != nil {
 			return of, kerr
 		}
@@ -565,12 +572,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 	}
 
-	hop, herr := loadHopTLS(bootCtx, secrets, *f.controlURL)
-	if herr != nil {
+	var herr error
+	if of.hop, herr = loadHopTLS(bootCtx, bootKeys, *f.controlURL); herr != nil {
 		return of, herr
 	}
-	of.hop = hop
-
+	// Before anything serves, so an ingest waiting on wardynd's healthcheck finds it.
+	_ = publishHopCA(of.hop, strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")))
 	return of, nil
 }
 

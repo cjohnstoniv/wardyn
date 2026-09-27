@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -310,13 +311,15 @@ func (c *client) login(ctx context.Context) error {
 	return fmt.Errorf("WARDYN_VAULT_AUTH %q is not %q or %q", c.authMode, AuthKubernetes, AuthTokenFile)
 }
 
+// readTrimmed reads a Vault login file on every login, under the shared
+// secret-file mode rule; surrounding whitespace is not part of a token or JWT.
 func readTrimmed(path, setting string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%s is not set", setting)
 	}
-	b, err := os.ReadFile(path)
+	b, err := cliutil.ReadSecretFile(setting, path)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", setting, err)
+		return "", err
 	}
 	v := strings.TrimSpace(string(b))
 	if v == "" {

@@ -109,7 +109,7 @@ func (s *Server) bedrockCredGradeHolds(ctx context.Context, run types.AgentRun, 
 		return true
 	}
 	const reason = "autonomy_grade_drift"
-	detail := "this run was not launched: its autonomy level was graded WITHOUT an Amazon Bedrock model credential, " +
+	detail := "This run was not launched: its autonomy level was graded WITHOUT an Amazon Bedrock model credential, " +
 		"and the configuration changed between then and now so that dispatch would hand it one. Re-launch the run " +
 		"so it is graded against the credential it will actually get."
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, detail)

@@ -452,6 +452,49 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 // asciicast is ever persisted. The gate lives at that single call site so a future
 // second attach path cannot miss it. (harness.login.start and session.attach
 // still record who attached, when, and why — no provenance is lost.)
+// Conservative small defaults for the sign-in sandbox (#1100): it drives only a
+// CLI device-code flow (no workload, no mounts, no injections), so it has no
+// business inheriting runner.DefaultCPUMillis/DefaultMemoryMiB (2 vCPU / 4 GiB —
+// sized for an agent run). A namespace LimitRange sized for a small node refuses
+// that default outright, stranding a member's own sign-in. Configurable via
+// Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB
+// (WARDYN_HARNESS_LOGIN_CPU_MILLIS/WARDYN_HARNESS_LOGIN_MEMORY_MIB); zero (unset)
+// keeps these compiled-in defaults rather than falling through to the agent-run
+// ones the way an unset policy.Resources otherwise would.
+const (
+	defaultHarnessLoginCPUMillis = 500 // 0.5 vCPU
+	defaultHarnessLoginMemoryMiB = 512 // 512 MiB
+)
+
+// harnessLoginResources decides the sign-in run's Resources block: the
+// small default above (or its configured override), clamped DOWN to the
+// acting principal's governance ceiling when that ceiling sets a Resources cap
+// of its own — never up, and never bypassed. Mirrors composer.Clamp's capField
+// idiom (cap a set field at the ceiling's, ignore an unset one), scoped to just
+// this lane's two fields rather than reusing the full Clamp — that function
+// also intersects AllowedDomains/FirstUseApproval/etc. against the ceiling,
+// which the login policy already computes correctly for itself (loginEgress,
+// FirstUseDenyWithReview) and must not have re-narrowed by a generic pass.
+func harnessLoginResources(cfg Config, ceiling governanceCeiling) types.ResourceLimits {
+	cpu := cfg.HarnessLoginCPUMillis
+	if cpu <= 0 {
+		cpu = defaultHarnessLoginCPUMillis
+	}
+	mem := cfg.HarnessLoginMemoryMiB
+	if mem <= 0 {
+		mem = defaultHarnessLoginMemoryMiB
+	}
+	if ceilRes := ceiling.Spec.Resources; ceilRes != nil {
+		if ceilRes.CPUMillis > 0 && cpu > ceilRes.CPUMillis {
+			cpu = ceilRes.CPUMillis
+		}
+		if ceilRes.MemoryMiB > 0 && mem > ceilRes.MemoryMiB {
+			mem = ceilRes.MemoryMiB
+		}
+	}
+	return types.ResourceLimits{CPUMillis: cpu, MemoryMiB: mem}
+}
+
 // t.startURL (AWS only, "" for every other provider) is the IAM Identity
 // Center access-portal URL. It is seeded into the sandbox as a pre-login
 // ~/.aws/config so the auto-typed `aws sso login --sso-session wardyn` has an
@@ -500,6 +543,11 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 			"runner %q cannot enforce confinement_class %s (available: %s)",
 			s.cfg.Runner.Name(), cc, classesOrNone(caps.ConfinementClasses))
 	}
+	// Host capacity, before the lock and the supersede for the same reason as
+	// the class check above: a refusal must not first end an existing sign-in.
+	if err := s.admitHostCapacity(ctx, actor, "harness_login", true); err != nil {
+		return types.AgentRun{}, harnessLoginDispatch{}, err
+	}
 	// Serialized per person, across replicas, for the whole span below: the
 	// supersede pass, the insert, and the SECOND pass after it are independent
 	// statements, and two launches interleaving through them leave two live
@@ -530,6 +578,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// "not configured": the flow's regional hosts are then left to first-use
 	// approval rather than pre-allowed wide.
 	egress := hl.loginEgress(t.region, s.cfg.AWSSSOEndpointOverride)
+	// Small sign-in default (#1100), never the agent-run one — see
+	// harnessLoginResources. Still clamped to the acting principal's ceiling.
+	resources := harnessLoginResources(s.cfg, ceiling)
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		// Default-deny, limited to the OAuth hosts. An off-policy host the login
@@ -539,6 +590,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		AllowedDomains:   egress,
 		FirstUseApproval: types.FirstUseDenyWithReview,
 		AutoStopAfterSec: int(harnessLoginIdleCap.Seconds()),
+		Resources:        &resources,
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	created, err := s.createRun(ctx, run)

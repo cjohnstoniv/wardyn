@@ -13,9 +13,10 @@
 // (ADO.LAUNCH_DIALOG_BODY) is true by construction: the form never left.
 import * as React from "react";
 import { scmAccess } from "../api/scm-access";
+import { apiURL } from "../base-path";
 
 const POLL_MS = 1500;
-const SIGNIN_URL = "/api/v1/scm/azure-devops/signin";
+const SIGNIN_PATH = "/scm/azure-devops/signin";
 // The fallback link (review follow-up N1) opens a plain browser tab this
 // hook has no handle on — nothing tells it the tab closed, so the poll it
 // starts for that path is bounded instead, long enough for a real sign-in.
@@ -138,7 +139,7 @@ export function useAdoConnect(): {
   const connect = React.useCallback((): Promise<boolean | null> => {
     setBlockedUrl(null);
     // about:blank FIRST, same-origin, then sever the opener reference and
-    // navigate — not window.open(SIGNIN_URL, ...) directly. This is the
+    // navigate — not window.open(<sign-in URL>, ...) directly. This is the
     // tabnabbing fix (reverse tabnabbing: a page we navigate to must not be
     // able to reach back via `window.opener` and redirect this window while
     // its sign-in runs unattended) — `rel="noopener"`'s own effect, done by
@@ -150,11 +151,11 @@ export function useAdoConnect(): {
       // connection nor a decline, and the launch door must keep the dialog
       // open — showing the fallback link — rather than close it as if the
       // person had answered.
-      setBlockedUrl(SIGNIN_URL);
+      setBlockedUrl(apiURL(SIGNIN_PATH));
       return Promise.resolve(null);
     }
     popup.opener = null;
-    popup.location.href = SIGNIN_URL;
+    popup.location.href = apiURL(SIGNIN_PATH);
     return poll(
       () => popup.closed,
       () => popup.close(),

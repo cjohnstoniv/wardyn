@@ -504,9 +504,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   carries no chart labels) so its proxy sidecars can still reach wardynd's
   `internal` TLS port for credential resolves and mints, approval checks, and
   recording uploads. That port has its own NetworkPolicy rule (this namespace
-  plus the runs namespace) and never inherits `networkPolicy.ingress.from`. A
-  separate `http` peer for the runs namespace stays only so a run already in
-  flight at an upgrade from 0.7.11 finishes.
+  plus the runs namespace) and never inherits `networkPolicy.ingress.from`.
+  The runs namespace is granted that port only, never `http`.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
   also what the boot-time egress canary launches. **Required — the chart
   refuses to render without it** (like `serviceAccount.automount` above): the
@@ -560,11 +559,14 @@ networkpolicies create/list/delete/deletecollection — deliberately **no**
 body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
 `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run
 whose pods are both gone, and it is asked for best-effort — a Role without it
-degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
+degrades the sweep rather than killing it; `events` list only, so an image
+pull reads as "Downloading the image" rather than ContainerCreating — a Role
+without it keeps the old wording and nothing else changes); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
-only ever resolves one by name). One rule is conditional:
-`persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
-see [User drives](#user-drives-userdrivesenabled) below. A run's `disk_mib`
+only ever resolves one by name). One rule is conditional, and it is the only
+one switched twice: `persistentvolumeclaims` get+create, rendered only with
+`drives.enabled`, plus `delete` only with `drives.reclaim.enabled` —
+see [User drives](#user-drives-drivesenabled) below. A run's `disk_mib`
 cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the
 runner already creates, and eviction is read back through the `pods: get` the
 Role already has.
@@ -580,7 +582,14 @@ uninstalling either would take the other's RuntimeClass read permission with it
 Upgrading a release installed before 0.7 renames both objects in place, which
 Helm handles as an ordinary create-then-prune.
 
-### User drives (`userDrives.enabled`)
+### User drives (`drives.enabled`)
+
+Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no
+alias — a `--reuse-values` upgrade from an older release must set `drives`
+explicitly; see docs/sdk.md's "Renamed in 0.8" table. The chart refuses to
+render while the old `userDrives.enabled` is `true`, since nothing reads it any
+more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the
+`userDrives` block from your values file).
 
 A **user drive** is per-person storage a run mounts at `/home/agent/drive`. An
 admin registers a drive and allocates it in the console; a member ticks a box on
@@ -592,19 +601,32 @@ and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
 | `k8s_pvc` (managed) | looks the claim up by name, creates it on first use as `wardyn-drive-<drive-slug>-<home>` with `accessModes: [ReadWriteOnce]` and the allocation as `requests.storage` | `get` + `create` |
 | `k8s_pvc_static` (share) | looks the claim up by name; a missing one fails the run | `get` |
 
-`userDrives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
+`drives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
 to the namespaced Role. Leave it on for **any** drive at all: a static share
 needs `get`, and with the rule absent the LOOKUP is what the apiserver refuses
 first. Off, any drive's run fails at dispatch with a hint naming this switch.
 
-**There is no `delete` verb, on purpose.** A drive outlives every run that mounts
-it, and the claim carries no `wardyn.run-id` label, so the per-run teardown sweep
-cannot select it. Reclaiming a departed person's storage is an operator command,
-run once, deliberately:
+**The `delete` verb is off by default, and it is a second switch.** A drive
+outlives every run that mounts it, and the claim carries no `wardyn.run-id`
+label, so no per-run teardown sweep can ever select it — that holds on every
+setting. What `drives.reclaim.enabled=true` adds is `delete` on the same
+rule, for exactly one caller: the operator's explicit
+`POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim`), super-admin only,
+refused while a pod still mounts the claim, and audited as `drive.reclaim` on
+every attempt that reaches the cluster. **It destroys a member's stored bytes and nothing undoes it**, so
+it is opt-in: leave the value unset and this Role is byte-for-byte the one it
+has always been, every reclaim attempt ends in the apiserver's own `403`, and
+reclaiming a departed person's storage stays an operator command, run once,
+deliberately:
 
 ```sh
 kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
+
+Turn it on when your offboarding runbook calls the API instead. Both paths stay
+supported; only one is the default. `deletecollection` is still never granted —
+a label-scoped sweep would reclaim every claim matching a selector in one call,
+and a reclaim is one person's object at a time, by name, or it is not reviewable.
 
 The console's drive preview prints the object name for a principal — paste the
 sign-in subject FIRST: on a `hash`/`sub` drive the name keys on the first claim,
@@ -1101,6 +1123,12 @@ See `values.yaml` for all options. Key settings:
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
   you **pin an `image.tag` at or below `0.5.0`**, which serves none: see
   [Installation](#installation) for what that failure looks like.
+- `basePath`: serve the console, API, sign-in and health endpoints under a
+  sub-path behind a reverse proxy (`WARDYN_BASE_PATH`, e.g. `/wardyn`). The
+  three probes move under it (`readinessProbe.path` stays relative to it), and
+  so must `WARDYN_OIDC_REDIRECT_URL`. Empty (default) => the host root. See
+  [docs/OPERATIONS.md "Serving the console under a
+  sub-path"](../../../docs/OPERATIONS.md#serving-the-console-under-a-sub-path).
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see
@@ -1133,11 +1161,15 @@ See `values.yaml` for all options. Key settings:
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
-- `userDrives.enabled`: adds `persistentvolumeclaims: get, create` to the
+- `drives.enabled`: adds `persistentvolumeclaims: get, create` to the
   k8s-runner Role so runs can mount per-person storage, off by default — see
-  [User drives](#user-drives-userdrivesenabled) above. It is the only key in the
-  block: a drive's storage class is a per-drive field in the console, not a chart
-  value.
+  [User drives](#user-drives-drivesenabled) above.
+- `drives.reclaim.enabled`: adds `delete` on that same rule, also off by
+  default, and **it is the one value in this chart that can destroy a member's
+  stored bytes** — it exists only so the operator's explicit
+  `POST /api/v1/drives/{id}/reclaim` can work. Same section above. Those two are
+  the whole block: a drive's storage class is a per-drive field in the console,
+  not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
 - `replicas`: **leave at 1 — the chart refuses anything higher.** A render with

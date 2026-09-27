@@ -46,8 +46,6 @@ func r3bSecondHumanFixture(t *testing.T) (*harness, *Server, uuid.UUID) {
 	return h, srv, runID
 }
 
-// TestSecondHumanBypassIsScopedToDecisionsTheGateGoverns is F147's pin.
-//
 // approval.second_human.bypass is the record that a four-eyes rule WAS bypassed
 // — that is how docs/ENV.md, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md
 // all describe it, and ENV.md adds "Scoped to egress_domain only". The row was

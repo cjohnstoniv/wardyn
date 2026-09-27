@@ -45,6 +45,8 @@ type tokenMemStore struct {
 	touched map[uuid.UUID]time.Time
 }
 
+func (*tokenMemStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
+
 func newTokenMemStore() *tokenMemStore {
 	return &tokenMemStore{
 		byID:    map[uuid.UUID]types.APIToken{},
@@ -324,6 +326,29 @@ func TestAPITokenAuth_RevokedIsRefused(t *testing.T) {
 	// second token.revoke audit row for an act that did not happen).
 	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/me/tokens/"+created.ID.String(), sess, ""); w.Code != http.StatusNotFound {
 		t.Errorf("second revoke: code = %d, want 404", w.Code)
+	}
+}
+
+// TestAPITokenAuth_PersonlessRowIsRefused: a token row with no principal is
+// refused exactly like an unknown token. Admitted, it would publish no human
+// and so read as the admin-token lane, which is the operator.
+func TestAPITokenAuth_PersonlessRowIsRefused(t *testing.T) {
+	srv, st, _ := apiTokenTestServer(t)
+	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
+	raw, created := mintToken(t, srv, sess, "ci")
+	st.mu.Lock()
+	row := st.byID[created.ID]
+	row.Principal = ""
+	st.byID[created.ID] = row
+	st.mu.Unlock()
+
+	w := do(t, srv, http.MethodGet, "/api/v1/me", raw, "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("person-less token: code = %d, want 401; body=%s", w.Code, w.Body.String())
+	}
+	unknown := do(t, srv, http.MethodGet, "/api/v1/me", apiTokenPrefix+"never-issued", "")
+	if w.Body.String() != unknown.Body.String() {
+		t.Errorf("person-less body %q differs from unknown-token body %q", w.Body.String(), unknown.Body.String())
 	}
 }
 

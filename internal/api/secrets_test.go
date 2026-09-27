@@ -624,7 +624,7 @@ func (d secretOwnerDirectory) ListWorkspaces(context.Context) ([]types.Workspace
 	return nil, nil
 }
 
-// TestDeleteSecret_UnknownBareOwnerIsMarkedInTheAudit is the B5-F7 residual,
+// TestDeleteSecret_UnknownBareOwnerIsMarkedInTheAudit pins the residual case,
 // on the one write verb that still takes ?owner= (a PUT refuses it, K7-A).
 //
 // An admin's `?owner=` value that matches no principal this deployment knows is

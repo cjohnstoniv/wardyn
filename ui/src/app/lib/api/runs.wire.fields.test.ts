@@ -120,8 +120,9 @@ const expectedWire: Record<string, unknown> = {
 // If the whitelist starts forwarding one of these, or the Go DTO drops one,
 // this list must change in the same commit. model_provider is CLI/API-only
 // until the New Run rail's provider picker lands (multi-provider MP-23), which
-// moves it into runWireBody.
-const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider"]);
+// moves it into runWireBody. preset/preset_version are the launcher API's
+// (#1143); the console sends the explicit spec and has no preset UI.
+const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider", "preset", "preset_version"]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,

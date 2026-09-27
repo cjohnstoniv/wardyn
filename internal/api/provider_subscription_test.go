@@ -425,7 +425,9 @@ func TestProviderSubscriptionCreate(t *testing.T) {
 				if tc.signedIn {
 					_ = sec.For(admin).Put(context.Background(), name, subBlob(subOwnerToken))
 				}
-				w := doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
+				// An SSO admin session is in the Admin view and cannot launch
+				// (refuseAdminViewLaunch); the token lane still can.
+				w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, admin), `{"agent":"claude-code","task":"t"}`)
 				want := tc.want
 				if want == http.StatusCreated && path == "/api/v1/runs/preflight" {
 					want = http.StatusOK
