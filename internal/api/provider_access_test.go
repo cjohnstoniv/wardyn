@@ -466,10 +466,16 @@ func TestSetupProviderAccess_SourceRunIDIsProviderAndOwnerScoped(t *testing.T) {
 	}
 }
 
-// failingAudit refuses every row, as a sink that can only spool would.
-type failingAudit struct{}
+// captureRowLost is memAudit losing the capture's own row, as a sink that can
+// only spool would; every other row (the sign-in's launch stamp) lands.
+type captureRowLost struct{ *memAudit }
 
-func (failingAudit) Record(context.Context, types.AuditEvent) error { return errors.New("audit sink down") }
+func (a captureRowLost) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action == "harness.credential.capture" {
+		return errors.New("audit sink down")
+	}
+	return a.memAudit.Record(ctx, ev)
+}
 
 // TestSetupProviderAccess_SourceRunIDSurvivesAuditFailure is #993's reason:
 // the capture's harness.credential.capture row is best-effort, and a row that
@@ -480,12 +486,13 @@ func TestSetupProviderAccess_SourceRunIDSurvivesAuditFailure(t *testing.T) {
 	p := site.ModelProviders.Providers[0]
 	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	srv, _, audit, _ := signInFixture(t, nil, site)
+	// Before the sign-in starts: its launch reads the sink from a goroutine.
+	srv.cfg.Audit = captureRowLost{audit}
 	code, body := signIn(t, srv, member, p.ID)
 	if code != http.StatusOK {
 		t.Fatalf("sign-in = %d %s", code, body)
 	}
 	runID := signInRunID(t, body)
-	srv.cfg.Audit = failingAudit{}
 	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/"+p.ID+"/sign-in", member,
 		fmt.Sprintf(`{"run_id":%q,"token":"sk-ant-oat01-member-own-claude-sign-in"}`, runID))
 	if w.Code != http.StatusNoContent {
