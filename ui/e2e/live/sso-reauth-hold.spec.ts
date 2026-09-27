@@ -722,7 +722,7 @@ async function fastHold(
 // live.
 //
 // Pinned hermetically instead: the proxy's own credhold tests own this path.
-// Recorded in local/v076/canon/e2e-sso-path-docs.md -> docs/TEST-GAPS.md.
+// Recorded in docs/TEST-GAPS.md.
 test.fixme("negative (credential-reauth-hold): a hold nobody answers times out, and the request stays open", async ({
   page,
   request,

@@ -15,8 +15,8 @@
  *
  * NOTHING HERE IS A TEST. It is the walk's inputs, its two Dex sessions, the
  * four read helpers and the two write helpers. `ui/e2e/live/**` has ONE owner
- * (lane e2e-sso-path); other lanes hand their constant names over in
- * local/v075/canon/<lane>-docs.md rather than editing these files.
+ * (lane e2e-sso-path); other lanes hand their constant names over via their
+ * own canon docs rather than editing these files.
  */
 
 import { expect, type Page, type APIRequestContext } from "@playwright/test";

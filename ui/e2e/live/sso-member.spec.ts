@@ -49,7 +49,7 @@ import { expect, test } from "@playwright/test";
 import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
 // 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
-// constant name in local/v076/canon/*-docs.md. Both modules are plain constant
+// constant name from their own canon docs. Both modules are plain constant
 // tables with no CSS import — the rule ui/e2e/live/helpers.ts states for
 // SELFRUN_MARKER, and what keeps `playwright test --project=live --list` green.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";

@@ -416,7 +416,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // deleted Network dialog's own Save button — the panel has no separate save
   // step, and the JSON edit above IS the save, so the line pointed at nothing
   // on screen. Replaced with a drafted pair that names what the edit produced
-  // and ties it back to 05's spec beat. See local/light-episodes-dialog-flags.md.
+  // and ties it back to 05's spec beat.
   await caption(page, "Save the spec.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That spec is the contract — the same four lines we read in 'What it stops'.");

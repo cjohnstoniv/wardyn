@@ -77,7 +77,7 @@ import {
 // rule helpers.ts states for SELFRUN_MARKER.
 import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-status-detail";
 // 0.7.6 lanes ui-model-access-door (the strip) and ui-new-run-model-access (the
-// rail), by constant name from local/v076/canon/*-docs.md.
+// rail), by constant name handed over from their own canon docs.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import {
   MEMBER_GETTING_STARTED,
@@ -766,9 +766,9 @@ test("G (agent-boot-egress): a member's first claude-code run raises no approval
 // ── H — an INTERACTIVE run reaches the model: the owner's literal path ──────
 
 test("H (agent-boot-egress): an interactive run answers ONE trust prompt and reaches Bedrock", async ({ page }) => {
-  // THE STEP LIST IS THE W0 SPIKE'S, PRE-DECLARED, NOT DISCOVERED HERE
-  // (local/v075/evidence/w0-spike/RESULT.md §2). The spike drove the real image
-  // under a real PTY and recorded which screens each config shows:
+  // THE STEP LIST IS THE W0 SPIKE'S, PRE-DECLARED, NOT DISCOVERED HERE.
+  // The spike drove the real image under a real PTY and recorded which screens
+  // each config shows:
   //
   //   - with `hasCompletedOnboarding` seeded, the theme picker AND the
   //     "Security notes / Press Enter to continue" page are both gone;
