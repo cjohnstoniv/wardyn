@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -46,18 +47,41 @@ func (r *sweepGoneRunner) StopSandbox(_ context.Context, ref string) error {
 	return nil
 }
 
-// sweepStore serves a fixed run list to ListRuns; the sweep never writes state.
+// sweepStore serves a fixed run list to ListRuns; the sweep never writes run
+// state. GetRun and QueryAuditEvents back the KILLED-recovery path
+// (recoverAbandonedKillTail, via killTeardownTail's reconcileWorkspaceRun/
+// reconcileRecordRun and its own audit read-back) — both embedded store.Store
+// methods are nil otherwise, which would panic the moment that path runs.
 type sweepStore struct {
 	store.Store
-	runs []types.AgentRun
+	runs       []types.AgentRun
+	auditByRun map[uuid.UUID][]types.AuditEvent // nil is fine: a nil map read returns empty
 }
 
 func (s *sweepStore) ListRuns(context.Context) ([]types.AgentRun, error) { return s.runs, nil }
 
+func (s *sweepStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	for _, r := range s.runs {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return types.AgentRun{}, store.ErrNotFound
+}
+
+func (s *sweepStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	return s.auditByRun[runID], nil
+}
+
 func sweepRun(state types.RunState, sandboxRef string) types.AgentRun {
-	now := time.Now().UTC()
+	return sweepRunAt(state, sandboxRef, time.Now().UTC())
+}
+
+// sweepRunAt is sweepRun with an explicit UpdatedAt, so a KILLED fixture can be
+// placed on either side of killTailRecoveryGrace.
+func sweepRunAt(state types.RunState, sandboxRef string, updatedAt time.Time) types.AgentRun {
 	return types.AgentRun{
-		ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+		ID: uuid.New(), CreatedAt: updatedAt, UpdatedAt: updatedAt, CreatedBy: "t@example.com",
 		Agent: "claude-code", ConfinementClass: types.CC1, State: state,
 		RunnerTarget: "docker", SandboxRef: sandboxRef,
 	}
@@ -131,5 +155,185 @@ func TestSweepTerminalSandboxes_LeavesSettledSandboxesAlone(t *testing.T) {
 	}
 	if len(h.broker.revoked) != 0 {
 		t.Errorf("must not re-revoke a run whose sandbox already settled; broker.revoked=%v", h.broker.revoked)
+	}
+}
+
+// killTailBroker wraps fakeBroker so a recovered kill tail's broker revoke can
+// be forced to fail, producing the run.kill FAILURE row
+// TestSweepTerminalSandboxes_RetainsFailedRecovery pins.
+type killTailBroker struct {
+	*fakeBroker
+	revokeErr error
+}
+
+func (b *killTailBroker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
+	if b.revokeErr != nil {
+		return b.revokeErr
+	}
+	return b.fakeBroker.RevokeRun(ctx, runID)
+}
+
+// killAuditRows filters events to run.kill rows for runID. Local to this file
+// (rather than the package's runID+action+outcome-keyed findAudit,
+// dispatch_teardown_test.go) because the tests below need to COUNT matches —
+// e.g. asserting a retried recovery produced two rows, not just that one exists.
+func killAuditRows(events []types.AuditEvent, runID uuid.UUID) []types.AuditEvent {
+	var out []types.AuditEvent
+	for _, ev := range events {
+		if ev.Action == "run.kill" && ev.RunID != nil && *ev.RunID == runID {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// staleKilledAt is a KILLED run's UpdatedAt old enough that its own kill tail
+// (bounded by killCascadeTimeout, plus killTailRecoveryGrace's margin) could
+// not still be running — the "abandoned" shape recoverAbandonedKillTail exists
+// for.
+func staleKilledAt() time.Time {
+	return time.Now().UTC().Add(-(killTailRecoveryGrace + time.Minute))
+}
+
+// TestSweepTerminalSandboxes_RecoversKilledRunAfterSandboxGone is the no-ref
+// shape of an abandoned kill tail: killTeardownTail died (a shutdown past its
+// grace, a crash) before ever reaching KillSandbox, so SandboxRef is exactly as
+// claimKillTransition left it — nothing for the ordinary ref-probe to find. The
+// only signal is the run.kill row that never got written. The sweep must
+// re-run the revoke cascade and write the missing row itself.
+func TestSweepTerminalSandboxes_RecoversKilledRunAfterSandboxGone(t *testing.T) {
+	h := newHarness(t)
+	killed := sweepRunAt(types.RunKilled, "", staleKilledAt())
+	fake := &sweepStore{runs: []types.AgentRun{killed}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("swept = %d, want 1 (the abandoned kill tail)", swept)
+	}
+	revoked := false
+	for _, id := range h.broker.revoked {
+		if id == killed.ID {
+			revoked = true
+		}
+	}
+	if !revoked {
+		t.Errorf("sweep must revoke the recovered run's broker credentials; broker.revoked=%v", h.broker.revoked)
+	}
+	rows := killAuditRows(h.audit.snapshot(), killed.ID)
+	if len(rows) != 1 {
+		t.Fatalf("run.kill rows = %d, want exactly 1", len(rows))
+	}
+	if rows[0].Outcome != "success" {
+		t.Errorf("run.kill outcome = %q, want success", rows[0].Outcome)
+	}
+}
+
+// TestSweepTerminalSandboxes_RetainsFailedRecovery: when the recovery attempt
+// ITSELF fails (here, the broker revoke), the sweep must still honestly write a
+// FAILURE run.kill row rather than silently drop the attempt — and, because
+// eligibility is read fresh from the audit trail every pass rather than latched
+// anywhere, the very next sweep retries it. Recovery is at-least-once.
+func TestSweepTerminalSandboxes_RetainsFailedRecovery(t *testing.T) {
+	h := newHarness(t)
+	killed := sweepRunAt(types.RunKilled, "", staleKilledAt())
+	fake := &sweepStore{runs: []types.AgentRun{killed}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	failingBroker := &killTailBroker{fakeBroker: h.broker, revokeErr: errors.New("broker unreachable")}
+	cfg.Broker = failingBroker
+	srv := New(cfg)
+
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("swept = %d, want 1 (a recovery was attempted)", swept)
+	}
+	rows := killAuditRows(h.audit.snapshot(), killed.ID)
+	if len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("run.kill rows = %+v, want exactly 1 with outcome=failure", rows)
+	}
+
+	// Second pass: still no SUCCESSFUL run.kill row exists, so the sweep must
+	// retry rather than treat the first (failed) attempt as done.
+	swept, err = srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("second swept = %d, want 1 (a failed recovery must be retried)", swept)
+	}
+	if rows := killAuditRows(h.audit.snapshot(), killed.ID); len(rows) != 2 {
+		t.Fatalf("run.kill rows after retry = %d, want 2 (both attempts audited)", len(rows))
+	}
+}
+
+// TestSweepTerminalSandboxes_SettledRunIsNotRepeated is the counterfactual: a
+// KILLED run whose kill tail already wrote a successful run.kill row (the
+// ordinary case) must not be re-torn-down or re-revoked, however old it is.
+func TestSweepTerminalSandboxes_SettledRunIsNotRepeated(t *testing.T) {
+	h := newHarness(t)
+	killed := sweepRunAt(types.RunKilled, "", staleKilledAt())
+	fake := &sweepStore{
+		runs: []types.AgentRun{killed},
+		auditByRun: map[uuid.UUID][]types.AuditEvent{
+			killed.ID: {{Action: "run.kill", Outcome: "success"}},
+		},
+	}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Errorf("swept = %d, want 0 (the kill tail already settled)", swept)
+	}
+	if len(h.broker.revoked) != 0 {
+		t.Errorf("must not re-revoke an already-settled kill; broker.revoked=%v", h.broker.revoked)
+	}
+	if rows := killAuditRows(h.audit.snapshot(), killed.ID); len(rows) != 0 {
+		t.Errorf("must not write a second run.kill row for an already-settled kill; rows=%+v", rows)
+	}
+}
+
+// TestSweepTerminalSandboxes_LeavesActiveTailAlone: a KILLED run whose
+// transition landed a moment ago, with no run.kill row yet, is indistinguishable
+// from one whose killTeardownTail is still actively running — the sweep must
+// NOT enter it concurrently (which would double the run.kill row and
+// double-drive the revoke cascade). killTailRecoveryGrace is exactly this
+// guard.
+func TestSweepTerminalSandboxes_LeavesActiveTailAlone(t *testing.T) {
+	h := newHarness(t)
+	killed := sweepRunAt(types.RunKilled, "", time.Now().UTC()) // just landed
+	fake := &sweepStore{runs: []types.AgentRun{killed}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Errorf("swept = %d, want 0 (the kill tail may still be running)", swept)
+	}
+	if len(h.broker.revoked) != 0 {
+		t.Errorf("must not revoke a run whose kill tail may still be in flight; broker.revoked=%v", h.broker.revoked)
+	}
+	if rows := killAuditRows(h.audit.snapshot(), killed.ID); len(rows) != 0 {
+		t.Errorf("must not write a run.kill row for a possibly-in-flight tail; rows=%+v", rows)
 	}
 }

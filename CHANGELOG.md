@@ -10,6 +10,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The terminal-sandbox sweep now recovers a KILLED run whose kill tail never
+  finished (#710).** `killTeardownTail` runs detached after the KILLED
+  transition wins its CAS, and a shutdown past its grace or a crash could kill
+  it mid-cascade — leaving the run correctly marked KILLED but with no
+  `run.kill` audit row, its sandbox possibly still live, and its credentials
+  possibly still un-revoked, including runs whose tail died before ever
+  reaching `KillSandbox` (`SandboxRef` empty, nothing for the existing
+  sandbox-ref probe to find). `SweepTerminalSandboxes` now also re-runs the
+  idempotent kill teardown for any KILLED row old enough that its own tail
+  could not still be running (`killTailRecoveryGrace`, past `killCascadeTimeout`)
+  and that has no successful `run.kill` row yet; a row younger than the grace
+  is left alone so a genuinely in-flight tail is never entered twice.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
