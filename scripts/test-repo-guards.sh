@@ -40,6 +40,10 @@
 #      gh with GH_REPO set — none of them check out the repo, so without it
 #      `gh` fails with "failed to run git: fatal: not a git repository" (#511,
 #      #1069).
+#  13. release.yml's publishing jobs (images, binaries, chart,
+#      images-ui-sandbox, release-assets) all depend on preflight-green,
+#      directly or transitively, and preflight-green has no `|| true` /
+#      `continue-on-error` escape hatch (T-06, #666).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -348,6 +352,47 @@ for wf in .github/workflows/*.yml; do
     done
 done
 if [ "$notify_gh_repo_fail" = 0 ]; then ok "every notify-* job carries GH_REPO"; fi
+
+# ── 13. release.yml's publishing jobs all sit behind preflight-green ────────
+# preflight-green (branch-protection required contexts + the watched nightly
+# jobs, both checked on the tag commit) exists to stop `images`, `binaries`
+# and `chart` from publishing on an unvetted commit — a `needs:` edge dropped
+# by a later edit would silently remove that gate. `images-ui-sandbox` and
+# `release-assets` carry no DIRECT `needs: preflight-green` (they need
+# `images`/the built set instead), so this walks each publishing job's
+# `needs:` graph and requires preflight-green to be reachable somewhere in
+# it, not just spelled out on the job itself.
+if ! command -v yq >/dev/null 2>&1; then
+    echo "skip: yq not installed — preflight-green guard needs it"
+else
+    preflight_fail=0
+    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets"
+    reaches_preflight() {  # $1 = job name, $2 = space-separated jobs already visited (cycle guard)
+        local job="$1" seen="$2" needs n
+        case " $seen " in *" $job "*) return 1 ;; esac
+        seen="$seen $job"
+        needs="$(yq -r ".jobs[\"$job\"].needs // [] | ([.] | flatten) | .[]" "$REL" 2>/dev/null)"
+        [ -n "$needs" ] || return 1
+        for n in $needs; do
+            [ "$n" = "preflight-green" ] && return 0
+            reaches_preflight "$n" "$seen" && return 0
+        done
+        return 1
+    }
+    for job in $PUBLISH_JOBS; do
+        reaches_preflight "$job" "" \
+            || { bad "$REL: job '$job' does not depend on preflight-green, directly or transitively — a release could publish without the required-checks/nightly gate"; preflight_fail=1; }
+    done
+    # The job's own source text (steps' run: blocks are plain strings, not YAML
+    # comments, so this catches a neutered check as-written, not just its shape).
+    preflight_block="$(awk '$0=="  preflight-green:"{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$REL")"
+    [ -n "$preflight_block" ] || { bad "$REL: no 'preflight-green:' job found — guard 13 is pointing at nothing"; preflight_fail=1; }
+    if printf '%s' "$preflight_block" | grep -qE '\|\| *true|continue-on-error'; then
+        bad "$REL: preflight-green contains \`|| true\` or \`continue-on-error\` — its gate can be satisfied without actually being green"
+        preflight_fail=1
+    fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green, which has no silent-pass escape hatch"; fi
+fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

@@ -129,11 +129,12 @@ jobs:
   # branch protection's LIVE required_status_checks.contexts (the one list
   # RELEASING.md's own PATCH configures — never a second, hand-typed copy that
   # could drift from it) and the check-runs GitHub recorded for the tagged
-  # commit, plus the most recent COMPLETED nightly run for that same commit.
-  # A dry run (workflow_dispatch) is a rehearsal on whatever commit the
-  # dispatcher chose — there is no release contract to preflight — so its
-  # steps below are skipped and the job succeeds unconditionally, rather than
-  # gating the whole rehearsal on a real tag's preconditions.
+  # commit, plus the most recent COMPLETED nightly run in the tag commit's own
+  # ancestry. Skipped only when this is an explicit dry-run rehearsal
+  # (`inputs.dry_run == true`) — a real tag push has no `inputs` at all, and a
+  # workflow_dispatch with `dry_run: false` is a real publish, so keying the
+  # skip on the event name instead of the flag would have let that path
+  # through with no gate at all.
   preflight-green:
     name: Preflight — required contexts + latest nightly green on the tag commit
     runs-on: ubuntu-latest
@@ -144,14 +145,17 @@ jobs:
       actions: read
     steps:
       - name: Required status checks must all be green on this commit
-        if: github.event_name == 'push'
+        if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
           sha="${{ github.sha }}"
-          contexts="$(gh api "repos/${repo}/branches/main/protection" --jq '.required_status_checks.contexts[]')"
+          # "Get a branch" (Contents: read) — NOT branches/main/protection,
+          # which needs Administration: read and 403s under GITHUB_TOKEN's
+          # ordinary job permissions (F2).
+          contexts="$(gh api "repos/${repo}/branches/main" --jq '.protection.required_status_checks.contexts[]')"
           [ -n "${contexts}" ] || { echo "::error::branch protection reported no required_status_checks.contexts — nothing to preflight against"; exit 1; }
           checks="$(gh api "repos/${repo}/commits/${sha}/check-runs" --paginate --jq '.check_runs[] | "\(.name)\t\(.conclusion)"')"
           failed=0
@@ -164,24 +168,78 @@ jobs:
             fi
           done <<<"${contexts}"
           [ "${failed}" -eq 0 ] || exit 1
-      - name: The latest completed nightly on this commit must be green
-        if: github.event_name == 'push'
+      - name: The latest completed nightly in this commit's ancestry must have its watched jobs green
+        if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
           sha="${{ github.sha }}"
-          conclusion="$(gh run list --repo "${repo}" --workflow nightly.yml --commit "${sha}" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // empty')"
-          if [ -z "${conclusion}" ]; then
-            echo "::error::no completed nightly.yml run was found for ${sha} — dispatch one (workflow_dispatch) and re-tag, or wait for the schedule to reach it"
+          # The nightly RUN's own conclusion is never success: e2e-live
+          # (known-fail, #965 + the OIDC-flow issue nightly.yml's own comment
+          # names) and migration-merge-check (red by design,
+          # scripts/test-repo-guards.sh's guard 1 comment) are red on purpose
+          # and carry no error-tolerant step override. So judge the WATCHED jobs
+          # individually instead of the run's conclusion — this list must
+          # stay identical to nightly.yml's notify-new-lanes.needs (the set
+          # nightly.yml itself treats as "no characterised noise"), which
+          # already excludes both of those by name.
+          # buildx-smoke is handled separately below: it is a matrix job whose
+          # API job name is "multi-arch build (<matrix.name>)"
+          # (nightly.yml:444), never the literal YAML key "buildx-smoke", so it
+          # cannot be matched by name the way the other ten are.
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk fuzz gvisor-cc2-live"
+          # nightly.yml runs on schedule against whatever commit is main's
+          # HEAD at 07:00 UTC, so it is never triggered ON the tag commit
+          # itself — walk back through the recent completed runs (newest
+          # first) and take the first whose head commit is an ancestor of
+          # (or equal to) this tag commit, i.e. the nightly actually
+          # validated a state this tag's history includes.
+          # --method GET is load-bearing: gh api defaults to POST the moment any
+          # -f/-F field is present, which 404s on this GET-only endpoint.
+          runs="$(gh api --method GET "repos/${repo}/actions/workflows/nightly.yml/runs" -f status=completed -f per_page=20 --jq '.workflow_runs[] | "\(.id)\t\(.head_sha)"')"
+          run_id=""
+          nightly_sha=""
+          while IFS=$'\t' read -r candidate_id candidate_sha; do
+            [ -n "${candidate_id}" ] || continue
+            cmp_status="$(gh api "repos/${repo}/compare/${candidate_sha}...${sha}" --jq '.status' 2>/dev/null || echo error)"
+            if [ "${cmp_status}" = "identical" ] || [ "${cmp_status}" = "ahead" ]; then
+              run_id="${candidate_id}"
+              nightly_sha="${candidate_sha}"
+              break
+            fi
+          done <<<"${runs}"
+          if [ -z "${run_id}" ]; then
+            echo "::error::no completed nightly.yml run was found in ${sha}'s ancestry (checked the latest 20) — dispatch one (workflow_dispatch on nightly.yml against a commit that includes this tag) and re-tag once it completes, or wait for the 07:00 UTC schedule to reach it"
             exit 1
           fi
-          [ "${conclusion}" = "success" ] || { echo "::error::the latest completed nightly on ${sha} concluded '${conclusion}', not success"; exit 1; }
+          job_conclusions="$(gh api "repos/${repo}/actions/runs/${run_id}/jobs" --paginate --jq '.jobs[] | "\(.name)\t\(.conclusion)"')"
+          failed=0
+          for job in ${watched}; do
+            status="$(printf '%s\n' "${job_conclusions}" | awk -F'\t' -v j="${job}" '$1==j{print $2; exit}')"
+            if [ "${status}" != "success" ]; then
+              echo "::error::watched nightly job '${job}' is not green on run ${run_id} (commit ${nightly_sha}; saw: '${status:-not reported}')"
+              failed=1
+            fi
+          done
+          buildx_rows="$(printf '%s\n' "${job_conclusions}" | awk -F'\t' '$1 ~ /^multi-arch build \(/')"
+          if [ -z "${buildx_rows}" ]; then
+            echo "::error::watched nightly job 'buildx-smoke' (matrix rows 'multi-arch build (...)') was not reported on run ${run_id} (commit ${nightly_sha})"
+            failed=1
+          else
+            while IFS=$'\t' read -r name status; do
+              if [ "${status}" != "success" ]; then
+                echo "::error::watched nightly job 'buildx-smoke' row '${name}' is not green on run ${run_id} (commit ${nightly_sha}; saw: '${status}')"
+                failed=1
+              fi
+            done <<<"${buildx_rows}"
+          fi
+          [ "${failed}" -eq 0 ] || exit 1
       - name: Rehearsal — dry_run skips the preflight (no real release contract to check)
-        if: github.event_name != 'push'
+        if: inputs.dry_run == true
         run: |
-          echo "workflow_dispatch rehearsal: preflight-green's checks apply only to a real vX.Y.Z tag push."
+          echo "workflow_dispatch dry_run=true rehearsal: preflight-green's checks apply only to a real vX.Y.Z tag push, or a workflow_dispatch with dry_run=false."
 
   images:
     name: build, push, sign (${{ matrix.name }})
