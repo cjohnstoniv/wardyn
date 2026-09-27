@@ -3,35 +3,34 @@
 
 package db
 
-// The #1002 rollback drill: 0.8 -> 0.7.13 -> 0.7.11 (release/0.7's own version
-// line). unknownAppliedMigrations and migrateOn's refusal (db.go) already have
-// a unit-shaped pin — TestMigrateRefusesUnknownAppliedMigrations — but it
+// The #1002 rollback drill: 0.8 -> 0.7.13 (release/0.7's own version line).
+// unknownAppliedMigrations and migrateOn's refusal (db.go) already have a
+// unit-shaped pin — TestMigrateRefusesUnknownAppliedMigrations — but it
 // stages two PLACEHOLDER filenames ("9998_...", "9999_..."). This file proves
-// the same refusal against REAL 0.8 migration content: three additive
-// migrations copied verbatim from main's internal/db/migrations (0066, 0067,
-// 0068 — devices/federation, the user_drives object_scheme column, and the AWS
-// SSO spent-token table), fixed under testdata/rollback_drill_08_migrations so
-// this branch never has to track main's numbering. They are applied here with
-// raw SQL, never through this branch's own migrationFS, exactly the way an 0.8
-// wardynd would have recorded them on a database this 0.7.13 line never
-// upgrades to on its own.
-//
-// The drill has two halves:
-//
-//  1. DOWN: an 0.7.13 Migrate() against a database those three migrations were
-//     applied to must refuse, name the newest one, and write nothing.
-//  2. ROLLBACK: docs/OPERATIONS.md's only supported recovery — restore the
-//     pre-upgrade dump — modeled here as a FRESH schema carrying only what
-//     0.7.13 itself ships (probeSchemaPool, same as every other test in this
-//     package). Migrate() against that must succeed cleanly and the 0.8-only
-//     tables must be absent, so the "restore the pre-upgrade dump" remedy in
-//     the refusal message actually leads back to a database this build boots.
+// the same refusal against a REAL 0.8 install: three additive migrations
+// copied verbatim from main's internal/db/migrations (0066, 0067, 0068 —
+// devices/federation, the user_drives object_scheme column, and the AWS SSO
+// spent-token table), fixed under testdata/rollback_drill_08_migrations so
+// this branch never has to track main's numbering, PLUS the rename that makes
+// this a genuine 0.8 install rather than "0.7.13 plus three extra files":
+// main's own secret-envelope migration is 0069_secret_envelope_v1.sql, and it
+// is byte-identical to this branch's own 0065_secret_envelope_v1.sql (see
+// a84f21681's commit message — main renumbered, it did not rewrite). A real
+// database an 0.8 wardynd migrated therefore has NO "0065_secret_envelope_v1.sql"
+// row at all; it has "0069_…" instead. That is reproduced here by renaming the
+// row probeSchemaPool's Migrate() call already wrote, which leaves this
+// branch's OWN 0065 file looking UNAPPLIED to this branch's Migrate() — the
+// condition that makes "the refusal writes nothing" a real assertion rather
+// than a vacuous one (a schema with every one of this branch's own migrations
+// already recorded has nothing left for a write-before-refuse bug to write).
 //
 // A full binary-level drill (build wardynd, point it at a throwaway
 // postgres:17, exercise the documented pg_dump/restore commands with the same
-// three fixtures) lives in scripts/rollback-drill.sh — this test proves the
-// SAME refusal and restore behavior at the db.Migrate boundary, on every `go
-// test` run, without a docker dependency.
+// fixtures) lives in scripts/rollback-drill.sh — including the actual restore
+// step, which this package cannot do (no docker access from a `go test`
+// binary). TestPG_RollbackDrill_FreshPreUpgradeSchemaCarriesNo08Objects below
+// checks only what it says: a from-scratch 0.7.13 schema has none of the
+// 0.8-only objects. It is a sanity guard for the fixtures, NOT a restore test.
 
 import (
 	"context"
@@ -51,13 +50,22 @@ var rollbackDrill08Migrations = []string{
 	"0068_aws_sso_spent_tokens.sql",
 }
 
-// applyRealV08Migrations records schema_migrations rows for each fixture and
-// runs its SQL, in a schema already carrying a complete 0.7.13 install
-// (probeSchemaPool). It never touches migrationFS: production Migrate() must
-// not gain any way to see these files.
-func applyRealV08Migrations(t *testing.T, pool migrationExecutor) {
+// modelRealV08Install turns a complete, freshly-migrated 0.7.13 schema
+// (probeSchemaPool) into what a REAL 0.8 install left behind: it renames the
+// recorded 0065_secret_envelope_v1.sql row to 0069_secret_envelope_v1.sql (the
+// same migration, main's filename — byte-identical content, confirmed by
+// `cmp` against main's copy), then applies the three 0.8-only fixtures for
+// real and records them under their real filenames. It never touches
+// migrationFS: production Migrate() must not gain any way to see these files.
+func modelRealV08Install(t *testing.T, pool migrationExecutor) {
 	t.Helper()
 	ctx := context.Background()
+	if tag, err := pool.Exec(ctx,
+		`UPDATE schema_migrations SET filename = '0069_secret_envelope_v1.sql' WHERE filename = '0065_secret_envelope_v1.sql'`); err != nil {
+		t.Fatalf("rename 0065_secret_envelope_v1.sql to 0069_ (modeling main's renumbering): %v", err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("expected exactly one 0065_secret_envelope_v1.sql row to rename, affected %d — probeSchemaPool's schema shape changed?", tag.RowsAffected())
+	}
 	for _, name := range rollbackDrill08Migrations {
 		data, err := os.ReadFile(filepath.Join("testdata", "rollback_drill_08_migrations", name))
 		if err != nil {
@@ -87,23 +95,25 @@ func schemaMigrationsSnapshot(t *testing.T, pool migrationExecutor) []string {
 }
 
 // TestPG_RollbackDrill_RefusesRealV08MigrationsWithoutWriting is the DOWN half
-// (#1002): 0.7.13's Migrate() against a database carrying real 0.8-only
-// migrations refuses, names the newest one, and leaves schema_migrations
-// byte-for-byte unchanged.
+// (#1002): 0.7.13's Migrate() against a database a real 0.8 install left
+// behind refuses, names the newest unknown migration, and leaves
+// schema_migrations byte-for-byte unchanged — including NOT applying its own
+// 0065_secret_envelope_v1.sql, which this database genuinely has pending
+// (see modelRealV08Install).
 func TestPG_RollbackDrill_RefusesRealV08MigrationsWithoutWriting(t *testing.T) {
 	pool, _ := probeSchemaPool(t) // a complete, fresh 0.7.13 schema
 	ctx := context.Background()
 
-	applyRealV08Migrations(t, pool)
+	modelRealV08Install(t, pool)
 	before := schemaMigrationsSnapshot(t, pool)
 
 	err := Migrate(ctx, pool)
 	if err == nil {
-		t.Fatal("Migrate booted over a database carrying real 0.8 migrations (devices/federation, user_drives object_scheme, aws_sso_spent_tokens); want a refusal")
+		t.Fatal("Migrate booted over a database a real 0.8 install left behind (renamed secret-envelope row, devices/federation, user_drives object_scheme, aws_sso_spent_tokens); want a refusal")
 	}
 	for _, want := range []string{
-		`"0068_aws_sso_spent_tokens.sql"`, // newest unknown, named
-		"3 migration(s)",                  // exactly the three fixtures, nothing else miscounted
+		`"0069_secret_envelope_v1.sql"`, // newest unknown (COLLATE "C": 0069 > 0068), named
+		"4 migration(s)",                // 0066, 0067, 0068, and the renamed secret-envelope row
 		"downgrade is unsupported",
 		"restore the pre-upgrade dump",
 		"WARDYN_ALLOW_UNKNOWN_MIGRATIONS",
@@ -115,28 +125,22 @@ func TestPG_RollbackDrill_RefusesRealV08MigrationsWithoutWriting(t *testing.T) {
 
 	after := schemaMigrationsSnapshot(t, pool)
 	if strings.Join(before, ",") != strings.Join(after, ",") {
-		t.Fatalf("the refusal changed schema_migrations: before %v, after %v — it must write nothing", before, after)
+		t.Fatalf("the refusal changed schema_migrations: before %v, after %v — it must write nothing, including not applying "+
+			"its own 0065_secret_envelope_v1.sql even though this database has no row recorded under that name", before, after)
 	}
 }
 
-// TestPG_RollbackDrill_RestoredPreUpgradeSchemaBootsClean is the ROLLBACK half
-// (#1002): the refusal message's own remedy — "restore the pre-upgrade dump"
-// — modeled as a fresh schema carrying only what 0.7.13 ships. Migrate() must
-// succeed, and none of the three 0.8-only tables/columns may exist: a restore
-// that left 0.8 artifacts behind would not be the rollback docs/OPERATIONS.md
-// documents.
-func TestPG_RollbackDrill_RestoredPreUpgradeSchemaBootsClean(t *testing.T) {
-	pool, schema := probeSchemaPool(t) // models "the pre-upgrade dump, restored"
+// TestPG_RollbackDrill_FreshPreUpgradeSchemaCarriesNo08Objects is a sanity
+// guard on the fixtures, NOT a restore test: it checks that a from-scratch
+// 0.7.13 schema (what "restore the pre-upgrade dump" should get an operator
+// back to) has none of the 0.8-only objects the fixtures add. The actual
+// pg_dump/restore round-trip this proves is meant to model runs only in
+// scripts/rollback-drill.sh's step 4, against a real postgres:17 and a real
+// built binary — a `go test` in this package has no docker access to do that
+// itself.
+func TestPG_RollbackDrill_FreshPreUpgradeSchemaCarriesNo08Objects(t *testing.T) {
+	pool, schema := probeSchemaPool(t)
 	ctx := context.Background()
-
-	// probeSchemaPool already ran Migrate() once to build the schema; running
-	// it again is the boot every restore is followed by, and must be a clean
-	// no-op — the same idempotency every other Migrate() caller in this
-	// package relies on, just spelled out here because this test's whole point
-	// is "the restored database still boots".
-	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate on the restored pre-upgrade schema: %v", err)
-	}
 
 	for _, table := range []string{"devices", "device_enrolment_tokens", "org_federation", "aws_sso_spent_tokens"} {
 		var exists bool
@@ -146,7 +150,7 @@ func TestPG_RollbackDrill_RestoredPreUpgradeSchemaBootsClean(t *testing.T) {
 			t.Fatalf("look up %s: %v", table, err)
 		}
 		if exists {
-			t.Errorf("restored pre-upgrade schema has 0.8-only table %s — the restore is not clean", table)
+			t.Errorf("a fresh 0.7.13 schema already has 0.8-only table %s — the fixture set is not additive-only over this branch", table)
 		}
 	}
 	var hasObjectScheme bool
@@ -157,6 +161,6 @@ func TestPG_RollbackDrill_RestoredPreUpgradeSchemaBootsClean(t *testing.T) {
 		t.Fatalf("look up user_drives.object_scheme: %v", err)
 	}
 	if hasObjectScheme {
-		t.Error("restored pre-upgrade schema has 0.8-only user_drives.object_scheme — the restore is not clean")
+		t.Error("a fresh 0.7.13 schema already has 0.8-only user_drives.object_scheme — the fixture set is not additive-only over this branch")
 	}
 }

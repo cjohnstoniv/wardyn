@@ -30,6 +30,11 @@ regexes = [
     # Was fingerprinted per-commit before this rule; regex-scoped here instead
     # so no future value churns a fresh .gitleaksignore entry (SF-15).
     '''wardyn/secret/v1''',
+    # internal/api/delegation_exchange.go's audit actor for the token
+    # exchange's client-authentication boundary (delegationAuthActor): a
+    # constant label shaped like generic-api-key, not a secret. Its sibling
+    # deviceAuthActor ("wardyn/deviceAuth") does not trip the rule.
+    '''wardyn/delegation''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
