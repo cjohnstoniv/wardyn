@@ -29,11 +29,13 @@ import { ChevronRight } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { health } from "../../../lib/api/health";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import { CC_ORDER } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 import { Mono } from "../../wardyn/code-block";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { EnvironmentStep } from "../setup/environment-step";
+import { TierPicker } from "../../wardyn/tier-picker";
+import { K8sEnvironmentRows, NoRunnerCard, runnerAvailability } from "../setup/environment-step";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
@@ -74,7 +76,14 @@ function HostCard({
   // straight (no override state left to own here: there is nothing left to
   // persist, and this card is a read-only statement of "what every run
   // inherits by default", never a second place to pick it).
+  const installed = CC_ORDER.filter((cc) => (status.runner.confinement_classes ?? []).includes(cc));
   const selected = strongestAvailable(status.runner.confinement_classes ?? []) ?? "CC1";
+  // #1200 review P1-1 — the SAME no-runner facts EnvironmentStep reads, so
+  // this second mount can render its canon danger card + fix line instead of
+  // a compact-picker-only fallback, and the k8s Runner/Egress-containment
+  // rows a driver:"k8s" host needs regardless of noRunner.
+  const { noDriver, noRunner } = runnerAvailability(status);
+  const k8s = status.runner.driver === "k8s";
 
   const envBuilder = status.checks.find((c) => c.id === "env_builder");
   // GET /api/v1/site-config is operatorOnly since R1 — it carries the upstream
@@ -108,11 +117,26 @@ function HostCard({
         default.
       </p>
 
-      <div className="mt-3">
-        {/* Read-only here (see `selected` above): a click has nothing left to
-            change, so onSelect is a no-op rather than a second place that
-            picks a default a run could then inherit from. */}
-        <EnvironmentStep status={status} selected={selected} onSelect={() => {}} />
+      <div className="mt-3 space-y-3">
+        {/* #1200 review P1-1 — the canon no-runner card, byte-identical to
+            Getting started's: a host with nothing to launch on is a fact
+            about the HOST, not something a compact-picker fallback should
+            restate in its own words. */}
+        {noRunner && <NoRunnerCard noDriver={noDriver} />}
+        {/* k8s Runner/Egress containment/Confinement classes/Agent images —
+            unconditional on noRunner, exactly like EnvironmentStep: a
+            driver:"k8s" host still gets these rows even when it reports
+            zero classes. */}
+        {k8s && <K8sEnvironmentRows status={status} />}
+        {/* #1200 — the compact TierPicker, display mode: installed tiers
+            ONLY (T-10), never the governance floor (that ceiling is stated
+            in Governance, where it's set, and in the person's own picker,
+            where it binds — a third place would be a third to keep in
+            sync). Read-only: nobody picks a default here, this card states
+            what every run inherits by default. Suppressed while noRunner —
+            the danger card above is the honest statement then, not an
+            empty "nothing installed" picker beside it. */}
+        {!noRunner && <TierPicker tiers={installed} mode="display" recommended={selected} />}
       </div>
 
       <div className="mt-4 divide-y divide-border border-t border-border pt-1">

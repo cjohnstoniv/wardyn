@@ -23,9 +23,32 @@ and does not yet follow semantic versioning (interfaces are not stable).
   launched keep running. Migration `0094_delegates` adds the `delegates` and `delegated_tokens`
   tables, `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`; nothing that
   worked before newly fails. See OPERATIONS.md, "Delegated run management (portals)".
+- **A run's title is now renameable, and no longer required to launch one (#1197 L2).**
+  `PATCH /runs/{id}/title` lets the run's owner change its title in any run state — owner only,
+  audited as `run.title.set` with the old and new values. New Run's Title field is optional and
+  prefills from the task's own first line (up to 80 characters, cut at a word boundary) until the
+  operator edits it by hand; the "Runs that share a title are grouped together" hint is gone, since
+  exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
+  owner, showing a "Renamed" toast and the new title in place, with no reload.
 
 ### Changed
 
+- **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
+  matrix (#1200).** A new shared `TierPicker` component lists only the tiers this host has installed,
+  each with a one-line strength and an info popover, plus a "Compare barriers" dialog holding the full
+  table for reference — never the governance floor (that's stated in Governance, where it's set, and
+  in each person's own picker, where it binds). The card still shows the canon "No sandbox runner"
+  danger card and its fix line when nothing can launch, and the k8s Runner/Egress-containment rows on
+  a Kubernetes driver, exactly as the Getting-started funnel does. The Governance profile editor gains
+  an "Allowed barriers" control: one radio over the existing `min_confinement_class` ceiling field, so
+  an admin sets the floor without hand-editing the ceiling's JSON.
+- **New Run's Barrier control and member Getting-started's barrier summary now obey the caller's
+  governance ceiling (#1200), exactly where the server would enforce it — never an admin's inline
+  launch (never clamped) or an unassigned member's saved policy (not raised to the deployment
+  default).** A tier the ceiling forbids or the host can't build is dropped from the Barrier control
+  rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
+  admin" only when the governance ceiling actually did the narrowing; none qualifying names the
+  requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
   (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,
@@ -39,6 +62,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   caller. Every `AgentRun` now carries `ended_at` (migration `0092_agent_runs_ended_at`), stamped by
   the run's terminal state transition; a lease-ended run's end time is still its lease end
   (`lost_at`), not this column.
+
+- **One server-side hold/attention rule replaces the console's own client-side copy (#1197).**
+  A PENDING row on `GET /approvals` now carries `held` and, for a bounded hold, `held_until`
+  (`internal/approval.Hold` — a verbatim port of the console's former `isHeld`, same three windows).
+  Each live run returned from `GET /runs?view=` (and from the new `GET /me/attention`) now carries
+  `attention: {kind, by, pending}` — what it is waiting on, and who, in the caller's own console
+  view, can clear it: `by:"you"` only when the caller's own real decide-path verdict (`mayDecide`,
+  mirroring `decide()`'s own gates) would actually let them act, else `by:"admin"` for a member who
+  cannot, or `by:"owner"` for a `credential_reauth`/lost-run revive outside the User view. New
+  `GET /me/attention?view=user|admin` returns `{needs_you, pending_approvals}` — the shell's two nav
+  badges in one small object, replacing two unscoped ~1000-row reads. The console's `isHeld` is now a
+  one-line reader of the wire fields; every client-side hold window constant is gone.
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
