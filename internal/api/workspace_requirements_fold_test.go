@@ -188,7 +188,7 @@ func TestApplyWorkspaceRequirements_Secret(t *testing.T) {
 		if !slices.Contains(spec.AllowedDomains, "api.anthropic.com") {
 			t.Errorf("AllowedDomains = %v, want the coupled exact host", spec.AllowedDomains)
 		}
-		if len(events) != 1 || events[0].action != "run.workspace.requirement.secret" {
+		if len(events) != 1 || events[0].action != "run.requirement.grant" {
 			t.Errorf("events = %+v, want ONE dedicated secret-grant audit entry", events)
 		}
 	})
@@ -397,7 +397,7 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	}
 	wsRefs := h.srv.referencedWorkspaces(ctx, spec)
 	events := h.srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
-	if len(events) != 1 || events[0].action != "run.workspace.requirement.secret" {
+	if len(events) != 1 || events[0].action != "run.requirement.grant" {
 		t.Fatalf("launch-side fold events = %+v, want ONE secret-grant entry — must AGREE with preflight's satisfied verdict", events)
 	}
 	if _, granted := apiKeyGrantForHost(&spec, "api.anthropic.com"); !granted {

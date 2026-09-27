@@ -45,7 +45,7 @@ import (
 //   - DEFAULT READ-ONLY: a mount is read-only unless the policy explicitly set
 //     ReadOnly=false, so a workspace bind cannot grant host write by default.
 //   - MEMBER MOUNTS (memberRoots non-nil): a run against a member-owned
-//     workspace additionally runs runner.ValidateMemberMountSource against the
+//     workspace additionally runs runner.ValidateUserMountSource against the
 //     operator/MDM-set roots resolved for that member — over the binds the
 //     MEMBER authored (runner.Mount.MemberAuthored: that workspace's local_dir),
 //     and only those. The same spec also carries operator/Wardyn-authored binds
@@ -72,7 +72,7 @@ import (
 // `docker info` it is read from: a second Info call could answer differently
 // from the one the rest of this create was built against.
 func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSupported bool) ([]mount.Mount, error) {
-	specMounts, memberRoots := spec.Mounts, spec.MemberMountRoots
+	specMounts, memberRoots := spec.Mounts, spec.UserMountRoots
 	var mounts []mount.Mount
 	if d.cfg.RecordingMount != "" {
 		// Cast delivery: wardyn-rec writes the finished recording to this
@@ -123,7 +123,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
 		if memberRoots != nil && m.MemberAuthored {
-			if err := runner.ValidateMemberMountSource(m.Source, memberRoots); err != nil {
+			if err := runner.ValidateUserMountSource(m.Source, memberRoots); err != nil {
 				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
 			}
 		}

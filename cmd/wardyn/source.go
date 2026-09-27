@@ -68,9 +68,9 @@ func sourceCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if listJSON {
-				return emitJSON(srcs)
+				return emitJSON(cmd.OutOrStdout(), srcs)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tKIND\tLOCATOR\tREF\tSTATUS\tCONTRACT")
 			for _, src := range srcs {
 				ref := src.Ref
@@ -96,9 +96,9 @@ func sourceCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if createJSON {
-				return emitJSON(src)
+				return emitJSON(cmd.OutOrStdout(), src)
 			}
-			fmt.Printf("source %s (%s %s, status %s)\n", src.ID, src.Kind, src.Locator, src.Status)
+			fmt.Fprintf(cmd.OutOrStdout(), "source %s (%s %s, status %s)\n", src.ID, src.Kind, src.Locator, src.Status)
 			return nil
 		},
 	}
@@ -127,7 +127,7 @@ func sourceCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(raw)
+			return emitJSON(cmd.OutOrStdout(), raw)
 		},
 	}
 
@@ -146,9 +146,9 @@ func sourceCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("source %s deleted\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "source %s deleted\n", args[0])
 			if len(detachedFrom) > 0 {
-				fmt.Printf("  detached from: %s (those workspaces stop mounting this source; their next runs succeed without it)\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "  detached from: %s (those workspaces stop mounting this source; their next runs succeed without it)\n",
 					strings.Join(detachedFrom, ", "))
 			}
 			return nil

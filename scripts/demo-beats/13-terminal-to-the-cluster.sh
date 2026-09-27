@@ -63,7 +63,7 @@
 #     nothing about key management is filmed, that is V12's subject.
 #  7. NON-INTERACTIVE AUTH REALLY WORKS. Preflight opens a real connection with
 #     `ssh -N` and no exec, so it proves the key, the agent, known_hosts and
-#     the gateway in one go and leaves an ssh.auth row but NO ssh.exec row —
+#     the gateway in one go and leaves an ssh.authenticate row but NO ssh.exec row —
 #     the two exec rows on the trail are then exactly the two beats 3-4 filmed.
 #     A passphrase-locked key with no agent hangs the take otherwise, on camera.
 #  8. THE ADMIN TOKEN IS NEVER TYPED. `wardyn audit` reads it from
@@ -227,7 +227,7 @@ preflight() {
     || die "'wardyn ssh --print' emits '${printed}' but beat 3 types '${SSH_CMD}' — the two beats disagree"
 
   # Auth, proved without an exec: -N opens the connection and requests no
-  # command, so this leaves an ssh.auth row and NO ssh.exec row, and the two
+  # command, so this leaves an ssh.authenticate row and NO ssh.exec row, and the two
   # exec rows beat 5 films are exactly the two beats 3-4 ran. A key that would
   # prompt for a passphrase, or an agent that is not running, dies HERE
   # instead of hanging the take with the camera on it. rc 124 is `timeout`

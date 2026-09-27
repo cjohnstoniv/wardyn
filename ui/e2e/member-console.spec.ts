@@ -146,7 +146,7 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
 // X3-F1 / X3-F4 — the console used to read a member's REDACTED body as facts
 // about the deployment. The harness backend always answers as an admin (see
 // fixtures.ts), so the member-shaped body is spliced the same way the role is:
-// redactSetupStatusForMember zeroes the runner struct (Driver "" — the Go zero
+// redactSetupStatusForUser zeroes the runner struct (Driver "" — the Go zero
 // value, not the "none" sentinel), empties checks, and now says so with
 // checks_redacted.
 async function mockMemberSetupStatus(page: import("@playwright/test").Page): Promise<void> {

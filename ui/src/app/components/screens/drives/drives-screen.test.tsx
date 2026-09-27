@@ -71,6 +71,7 @@ import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { DrivesScreen } from "./drives-screen";
 import { question, sizeText } from "./display";
+import { aheadByHours } from "../../../lib/test-clock";
 
 function drive(over: Partial<UserDriveListItem> = {}): UserDriveListItem {
   return {
@@ -80,8 +81,8 @@ function drive(over: Partial<UserDriveListItem> = {}): UserDriveListItem {
     home_template: "email_local",
     reclaim: "retain",
     grant_count: 2,
-    created_at: "2026-08-28T00:00:00Z",
-    updated_at: "2026-08-28T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     ...over,
   };
 }
@@ -110,7 +111,7 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
         priority: 10,
         size_mib_override: 16384,
         enabled: true,
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
     host_roots_configured: false,

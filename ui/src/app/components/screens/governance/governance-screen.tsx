@@ -249,7 +249,7 @@ export function GovernanceScreen() {
                                   nothing, so it is derived from EVERY field of
                                   GovernanceLimits — not from the boolean doors
                                   alone. max_concurrent_runs is enforced
-                                  (denyMemberRunQuota's 422), and a quota-only
+                                  (denyUserRunQuota's 422), and a quota-only
                                   profile used to read "None". autonomy_rubric
                                   joined the same rule the day this chip did. */}
                               {!p.limits.deny_task_mode_exec &&

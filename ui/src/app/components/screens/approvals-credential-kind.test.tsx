@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
+import { aheadByHours } from "../../lib/test-clock";
 
 // H7 fix: requested_scope never carries a real GrantKind (ApprovalRequest.kind
 // is only the wire-level "credential"/"egress_domain"/"tool_call"), so
@@ -141,7 +142,7 @@ describe("egressBlastRadius — per-scope blast-radius copy", () => {
   });
 
   it("until: names the time, not a claim about the run's lifetime", () => {
-    const untilIso = new Date("2030-01-01T17:00:00Z").toISOString();
+    const untilIso = aheadByHours(24);
     const b = egressBlastRadius("until", "evil.example.com", untilIso);
     expect(b.what).toMatch(/evil\.example\.com until/i);
     expect(b.blast).toMatch(/asks again/i);

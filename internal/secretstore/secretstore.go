@@ -11,6 +11,10 @@
 //   - azurekv: store mode in the organisation's Azure Key Vault (package
 //     azurekv; design §2.3a.3).
 //
+// In pg, the key that wraps each row's data key is its own seam (package kek,
+// selected by WARDYN_KEK): the local key derived from WARDYN_AGE_KEY, or Vault
+// Transit (package vaultkv, design §2.3).
+//
 // Secrets are late-bound: they are resolved at use time by the broker or
 // injected proxy-side, so as a RULE no value lands in a sandbox's environment
 // or disk. It is a rule with named, bounded exceptions, not an invariant — a
@@ -30,7 +34,9 @@ package secretstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is the typed sentinel a Store.Get returns (wrapped) when no secret
@@ -38,9 +44,9 @@ import (
 // error. Every Store implementation must honor it (the conformance suite checks).
 var ErrNotFound = errors.New("secretstore: secret not found")
 
-// ErrUnavailable marks a TRANSIENT failure of an external store (sealed,
-// throttled, 5xx, network, timeout): the value may well be there, the store
-// just could not answer. Every other Get error is DEFINITIVE — the row, the
+// ErrUnavailable marks a TRANSIENT failure: an external store sealed,
+// throttled, 5xx, unreachable or timing out, or the database holding the rows
+// not answering. The value may well be there; the store just could not answer. Every other Get error is DEFINITIVE — the row, the
 // value, the binding or the access is gone, and retrying will not bring it
 // back. A 401/403 is definitive by design, so revoking Wardyn's access at the
 // store bites at once (design §2.3a.4, K8).
@@ -59,6 +65,19 @@ type Store interface {
 	Get(ctx context.Context, name string) ([]byte, error)
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]string, error)
+	// DeleteEverywhere removes every namespace's row of each name — the
+	// operator's and every principal's — whatever view it is called on, and
+	// returns how many rows it removed. It is the one cross-owner write: a
+	// model provider whose address changes must take every person's
+	// credential for it with it, and no caller knows every owner to Delete
+	// them one by one.
+	DeleteEverywhere(ctx context.Context, names []string) (int, error)
+	// Holders is DeleteEverywhere's read twin: for each of names, every
+	// namespace holding a row of it — the operator's ("") included — whatever
+	// view it is called on. A name nobody holds is absent. It reads rows,
+	// never a value, so a store-mode backend's external store is not asked:
+	// the model providers list counts the people connected to each provider.
+	Holders(ctx context.Context, names []string) (map[string][]string, error)
 	// For returns a view of the store scoped to owner, the per-principal
 	// namespace introduced by migration 0050 (member BYOK). owner "" is the
 	// OPERATOR namespace — the zero value of every existing caller, so a call
@@ -75,7 +94,7 @@ type Store interface {
 	//     operator's. A caller that wants "everything a principal may see"
 	//     composes it itself: For("").List() ∪ For(owner).List().
 	// This is a real backend implementation, not policy: a plugged-in
-	// alternate (OpenBao, KMS) implements the same fallback/isolation
+	// alternate (a store-mode backend, a KEK) keeps the same fallback/isolation
 	// contract, held to it by the shared conformance suite.
 	For(owner string) Store
 }
@@ -131,6 +150,9 @@ var PlatformNames = map[string]bool{
 	"wardyn-ui-session-key": true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-internal-ca":    true,
+	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid),
+	// bootstrapped through loadOrCreateSecret like the keys above.
+	"wardyn-org-device-credential": true,
 }
 
 // Kind is the store-side kind of the row (owner, name): "platform" for a boot
@@ -187,4 +209,84 @@ type ExternalEntry struct {
 	// (Key Vault's soft delete), for RecoverableDays more days (0: unknown).
 	SoftDeleted     bool
 	RecoverableDays int
+}
+
+type expiryKey struct{}
+
+// WithExpiry returns a context under which a Put records at as the latest time
+// the value can still be used or renewed (the row's expires_at): the daily
+// sweep deletes it after that. A Put without it records no expiry, so a
+// replace always describes the value it wrote.
+func WithExpiry(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, expiryKey{}, at)
+}
+
+// ExpiryFrom is the expiry WithExpiry put on ctx, if any.
+func ExpiryFrom(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(expiryKey{}).(time.Time)
+	return at, ok && !at.IsZero()
+}
+
+// Expired names one row a sweep deleted because its expiry had passed.
+type Expired struct {
+	Owner, Name string
+	ExpiresAt   time.Time
+}
+
+// EraseReport is what EraseOwner removed.
+type EraseReport struct {
+	// Count is how many credentials were deleted.
+	Count int
+	// Store, Purged and RecoverableDays aggregate the external store's
+	// DeleteReports: Store is "" when nothing reported, Purged is false when
+	// any value was left recoverable, RecoverableDays is the longest window.
+	Store           string
+	Purged          bool
+	RecoverableDays int
+}
+
+// ErrOperatorNamespace refuses an erase of the operator namespace (""): it
+// holds the platform keys and the deployment's shared credentials, not one
+// person's.
+var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is not a person's and cannot be erased")
+
+// EraseOwner deletes every credential in owner's own namespace (design §2.5,
+// CS-5 offboarding). Each Delete removes the external value before the row, so
+// a failure keeps the row and a retry resumes. It never reports success with a
+// row left behind: every failure is returned, and a namespace that is not empty
+// afterwards (a write racing the erase) is an error naming how many remain.
+func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
+	rep := EraseReport{Purged: true}
+	if owner == "" {
+		return rep, ErrOperatorNamespace
+	}
+	view := st.For(owner)
+	names, err := view.List(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("list %q: %w", owner, err)
+	}
+	var errs []error
+	for _, n := range names {
+		dctx, dr := WithDeleteReport(ctx)
+		if err := view.Delete(dctx, n); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		rep.Count++
+		if dr.Store != "" {
+			rep.Store = dr.Store
+			rep.Purged = rep.Purged && dr.Purged
+			rep.RecoverableDays = max(rep.RecoverableDays, dr.RecoverableDays)
+		}
+	}
+	if len(errs) == 0 {
+		left, err := view.List(ctx)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("re-list %q: %w", owner, err))
+		case len(left) > 0:
+			errs = append(errs, fmt.Errorf("%d credentials of %q were written while the erase ran; erase again", len(left), owner))
+		}
+	}
+	return rep, errors.Join(errs...)
 }

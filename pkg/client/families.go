@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -310,6 +311,15 @@ func (c *Client) RevokeDevice(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), nil, nil)
 }
 
+// ListSSHKeysPage is ListSSHKeys plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See client.go's package doc's "# Pagination".
+func (c *Client) ListSSHKeysPage(ctx context.Context, opts ...ListOpts) (keys []types.SSHPublicKey, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/me/ssh-keys", opts), nil, &keys, &hdr)
+	return keys, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListDeviceEnrolmentTokens returns every enrolment token still redeemable —
 // minted, not yet redeemed, revoked or expired — newest first, never the token
 // itself (admin or security_admin). GET /api/v1/admin/devices/enrolment-tokens.
@@ -329,11 +339,11 @@ func (c *Client) RevokeDeviceEnrolmentToken(ctx context.Context, id uuid.UUID) e
 
 // ListSSHKeys returns the caller's own registered SSH gateway keys — the
 // gateway's entire trust root (docs/SSH.md §1). There is no admin view of
-// another principal's keys. GET /api/v1/me/ssh-keys.
-func (c *Client) ListSSHKeys(ctx context.Context) ([]types.SSHPublicKey, error) {
-	var out []types.SSHPublicKey
-	err := c.do(ctx, http.MethodGet, "/api/v1/me/ssh-keys", nil, &out)
-	return out, err
+// another principal's keys. Pass a ListOpts to page; prefer ListSSHKeysPage,
+// which also returns the server's truncation signal. GET /api/v1/me/ssh-keys.
+func (c *Client) ListSSHKeys(ctx context.Context, opts ...ListOpts) ([]types.SSHPublicKey, error) {
+	keys, _, err := c.ListSSHKeysPage(ctx, opts...)
+	return keys, err
 }
 
 // AddSSHKey registers one authorized_keys line under the caller's own
@@ -346,6 +356,16 @@ func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.S
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
 		map[string]string{"name": name, "public_key": publicKey}, &out)
 	return out, err
+}
+
+// DeleteSSHKey removes one of the caller's own registered SSH gateway keys.
+// fp is ssh.FingerprintSHA256's raw form, which routinely contains '/' — it
+// is percent-encoded here, matching the server's decode
+// (handleDeleteSSHKey). Deleting a fingerprint registered by someone else
+// (or one that never existed) 404s the same way — no existence leak across
+// principals. DELETE /api/v1/me/ssh-keys/{fingerprint}.
+func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
 // RunFileStat is one changed file in a RunFiles listing.

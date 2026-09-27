@@ -76,6 +76,7 @@ type fakeApprovals struct {
 	byID       map[uuid.UUID]types.ApprovalRequest
 	decideErr  error
 	requestErr error
+	listErr    error
 	cancelErr  error
 	cancelled  []cancelCall
 	expireErr  error
@@ -168,6 +169,9 @@ func (f *fakeApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalRequ
 func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]types.ApprovalRequest, 0, len(f.byID))
 	for _, ap := range f.byID {
 		out = append(out, ap)
@@ -524,7 +528,7 @@ func (enforcementWordRunner) Capabilities(context.Context) (runner.Capabilities,
 }
 
 // TestHealthz_OmitsTheEnforcementWord pins the half healthz.go states only in a
-// comment: the word is OPERATOR DETAIL, redactSetupStatusForMember strips it
+// comment: the word is OPERATOR DETAIL, redactSetupStatusForUser strips it
 // from /setup/status for a member (setup_test.go), and /healthz is ANONYMOUS —
 // so it must not carry it at all. handleHealthz composes its body field by
 // field precisely so a field added to the setup status never appears here by
