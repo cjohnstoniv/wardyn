@@ -575,6 +575,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 		listen         string
 		sshListen      string
 		originTemplate string
+		stripCookies   string
 		posture        tlsPosture
 		allowPlaintext bool
 		wantErr        string // substring; empty = must succeed
@@ -667,10 +668,44 @@ func TestValidateUISandboxConfig(t *testing.T) {
 			name:     "unspecified UI bind stays warn-only",
 			uiListen: ":8081", listen: "127.0.0.1:8080",
 		},
+		{
+			name: "inbound cookie allow list", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:session, csrf_*",
+		},
+		{
+			name: "inbound cookie deny list", uiListen: ":8081", listen: ":8080",
+			stripCookies: "deny:*",
+		},
+		{
+			name: "unknown cookie policy mode refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "strip:session", wantErr: "WARDYN_UI_SANDBOX_STRIP_COOKIES",
+		},
+		{
+			name: "empty cookie policy list refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:", wantErr: "not a cookie name",
+		},
+		{
+			name: "cookie policy entry with a separator refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "deny:a;b", wantErr: "not a cookie name",
+		},
+		{
+			name: "cookie policy entry with an inner wildcard refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "deny:a*b", wantErr: "not a cookie name",
+		},
+		{
+			// wardyn_* is stripped whatever the policy says; an allow entry
+			// naming one reads as forwarding a credential, so boot says so.
+			name: "allow list naming a wardyn cookie refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:app,WARDYN_ui_sess", wantErr: "never forwarded",
+		},
+		{
+			name: "allow list with a wardyn prefix refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:wardyn_*", wantErr: "never forwarded",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.posture, tc.allowPlaintext)
+			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.stripCookies, tc.posture, tc.allowPlaintext)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("want accepted, got %v", err)

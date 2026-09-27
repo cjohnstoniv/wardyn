@@ -11,35 +11,21 @@ import (
 	"strings"
 )
 
-// merge.go — moved here VERBATIM from internal/api (workspace_run.go) in the
-// three-tier split: the store's hydrate pass computes a workspace's profile as
-// the merge of its attached sources' profiles, and store cannot import api.
-// api keeps a one-line alias so its call sites don't churn.
+// merge.go lives in workspacescan, not api, because store's hydrate pass
+// calls MergeProfiles and store cannot import api.
 
-// MergeProfiles combines N local_dir/repo sources' individually-scanned
-// profiles into ONE profile for the workspace: union the set-like fields
-// (languages, package managers, egress, tools, required secrets, services,
-// suggested egress), concatenate leak findings and setup commands (never drop
-// a suspected secret or an install step, deduped so N sources can't repeat
-// one, re-capped so N sources can't exceed one source's own bound), take the
-// largest build-memory hint, fold ContextHash into a digest-of-digests, and
-// take the LOWEST confidence (one ambiguous source makes the whole
-// workspace's profile suspect). HasDevcontainer/HasDockerfile come from the
-// PRIMARY source ONLY — unioning them would let a devcontainer that lives in
-// a non-primary source get built as if it were the primary repo's own.
-// primaryIdentity names that source (matched against identities, NOT
-// profiles[0] — the caller's attachment order and this function's scan order
-// can diverge whenever the first attachment is ephemeral or not yet scanned;
-// see hydrateWorkspace in internal/store/store_sources.go, which derives it
-// from the exact same ws.Sources[0] the consumer reads as "primary"). A
-// primaryIdentity matching no profile (primary is ephemeral or unscanned)
-// yields false/false, never another source's values. identities[i] names
-// profiles[i]'s source (its locator, unique per source): SecretFilesPresent
-// entries are prefixed "identity/path" so a merged finding still says which
-// source it came from, while a LeakFinding carries the same attribution in
-// LeakFinding.Source and keeps its Path scan-root-relative — Path is
-// path-CLASSIFIED by the client (fixture vs hot), which a locator prefix
-// would corrupt. Empty input returns the zero profile.
+// MergeProfiles combines N sources' individually-scanned profiles into ONE
+// profile for the workspace: unions the set-like fields, concatenates leak
+// findings and setup commands (deduped and re-capped), takes the largest
+// build-memory hint and the LOWEST confidence, and folds ContextHash into a
+// digest-of-digests. HasDevcontainer/HasDockerfile come from the PRIMARY
+// source ONLY, matched against identities (not profiles[0], since attachment
+// order and scan order can diverge) — no match yields false/false, never
+// another source's values. SecretFilesPresent entries are prefixed
+// "identity/path"; a LeakFinding instead carries its attribution in
+// LeakFinding.Source and keeps Path scan-root-relative, since Path is
+// path-CLASSIFIED downstream and a locator prefix would corrupt that. Empty
+// input returns the zero profile.
 func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIdentity string) WorkspaceProfile {
 	if len(profiles) == 0 {
 		return WorkspaceProfile{}
@@ -89,20 +75,16 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 		addAll(otherHosts, p.GitRemotes.OtherHosts)
 		for _, n := range p.RequiredSecrets {
 			// Strongest-wins (required beats optional), matching
-			// FoldWorkspaceContract's rule 5 (workspace_contract.go) — a
-			// first-wins keep here let attachment ORDER decide whether a
-			// secret both surfaces agree exists reads as optional or required
-			// (WSPIPE-10).
+			// FoldWorkspaceContract's rule 5 — a first-wins keep here would
+			// let attachment order decide optional-vs-required.
 			if prev, dup := secretByName[n.Name]; !dup || (prev.Optional && !n.Optional) {
 				secretByName[n.Name] = n
 			}
 		}
 		for _, f := range p.LeakFindings {
-			// Attribution rides its OWN field here, not a Path prefix: Path is
-			// path-classified downstream (fixture vs hot), so prefixing it with a
-			// locator that itself contains a testdata/fixtures segment would
-			// silently reclassify every leak in that source. Source still keeps
-			// two sources' identical relative paths distinct in leakSeen.
+			// Attribution rides its own field, not a Path prefix, since Path
+			// is path-classified downstream and a locator prefix would
+			// silently reclassify it.
 			f.Source = identity
 			if _, dup := leakSeen[f]; !dup {
 				leakSeen[f] = struct{}{}
@@ -127,10 +109,7 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 			lowest = p.Confidence
 		}
 	}
-	// Riskiest-first, then capped, and a drop sets NeedsReview (B11b-F9). The
-	// old form took the first maxLeakFindings in ATTACHMENT order and said
-	// nothing, so a private key in the ninth source lost to the first source's
-	// sixty-fourth JWT and the merged profile still read as complete.
+	// Riskiest-first, then capped; a drop sets NeedsReview.
 	leaks, leaksTruncated := capLeakFindings(leaks)
 	needsReview = needsReview || leaksTruncated
 	requiredSecrets := make([]SecretNeed, 0, len(secretByName))
@@ -162,14 +141,9 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 }
 
 // primaryBuildFacts returns the HasDevcontainer/HasDockerfile of the profile
-// whose identity equals primaryIdentity — i.e. the SAME attachment
-// hydrateWorkspace put at ws.Sources[0], which resolveWorkspaceImage
-// (internal/api/workspace_run.go) reads as "primary". Deliberately NOT
-// profiles[0]: identities/profiles only contain attachments that actually
-// decoded a profile, in scan order, which can diverge from attachment order.
-// No match (the primary attachment is ephemeral or unscanned) returns
-// false/false — a devcontainer belonging to some OTHER attached source must
-// never be attributed to a primary we know nothing about.
+// whose identity equals primaryIdentity, not profiles[0] — identities and
+// profiles are in scan order, which can diverge from attachment order. No
+// match returns false/false rather than attributing another source's values.
 func primaryBuildFacts(profiles []WorkspaceProfile, identities []string, primaryIdentity string) (hasDevcontainer, hasDockerfile bool) {
 	for i, id := range identities {
 		if i >= len(profiles) {
@@ -182,19 +156,11 @@ func primaryBuildFacts(profiles []WorkspaceProfile, identities []string, primary
 	return false, false
 }
 
-// attributePath prefixes a per-source-root-relative path with its source's
-// identity so a merged finding still says which attached source it came
-// from — two sources' identical relative paths ("config/.env") would
-// otherwise be indistinguishable once concatenated. "/" is the separator
-// (not ": ") so the result reads as a plausible full path (source root /
-// file). Empty identity leaves path as-is (unreachable via hydrateWorkspace,
-// which always has a source locator, but fail-safe rather than producing a
-// stray leading "/").
-//
-// SecretFilesPresent only: it is a bare []string with nowhere to put a
-// separate attribution field, and nothing path-CLASSIFIES it. LeakFinding
-// carries its attribution in LeakFinding.Source instead — see the loop above
-// for why a prefix there is wrong.
+// attributePath prefixes a path with its source's identity so two sources'
+// identical relative paths stay distinguishable once concatenated. Used only
+// for SecretFilesPresent, a bare []string with no separate attribution field;
+// LeakFinding carries its attribution in LeakFinding.Source instead. Empty
+// identity leaves path as-is.
 func attributePath(identity, path string) string {
 	if identity == "" {
 		return path

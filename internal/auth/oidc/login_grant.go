@@ -3,32 +3,19 @@
 
 package oidc
 
-// login_grant.go is the seam that lets the console's own SSO login ALSO acquire
-// a downstream credential, instead of making every person run a second errand
-// for one.
+// login_grant.go lets the console's own SSO login ALSO acquire a downstream
+// credential, instead of making every person run a second errand for one: the
+// login is already an authorization-code flow, so the same request can ask
+// for the downstream scopes and the same callback can hand back the result.
 //
-// WHY IT EXISTS. An organisation's admin should be able to configure downstream
-// access once and have it work for everyone; a member should at most click
-// "allow" once, and with tenant-wide administrator consent not even that. The
-// login is already an authorization-code flow against the organisation's own
-// identity provider, so the same request can ask for the downstream scopes and
-// the same callback can hand the resulting refresh token to whoever stores it.
-// The alternative — a separate sign-in per person — is the fallback, not the
-// design.
+// This package does not store anything, does not know what the extra scopes
+// mean, and keeps no token of its own — it asks a sink what to request and
+// hands the sink what came back. Where that lands stays outside this
+// package, which cannot import the package that owns it.
 //
-// WHAT THIS PACKAGE DOES NOT DO. It does not store anything, does not know what
-// the extra scopes mean, and does not keep a token of its own: Session still
-// carries no access or refresh token and this file does not change that. It
-// asks a sink what to request, and hands the sink what came back. Everything
-// about WHERE that lands — whose namespace, under what name, with what audit —
-// stays outside this package, which cannot import the package that owns it.
-//
-// THE LOGIN IS NEVER AT RISK. The sink is consulted best-effort at both ends. A
-// sink that returns nothing widens nothing; a sink that fails to store gets no
-// say in whether the person is signed in. A downstream credential is a
-// convenience; a console session is the thing the human came for, and an
-// organisation must never be locked out of its own console because a second
-// resource declined a scope.
+// THE LOGIN IS NEVER AT RISK: the sink is consulted best-effort at both
+// ends. A sink that returns nothing widens nothing; a sink that fails to
+// store gets no say in whether the person is signed in.
 
 import (
 	"context"
@@ -49,11 +36,9 @@ import (
 const maxExtraLoginScopes = 32
 
 // LoginGrant is what the login token exchange returned BESIDES the identity.
-//
-// It deliberately carries no access token. An access token from the login
-// exchange is minutes old by the time anything downstream wants one and cannot
-// be renewed by whoever holds it; the refresh token is the durable half, and
-// the party that stores it is the only party that may redeem it.
+// It deliberately carries no access token: that would be minutes old by the
+// time anything downstream wants one, so the refresh token is the durable
+// half, and the party that stores it is the only party that may redeem it.
 type LoginGrant struct {
 	// RefreshToken is the durable half of the grant. Empty means the provider
 	// issued none — `offline_access` was not asked for, or not granted.
@@ -68,16 +53,11 @@ type LoginGrant struct {
 }
 
 // LoginGrantSink is the two halves of the seam: what to ADD to the
-// authorization request, and what to DO with the grant that comes back.
-//
-// Both are best-effort by contract. LoginScopes returning nil (or a sink that
-// was never attached) leaves the authorization request byte-identical to a
-// deployment that never heard of this file. CaptureLoginGrant's outcome is not
-// reported and cannot be: its caller has already decided to sign this person
-// in, and a storage failure must not undo that.
-//
-// An implementation MUST NOT panic and MUST NOT block for long: it runs inside
-// a browser's login redirect, with a human waiting on it.
+// authorization request, and what to DO with the grant that comes back. Both
+// are best-effort by contract — a storage failure in CaptureLoginGrant must
+// not undo a login that was already decided. An implementation MUST NOT
+// panic and MUST NOT block for long: it runs inside a browser's login
+// redirect, with a human waiting on it.
 type LoginGrantSink interface {
 	// LoginScopes returns the extra scopes this login should request, or nil
 	// for none. Called once per authorization request.
@@ -89,11 +69,9 @@ type LoginGrantSink interface {
 	CaptureLoginGrant(ctx context.Context, subject string, grant LoginGrant)
 }
 
-// loginGrantHook holds the attached sink. It is guarded because the edge is
-// attached AFTER construction: the sink is owned by a component that needs the
-// Authenticator to exist first, so the two are joined once both do. The lock is
-// read-only on every login and taken once per request, which is nothing beside
-// the round trip the login is already making.
+// loginGrantHook holds the attached sink. It is guarded because the sink is
+// attached AFTER construction, once the owning component and the
+// Authenticator both exist.
 type loginGrantHook struct {
 	mu   sync.RWMutex
 	sink LoginGrantSink
@@ -102,16 +80,10 @@ type loginGrantHook struct {
 	timeout time.Duration
 }
 
-// loginGrantSinkTimeout bounds EACH sink call. It is enforced here rather than
-// trusted to the sink, because this package is the one promising that the
-// login is never at risk: a sink that reads a provider row, waits behind a
-// per-person lock a redemption can hold across a network round trip, and
-// writes a secret store has three ways to stall, and the person waiting on it
-// has already been approved but has no session yet.
-//
-// Three seconds is long enough for a healthy row read and store write and
-// short enough that a stalled one reads to a human as a slow login, not a
-// broken one.
+// loginGrantSinkTimeout bounds EACH sink call, enforced here rather than
+// trusted to the sink, since this package promises the login is never at
+// risk. Three seconds is long enough for a healthy read/write and short
+// enough that a stalled one reads as a slow login, not a broken one.
 const loginGrantSinkTimeout = 3 * time.Second
 
 func (a *Authenticator) sinkTimeout() time.Duration {
@@ -125,16 +97,11 @@ func (a *Authenticator) sinkTimeout() time.Duration {
 
 // boundedSinkCall runs fn with a deadline and RETURNS when the deadline does,
 // whether or not fn has. ok=false means it did not finish in time (or
-// panicked); the caller then proceeds as if the sink had declined.
-//
-// fn runs on its own goroutine for exactly that reason — a context only bounds
-// a callee that honours it, and a sink is not trusted to. fn is handed the
-// deadline context so a well-behaved sink stops promptly; one that ignores it
-// runs to completion in the background with nobody waiting on it.
-//
-// A panic is RECOVERED here. The sink contract forbids one, but on its own
-// goroutine a panic is no longer the request's to catch — it would take the
-// whole daemon down with it.
+// panicked); the caller then proceeds as if the sink had declined. fn runs
+// on its own goroutine since a context only bounds a callee that honours it;
+// one that ignores it runs to completion in the background unwaited. A panic
+// is RECOVERED here since on its own goroutine it would otherwise take the
+// whole daemon down.
 func (a *Authenticator) boundedSinkCall(ctx context.Context, what string, fn func(context.Context)) bool {
 	ctx, cancel := context.WithTimeout(ctx, a.sinkTimeout())
 	defer cancel()
@@ -174,19 +141,12 @@ func (a *Authenticator) loginGrantSink() LoginGrantSink {
 	return a.grants.sink
 }
 
-// extraLoginScopes asks the sink what to add and holds the answer to the rules
-// the authorization request needs, which the sink is not trusted to have
-// applied:
-//
-//   - a scope carrying whitespace is DROPPED, not split. The scope parameter is
-//     space-delimited, so a value with a space in it is two scopes wearing one
-//     name, and splitting it would silently request something nobody wrote.
-//   - a scope already in the base request is dropped, so the parameter cannot
-//     list `openid` twice.
-//   - the list is truncated at maxExtraLoginScopes.
-//
-// Returns nil when there is nothing to add, which is what keeps a deployment
-// with no sink byte-identical to before this seam existed.
+// extraLoginScopes asks the sink what to add and holds the answer to the
+// rules the authorization request needs, which the sink is not trusted to
+// have applied: a scope carrying whitespace is DROPPED rather than split (the
+// scope parameter is space-delimited), a scope already in the base request
+// is deduped, and the list is truncated at maxExtraLoginScopes. Returns nil
+// when there is nothing to add.
 func (a *Authenticator) extraLoginScopes(ctx context.Context) []string {
 	sink := a.loginGrantSink()
 	if sink == nil {
@@ -234,13 +194,10 @@ func (a *Authenticator) loginScopeParam(extra []string) string {
 }
 
 // captureLoginGrant hands the exchanged grant to the sink. It is the ONE call
-// site, and every reason to do nothing is checked here rather than in the sink:
-// no sink attached, no token, or no refresh token — the last being exactly what
-// a declined or unsupported `offline_access` looks like, and a case in which
-// there is nothing durable to store.
-//
-// It reports nothing, deliberately. The login has already been approved by the
-// time this runs, and a downstream credential is not a condition of it.
+// site, checking every reason to do nothing here rather than in the sink: no
+// sink attached, no token, or no refresh token (a declined/unsupported
+// `offline_access`). It reports nothing, deliberately: the login has already
+// been approved, and a downstream credential is not a condition of it.
 func (a *Authenticator) captureLoginGrant(ctx context.Context, subject string, token *oauth2.Token) {
 	sink := a.loginGrantSink()
 	if sink == nil || token == nil || token.RefreshToken == "" || subject == "" {
@@ -253,9 +210,7 @@ func (a *Authenticator) captureLoginGrant(ctx context.Context, subject string, t
 		Expiry:       token.Expiry,
 	}
 	// Bounded: this runs BEFORE the session cookie is written, so a stalled
-	// capture would hold an approved human at a blank page. On timeout the
-	// login proceeds and the capture is abandoned — its context is cancelled,
-	// so a sink that honours it stores nothing.
+	// capture would hold an approved human at a blank page.
 	a.boundedSinkCall(ctx, "capture the login grant", func(ctx context.Context) {
 		sink.CaptureLoginGrant(ctx, subject, grant)
 	})
@@ -263,8 +218,6 @@ func (a *Authenticator) captureLoginGrant(ctx context.Context, subject string, t
 
 // expireWidenedMarker deletes the widened marker through loginCookie, so the
 // deletion carries the same Secure posture as every cookie the login writes.
-// Callers invoke it only when the browser presented a marker, which is what
-// keeps an unwidened login's Set-Cookie headers exactly what they always were.
 func (a *Authenticator) expireWidenedMarker(w http.ResponseWriter) {
 	stale := a.loginCookie(widenedCookieName, "")
 	stale.MaxAge = -1
@@ -277,9 +230,7 @@ func (a *Authenticator) expireWidenedMarker(w http.ResponseWriter) {
 const maxLoggedErrorDescription = 256
 
 // logUnretriedRefusal names an identity-provider refusal the callback is NOT
-// retrying. The response is unchanged — the handler still answers as it always
-// has — but the cause reaches the log, which is where an operator whose tenant
-// refuses with a code outside widenRetryableError's set will look first.
+// retrying. The response is unchanged, but the cause reaches the log.
 func (a *Authenticator) logUnretriedRefusal(r *http.Request, widened bool, code string) {
 	desc := r.URL.Query().Get("error_description")
 	if len(desc) > maxLoggedErrorDescription {
@@ -289,20 +240,15 @@ func (a *Authenticator) logUnretriedRefusal(r *http.Request, widened bool, code 
 		"issuer", a.cfg.IssuerURL, "error", code, "error_description", desc, "widened", widened)
 }
 
-// widenRetryableError reports whether an authorization refusal is one the EXTRA
-// scopes plausibly caused, and therefore one worth retrying without them.
+// widenRetryableError reports whether an authorization refusal is one the
+// EXTRA scopes plausibly caused, and therefore one worth retrying without
+// them.
 //
-// THIS IS THE LOCK-OUT VALVE. Widening the login means an identity provider now
-// gets to refuse the console's own sign-in over a second resource's consent: a
-// tenant that will not issue those scopes, a Conditional Access policy, or a
-// person who clicks "cancel" on a consent screen for something they have never
-// heard of. Without a way back, every one of those is an organisation locked
-// out of Wardyn by a configuration change an admin made for a convenience.
-//
-// The four codes are the ways that refusal actually arrives. Anything else
-// falls through to the handler's existing behaviour untouched, because a
-// refusal this function does not recognise is not evidence that the extras
-// caused it.
+// THIS IS THE LOCK-OUT VALVE: without it, a tenant that won't issue the
+// extra scopes, a Conditional Access policy, or a declined consent screen
+// would lock an organisation out of Wardyn over a convenience an admin
+// configured. Anything outside these four codes falls through untouched,
+// since it is not evidence the extras caused it.
 func widenRetryableError(code string) bool {
 	switch code {
 	case "consent_required", "interaction_required", "access_denied", "invalid_scope":
@@ -312,15 +258,10 @@ func widenRetryableError(code string) bool {
 }
 
 // retryLoginUnwidened restarts the login WITHOUT the extra scopes and reports
-// whether it did.
-//
-// It is bounded at exactly one attempt by construction, not by a counter: the
-// retry it issues is unwidened, so it sets no widened marker, so its own
-// callback cannot reach this function. A second refusal is handled as any
-// ordinary login refusal is.
-//
-// Only reachable when the widened marker was present, i.e. when THIS browser's
-// authorization request really did ask for more than a login.
+// whether it did. Bounded at exactly one attempt by construction: the retry
+// it issues is unwidened, so it sets no widened marker, so its own callback
+// cannot reach this function again. Only reachable when the widened marker
+// was present.
 func (a *Authenticator) retryLoginUnwidened(w http.ResponseWriter, r *http.Request, widened bool, code string) bool {
 	if !widened || !widenRetryableError(code) {
 		return false

@@ -6,12 +6,10 @@
 // workspace's ACTUAL remotes rather than an LLM guess.
 //
 // It is read-only and runs NO subprocess: it parses .git/config and .gitmodules
-// as plain files (so it can never trigger a git hook or a malicious
-// include.path / core.fsmonitor in a repo's config). The walk is bounded (depth,
-// .git count, file size), never follows symlinks, reads REGULAR files only (a
-// FIFO named .gitmodules would otherwise block the scan's goroutine forever),
-// and fails safe — any error yields fewer/zero detected repos, never a grant on
-// uncertainty.
+// as plain files (never triggering a git hook or a malicious include.path /
+// core.fsmonitor). The walk is bounded (depth, .git count, file size), never
+// follows symlinks, reads REGULAR files only, and fails safe — any error yields
+// fewer/zero detected repos, never a grant on uncertainty.
 package gitremote
 
 import (
@@ -50,13 +48,10 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 		if err != nil || d == nil {
 			return nil // skip unreadable entries; keep walking siblings
 		}
-		// Never descend or follow symlinks (a symlinked dir is reported as a
-		// non-dir by WalkDir's lstat, so this also prevents escaping `root`).
-		// The ROOT is exempt: WalkDir lstats it like every other entry, so a
-		// root that is ITSELF a link (~/work -> /mnt/d/work) ended the walk on
-		// its very first callback and detection reported zero repos — which
-		// the caller cannot tell from a tree with no git remotes, and which
-		// costs the run its GitHub grant (B11b-F1). ResolveRoot has already
+		// Never descend or follow symlinks (also prevents escaping `root`). The
+		// ROOT is exempt: WalkDir lstats it like every other entry, so a root
+		// that is ITSELF a link would otherwise end the walk on its first
+		// callback and silently report zero repos. ResolveRoot has already
 		// canonicalised it; this arm is what still holds when that failed.
 		if p != root && d.Type()&fs.ModeSymlink != 0 {
 			return nil
@@ -67,9 +62,8 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 			}
 			return nil
 		}
-		// Never descend a repo's .git internals: detection stats <parent>/.git
-		// directly (below), so re-walking objects/refs/logs is pure waste that
-		// makes the scan O(git-objects) instead of O(repo-roots).
+		// Never descend a repo's .git internals: it is stat'd directly below, so
+		// re-walking it would make the scan O(git-objects) instead of O(repo-roots).
 		if d.Name() == ".git" {
 			return fs.SkipDir
 		}
@@ -97,16 +91,11 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 }
 
 // ResolveRoot canonicalises a scan root before a walk: cleaned, and with every
-// symlink in it resolved. It is the ONE line that keeps a walk's own view of a
-// workspace and the sandbox's mount of it talking about the same directory —
-// dispatch bind-mounts the RESOLVED tree, so a scanner that stops at the link
-// describes a tree the run never sees.
-//
-// Resolution failure (a broken link, a directory the daemon cannot traverse)
-// falls back to the cleaned path: the walk then finds nothing, which is the
-// fail-safe answer both callers already treat as "no evidence", never a claim
-// about a tree nobody read. Shared with internal/workspacescan, whose
-// CollectFacts had the identical bug on the identical locator.
+// symlink in it resolved. Dispatch bind-mounts the RESOLVED tree, so a scanner
+// that stops at the link would describe a tree the run never sees. Resolution
+// failure falls back to the cleaned path: the walk then finds nothing, the
+// fail-safe "no evidence" answer both callers already treat it as. Shared with
+// internal/workspacescan.
 func ResolveRoot(root string) string {
 	clean := filepath.Clean(root)
 	resolved, err := filepath.EvalSymlinks(clean)
@@ -127,8 +116,8 @@ func depthUnder(root, p string) int {
 
 // resolveConfigPath returns the path to the config file for a .git entry: a
 // directory yields <gitPath>/config; a "gitdir: X" pointer file is resolved to
-// <X>/config but ONLY if X stays inside root (else skipped, to avoid following a
-// pointer outside the operator-selected dir). Non-following on symlinks too.
+// <X>/config but ONLY if X stays inside root (else skipped). Non-following on
+// symlinks too.
 func resolveConfigPath(gitPath string, fi os.FileInfo, root string) string {
 	if fi.IsDir() {
 		return filepath.Join(gitPath, "config")
@@ -164,27 +153,10 @@ func within(root, p string) bool {
 // readCapped reads at most maxConfigBytes from a REGULAR file, failing safe to
 // nil for anything else. It is the single chokepoint behind all three read
 // sites (the .gitmodules scan, the .git/config scan, and resolveConfigPath's
-// gitdir pointer), which is why the whole of B11a-F5 is fixed here.
-//
-// Three properties the bare os.Open + single Read did not have:
-//
-//   - O_NOFOLLOW. The walk skips symlinks everywhere EXCEPT this final open, so
-//     a .git/config symlink was the one place the package doc's "never follows
-//     symlinks" promise did not hold; it read whatever the scanning uid could
-//     reach.
-//   - O_NONBLOCK + IsRegular. A FIFO named .gitmodules (or .git/config) blocks
-//     open(2) forever waiting for a writer, and CollectFacts runs on an HTTP
-//     handler goroutine with no ctx — one such file wedged that request
-//     permanently. O_NONBLOCK makes the open return; the fstat is what decides
-//     nothing is read from it. Doing it in that order is also race-free: the
-//     flags pick what gets opened, the fstat judges the thing actually opened,
-//     so there is no path-based window between the two.
-//   - io.ReadFull over a LimitReader. A single Read is documented to return
-//     FEWER bytes than the buffer holds, which silently truncated a large
-//     config mid-line and dropped every remote after the break.
-//
-// The first two properties are OpenRegular's, which internal/workspacescan
-// shares — its own walk had four bare os.Open calls on the same handler path.
+// gitdir pointer): OpenRegular gives O_NOFOLLOW (no symlinked final component)
+// and O_NONBLOCK+IsRegular (a FIFO can't block open(2) forever), and this
+// wraps them with io.ReadFull over a LimitReader, since a single Read can
+// return fewer bytes than the buffer holds and silently truncate mid-line.
 func readCapped(p string) []byte {
 	f, err := OpenRegular(p)
 	if err != nil {
@@ -200,21 +172,14 @@ func readCapped(p string) []byte {
 }
 
 // OpenRegular opens a file for reading that is PROVABLY an ordinary file and
-// is never reached through a symlink. It is the shared door for every read a
-// workspace walk performs, because every such walk runs on an HTTP handler
-// goroutine with no ctx and over a tree the scanned party controls.
-//
-// O_NOFOLLOW refuses a symlinked final component (the walk skips links
-// everywhere else, so this is the one remaining place a tree could point the
-// scanner at a file outside itself). O_NONBLOCK makes open(2) RETURN on a FIFO
-// instead of waiting forever for a writer — one such file wedged the request
-// permanently — and the fstat is what then decides nothing is read from it.
-// That order is also race-free: the flags pick what gets opened and the fstat
-// judges the thing actually opened, so there is no path-based window between
-// the two.
-//
-// The caller closes. The caller also bounds what it reads: this says WHAT may
-// be opened, never HOW MUCH comes back.
+// is never reached through a symlink — the shared door for every read a
+// workspace walk performs, since such walks run on an HTTP handler goroutine
+// with no ctx over a tree the scanned party controls. O_NOFOLLOW refuses a
+// symlinked final component; O_NONBLOCK makes open(2) RETURN on a FIFO instead
+// of waiting forever for a writer, and the fstat then decides nothing is read
+// from it — race-free, since the flags pick what gets opened and the fstat
+// judges the thing actually opened. The caller closes and bounds what it
+// reads; this only says WHAT may be opened.
 func OpenRegular(p string) (*os.File, error) {
 	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -299,17 +264,14 @@ func parseRemoteURL(url string) (host, ownerRepo string) {
 	s := url
 	// The SCHEME is case-insensitive (RFC 3986); the path is not. Match on a
 	// lowered copy and keep slicing the original, so "HTTPS://github.com/O/R"
-	// takes the URL arm while "O/R" survives as written. Before this, an
-	// upper-case scheme fell through to the scp arm and the SCHEME ITSELF came
-	// back as the host — "https" and "file" really appeared in the operator's
-	// "other hosts" warning (B11a-F8).
+	// takes the URL arm while "O/R" survives as written.
 	switch lower := strings.ToLower(s); {
 	case strings.HasPrefix(lower, "https://"), strings.HasPrefix(lower, "http://"),
 		strings.HasPrefix(lower, "ssh://"), strings.HasPrefix(lower, "git://"):
 		s = s[strings.Index(s, "://")+3:]
 		// LastIndexByte, not IndexByte: userinfo ends at the LAST "@" (git and
 		// net/url both read it that way), so "ssh://a@b@github.com/o/r" is
-		// github.com — IndexByte alone would take "b@github.com" as the host.
+		// github.com.
 		if at := strings.LastIndexByte(s, '@'); at >= 0 {
 			s = s[at+1:]
 		}
@@ -319,10 +281,9 @@ func parseRemoteURL(url string) (host, ownerRepo string) {
 		}
 		return hostOnly(s[:slash]), twoSegments(s[slash+1:])
 	default:
-		// A value carrying "://" is a URL, never an scp target — that is git's
-		// own rule. A scheme this package does not handle (file://, ftp://, a
-		// typo) is therefore DROPPED rather than scp-parsed into the host
-		// "file" (B11a-F8).
+		// A value carrying "://" is a URL, never an scp target (git's own rule),
+		// so an unhandled scheme (file://, ftp://, a typo) is DROPPED rather
+		// than scp-parsed into the host itself.
 		if strings.Contains(s, "://") {
 			return "", ""
 		}
@@ -331,11 +292,9 @@ func parseRemoteURL(url string) (host, ownerRepo string) {
 			s = s[at+1:]
 		}
 		// The separating colon is the one AFTER the closing bracket when the
-		// host is a bracketed IPv6 literal — git's own scp-like syntax accepts
-		// `git@[2001:db8::1]:acme/web.git`. Taking the FIRST colon split that
-		// host into the bogus "[2001", which is precisely the string B11a-F8/F11
-		// exist to keep out of the operator's "other hosts" warning; the URL arm
-		// was fixed and this one was not.
+		// host is a bracketed IPv6 literal — git's scp-like syntax accepts
+		// `git@[2001:db8::1]:acme/web.git`, and the FIRST colon would split
+		// that host into the bogus "[2001".
 		colon := strings.IndexByte(s, ':')
 		if strings.HasPrefix(s, "[") {
 			end := strings.IndexByte(s, ']')
@@ -356,10 +315,8 @@ func parseRemoteURL(url string) (host, ownerRepo string) {
 }
 
 // hostOnly lowercases a URL authority and strips an optional port, unwrapping a
-// bracketed IPv6 literal. Splitting at the first ":" truncated
-// "[2001:db8::1]:2222" to "[2001" — the same class as the git helper's
-// B11a-F11, and it is the string the operator reads in the "other hosts"
-// warning.
+// bracketed IPv6 literal (splitting at the first ":" would truncate
+// "[2001:db8::1]:2222" to "[2001").
 func hostOnly(authority string) string {
 	h := strings.ToLower(authority)
 	if bare, _, err := net.SplitHostPort(h); err == nil {
@@ -385,14 +342,8 @@ func twoSegments(p string) string {
 // FieldSafe reports whether s carries no control character and no whitespace.
 // It is THE predicate for both doors that judge an attacker-influenceable repo
 // slug or remote URL: this package's classify(), and internal/api's
-// repoFieldSafe, which delegates here.
-//
-// One predicate, deliberately (B11a-F10). The previous local copy carried a
-// FIXED whitespace list and a comment claiming to mirror repoFieldSafe — which
-// had since moved to unicode.IsSpace, so every Unicode space separator
-// (U+2000..U+200A, U+3000, …) passed here while the api door rejected it. Two
-// doors judging one value by different rules is how a detected remote reaches a
-// grant the authoring door would have refused.
+// repoFieldSafe, which delegates here — one predicate, deliberately, so the two
+// doors can never judge the same value by different rules.
 func FieldSafe(s string) bool {
 	return !strings.ContainsFunc(s, func(r rune) bool {
 		return unicode.IsControl(r) || unicode.IsSpace(r)

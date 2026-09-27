@@ -6,21 +6,12 @@ package adoscope
 // Which Azure DevOps REST requests write git repository CONTENT, for a run's
 // push_rules (internal/egress/proxy's ADO REST gate).
 //
-// The capability catalogue above answers "may this run do this at all"; push
-// rules ask "what does this write put in the repository", and the REST API is
-// a second door to that question beside git itself. Git Pushes - Create
-// (POST …/_apis/git/repositories/{repo}/pushes) carries its files inline,
-// path by path, so its paths can be read (ParsePush). Every other route that
-// puts content on a branch — an import, a server-side commit, merge,
-// cherry-pick or revert, a fork sync, a ref or tag pointed at a commit the
-// request does not show, a pull-request completion, a wiki page (a wiki is a
-// git repository, and a code wiki is a branch of one), a TFVC check-in — names
-// no path the rules could judge, so it is reported ContentOpaque and the gate
-// refuses it while the run has push rules. That mirrors the git door, which
-// refuses a ref update that carries no pack.
-//
-// Routes are read with the classifier's own parser (parseRoute), so the two
-// cannot disagree about which resource a path names.
+// Git Pushes - Create carries its files inline and can be read path by path
+// (ParsePush). Every other content-writing route (import, server-side commit,
+// merge, cherry-pick, revert, fork sync, a ref pointed at a commit the
+// request doesn't show, PR completion, wiki, TFVC check-in) names no path the
+// rules could judge, so it is reported ContentOpaque and refused while the
+// run has push rules.
 
 import (
 	"bytes"
@@ -60,9 +51,8 @@ var gitOpaqueContentResources = []string{
 }
 
 // ClassifyContent reports how req writes repository content. A route whose
-// answer depends on the body (a ref update, a pull-request update) answers
-// ErrNeedsBody for a BodyWithheld request, exactly as Classify does; one it
-// cannot read is an error, which the caller refuses.
+// answer depends on the body answers ErrNeedsBody for a BodyWithheld request,
+// same as Classify; one it cannot read is an error, refused by the caller.
 func ClassifyContent(req Request) (ContentTarget, error) {
 	method, err := effectiveMethod(req.Method, req.Header)
 	if err != nil {
@@ -89,10 +79,8 @@ func ClassifyContent(req Request) (ContentTarget, error) {
 		return ContentTarget{}, nil
 	}
 	t := ContentTarget{RepoPath: strings.Join(append(slices.Clone(r.segs[:r.apis]), "_git", r.at(3)), "/")}
-	// method is the EFFECTIVE method (X-HTTP-Method-Override applied), and
-	// every write to these resources is content whatever verb it arrives as:
-	// only a POST to pushes has a body ParsePush knows how to read, so any
-	// other verb there is refused as opaque rather than waved through.
+	// Only a POST to pushes has a body ParsePush can read; any other verb
+	// there is refused as opaque rather than waved through.
 	switch res := r.at(4); {
 	case res == "pushes" && method == http.MethodPost:
 		t.Write = ContentPush
@@ -107,8 +95,7 @@ func ClassifyContent(req Request) (ContentTarget, error) {
 }
 
 // refContent: Update Refs is content when any update points a ref at a
-// commit — the request shows no content, only an object id the service
-// already holds. An update that only deletes refs is not.
+// commit the request does not show; an update that only deletes refs is not.
 func refContent(req Request, t ContentTarget) (ContentTarget, error) {
 	body, err := peekBody(req)
 	if err != nil {
@@ -129,11 +116,9 @@ func refContent(req Request, t ContentTarget) (ContentTarget, error) {
 }
 
 // pullRequestContent: completing a pull request merges its source into the
-// target branch, content the request does not show — whether it completes now
-// (status "completed") or sets auto-complete to do so later, and whether that
-// is asked of an existing pull request or of one being created. Only the pull
-// request object itself carries those fields; sub is the segment after its id
-// (threads, reviewers, statuses, …), whose writes carry no content.
+// target branch, content the request does not show — via status "completed"
+// or auto-complete. sub is the segment after the PR id (threads, reviewers,
+// statuses, …), whose writes carry no content.
 func pullRequestContent(method string, req Request, t ContentTarget, sub string) (ContentTarget, error) {
 	if method == http.MethodDelete || sub != "" {
 		return t, nil
@@ -159,19 +144,16 @@ func pullRequestContent(method string, req Request, t ContentTarget, sub string)
 }
 
 // Push is what a Git Pushes - Create body writes: the refs it moves, every
-// path its changes name (a rename names both), and a digest of the body — the
-// request names no commit until the service makes one, so the digest is what
-// identifies its content.
+// path its changes name (a rename names both), and a digest of the body
+// (the request names no commit until the service makes one).
 type Push struct {
 	Refs   []string
 	Paths  []string
 	Digest string
 }
 
-// ParsePush reads a Git Pushes - Create body the classifier has already let
-// through peekBody. Anything it cannot read whole is an error: a repeated
-// key, a change with no path, a path git would not store, a push that moves
-// no ref.
+// ParsePush reads a Git Pushes - Create body already let through peekBody.
+// Anything it cannot read whole is an error.
 func ParsePush(req Request) (Push, error) {
 	body, err := peekBody(req)
 	if err != nil {
@@ -228,11 +210,9 @@ func ParsePush(req Request) (Push, error) {
 	return out, nil
 }
 
-// pushPath is a change's path as git stores it: the leading "/" dropped, and
-// refused when it could name something other than what it reads as — an
-// empty, "." or ".." segment, a backslash (a separator to the service), or a
-// control byte — or when it names the repository root, which no rule can be
-// matched against.
+// pushPath is a change's path as git stores it, with the leading "/" dropped;
+// refused if it names the repository root or contains an empty, "." or ".."
+// segment, a backslash, or a control byte.
 func pushPath(raw string) (string, error) {
 	p := strings.TrimPrefix(raw, "/")
 	if strings.TrimSuffix(p, "/") == "" {

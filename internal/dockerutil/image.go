@@ -16,10 +16,9 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// ImagePuller is the narrow Docker client surface PullImage needs. The moby v29
-// client's ImagePull returns a client.ImagePullResponse (an io.ReadCloser with
-// extra progress helpers), so the interface must declare that exact type for
-// *client.Client to satisfy it; PullImage only uses the io.ReadCloser aspect.
+// ImagePuller is the narrow Docker client surface PullImage needs, declaring
+// the exact client.ImagePullResponse return type *client.Client needs to
+// satisfy it; PullImage only uses its io.ReadCloser aspect.
 type ImagePuller interface {
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
 }

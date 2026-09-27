@@ -18,47 +18,30 @@ import (
 // Compile-time assertion: PGStore implements Store.
 var _ Store = (*PGStore)(nil)
 
-// maxCastBytes bounds a single stored cast (migration 0028). It matches
-// internal/api/recording.go's maxRecordingUploadBytes (64 MiB), but this cap
-// is NOT redundant with that one: it fronts only ONE of SaveCast's two
-// callers (the HTTP upload handler, via http.MaxBytesReader). The other
-// caller — the interactive-attach session recorder
-// (internal/api/attach.go newSessionRecorder's finish closure) — calls
-// SaveCastNamed directly, in-process, with no HTTP body to bound; it now
-// truncates at its own, much lower maxSessionCastBytes, so in practice this cap
-// only ever bites the upload path. Unlike a
-// local fs write, an oversized BYTEA row bloats the shared Postgres
-// table/WAL/backups for every replica, not just one pod's disk, so the store
-// enforces its own cap rather than trusting every caller to have one
-// upstream. Kept equal to the upload cap so behavior does not depend on which
-// path recorded the session.
+// maxCastBytes bounds a single stored cast (migration 0028), matching
+// internal/api/recording.go's maxRecordingUploadBytes so behavior doesn't
+// depend on which path recorded the session. Not redundant with that cap:
+// it also fronts the in-process attach-session recorder, which has no HTTP
+// body to bound another way. An oversized BYTEA row bloats the shared
+// Postgres table/WAL/backups for every replica, not just one pod's disk, so
+// the store enforces its own cap rather than trusting every caller upstream.
 const maxCastBytes = 64 << 20 // 64 MiB
 
-// readCapped reads everything r yields, stopping at limit+1 bytes so the caller
-// can tell "exactly at the cap" from "over it".
+// readCapped reads everything r yields, stopping at limit+1 bytes so the
+// caller can tell "exactly at the cap" from "over it".
 //
-// It exists because both obvious spellings blow through the control plane's
-// memory ceiling on a max-size cast — the deployed limit is 512Mi
-// (deploy/helm/wardyn/values.yaml resources.limits.memory) and an in-sandbox
-// agent streaming an unbounded cast is EXPLICITLY modelled hostile behavior
-// (internal/api/recording.go). Both grow by REALLOCATING, so the old and new
-// backing arrays are live at once and the earlier ones are still uncollected
-// garbage. Measured peak runtime.MemStats.HeapAlloc for one 64 MiB cast, go1.26:
+// A plain io.ReadAll or bytes.Buffer+io.Copy grows by REALLOCATING, so old
+// and new backing arrays are live at once — measured peak HeapAlloc for one
+// 64 MiB cast (go1.26):
 //
-//	io.ReadAll(io.LimitReader(r, cap+1))        158.3 MiB   (chunk list + final copy)
-//	bytes.Buffer(1 MiB) + io.Copy               224.6 MiB   (2x regrow — WORSE)
-//	64 KiB start, ONE regrow straight to cap+1   64.7 MiB   (this)
+//	io.ReadAll(io.LimitReader(r, cap+1))        158.3 MiB
+//	bytes.Buffer(1 MiB) + io.Copy                224.6 MiB   (worse)
+//	64 KiB start, ONE regrow straight to cap+1    64.7 MiB   (this)
 //
-// Two concurrent max-size uploads is the OOMKill case, so the fix is to make
-// the buffer reach its final size in one step: a typical few-KiB cast never
-// leaves the 64 KiB start (0.1 MiB allocated), and the worst case peaks at the
-// payload itself instead of 2.5x it.
-//
-// Do not "simplify" this back to one of the others after a Go upgrade. The two
-// spellings above depend on runtime growth heuristics that change between
-// releases (io.ReadAll grew by reallocation before go1.21 and by a chunk list
-// after); this reaches its final size in exactly two allocations by
-// construction, so its ceiling holds whatever those heuristics do next.
+// Two concurrent max-size uploads is the OOMKill case this avoids by
+// reaching final size in one regrow. Do not simplify this back to one of
+// the others after a Go upgrade — those depend on runtime growth heuristics
+// that change between releases; this doesn't.
 func readCapped(r io.Reader, limit int) ([]byte, error) {
 	buf := make([]byte, 0, min(64<<10, limit+1)) // min: the start must never exceed the cap
 
@@ -80,18 +63,15 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 	}
 }
 
-// PGStore is a Postgres-backed Store (migration 0028). Unlike FSStore, a cast
-// saved through one replica's handle is immediately visible to OpenCast
-// through any OTHER replica's handle — FSStore's directory is per-pod, so a
-// replay request that lands on a different pod than the one that recorded the
-// session 404s. The zero value is unusable; use NewPGStore.
+// PGStore is a Postgres-backed Store (migration 0028). Unlike FSStore
+// (per-pod directory), a cast saved via one replica is immediately visible
+// through any other. The zero value is unusable; use NewPGStore.
 type PGStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewPGStore returns a Store backed by pool — the SAME pgxpool the rest of the
-// control plane uses, so there is no separate connection or credential to
-// manage.
+// NewPGStore returns a Store backed by pool, the same pgxpool the rest of
+// the control plane uses.
 func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
 }
@@ -114,10 +94,8 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	if err := validKey(runID); err != nil {
 		return err
 	}
-	// Read fully (bounded) rather than streaming: pgx sends a bytea parameter as
-	// a single []byte, so there is nothing to stream to — readCapped stops at
-	// cap+1 so a too-large cast is detected and rejected before any INSERT is
-	// even attempted.
+	// Read fully (bounded), not streamed: pgx sends a bytea parameter as a
+	// single []byte, so a too-large cast is rejected before any INSERT.
 	data, err := readCapped(r, maxCastBytes)
 	if err != nil {
 		return fmt.Errorf("recording: read cast %q: %w", runID, err)
@@ -158,10 +136,9 @@ func (s *PGStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, erro
 }
 
 // StatAndTail reports the cast's byte size and its last tailBytes, computed
-// and sliced SERVER-SIDE (octet_length/substring on the bytea column) so a
-// caller wanting only a size and a duration never pulls the whole payload
-// across the wire — the same reason FSStore's twin seeks instead of reading
-// the file. tailBytes is clamped down to size when the cast is smaller.
+// and sliced SERVER-SIDE so a caller wanting only a size and a duration never
+// pulls the whole payload across the wire. tailBytes is clamped to size when
+// the cast is smaller.
 func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, error) {
 	if err := validKey(key); err != nil {
 		return 0, nil, err
@@ -184,22 +161,15 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 }
 
 // Sweep deletes every cast row last written more than olderThan ago,
-// returning how many rows it removed. It mirrors FSStore.Sweep's age
-// semantics — measured on last write via updated_at, not created_at, so a
-// cast that was re-saved is never swept out from under an in-progress session
-// — but, like FSStore.Sweep, is deliberately NOT part of the Store interface
-// (see store.go's package doc: retention is a storage-backend concern, and a
-// future object-storage backend would use its bucket's own lifecycle rules
-// instead of an app-level sweep). cmd/wardynd's startBackgroundWorkers
-// reaches this through the unexported recordingSweepable interface
-// (adapters.go), which both FSStore and PGStore satisfy structurally.
+// returning how many rows it removed. Measured on updated_at, not
+// created_at, so a re-saved cast is never swept from under an in-progress
+// session. Like FSStore.Sweep, deliberately NOT part of the Store interface
+// — retention is a storage-backend concern; reached via the unexported
+// recordingSweepable interface instead.
 func (s *PGStore) Sweep(olderThan time.Duration) (int, error) {
-	// Bounded, not context.Background(): the DELETE walks a TOASTed table that
-	// grows without bound under the keep-forever default, and its caller
-	// (cmd/wardynd/adapters.go runRecordingSweeper) runs it SYNCHRONOUSLY on the
-	// sweep loop — an unbounded statement would pin the sweeper past rootCtx
-	// cancellation and stall shutdown. Timing out just skips a sweep; the next
-	// tick retries, and the retention window is a day-scale knob.
+	// Bounded: the caller runs this synchronously on the sweep loop, so an
+	// unbounded DELETE would stall shutdown. Timing out just skips a sweep;
+	// the next tick retries.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	tag, err := s.pool.Exec(ctx,
@@ -215,12 +185,8 @@ func (s *PGStore) Sweep(olderThan time.Duration) (int, error) {
 func init() {
 	Register("pg", func(d Deps) (Store, error) {
 		if d.Pool == nil {
-			// Unlike fs's empty-Dir => disabled convention (an operator-facing
-			// knob, WARDYN_RECORDING_DIR), Deps.Pool has no operator-facing
-			// equivalent — wardynd always has a pool by the time it selects a
-			// recording store (Postgres is the one required dependency), so a
-			// nil pool here can only mean a wiring bug. Fail loud rather than
-			// silently going dark on the governance-evidence path.
+			// wardynd always has a pool by the time it selects a recording
+			// store, so nil here can only mean a wiring bug — fail loud.
 			return nil, errors.New("recording: pg store requires a pool (Deps.Pool is nil)")
 		}
 		return NewPGStore(d.Pool), nil
