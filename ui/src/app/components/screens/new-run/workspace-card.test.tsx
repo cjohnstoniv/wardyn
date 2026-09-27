@@ -17,10 +17,12 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { MEMBER } from "../../../lib/governance-copy";
-import { baseMeDrive } from "../../../lib/test-fixtures";
-import type { Workspace } from "../../../lib/types";
+import { DENIED } from "../../../lib/permissions-copy";
+import { baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
+import type { SetupModelProvider, Workspace } from "../../../lib/types";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { WorkspaceCard } from "./workspace-card";
 import { initialWizardState, type WizardState } from "./wizard-types";
 
@@ -39,10 +41,15 @@ function renderCard(opts: {
   unavailable?: string;
   workspaces?: Workspace[];
   state?: Partial<WizardState>;
+  // #922: undefined mounts NO <ModelAccessProvider> at all — the exact shape
+  // every OTHER case in this file renders, untouched. Only a test that passes
+  // this wraps one, matching new-run-rail.test.tsx's own "no provider above"
+  // fail-open precedent.
+  modelProviders?: SetupModelProvider[];
 } = {}) {
   const patch = vi.fn();
   const state = { ...initialWizardState(), ...opts.state };
-  const view = render(
+  const card = (
     <WorkspaceCard
       state={state}
       patch={patch}
@@ -52,7 +59,16 @@ function renderCard(opts: {
       drive={opts.drive ?? null}
       driveDeniedBy={opts.deniedBy ?? ""}
       driveUnavailable={opts.unavailable ?? ""}
-    />,
+    />
+  );
+  const view = render(
+    opts.modelProviders ? (
+      <ModelAccessProvider status={baseStatus({ model_providers: opts.modelProviders })} onRefresh={() => {}}>
+        {card}
+      </ModelAccessProvider>
+    ) : (
+      card
+    ),
   );
   return { patch, view };
 }
@@ -286,6 +302,62 @@ describe("WorkspaceCard — a selected workspace's source is not an enabled prov
     const ws = repoWorkspace();
     renderCard({ workspaces: [ws] });
     expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
+  });
+});
+
+// #922 (UT-7c): a selected workspace pinned to a model provider the caller's
+// OWN filtered /setup/status.model_providers doesn't carry — see
+// workspaceModelProviderUnavailable's own doc comment (wizard-types.ts) for
+// why this never names the provider.
+describe("WorkspaceCard — a selected workspace is pinned to an unavailable model provider (#922)", () => {
+  function pinnedWorkspace(providerRef: string): Workspace {
+    return {
+      id: "ws-pinned",
+      name: "trading-desk",
+      kind: "repo",
+      source: "acme/trading-desk",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+      llm_cred: { provider_ref: providerRef },
+    };
+  }
+
+  it("names the consequence when the pin isn't in the caller's own filtered list", () => {
+    const ws = pinnedWorkspace("bloomberg-gateway");
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      modelProviders: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }],
+    });
+    expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+  });
+
+  it("says nothing when the pin IS in the caller's own filtered list", () => {
+    const ws = pinnedWorkspace("corp-gateway");
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      modelProviders: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }],
+    });
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  it("says nothing while the list hasn't loaded yet (no ModelAccessProvider mounted) — fails open, never flashes on", () => {
+    const ws = pinnedWorkspace("bloomberg-gateway");
+    renderCard({ workspaces: [ws], state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] } });
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  it("says nothing when the workspace carries no pin at all", () => {
+    const ws = pinnedWorkspace("");
+    ws.llm_cred = {};
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      modelProviders: [],
+    });
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 });
 

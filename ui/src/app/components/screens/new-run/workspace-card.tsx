@@ -65,9 +65,10 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { makeMono } from "../../wardyn/code-block";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { Chip } from "../../wardyn/primitives";
 import { SectionCard } from "./new-run-primitives";
-import { hasSourceNotAdmitted } from "./wizard-types";
+import { hasSourceNotAdmitted, workspaceModelProviderUnavailable } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
 
 // /me.user_drive_unavailable's four closed tokens (user_drives_resolve.go),
@@ -240,6 +241,15 @@ export function WorkspaceCard({
   // as the Select's own reason line — the server withholds the base URL and
   // the row id, so PROVIDERS.CARD_NOT_ADMITTED names neither.
   const selectedNotAdmitted = !!pickedWorkspace && hasSourceNotAdmitted(pickedWorkspace);
+  // #922: the picked workspace is pinned to a model provider this caller's
+  // OWN filtered `/setup/status.model_providers` doesn't carry (see
+  // workspaceModelProviderUnavailable's own doc comment for why this can
+  // never name the provider). The shared shell status, not a fetch of its
+  // own — new-run-rail.tsx already reads the same context for its own
+  // preflight line, so this is the second consumer, not a second call.
+  const { status: shellStatus } = useShellSetupStatus();
+  const selectedProviderUnavailable =
+    !!pickedWorkspace && workspaceModelProviderUnavailable(pickedWorkspace, shellStatus?.model_providers);
 
   return (
     <SectionCard title="Workspace">
@@ -317,6 +327,9 @@ export function WorkspaceCard({
       )}
       {selectedNotAdmitted && (
         <p className="mt-2 text-xs text-muted-foreground">{PROVIDERS.CARD_NOT_ADMITTED}</p>
+      )}
+      {selectedProviderUnavailable && (
+        <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
       )}
       <DriveBlock
         drive={drive}

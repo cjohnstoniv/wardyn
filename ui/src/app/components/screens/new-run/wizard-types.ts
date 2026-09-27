@@ -104,6 +104,31 @@ export function hasSourceNotAdmitted(ws: Workspace): boolean {
   return workspaceSources(ws).some((s) => s.admitted === false);
 }
 
+// #922 (UT-7c), the person side: is this workspace pinned (llm_cred.provider_ref,
+// WorkspaceLLMCred) to a model provider this caller's own filtered list does
+// not carry? `modelProviders` is GET /setup/status's own `model_providers`
+// (SetupModelProvider[]) — already narrowed to what THIS caller may use by
+// the server's capVisible(capModelProvider) (#832, #1015): a provider this
+// caller isn't granted is dropped from that array whole, "so it reads exactly
+// as a resource the deployment does not have", not merely disabled. So an
+// absent match here is the caller's OWN answer, never re-derived from a grant
+// table the console cannot safely read for a plain member (there is no
+// member-safe way to learn a restricted value's own name — #1018 tracks the
+// same gap for the refusal sentence).
+//
+// undefined `modelProviders` means "haven't read the list yet" (or a
+// deployment with no provider block at all) and answers false — the same
+// fail-open default hasSourceNotAdmitted's sibling checks take: an advisory
+// hint must never flash on before its own data has loaded.
+export function workspaceModelProviderUnavailable(
+  ws: Workspace,
+  modelProviders: { id: string }[] | undefined,
+): boolean {
+  const ref = ws.llm_cred?.provider_ref;
+  if (!ref || !modelProviders) return false;
+  return !modelProviders.some((p) => p.id === ref);
+}
+
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
 // bug by constraining the picker to exactly these dotted ids.
 // SEAM: there is no harness/tool-catalog endpoint exposed to the UI yet (no GET

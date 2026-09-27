@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { Workspace, WorkspaceProfile } from "../../lib/types";
+import type { SetupModelProvider, Workspace, WorkspaceProfile } from "../../lib/types";
+import { baseStatus } from "../../lib/test-fixtures";
 
 // The workspaces LIST: a single table, four columns (Workspace / Source /
 // Image / Model) + an overflow kebab. Stage 2 dropped the tier tabs (Sources
@@ -37,7 +38,9 @@ vi.mock("sonner", () => ({
 
 import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
+import { DENIED } from "../../lib/permissions-copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 
@@ -176,6 +179,45 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
     renderScreen();
     await screen.findByText("payments");
     expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
+  });
+});
+
+// #922 (UT-7c): a workspace pinned to a model provider the caller's own
+// filtered /setup/status.model_providers doesn't carry.
+describe("WorkspacesScreen — a workspace is pinned to an unavailable model provider (#922)", () => {
+  function renderWithStatus(modelProviders: SetupModelProvider[]) {
+    return render(
+      <MemoryRouter>
+        <ModelAccessProvider status={baseStatus({ model_providers: modelProviders })} onRefresh={() => {}}>
+          <WorkspacesScreen />
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("renders the generic consequence under Model, naming nothing", async () => {
+    const w = ws({}, { llm_cred: { provider_ref: "bloomberg-gateway" } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }]);
+    const text = await screen.findByText(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).toBe(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).not.toContain("bloomberg-gateway");
+  });
+
+  it("says nothing when the pin IS in the caller's own filtered list", async () => {
+    const w = ws({}, { llm_cred: { provider_ref: "corp-gateway" } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }]);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  it("says nothing for a workspace with no provider pin at all", async () => {
+    const w = ws({});
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([]);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 });
 

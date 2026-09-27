@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The person side of "Available to" names the consequence, in the console, before Launch (#922).**
+  New Run's workspace picker and a workspace's own page (its "Start a run" button) now say
+  `This workspace isn't available to you.` when the workspace itself carries no allow for the
+  caller, or when it is pinned to a model provider the caller's own filtered
+  `/setup/status.model_providers` doesn't carry — the sentence never names the resource, since the
+  console has no member-safe way to learn a restricted value's own name. The Workspaces list shows
+  the same line under a pinned workspace's Model column. Advisory only, same as the existing
+  "Not granted" workspace-picker annotation; the server's own launch-time refusal is still the real
+  gate.
+
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
   group); the portal then trades the person's own live identity-provider token for a ten-minute,

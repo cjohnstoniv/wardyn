@@ -22,15 +22,19 @@ import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
 import { AVAILABILITY } from "../../../lib/availability-copy";
+import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities";
+import { DENIED } from "../../../lib/permissions-copy";
 import { Button } from "../../ui/button";
 import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { useCanMutate, useSecurityOperator } from "../../wardyn/operator-context";
+import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
+import { workspaceModelProviderUnavailable } from "../new-run/wizard-types";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
@@ -78,6 +82,12 @@ export function WorkspaceDetailScreen() {
   // OTHER control on this page keeps its own (security/operator) gate.
   const canMutate = useCanMutate(ws?.owned_by);
   const securityOperator = useSecurityOperator();
+  // #922 (UT-7c), the person side: an admin is exempt from every capability
+  // (capabilities.ts's own fail-open doctrine), so this never asks for one —
+  // useMyCapabilities' own `enabled` gate.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
+  const { status: shellStatus } = useShellSetupStatus();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
@@ -340,6 +350,21 @@ export function WorkspaceDetailScreen() {
 
   const kindMeta = kindMetaOf(ws.kind) ?? KIND_META.local_dir;
   const image = imageRow(ws);
+  // #922 (UT-7c): "Start a run" only NAVIGATES to New Run (it launches
+  // nothing itself), so disabling it here costs nothing a member could not
+  // already reach a different way — but it is the one place on this page
+  // that ever pointed at launching AGAINST this workspace specifically, so it
+  // is where the person-side "isn't available to you" consequence belongs.
+  // Two independent reasons fold into the SAME generic sentence (see
+  // DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment for why neither ever
+  // names the resource): this workspace itself carries no allow naming the
+  // caller (capabilityAllowed's existing "workspace" narrowing, the same
+  // signal workspace-card.tsx's own selectedWorkspaceUngranted reads), or it
+  // is pinned to a model provider the caller's own filtered list doesn't
+  // carry.
+  const workspaceUnavailable =
+    (!operator && !capabilityAllowed(caps, "workspace", ws.id)) ||
+    workspaceModelProviderUnavailable(ws, shellStatus?.model_providers);
 
   return (
     <div className="mx-auto max-w-[1000px] px-6 py-5">
@@ -370,7 +395,12 @@ export function WorkspaceDetailScreen() {
               )}
             </div>
           </div>
-          <Button size="sm" onClick={() => navigate("/runs", { state: { openNewRun: true } })}>
+          <Button
+            size="sm"
+            disabled={workspaceUnavailable}
+            title={workspaceUnavailable ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined}
+            onClick={() => navigate("/runs", { state: { openNewRun: true } })}
+          >
             Start a run
           </Button>
           <Button
@@ -386,6 +416,13 @@ export function WorkspaceDetailScreen() {
             {!canMutate && <OperatorOnlyHint />}
           </Button>
         </div>
+
+        {/* A disabled button that doesn't say why is a dead end (M-ux-6) —
+            the same rule New Run's own Launch button follows for its
+            `problem` line. */}
+        {workspaceUnavailable && (
+          <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
+        )}
 
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5">
           <div className="min-w-0 flex-1">

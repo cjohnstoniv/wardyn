@@ -8,7 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { FolderGit2, FolderOpen, Hourglass, MoreHorizontal, Plus, RotateCw, Trash2 } from "lucide-react";
 import { workspaces as api } from "../../lib/api/workspaces";
 import { LIST_LIMIT } from "../../lib/api/core";
-import { compositionSummary, hasSourceNotAdmitted } from "./new-run/wizard-types";
+import { compositionSummary, hasSourceNotAdmitted, workspaceModelProviderUnavailable } from "./new-run/wizard-types";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
@@ -34,7 +34,8 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
-import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { DENIED, MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { useCanMutate, useOperator, useRole } from "../wardyn/operator-context";
 
@@ -105,6 +106,10 @@ export function WorkspacesScreen() {
   const operator = useOperator();
   const role = useRole();
   const navigate = useNavigate();
+  // #922: the shared shell status (already fetched for the app shell's own
+  // model-access reads), read here only for its filtered model_providers —
+  // see workspaceModelProviderUnavailable's own doc comment.
+  const { status: shellStatus } = useShellSetupStatus();
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -235,6 +240,7 @@ export function WorkspacesScreen() {
                 // precedent's shape. No base URL, no row id: the server
                 // already withholds both from PROVIDERS.CARD_NOT_ADMITTED.
                 const notAdmitted = hasSourceNotAdmitted(w);
+                const providerUnavailable = workspaceModelProviderUnavailable(w, shellStatus?.model_providers);
                 return (
                   <TableRow
                     key={w.id}
@@ -288,6 +294,11 @@ export function WorkspacesScreen() {
                         </Chip>
                       ) : (
                         <span className="text-muted-foreground">—</span>
+                      )}
+                      {providerUnavailable && (
+                        <p className="mt-1 max-w-[220px] text-meta text-muted-foreground">
+                          {DENIED.WORKSPACE_NOT_AVAILABLE}
+                        </p>
                       )}
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>

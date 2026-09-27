@@ -42,11 +42,16 @@ const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 const getAvailabilityMock = vi.fn();
+const getMyCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
   return {
     ...actual,
-    permissions: { ...actual.permissions, getAvailability: (...a: unknown[]) => getAvailabilityMock(...a) },
+    permissions: {
+      ...actual.permissions,
+      getAvailability: (...a: unknown[]) => getAvailabilityMock(...a),
+      getMyCapabilities: (...a: unknown[]) => getMyCapabilitiesMock(...a),
+    },
   };
 });
 
@@ -120,6 +125,11 @@ beforeEach(() => {
   // Never settles by default, so the Availability card stays empty in every
   // test that isn't about it.
   getAvailabilityMock.mockReturnValue(new Promise(() => {}));
+  // Same idiom, same reason (#922): a test that isn't about "Start a run"'s
+  // own availability must render byte-identical to before this hook existed —
+  // caps stays null forever, and capabilityAllowed's own fail-open default
+  // (null caps => allowed) is what that renders as.
+  getMyCapabilitiesMock.mockReturnValue(new Promise(() => {}));
 });
 
 // The F031 case below queues two mockResolvedValueOnce answers on
@@ -152,6 +162,60 @@ describe("WorkspaceDetailScreen — header: name, source line, and Start a run",
     expect(screen.getByText("repo · acme/payments · main")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^start a run$/i }));
     expect(await screen.findByText("runs screen (openNewRun)")).toBeInTheDocument();
+  });
+});
+
+// #922 (UT-7c), the person side: "Start a run" only NAVIGATES (it launches
+// nothing itself), so this is the one place on this page a member-facing
+// launch consequence belongs. Both reasons fold into the SAME generic
+// sentence — see DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment
+// (permissions-copy.ts) for why neither ever names the resource.
+describe("WorkspaceDetailScreen — Start a run, unavailable to this person (#922)", () => {
+  it("disables Start a run and names the consequence when this workspace carries no allow for a non-operator caller", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getMyCapabilitiesMock.mockResolvedValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderDetail("ws-1", false);
+    expect(await screen.findByRole("heading", { name: "payments" })).toBeInTheDocument();
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled for the same caller once an allow names them", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getMyCapabilitiesMock.mockResolvedValue({
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user_type",
+          subject: "standard",
+          capability: "workspace",
+          value: "ws-1",
+          effect: "allow",
+          created_at: "",
+        },
+      ],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderDetail("ws-1", false);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("stays enabled for an operator regardless — never asks /me/capabilities", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    expect(button).toBeEnabled();
+    expect(getMyCapabilitiesMock).not.toHaveBeenCalled();
   });
 });
 
