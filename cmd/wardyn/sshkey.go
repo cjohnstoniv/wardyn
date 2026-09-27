@@ -27,12 +27,19 @@ const defaultSSHKeyPath = "~/.wardyn/id_ed25519"
 
 // sshKeyCmd returns `wardyn ssh-key`: the keys the SSH gateway trusts for the
 // caller's own principal (docs/SSH.md §1). `ensure` is the scriptable half of
-// the console's Account -> SSH keys page — a tool that needs to dial a sandbox
+// the console's Your account page — a tool that needs to dial a sandbox
 // calls it once per machine and gets back the identity file to use.
 func sshKeyCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ssh-key",
 		Short: "Manage the SSH keys the gateway trusts for your account",
+		Long: `Manage the SSH keys the gateway trusts for your account.
+
+Keys registered here — or from the console's Your account page — are capped:
+they never carry the admin override, even for a super admin. Registering a
+key with admin reach, one that can open a run someone else created, is a
+separate, admin-view-only door: the Admin SSH keys card in Admin view ->
+Settings, super admins only.`,
 	}
 	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client), sshKeyDeleteCmd(client))
 	return subcommandGroup(cmd)
@@ -66,7 +73,7 @@ the account. Safe to run on every launch: a second call changes nothing.
 Under SSO the key must be registered by YOU, not by the deployment's admin
 token (a key on the admin-token principal can never open a run you created):
 authenticate the CLI with your own API token (WARDYN_TOKEN) or add the key in
-the console under Account -> SSH keys instead.
+the console under Your account instead.
 `,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
