@@ -263,17 +263,19 @@ func TestCommentsCiteSymbolsNotLineNumbers(t *testing.T) {
 
 // privatePathCitation matches a reference to the author's own machine (a
 // `~/.claude` plan or verify-run) or to a private note in the gitignored
-// `local/` tree: a `review…` ledger or a release folder under `local/v0N…`.
-// All of them live outside the published repo, so a citation sends a reader —
-// anyone who is not the one machine that wrote it — to a path that does not
-// exist for them. The published tree must be legible on its own.
+// `local/` tree: a `review…` ledger, a `HANDOFF…` or `FILED…` note, or a
+// release folder under `local/v0N…`. All of them live outside the published
+// repo, so a citation sends a reader — anyone who is not the one machine that
+// wrote it — to a path that does not exist for them. The published tree must
+// be legible on its own.
 //
 // Not "cites `local/`": the product itself documents real `local/` runtime
 // paths, such as the kind SSO walk's evidence directory (docs/ENV.md,
 // `WARDYN_KIND_SSO_EVIDENCE` = `local/evidence/kind-sso`) and the demo take
-// ledger (RELEASING.md, `local/TAKES-LEDGER.md`) — neither is a `review…` or
-// `v0N…` path, so this guard leaves them alone without needing an allowlist.
-var privatePathCitation = regexp.MustCompile(`~/\.claude/(plans|verify-runs)|(^|[^A-Za-z0-9_])local/(review|v0[0-9]+)`)
+// ledger (RELEASING.md, `local/TAKES-LEDGER.md`) — none of those is a
+// `review…`, `HANDOFF…`, `FILED…` or `v0N…` path, so this guard leaves them
+// alone without needing an allowlist.
+var privatePathCitation = regexp.MustCompile(`~/\.claude/(plans|verify-runs)|(^|[^A-Za-z0-9_])local/(review|v0[0-9]+|HANDOFF|FILED)`)
 
 // TestNoPrivatePathCitations fails on a tracked Markdown doc, or a non-test Go
 // comment, that cites the author's private plan/review directories. It is
