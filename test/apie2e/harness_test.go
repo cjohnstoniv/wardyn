@@ -492,7 +492,7 @@ func newCleanupCtx(t *testing.T) context.Context {
 // injection) directly over HTTP — the black-box analogue of a sidecar.
 func (h *harness) mintRunToken(runID uuid.UUID) string {
 	h.t.Helper()
-	id, err := h.idp.MintRunIdentity(context.Background(), runID, "alice@example.com", "", internalAudience)
+	id, err := h.idp.MintRunIdentity(context.Background(), runID, "alice@example.com", "", internalAudience, false)
 	if err != nil {
 		h.t.Fatalf("mint run identity: %v", err)
 	}

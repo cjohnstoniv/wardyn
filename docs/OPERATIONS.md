@@ -6311,6 +6311,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `api_tokens.user_type` with its CHECK. The long-holds runs add three more on `agent_runs`:
 `0083` adds `token_renewed_at` and `0084` adds `proxy_release`, and `0088`
 (`0088_agent_runs_containment_error`) adds `containment_error` and `containment_error_at`.
+`0089` adds `agent_runs.operator_owned`.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

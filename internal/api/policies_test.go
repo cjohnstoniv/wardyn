@@ -59,6 +59,7 @@ func TestCreatePolicyValidation(t *testing.T) {
 		{"unknown min cc", `{"name":"p","spec":{"min_confinement_class":"CC9"}}`},
 		{"unknown grant kind", `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"weird"}]}}`},
 		{"negative ttl", `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","ttl_seconds":-1}]}}`},
+		{"owner_only on a kind naming no secret", `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"cloud_sts","owner_only":true}]}}`},
 		{"unknown field (typo)", `{"name":"p","spec":{"min_confinement_class":"CC2","allowd_domains":["x"]}}`},
 	}
 	for _, c := range cases {
@@ -69,20 +70,18 @@ func TestCreatePolicyValidation(t *testing.T) {
 	}
 }
 
-// TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime pins the author-time
-// fail-fast for validateWorkspaceSources' sibling reference: a typo'd api_key
-// secret name must not save green and then 422 at every launch that references
-// the policy — the failure mode the workspace check prevents, on the other
-// referenced resource. Advisory, not the load-bearing gate: the secret can be
-// deleted afterwards, so run-create still re-checks.
-func TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime(t *testing.T) {
+// TestCreatePolicy_SecretRefShapeFailsAtAuthorTime: a stored policy's secret
+// references are checked for shape at author time — here an LLM-auth sentinel
+// with no token provider behind it — and the refusal carries the "secret: "
+// prefix, mirroring "workspace: ". Existence is not checked there (#1123): see
+// TestStoredPolicy_SecretRefsResolvePerRunOwner.
+func TestCreatePolicy_SecretRefShapeFailsAtAuthorTime(t *testing.T) {
 	h := newHarness(t)
-	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("k")}}
-	const body = `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
-		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"anthropic-api-kye"}}]}}`
+	body := `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"` + types.SubscriptionOAuthSecret + `"}}]}}`
 	w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken, body)
 	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("code = %d, want 422 (unknown secret must fail at author time); body=%s", w.Code, w.Body.String())
+		t.Fatalf("code = %d, want 422 (a sentinel with no provider must fail at author time); body=%s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "secret: ") {
 		t.Errorf("error must carry the \"secret: \" prefix, mirroring \"workspace: \": %s", w.Body.String())

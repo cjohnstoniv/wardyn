@@ -505,6 +505,34 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 	return actor
 }
 
+// operatorOwnedRequest reports whether the request on ctx is the operator
+// itself rather than a person: local mode's injected principal, or
+// actorFromRequest's system actor that is not a device — the real admin token.
+// It reads what authenticated the request, never a principal string, so an
+// IdP sub spelled like the admin token is still a person. Run creation records
+// it (AgentRun.OperatorOwned, identity.Claims.OperatorOwned).
+func operatorOwnedRequest(ctx context.Context) bool {
+	if localPrincipalFromContext(ctx) != "" {
+		return true
+	}
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false
+	}
+	t, _ := actorFromRequest((&http.Request{}).WithContext(ctx))
+	return t == types.ActorSystem
+}
+
+// grantReadOwner is the namespace a grant's stored secret is read from for a
+// run whose identity subject is subject: that subject's (falling back to the
+// operator's unless the grant is owner_only), except that an owner_only grant
+// on an operator-owned run reads the operator's "" namespace, its own.
+func grantReadOwner(subject string, ownerOnly, operatorOwned bool) string {
+	if ownerOnly && operatorOwned {
+		return ""
+	}
+	return subject
+}
+
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit
 // sites that already pass principalFromRequest(r) for the name. Pairing them as
 // (actorTypeFromRequest(r), principalFromRequest(r)) records a bare admin-token

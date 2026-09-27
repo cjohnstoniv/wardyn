@@ -288,11 +288,12 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, "workspace: "+err.Error())
 		return
 	}
-	// Same fail-fast for the sibling reference: an api_key/git_pat/ssh_key grant
-	// naming a secret that does not exist. Advisory at author time (the secret can
-	// be deleted afterwards) — run-create stays the load-bearing gate.
-	if code, err := s.validateInlineSecretRefs(r.Context(), s.secretOwnerFromRequest(r), req.Spec); err != nil {
-		writeError(w, code, "secret: "+err.Error())
+	// Secret references are checked for shape only. Whether a named secret
+	// exists depends on whose run selects the policy, so run-create checks it
+	// in that owner's namespace; checking the author's here demanded an
+	// operator row, the fallback a per-person credential must not have (#1123).
+	if _, err := s.secretRefsOf(req.Spec); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "secret: "+err.Error())
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -339,8 +340,8 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, "workspace: "+err.Error())
 		return
 	}
-	if code, err := s.validateInlineSecretRefs(r.Context(), s.secretOwnerFromRequest(r), req.Spec); err != nil {
-		writeError(w, code, "secret: "+err.Error())
+	if _, err := s.secretRefsOf(req.Spec); err != nil { // shape only, as in create
+		writeError(w, http.StatusUnprocessableEntity, "secret: "+err.Error())
 		return
 	}
 	updated, err := s.cfg.Store.UpdatePolicy(r.Context(), id, req.Name, req.Spec)

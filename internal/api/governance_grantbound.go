@@ -78,6 +78,7 @@ const (
 	// in one place, and a proposal it covers nothing of is refused with the
 	// matching sentence before any ranking starts.
 	boundFailApproval grantBoundFailure = iota
+	boundFailOwnerOnly
 	boundFailTTL
 	boundFailGitHubScope
 )
@@ -112,12 +113,12 @@ const (
 //     approval forced on, a smaller GitHub repo set — which is the entire point
 //     of authoring one.
 //
-// Four axes, all in the narrowing direction: the pairing must be one the
+// Five axes, all in the narrowing direction: the pairing must be one the
 // deployment ceiling already lists — that axis is composer.CeilingGrantsCovering,
 // the SAME selection the runtime clamp bounds against and the same pairing rule
 // filterUserGrants enforces, so a profile, a member and a dispatched run are
 // bounded by one rule, not three that can drift; approval may be forced on,
-// never stripped;
+// never stripped; owner_only likewise;
 // TTL may be shortened, never lengthened (both sides normalized —
 // normalizeGrantTTLSeconds); and github_token repos/permissions must be a
 // subset, which pairing checks CANNOT see (storedSecretGrantPairing reports
@@ -185,6 +186,13 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 			note(boundFailApproval, fmt.Errorf(
 				"eligible grant %q strips requires_approval, which the deployment ceiling sets "+
 					"(a profile may force approval on, never off — without it the credential auto-mints at proxy boot)",
+				g.Kind))
+			continue
+		}
+		if cg.OwnerOnly && !g.OwnerOnly {
+			note(boundFailOwnerOnly, fmt.Errorf(
+				"eligible grant %q strips owner_only, which the deployment ceiling sets "+
+					"(a profile may force it on, never off — without it a person with no row of their own is served the operator's)",
 				g.Kind))
 			continue
 		}

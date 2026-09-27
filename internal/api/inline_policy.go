@@ -223,7 +223,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
-		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
+		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 			writeError(w, code, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
@@ -324,7 +324,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// their run does not get, and a dispatch-side log line is not a disclosure to
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
 	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
-	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
+	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
@@ -858,17 +858,29 @@ func storedSecretPairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 // references it. The kind is the whole point: without it, a refusal on this
 // path cannot say which grant is the problem — git_pat and ssh_key grants
 // would be named "api_key" too. Reachable from four doors.
+// ownerOnlyMissingRefusal names the remedy: the row is stored by that person,
+// signed in as themselves; an admin's own writes land in the operator
+// namespace, so an admin stores theirs from the user view.
+const ownerOnlyMissingRefusal = "%s grant for secret %q is owner_only, and the run's owner has no secret of that name of their own " +
+	"(an operator secret of that name is never used for it). Store it via the secrets API signed in as that person; " +
+	"an admin stores their own from the user view"
+
 type neededSecret struct {
-	name string
-	kind types.GrantKind
+	name      string
+	kind      types.GrantKind
+	ownerOnly bool
 }
 
-func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spec types.RunPolicySpec) (int, error) {
+// secretRefsOf is validateInlineSecretRefs' shape half: the secret names a
+// spec's api_key, git_pat and ssh_key grants reference, refusing a scope that
+// does not decode, a reserved name, or a misdirected LLM-auth sentinel. It
+// reads no store. A stored policy is checked with this alone: its grants
+// resolve in each run owner's namespace, and run-create checks that (#1123).
+func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) {
 	// Collect the secret names referenced by api_key, git_pat AND ssh_key
 	// grants (all three resolve a stored secret by name — api_key proxy-side,
 	// git_pat via the git helper, ssh_key as the resident key + optional
-	// known_hosts), each carrying the kind that referenced it. If there are
-	// none, there is nothing to check and no secret store is required.
+	// known_hosts), each carrying the kind that referenced it.
 	var needed []neededSecret
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {
@@ -877,11 +889,10 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 			if derr != nil {
 				// An undecodable api_key scope cannot reference a resolvable secret;
 				// fail closed rather than silently skipping it.
-				return http.StatusUnprocessableEntity, fmt.Errorf("api_key grant scope invalid: %w", derr)
+				return nil, fmt.Errorf("api_key grant scope invalid: %w", derr)
 			}
 			if sinkReservedSecret(rule.SecretName) {
-				return http.StatusUnprocessableEntity, fmt.Errorf(
-					"api_key grant references reserved secret name %q", rule.SecretName)
+				return nil, fmt.Errorf("api_key grant references reserved secret name %q", rule.SecretName)
 			}
 			// The subscription/managed OAuth sentinels are NOT stored secrets — they
 			// resolve live at inject time (resident ~/.claude, or the Wardyn-managed
@@ -890,46 +901,55 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 			// profile); just require the matching provider to be wired.
 			if provider, source, isSentinel := s.oauthProviderForSentinel(rule.SecretName); isSentinel {
 				if provider == nil {
-					return http.StatusUnprocessableEntity, fmt.Errorf(
-						"policy uses %s LLM auth, but no %s token provider is configured", source, source)
+					return nil, fmt.Errorf("policy uses %s LLM auth, but no %s token provider is configured", source, source)
 				}
 				// Host pin (write-time defense): the sentinel resolves to a LIVE
 				// OAuth token and may only ever target Anthropic (or the operator's
 				// own configured gateway). Reject an authored grant that points it
 				// elsewhere (the inject sink also enforces this, fail-closed).
 				if !s.subscriptionInjectionHostAllowed(rule.Host) {
-					return http.StatusUnprocessableEntity, fmt.Errorf(
-						"%s LLM auth may only target %s, not %q", source, s.subscriptionInjectionHostDesc(), rule.Host)
+					return nil, fmt.Errorf("%s LLM auth may only target %s, not %q", source, s.subscriptionInjectionHostDesc(), rule.Host)
 				}
 				continue
 			}
-			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey})
+			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly})
 		case types.GrantGitPAT:
 			_, secretName, _, derr := gitPATScopeFields(g.Scope)
 			if derr != nil {
-				return http.StatusUnprocessableEntity, fmt.Errorf("git_pat grant scope invalid: %w", derr)
+				return nil, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
 			if sinkReservedSecret(secretName) {
-				return http.StatusUnprocessableEntity, fmt.Errorf(
-					"git_pat grant references reserved secret name %q", secretName)
+				return nil, fmt.Errorf("git_pat grant references reserved secret name %q", secretName)
 			}
-			needed = append(needed, neededSecret{secretName, types.GrantGitPAT})
+			needed = append(needed, neededSecret{secretName, types.GrantGitPAT, g.OwnerOnly})
 		case types.GrantSSHKey:
 			_, keyRef, _, khRef, derr := sshKeyScopeFields(g.Scope)
 			if derr != nil {
-				return http.StatusUnprocessableEntity, fmt.Errorf("ssh_key grant scope invalid: %w", derr)
+				return nil, fmt.Errorf("ssh_key grant scope invalid: %w", derr)
 			}
 			if sinkReservedSecret(keyRef) || sinkReservedSecret(khRef) {
-				return http.StatusUnprocessableEntity, errors.New(
-					"ssh_key grant references a reserved secret name")
+				return nil, errors.New("ssh_key grant references a reserved secret name")
 			}
-			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey})
+			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly})
 			if khRef != "" {
-				needed = append(needed, neededSecret{khRef, types.GrantSSHKey})
+				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly})
 			}
 		default:
 			continue
 		}
+	}
+	return needed, nil
+}
+
+// validateInlineSecretRefs is secretRefsOf plus existence, for a spec about to
+// run: owner is the caller's secret namespace (secretOwnerFromRequest) and
+// subject the run identity's (runIdentitySubject), the namespace an owner_only
+// grant is read from at mint. With no reference there is nothing to check and
+// no secret store is required.
+func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject string, spec types.RunPolicySpec) (int, error) {
+	needed, err := s.secretRefsOf(spec)
+	if err != nil {
+		return http.StatusUnprocessableEntity, err
 	}
 	if len(needed) == 0 {
 		return 0, nil
@@ -952,6 +972,15 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 		known[n] = true
 	}
 	for _, n := range needed {
+		// A person's owner_only grant never reads the operator namespace (#1106):
+		// only the row the mint reads. An operator-owned run's own row is the
+		// operator's, which the check below finds.
+		if n.ownerOnly && !operatorOwnedRequest(ctx) {
+			if !s.ownsSecretMemoized(ctx, subject, n.name) {
+				return http.StatusUnprocessableEntity, fmt.Errorf(ownerOnlyMissingRefusal, n.kind, n.name)
+			}
+			continue
+		}
 		// A name in owner's OWN namespace (For(owner).List — own rows only) is
 		// accepted too — this is what lets a member's inline_policy name their
 		// own model key with no operator row of that name at all (6c). Never

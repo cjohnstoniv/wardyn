@@ -145,7 +145,8 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	// sponsor claim); the identity's SUBJECT — the secret-namespace selector — is
 	// runIdentitySubject's, so a LocalMode X-Wardyn-Principal header cannot point
 	// a server-launched step/probe/login run at another principal's stored rows.
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), actor, internalAudience)
+	operatorOwned := operatorOwnedRequest(ctx)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), actor, internalAudience, operatorOwned)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}
@@ -154,7 +155,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
 		Agent: stepRunAgent, Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget: s.cfg.RunnerTarget,
+		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned,
 	}
 	s.captureRunLimits(&run, gov.ceiling)
 	if set != nil {
