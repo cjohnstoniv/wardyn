@@ -60,7 +60,10 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if callerIsOwner && s.isOperator(ctx) {
 		return nil, nil
 	}
-	if !callerIsOwner && run.CreatedBy == adminTokenPrincipal {
+	// An operator-owned run (the admin token, local mode) has no person whose
+	// capabilities could have changed. Read from the run's recorded
+	// authentication, never created_by, which an IdP sub could spell alike.
+	if !callerIsOwner && run.OperatorOwned {
 		return nil, nil
 	}
 	rows, err := s.ownerProviderRows(ctx, repos)

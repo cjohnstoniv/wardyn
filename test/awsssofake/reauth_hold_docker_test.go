@@ -7,12 +7,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
+	"maps"
 	"os/exec"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -77,67 +78,62 @@ func syntheticAWSHome(sessionName, startURL, region, accountID, roleName string,
 	}
 }
 
-// writeAWSHome materializes the synthetic ~/.aws layout under dir before it is
-// bind-mounted into the agent image at /home/agent. World-readable (0o755/
-// 0o644), not the 0o700/0o600 a real credentials directory would get: the
-// image's agent user is a FIXED uid (1000, deploy/images/claude-code/
-// Dockerfile), but the host uid writing these files is whatever runs `go
-// test` — a GitHub-hosted runner's default user is uid 1001, not 1000, so a
-// file mode that only the WRITER can read left the container's read of its
-// own bind-mounted home permission-denied on every nightly (#511/F6): not
-// just the direct read in (c), but the SDK's own read of the SSO token cache
-// in (a)/(b), which is why those hung for zero GetRoleCredentials calls
-// rather than reusing the cached token. This is a throwaway t.TempDir() this
-// one test process owns for its own lifetime, on a runner or laptop nobody
-// else's containers share, so there is no boundary a permissive mode weakens.
-func writeAWSHome(t *testing.T, dir string, home map[string]string) {
-	t.Helper()
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatalf("chmod %s: %v", dir, err)
+// sandboxAWSConfigEnv is home as dispatch delivers it: the
+// WARDYN_AWS_SSO_CONFIG_B64 value (internal/api's awsSSOConfigEnvVar, encoded
+// like encodeArtifactConfig), which the image's own agent-run materializes as
+// the agent user. Never a host bind mount: production has none, and a
+// host-written home is unreadable to the image's agent uid wherever the host
+// uid differs (a hosted runner), which the SDK reports as "Could not load
+// credentials from any providers" without ever calling GetRoleCredentials.
+func sandboxAWSConfigEnv(home map[string]string) string {
+	records := make([]string, 0, len(home))
+	for _, rel := range slices.Sorted(maps.Keys(home)) {
+		records = append(records, rel+"\t"+base64.StdEncoding.EncodeToString([]byte(home[rel])))
 	}
-	for rel, contents := range home {
-		dst := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", rel, err)
-		}
-		if err := os.WriteFile(dst, []byte(contents), 0o644); err != nil {
-			t.Fatalf("write %s: %v", rel, err)
-		}
-	}
+	return "WARDYN_AWS_SSO_CONFIG_B64=" + strings.Join(records, "\n")
 }
 
-// runClaudeAgainstFake starts `claude -p` in the agent image, pointed at the
-// fake for BOTH the SSO services and the Bedrock data plane, and returns the
-// running command plus a buffer collecting its output. The caller waits.
+// runClaudeAgainstFake runs the agent image the way a captured-AWS-SSO Bedrock
+// run does — its agent-run entry, with the env bedrockBaseEnv, bedrockSSOAuth
+// and ssoInjectEndpointEnv author — pointed at the fake for BOTH the SSO
+// services and the Bedrock data plane, and returns the running command plus a
+// buffer collecting its output. The caller waits.
+//
+// The returned stop removes the container, not just the `docker run` client:
+// killing the client leaves the agent running past the test, holding a parked
+// GetRoleCredentials open that the fake's Close then waits on.
 func runClaudeAgainstFake(t *testing.T, s *Server, home map[string]string, timeout time.Duration) (*exec.Cmd, *bytes.Buffer, context.CancelFunc) {
 	t.Helper()
-	dir := t.TempDir()
-	writeAWSHome(t, dir, home)
+	name := "awsssofake-agent-" + randHex(6)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
+	stop := func() {
+		cancel()
+		_ = exec.Command("docker", "rm", "-f", name).Run()
+	}
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", name,
 		"--network", "host",
 		"-e", "CLAUDE_CODE_USE_BEDROCK=1",
 		"-e", "AWS_REGION=eu-west-2",
-		"-e", "AWS_PROFILE=wardyn",
-		"-e", "AWS_CONFIG_FILE=/home/agent/.aws/config",
-		"-e", "AWS_SHARED_CREDENTIALS_FILE=/home/agent/.aws/credentials",
-		"-e", "AWS_ENDPOINT_URL_SSO_OIDC="+s.URL(),
-		"-e", "AWS_ENDPOINT_URL_SSO="+s.URL(),
+		"-e", "AWS_DEFAULT_REGION=eu-west-2",
+		"-e", "ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		"-e", "ANTHROPIC_BEDROCK_BASE_URL="+s.URL(),
 		"-e", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME="+s.URL(),
-		"-e", "ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-		"-v", dir+":/home/agent",
-		"--entrypoint", "claude", claudeCodeImage,
-		"-p", "say hi",
+		"-e", "AWS_CONFIG_FILE=/home/agent/.aws/config",
+		"-e", "AWS_SHARED_CREDENTIALS_FILE=/home/agent/.aws/credentials",
+		"-e", "AWS_PROFILE=wardyn",
+		"-e", sandboxAWSConfigEnv(home),
+		"-e", "AWS_ENDPOINT_URL_SSO_OIDC="+s.URL(),
+		"-e", "AWS_ENDPOINT_URL_SSO="+s.URL(),
+		claudeCodeImage, "agent-run", "say hi",
 	)
 	buf := &bytes.Buffer{}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 	if err := cmd.Start(); err != nil {
-		cancel()
+		stop()
 		t.Fatalf("start claude: %v", err)
 	}
-	return cmd, buf, cancel
+	return cmd, buf, stop
 }
 
 // waitForRoleCredCall blocks until the fake has seen at least n calls.
@@ -198,11 +194,18 @@ func TestDocker_SDKToleratesAParkedCredentialExchange(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
+	// Inside this run's -timeout, leaving room for the rest of the package: an
+	// agent that never gives up would otherwise panic the package at go test's
+	// 10m default instead of being reported as outlasting the budget.
+	budget := 11 * time.Minute
+	if deadline, ok := t.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)-2*time.Minute)
+	}
 	var gaveUpAfter time.Duration
 	select {
 	case <-done:
 		gaveUpAfter = time.Since(parkedAt)
-	case <-time.After(11 * time.Minute):
+	case <-time.After(budget):
 		_ = cmd.Process.Kill()
 		gaveUpAfter = time.Since(parkedAt)
 		t.Logf("MEASURED TOLERANCE: the agent was STILL waiting after %v — it outlasts the whole test budget", gaveUpAfter)
@@ -285,14 +288,14 @@ func TestDocker_TheSandboxCacheHoldsOnlyThePlaceholder(t *testing.T) {
 	home := syntheticAWSHome("wardyn", "https://fake.awsapps.com/start", "eu-west-2",
 		"111111111111", "AdministratorAccess", true, realToken)
 
-	dir := t.TempDir()
-	writeAWSHome(t, dir, home)
+	// The image's own materializer, the one agent-run calls, so what is read
+	// back is what a run's sandbox would hold.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "run", "--rm",
-		"-v", dir+":/home/agent",
-		"--entrypoint", "sh", claudeCodeImage,
-		"-c", "cat /home/agent/.aws/sso/cache/*.json",
+		"-e", sandboxAWSConfigEnv(home),
+		claudeCodeImage, "bash", "-c",
+		". /usr/local/bin/agent-run-lib.sh && materialize_aws_sso_config && cat /home/agent/.aws/sso/cache/*.json",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("read the container's cache file: %v\n%s", err, out)

@@ -61,12 +61,9 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 	return st
 }
 
-// failureDetail returns "<reason>: <message>" for a failed pod, or whichever half
-// exists. pod.Status.Reason carries the VERDICT — an eviction's is "Evicted" —
-// and Message the detail that names the limit the kubelet measured past, so
-// dropping the reason left a run failure reading like an unattributed sentence
-// ("Pod ephemeral local storage usage exceeds the total limit of containers 64Mi"
-// with nothing saying who killed it, or why).
+// failureDetail returns "<reason>: <message>" for a failed pod, or whichever
+// half exists. Reason carries the VERDICT (e.g. "Evicted"); dropping it left
+// failures reading as an unattributed message with nothing saying who killed it.
 func failureDetail(pod *corev1.Pod) string {
 	reason, msg := pod.Status.Reason, pod.Status.Message
 	switch {
@@ -96,16 +93,10 @@ func waitingDetail(pod *corev1.Pod) string {
 }
 
 // waitingReason is what a starting pod is waiting ON, in one line, and unlike
-// waitingDetail it always has an answer. waitingDetail walks ContainerStatuses,
-// so the pod NO NODE TOOK — no kubelet ever wrote one — produced "", which is
-// the case a person is most likely to be staring at: a taint, a full cluster, an
-// unbound claim. The scheduler has been explaining itself the whole time in the
-// PodScheduled condition, in a field nothing read.
-//
-// Same `<component>: <Reason>[: <message>]` shape either way, so one parser
-// upstream covers both; "pod" is the component for a POD-level verdict, since no
-// container is involved in not being scheduled. Never "": a bare "pod: Pending"
-// still says the pod exists and nothing has claimed it yet.
+// waitingDetail it always has an answer: a pod NO NODE TOOK has no
+// ContainerStatuses, so it falls back to the PodScheduled condition. Same
+// `<component>: <Reason>[: <message>]` shape either way; never "" — a bare
+// "pod: Pending" still says something.
 func waitingReason(pod *corev1.Pod) string {
 	if pod == nil {
 		return ""
@@ -151,25 +142,13 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // teardown resolves ref's run id — from the agent pod's wardyn.run-id label,
 // or, when that pod is already gone, from the REF ITSELF (a sandbox ref is the
 // deterministic agent pod name) — then sweeps every Wardyn-owned object
-// carrying that label via three DeleteCollection calls: pods, NetworkPolicies,
-// Secrets. One label selector reaches the agent pod, the proxy pod, both
-// NetworkPolicies, and the config Secret in three calls total — simpler than
-// docker's per-object-name removal loop, because k8s's label selector does in
-// one call what docker's driver needs several names for.
+// carrying that label via three DeleteCollection calls (pods, NetworkPolicies,
+// Secrets); one label selector reaches all of them in three calls total.
 //
-// A 404 on the agent pod does not mean the whole run is gone: the agent pod
-// is the one object of a run that routinely disappears on its own (disk_mib
-// is the agent container's ephemeral-storage limit, and the agent's own
-// writes land inside that budget via ephemeralScratchVolumes, so the kubelet
-// EVICTS it and its terminated-pod GC reaps it — a kill path no Wardyn code
-// is on; a deleted node does the same),
-// and what it leaves behind
-// is the credential-bearing half: a proxy pod still Running with resolved
-// upstream creds, the per-run Secret carrying every SecretEnv value verbatim,
-// and both NetworkPolicies. Recovering the id from the ref costs one string
-// parse and no API call, so only a ref that is not a wardyn agent pod name at
-// all is still the idempotent no-op it was meant to be (docker's
-// runIDFromAgentName fallback, on the substrate that lacked it).
+// A 404 on the agent pod does not mean the run is gone: the kubelet routinely
+// EVICTS it alone (disk_mib is its ephemeral-storage limit) while a
+// credential-bearing proxy pod, Secret, and NetworkPolicies survive. Only a
+// ref that is not a wardyn agent pod name at all falls through to a no-op.
 func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *int64) error {
 	ns := d.cfg.Namespace
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
@@ -195,13 +174,10 @@ func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *i
 }
 
 // teardownByRunID is teardown's run-id-keyed core: sweeps every Wardyn-owned
-// object carrying runID's label via three DeleteCollection calls (pods,
-// NetworkPolicies, Secrets), waiting for the pods to actually be gone before
-// touching the NetworkPolicies (see the H3 comment below). Split out from
-// teardown so CreateSandbox's failure-path rollback can share this exact
-// guard: it knows the run id directly (spec.RunID) and must not skip the
-// wait-before-netpol-drop ordering just because no live pod exists yet to
-// resolve a label from.
+// object carrying runID's label (pods, NetworkPolicies, Secrets), waiting for
+// the pods to actually be gone before touching the NetworkPolicies (H3
+// below). Split out so CreateSandbox's rollback can share this exact ordering
+// even when no live pod exists yet to resolve a label from.
 func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeriodSeconds *int64) error {
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
@@ -211,13 +187,9 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	}
 
 	// H3: an unselected pod is default-allow, so dropping the NetworkPolicies
-	// while the pod is still Terminating (a SIGTERM-trapping agent can run
-	// for up to its full grace period) would hand it open egress for that
-	// whole window. Wait for the DeleteCollection above to actually take
-	// effect — pods gone, not merely marked for deletion — before touching
-	// the netpols confining them. Bounded at grace+slack: never longer than
-	// the pod would legitimately take to terminate, plus a beat for the
-	// kubelet to report it gone.
+	// while the pod is still Terminating would hand it open egress for that
+	// window. Wait for pods to actually be gone (not merely marked for
+	// deletion) first. Bounded at grace+slack.
 	grace := defaultPodGracePeriod
 	if gracePeriodSeconds != nil {
 		grace = time.Duration(*gracePeriodSeconds) * time.Second
@@ -226,12 +198,10 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
 	}
 
-	// Secret FIRST, NetworkPolicies after (the mirror of CreateSandbox's
-	// order): the netpols are what the orphan sweep keys the Secret on, since
-	// listing Secrets needs a verb that returns their bodies. Dropping them
-	// before the Secret would leave a crash window whose survivor is exactly the
-	// object that carries every secret_env value, with nothing left to find it
-	// by. Both are label-scoped deletecollections, so neither reads anything back.
+	// Secret FIRST, NetworkPolicies after (mirrors CreateSandbox's order): the
+	// orphan sweep keys the Secret on the netpols, since listing Secrets needs
+	// a body-returning verb it's never granted. Reversing the order would
+	// leave a crash-window survivor with nothing left to find it by.
 	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete secrets: %w", err)
 	}
@@ -241,21 +211,18 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	return nil
 }
 
-// defaultPodGracePeriod mirrors the pod-level default when
-// TerminationGracePeriodSeconds is left unset (every pod spec this package
-// creates does): 30s. teardownPollSlack is added on top: the kubelet needs a
-// beat after the grace window elapses to actually report the pod gone.
+// defaultPodGracePeriod mirrors the pod-level default (30s) used when
+// TerminationGracePeriodSeconds is unset. teardownPollSlack adds the beat the
+// kubelet needs after the grace window to report the pod gone.
 const (
 	defaultPodGracePeriod = 30 * time.Second
 	teardownPollSlack     = 15 * time.Second
 )
 
-// waitPodsGone polls until no pod matches listOpts — the ordering guard H3
-// exists for. A timeout here is a real error (not best-effort): proceeding
-// to drop the NetworkPolicies without this proof is exactly the open-egress
-// window this function exists to close. teardown is already idempotent, so
-// a caller retry (or wardynd's own reconciler) completes the sweep once the
-// pod actually terminates.
+// waitPodsGone polls until no pod matches listOpts (the H3 ordering guard).
+// A timeout here is a real error, not best-effort: proceeding without this
+// proof reopens the open-egress window. teardown is idempotent, so a retry
+// completes the sweep once the pod actually terminates.
 func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.ListOptions, timeout time.Duration) error {
 	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
 		pods, err := d.clientset.CoreV1().Pods(ns).List(pollCtx, listOpts)
@@ -268,45 +235,30 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 
 // SweepOrphanedSandboxes tears down the sandbox objects of every run whose row
 // no longer owns them — this substrate's half of api.SandboxOrphanSweeper
-// (D13), the sibling of docker/driver.go's. Until it existed the control
-// plane's boot-and-cadence sweep (internal/api/reconcile.go) was a SILENT
-// NO-OP here: it reaches the capability by type assertion, and only the docker
-// driver satisfied it, so on k8s nothing ever revisited a run's objects once
-// no sandbox_ref pointed at them.
+// (D13). Without it the control-plane's boot-and-cadence sweep was a SILENT
+// NO-OP on k8s: only the docker driver satisfied the capability.
 //
-// This is reachable routinely, not only after a control-plane crash: a run's
-// disk_mib is the agent container's ephemeral-storage LIMIT (naming.go's
-// resourceRequirements), so the kubelet EVICTS the agent pod — a kill path no
-// Wardyn code is on. An ORDINARY `dd` from the agent reaches it too, since the
-// agent's /tmp and workdir are mounted on metered emptyDirs
-// (ephemeralScratchVolumes). Normal finalization attempts teardown when the pod ends;
-// this sweep retries abandoned or failed cleanup. The credential-bearing
-// siblings are the point: a proxy pod can retain resolved upstream creds in
-// memory, and the per-run Secret holds proxy config JSON and SecretEnv values.
+// Reachable routinely, not just after a crash: disk_mib is the agent
+// container's ephemeral-storage LIMIT, so the kubelet EVICTS it (an ordinary
+// `dd` reaches it too via the metered emptyDirs). What survives is
+// credential-bearing: a proxy pod with resolved upstream creds, and the
+// per-run Secret holding SecretEnv values.
 //
-// Keyed on the agent AND proxy pods, where docker keys on its agent container
-// alone: an evicted pod is Failed, and the kubelet's terminated-pod GC may
-// reap it while the proxy pod lives on — keying on the agent alone would miss
-// exactly the shape this exists for. And keyed on the per-run Secret and both
-// NetworkPolicies besides, for the case where neither pod is left to name the
-// run at all — see sweepCandidates, which also states what keeps a boot
-// canary's own objects out. Deduped by run id, since teardownByRunID already
-// reaches every object of that run from the id.
+// Keyed on BOTH agent and proxy pods (an evicted agent pod may be GC'd while
+// the proxy lives on), plus the per-run Secret and both NetworkPolicies for
+// the case where neither pod survives to name the run (see sweepCandidates).
+// Deduped by run id, since teardownByRunID reaches every object from the id.
 //
-// A drive PVC is never touched, on two independent counts: it carries
-// labelDrive/labelDriveHome/labelDriveSubject and NEVER labelRun (drives.go's
-// ensureDrivePVC), and teardownByRunID only ever DeleteCollections pods,
-// NetworkPolicies and Secrets. A drive outlives every run that mounts it —
-// which is why the chart grants no claim delete verb at all.
+// A drive PVC is never touched: it carries labelDrive, never labelRun, and
+// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {
 		return 0, err
 	}
 	cutoff := time.Now().Add(-minAge)
-	// An orphan has no owner left to flush, so kill rather than wait out a
-	// 30s SIGTERM grace window per run — and waitPodsGone's bound shrinks with
-	// it, which matters when a sweep finds several.
+	// An orphan has no owner to flush, so kill rather than wait a 30s SIGTERM
+	// grace per run — shrinking waitPodsGone's bound too.
 	zeroGrace := int64(0)
 	swept := 0
 	seen := make(map[uuid.UUID]bool, len(candidates))
@@ -334,11 +286,10 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	return swept, errors.Join(errs...)
 }
 
-// sweepCandidate is one object that names a run the sweep might have to
-// reclaim, with the creation time the minAge gate reads. fromPod marks the ones
-// the pod list produced, so a NetworkPolicy of a run whose pods ARE listed
-// defers to those entries rather than re-deciding with its own (older)
-// timestamp — CreateSandbox writes both NetworkPolicies before either pod exists.
+// sweepCandidate is one object naming a run the sweep might reclaim, with the
+// creation time minAge reads. fromPod marks pod-list entries, so a
+// NetworkPolicy of a run whose pods ARE listed defers to those rather than
+// its own older timestamp (CreateSandbox writes NetworkPolicies before pods).
 type sweepCandidate struct {
 	runID     uuid.UUID
 	createdAt time.Time
@@ -346,50 +297,28 @@ type sweepCandidate struct {
 }
 
 // sweepCandidates lists every object that can name an orphaned run: the agent
-// and proxy pods, AND both NetworkPolicies.
+// and proxy pods, AND both NetworkPolicies. Pods alone would leave a run
+// whose pods are BOTH gone (a deleted node, or eviction + GC) permanently
+// unreachable, with the credential-bearing Secret and NetworkPolicies stranded.
 //
-// Listing pods alone would leave a run whose pods are BOTH gone unreachable —
-// permanently, since the sweep is the only thing that revisits a run no
-// sandbox_ref points at. That is not a corner: a deleted node takes both pods
-// together, and an eviction plus the kubelet's terminated-pod GC gets there on
-// its own. What survives is the object the whole sweep exists for — the Secret
-// holding the proxy config JSON and every SecretEnv value verbatim — plus two
-// NetworkPolicies. Any fix that leaves the Secret reachable only via a pod
-// label repeats the bug.
+// The Secret is reached WITHOUT being listed: `list` on secrets returns every
+// body and RBAC can't scope it by label, so that verb is never granted.
+// Instead the NetworkPolicies (no credential) are ordered to strictly outlive
+// the Secret — created before it, deleted after it — so a surviving Secret
+// always has a surviving NetworkPolicy to be reclaimed by.
 //
-// The Secret is reached WITHOUT being listed. `list` on secrets returns
-// every Secret's body and RBAC cannot scope a list by label, so granting it
-// would hand this ServiceAccount plaintext read of every Secret in the
-// namespace — the control plane's own, with k8s.runsNamespace unset. No
-// Secret-body read verb is granted. Instead the
-// NetworkPolicies, which carry no credential, are ordered to strictly outlive
-// the Secret (created before it in CreateSandbox, deleted after it in
-// teardownByRunID), so a surviving Secret always has a surviving NetworkPolicy
-// to be found by — and teardownByRunID reclaims it with the label-scoped
-// deletecollection that has been granted since the substrate shipped.
+// The NetworkPolicy list is BEST-EFFORT: it's a privilege only granted from
+// chart 0.7.4, so an operator-managed Role can 403 on upgrade. A Forbidden
+// degrades to the pod-only candidate set (logged once) rather than taking the
+// whole sweep down; every other list error still fails honestly.
 //
-// The NetworkPolicy list is BEST-EFFORT. It is a NEW privilege this release
-// asks for (the chart's Role grants it from 0.7.4; see
-// deploy/helm/wardyn/templates/rbac.yaml), and an operator running their own
-// Role under k8s.rbac.create=false has a pre-0.7.4 one that the chart cannot
-// upgrade for them. On upgrade day that list 403s. Aborting here on that 403
-// would take the WHOLE sweep down with it — including the evicted-agent reclaim
-// that worked in 0.7.3 — trading a partial credential leak for a total one. So
-// a Forbidden degrades to the pod-only candidate set, logged once per process,
-// and every other list error still fails the sweep honestly.
+// Pods are listed LAST: hasPod must be built from the latest snapshot, or a
+// pod created in the window between the two lists would be invisible and its
+// run's older NetworkPolicy would decide the run's fate on stale age.
 //
-// Pods are listed LAST, deliberately: hasPod decides which NetworkPolicy
-// entries defer to a pod entry, so it has to be built from the LATEST snapshot.
-// A pod created in the window between the lists would otherwise be invisible,
-// and its run's older NetworkPolicy would then decide the run's fate on its own
-// age — reclaiming a dispatch that had just come up.
-//
-// All three lists use the SAME agent/proxy component selector. That is what
-// keeps a boot canary out: its objects carry labelManaged and a labelRun that
-// IS a parseable uuid (canary.go's per-invocation suffix), so only
-// labelComponent tells them apart from a run's — and runCanaryPhase cleans its
-// own up on every path. A drive PVC is excluded twice over: it is not one of the
-// three kinds listed here, and it never carries labelRun at all.
+// All three lists share the SAME agent/proxy component selector, which is
+// what excludes a boot canary (labelManaged, not labelComponent) and a drive
+// PVC (never carries labelRun at all).
 func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uuid.UUID]bool, error) {
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{
@@ -433,15 +362,12 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 }
 
 // sweepListForbiddenOnce keeps the degraded-sweep warning to ONE line per
-// process. The sweep runs on a cadence (internal/api/reconcile.go), so a Role
-// missing the verb would otherwise write the same line forever; the condition it
-// reports is static — an operator-managed Role — so saying it once is saying it.
+// process: the sweep runs on a cadence, and the condition it reports (an
+// operator-managed Role) is static, so repeating it says nothing new.
 var sweepListForbiddenOnce sync.Once
 
-// warnSweepListForbidden names the reclaim that is degraded and the exact fix,
-// because the symptom (a run's Secret surviving until someone notices) has no
-// other place to surface: the sweep returns success, correctly, and the whole
-// point is that it keeps working.
+// warnSweepListForbidden names the reclaim that is degraded and the exact fix
+// — the sweep itself returns success, so this is the only place it surfaces.
 func warnSweepListForbidden(netpolsErr error) {
 	sweepListForbiddenOnce.Do(func() {
 		slog.Warn("wardynd: k8s orphan sweep is running DEGRADED: this ServiceAccount may not list NetworkPolicies, "+

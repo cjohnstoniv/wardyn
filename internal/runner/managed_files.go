@@ -11,24 +11,12 @@ import (
 )
 
 // ManagedFile is one operator-authored file placed inside the sandbox that the
-// AGENT CANNOT MODIFY. That immutability is the whole point: a ceiling the
-// agent can rewrite is not a ceiling, so a driver delivers this file owned by
-// root inside a directory the agent can neither write nor replace, and it does
-// so BEFORE the agent's main process can run.
-//
-// Two ways of producing such a file are deliberately NOT how this is delivered,
-// because both look identical in a test and fail in production:
-//
-//   - Materialising it from inside the image. Every Wardyn agent image runs as
-//     uid 1000 (image contract §3), so a file it writes is a file it can rewrite.
-//   - A one-shot root exec after the container starts. That races the main
-//     process, and the agent can observe — or act in — the window before the
-//     file exists.
-//
-// Content is deliberately NOT serialised anywhere: a managed file may carry
-// operator policy the agent is not meant to be able to tamper with, and on the
-// Kubernetes substrate it travels in the per-run Secret for the same reason
-// SecretEnv does.
+// AGENT CANNOT MODIFY: a driver delivers it root-owned, in a directory the
+// agent can neither write nor replace, before the agent's main process can
+// run — never materialised from inside the image (agent runs as uid 1000) or
+// via a post-start root exec (races the main process). Content is never
+// serialised anywhere; on Kubernetes it travels in the per-run Secret like
+// SecretEnv.
 type ManagedFile struct {
 	// Path is the absolute in-sandbox path, already cleaned. See
 	// ValidateManagedFiles for the shape both substrates can honour.
@@ -46,43 +34,26 @@ type ManagedFile struct {
 // with: readable by the agent, writable only by root.
 const DefaultManagedFileMode fs.FileMode = 0o644
 
-// ManagedFileDir is the one directory a managed file may be delivered into,
-// and every managed file sits directly in it. It is where Claude Code reads its
+// ManagedFileDir is the one directory a managed file may be delivered into
+// (every managed file sits directly in it) — where Claude Code reads its
 // managed settings on Linux, the only consumer. It is an allowlist rather than
-// a rule about path shape because each property that makes a managed file a
-// ceiling depends on where the file is:
-//
-//   - its parent, /etc, is root-owned and not writable by the agent, and the
-//     agent is not root, so it cannot rename this directory aside and put its
-//     own in its place (a rename within one parent needs write on the parent
-//     only). The Docker driver refuses an image that breaks either; Kubernetes
-//     runs the agent as uid 1000 on a read-only mount point whatever the image;
-//   - nothing covers or loosens /etc after delivery: mount targets are confined
-//     to allowedTargetPrefixes, the sandbox's tmpfs is /tmp, and recording
-//     setup chmods only its own directories;
-//   - no Wardyn image ships it, so the Docker driver creates it rather than
-//     delivering into a directory it did not make.
-//
-// A second location joins only once it has been checked against each of those.
+// a path-shape rule because the ceiling depends on where the file is: /etc is
+// root-owned and unwritable by the agent, nothing covers or loosens it after
+// delivery, and no Wardyn image ships it. A second location joins only once
+// it has been checked against each of those.
 const ManagedFileDir = "/etc/claude-code"
 
 // ManagedFilesMaxBytes caps the total content one spec may carry. The binding
-// constraint is the Kubernetes substrate: every managed file rides the same
-// per-run Secret as the proxy config and each SecretEnv value, and a Secret is
-// capped at 1 MiB. Refusing here — in the contract, on both substrates — turns
-// what would otherwise be a docker-succeeds/k8s-413s divergence into one
-// refusal with the same words everywhere.
+// constraint is Kubernetes: every managed file rides the same per-run Secret
+// (capped at 1 MiB) as the proxy config and SecretEnv, so this is refused on
+// both substrates rather than diverging into docker-succeeds/k8s-413s.
 const ManagedFilesMaxBytes = 256 << 10
 
 // ValidateManagedFiles reports whether files can be delivered on EVERY
 // substrate. Drivers call it before they create anything, so an impossible
-// request is refused rather than half-applied.
-//
-// Every path must sit directly in ManagedFileDir; the refusal for any other
-// says why. On the Kubernetes substrate that directory becomes the mount point
-// of a read-only Secret volume — not a subPath mount, which the apiserver
-// forbids on the ephemeral container the agent actually runs in (see
-// internal/runner/k8s/exec.go).
+// request is refused rather than half-applied. On Kubernetes, ManagedFileDir
+// becomes the mount point of a read-only Secret volume, not a subPath mount
+// (the apiserver forbids that on the agent's ephemeral container).
 func ValidateManagedFiles(files []ManagedFile) error {
 	total := 0
 	seen := make(map[string]bool, len(files))

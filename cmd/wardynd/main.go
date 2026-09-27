@@ -496,6 +496,7 @@ func run() error {
 		UIAdvertiseURL:   *f.uiAdvertise,
 		UIOriginTemplate: *f.uiOriginTemplate,
 		UISessionTTL:     *f.uiSessionTTL,
+		UICookiePolicy:   uiCookiePolicy(*f.uiStripCookies),
 		UISessionKey:     feats.uiSessionKey,
 		RunConfigKey:     feats.runConfigKey,
 		// Admits every run unless a WARDYN_HOST_* limit is set.

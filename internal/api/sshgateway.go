@@ -499,6 +499,12 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 }
 
 func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPublicKey) string {
+	// A key stored under a reserved principal (an IdP sub spelled like one,
+	// before #1162) would own that identity's runs. SSO only: without it every
+	// key is legitimately under admin-token or the local seat.
+	if s.cfg.OIDC != nil && s.isReservedPrincipal(key.Principal) {
+		return "SSH key registered under a reserved principal"
+	}
 	if s.cfg.SessionRevocations == nil {
 		return ""
 	}

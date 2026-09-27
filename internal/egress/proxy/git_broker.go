@@ -27,107 +27,70 @@ import (
 
 // The Wardyn Git Broker: an authenticating git-smart-HTTP reverse-proxy local
 // route so a sandbox NEVER dials github.com directly. The sandbox's git is
-// pointed (url.<broker>.insteadOf, set by agent-run) at
-// http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>, which lands here as an
-// origin-form local route (wardyn-proxy is in the sandbox NO_PROXY). This
-// handler enforces the per-repo allowlist (p.gitGrants) in CLEARTEXT — the
-// sandbox->proxy hop is plain HTTP on the proxy's own endpoint, so no third-party
-// TLS-MITM is needed to see which repo is requested — mints the repo-scoped
-// GitHub App installation token server-side, and re-originates to github.com with
-// the token as Basic auth on the OUTBOUND request only. The token is never
-// returned to the sandbox (git responses carry no Authorization).
+// pointed (url.<broker>.insteadOf) at http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>,
+// which lands here as an origin-form local route. This handler enforces the
+// per-repo allowlist (p.gitGrants) — the sandbox->proxy hop is plain HTTP on
+// the proxy's own endpoint, so no third-party TLS-MITM is needed to see which
+// repo is requested — mints the repo-scoped GitHub App installation token
+// server-side, and re-originates to github.com with the token as Basic auth
+// on the OUTBOUND request only; the token is never returned to the sandbox.
 //
-// Repo is the unit of trust: a repo not in p.gitGrants is 403, so the sandbox can
-// reach ONLY the repos its run was granted, never all of github.com.
+// Repo is the unit of trust: a repo not in p.gitGrants is 403, so the sandbox
+// can reach ONLY the repos its run was granted, never all of github.com.
 const (
 	routeGitBroker = "/wardyn/gh/"
 	ruleSourceGit  = "brokered:git"
 	githubHost     = "github.com"
 	// gitBrokerUsername is the git username a GitHub App INSTALLATION token
-	// authenticates as — fixed by GitHub, not configurable. Named because it is
-	// half of the credential's wire rendering (SetBasicAuth sends
-	// base64(gitBrokerUsername + ":" + token)), so the mask registration and the
-	// outbound header must derive it from the same place.
+	// authenticates as — fixed by GitHub. Named so the mask registration and
+	// the outbound header (SetBasicAuth) derive it from the same place.
 	gitBrokerUsername = "x-access-token"
 	// ruleSourceGitRef marks a decision-log row denied by push branch-namespace
-	// confinement (as opposed to the per-repo allowlist), so audit says WHICH gate
-	// closed. The offending ref goes to slog, never to the decision log (which has
-	// no free-text field and is SIEM-fanned).
+	// confinement, so audit says WHICH gate closed. The offending ref goes to
+	// slog only, since the decision log has no free-text field and is SIEM-fanned.
 	ruleSourceGitRef = "brokered:git:branch-ns"
-	// ruleSourceGitEnc marks the refusal of a push body this proxy could not
-	// INSPECT (non-identity Content-Encoding) while enforcement is on — a
-	// distinct row so audit never reads an unparseable body as a ref violation.
+	// ruleSourceGitEnc marks refusal of a push body this proxy could not INSPECT
+	// (non-identity Content-Encoding) — distinct so audit never reads it as a ref violation.
 	ruleSourceGitEnc = "brokered:git:branch-ns-encoding"
 	// envEnforceBranchNS opts THIS proxy process OUT of push branch-namespace
-	// confinement on the App lane (=false). See BranchNSEnforced: it is ON by
-	// default.
+	// confinement on the App lane (=false); see BranchNSEnforced (ON by default).
 	envEnforceBranchNS = "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"
-	// envEnforcePATBranchNS opts THIS proxy process IN to the same confinement on
-	// the git_pat lane. See PATBranchNSEnforced: it is OFF by default — the
-	// opposite default from the App lane, and the whole reason it is a second
-	// switch rather than a widening of the first.
+	// envEnforcePATBranchNS opts THIS proxy process IN to the same confinement
+	// on the git_pat lane; see PATBranchNSEnforced (OFF by default, opposite the App lane).
 	envEnforcePATBranchNS = "WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS"
 	// ruleSourceGitNSOff marks a push this proxy FORWARDED WITHOUT PARSING while
-	// the lane's confinement was otherwise in force — on the App lane because
-	// envEnforceBranchNS or the run's git_push_any_branch opted out, on the
-	// git_pat lane (whose switch is off by default, so an unconfined PAT push
-	// keeps the ordinary brokered:git-pat allow) because git_push_any_branch did.
-	//
-	// It is the after-the-fact half of
-	// that opt-out being visible: the boot log (cmd/wardyn-proxy) states the
-	// posture once, and this row proves per push which posture actually applied,
-	// in the same append-only audit stream the ordinary "brokered:git" allow lands
-	// in (handlePostDecision records rule_source verbatim). Without it an
-	// unparsed push and a parsed one were the same audit record.
+	// the lane's confinement was otherwise in force (an opt-out via env or
+	// git_push_any_branch). It is the per-push proof of which posture actually
+	// applied, alongside the boot log's one-time statement of the posture.
 	ruleSourceGitNSOff = "brokered:git:branch-ns-off"
 	// maxReceivePackCmds caps the pkt-line COMMAND SECTION buffered ahead of the
-	// (still-streamed) packfile. Hundreds of ref updates fit in 64 KiB; anything
-	// larger is pathological and is refused rather than buffered.
+	// streamed packfile; anything larger is pathological and refused.
 	maxReceivePackCmds = 64 << 10
 	// envGitApprovalTimeout overrides gitApprovalTimeout's default (operator
-	// escape hatch for a slower approval workflow, same shape as
-	// envEnforceBranchNS above).
+	// escape hatch for a slower approval workflow).
 	envGitApprovalTimeout = "WARDYN_GIT_APPROVAL_TIMEOUT"
-	// defaultGitApprovalTimeout mirrors wardyn-git-helper's own
-	// defaultApprovalTimeout (cmd/wardyn-git-helper/main.go): how long the
-	// FIRST clone/fetch/push on an approval-gated github_token grant blocks
-	// waiting for a human to approve in the Wardyn UI before failing.
+	// defaultGitApprovalTimeout mirrors wardyn-git-helper's own default: how
+	// long the FIRST clone/fetch/push on an approval-gated grant blocks waiting for a human approval.
 	defaultGitApprovalTimeout = 120 * time.Second
 )
 
 // brokerRefreshMargin is how close to a STATED expiry brokeredToken re-mints.
-//
-// It is deliberately NOT injectRefreshMargin (inject.go, 5m). That margin is
-// sized for a rotating injected credential the proxy re-resolves in the
-// background; this cache exists to serve ONE clone — two sub-requests seconds
-// apart — from one mint, because an approval-gated grant is single-use and a
-// second mint 409s ErrAlreadyMinted. A git_pat or api_key grant states a REAL
-// expiry (internal/broker/broker_mint_kinds.go mints with ttlFor, honouring an
-// operator ttl_seconds), so any grant authored with ttl_seconds <= 300 was born
-// INSIDE a 5-minute margin: the cached token was treated as stale on the very
-// next sub-request and the clone re-minted and failed. At the
-// sub-request scale the margin only has to cover the round trip.
+// Deliberately NOT injectRefreshMargin (inject.go, 5m): this cache serves ONE
+// clone's two sub-requests from a single mint, and a 5m margin would treat a
+// grant with ttl_seconds<=300 as stale on the very next sub-request. At
+// sub-request scale the margin only needs to cover the round trip.
 const brokerRefreshMargin = 30 * time.Second
 
 // gitApprovalBudget is the operator's ceiling for ONE brokered-credential
 // acquisition: the first mint call, the approval wait, and every poll inside
-// it. WARDYN_GIT_APPROVAL_TIMEOUT names it; defaultGitApprovalTimeout is the
-// default.
+// it (WARDYN_GIT_APPROVAL_TIMEOUT, default defaultGitApprovalTimeout).
 //
-// Trust boundary: the env var alone bounds only the approval
-// WAIT's timer; nothing else bounds the HTTP calls that timer supervises —
-// handleGitBroker/handlePATBroker pass r.Context() (server.go sets
-// ReadTimeout/WriteTimeout to 0) and forwardToControlPlane rides p.localClient,
-// which carries no Timeout of its own (proxy.go). Against a control plane that
-// accepts a connection and then never answers, a clone would block FOREVER
-// even with WARDYN_GIT_APPROVAL_TIMEOUT=1s. So the budget is derived once at
-// the top of brokeredToken and passed down — the same shape
-// approvalClient.ResolveWait uses for the egress_domain hold — so the
-// documented timeout is a real bound.
-//
-// Same residual as ResolveWait's, stated rather than hidden: this ctx and the
-// timer inside waitForGitApproval share one budget, so the human's approval
-// window shrinks by however long the first mint round trip took.
+// Trust boundary: nothing else bounds the underlying HTTP calls (server.go's
+// timeouts are 0, p.localClient has none), so against a control plane that
+// never answers a clone would otherwise block FOREVER. The budget is derived
+// once at the top of brokeredToken and passed down so the documented timeout
+// is a real bound; the human's approval window shrinks by however long the
+// first mint round trip took.
 func gitApprovalBudget() time.Duration {
 	if v := os.Getenv(envGitApprovalTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
@@ -144,15 +107,10 @@ var gitApprovalPollInterval = 2 * time.Second
 // gitServices is the closed set of valid ?service= values / smart-HTTP verbs.
 var gitServices = map[string]bool{"git-upload-pack": true, "git-receive-pack": true}
 
-// gitTokEntry caches one grant's minted broker credential. token + username +
-// expiresAt are guarded by reMu, which ALSO single-flights the mint so info/refs
-// and the following git-upload-pack don't stampede a double-mint — fatal for a
-// single-use (approval-gated) grant, whose second mint 409s (broker ErrAlreadyMinted).
-//
-// It backs BOTH broker lanes (see brokeredToken): the git_pat lane's credential
-// is single-use in exactly the same way, and username is what that lane needs
-// back from the mint (a github_token mint always authenticates as
-// x-access-token and its caller discards this field).
+// gitTokEntry caches one grant's minted broker credential. token/username/
+// expiresAt are guarded by reMu, which ALSO single-flights the mint so
+// concurrent sub-requests don't stampede a double-mint (fatal for a
+// single-use approval-gated grant). Backs both broker lanes (see brokeredToken).
 type gitTokEntry struct {
 	reMu      sync.Mutex
 	token     string
@@ -170,10 +128,8 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid git broker path", http.StatusNotFound)
 		return
 	}
-	// The allowlist lookup is the STRUCTURAL traversal + authorization gate
-	// (mirrors handleBrokerApproval's uuid.Parse): anything not an exact granted
-	// key — including ".."-bearing or extra-segment paths — 403s before any
-	// github URL is formed.
+	// The allowlist lookup is the STRUCTURAL traversal + authorization gate:
+	// anything not an exact granted key 403s before any github URL is formed.
 	grantID, granted := p.gitGrants[orgRepo]
 	if !granted {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
@@ -186,24 +142,12 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push confinement (ON by default; =false opts out). A receive-pack POST carries its ref updates in a
-	// small pkt-line command section AHEAD of the packfile, so buffer only that
-	// section, validate every ref against this run's branch namespace, then forward
-	// the buffered bytes followed by the still-streaming pack. Fetch/clone
-	// (info/refs, upload-pack) never enter this branch: pure streaming, zero added
-	// latency. A denial happens BEFORE gitToken, so the refused request mints
-	// nothing itself — but the push's own discovery (GET info/refs) came first
-	// and already did (push_rules.go), and a content-rules verdict that has to
-	// read the forge looks the credential up before it is reached.
-	//
-	// allowSrc is the rule_source the ALLOW row below carries. A push forwarded
-	// with the parser opted out gets its own value (ruleSourceGitNSOff) so the
-	// audit stream distinguishes the two postures per push; everything else keeps
-	// the ordinary "brokered:git". Two switches opt out: the deployment-wide env
-	// (BranchNSEnforced) and the per-run policy field (git_push_any_branch, for a
-	// sandbox a human drives through an external tool that names its own
-	// branches) — same audit marker either way, so a reader never has to know
-	// which one was set.
+	// Push confinement (ON by default; =false opts out). A receive-pack POST
+	// carries its ref updates in a small pkt-line command section AHEAD of the
+	// packfile, so buffer only that section, validate every ref against this
+	// run's branch namespace, then forward it followed by the still-streaming
+	// pack. Fetch/clone never enter this branch. allowSrc records which posture
+	// applied (ruleSourceGitNSOff when either switch opted out).
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourceGit
 	isPush := rest == "git-receive-pack"
@@ -217,12 +161,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		}
 		reqBody = body
 	}
-	// CONTENT rules, entered independently of the block above rather than
-	// inside its else. git_push_any_branch opts out of WHERE a push may land;
-	// wiring this inside that block would let a WHERE opt-out silently switch
-	// off a WHAT control (push_rules.go). A refused push is never forwarded.
-	// What the pack does not carry is compared with the repository's own trees,
-	// read with this lane's credential (push_forge.go).
+	// CONTENT rules, entered independently of the block above: git_push_any_branch
+	// opts out of WHERE a push may land, and wiring this inside that block
+	// would let a WHERE opt-out silently switch off a WHAT control. A refused
+	// push is never forwarded.
 	if isPush {
 		forge := &forgeRepo{p: p, repo: orgRepo,
 			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
@@ -244,11 +186,8 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// egressTarget hides the corp-upstream branch: under an operator upstream
-	// proxy this sends the CONNECT to github.com BY NAME (the corp proxy does
-	// the outbound DNS+dial) instead of requiring local DNS resolution the
-	// sandbox host frequently cannot do at all, and instead of handing the
-	// corp proxy a resolved IP LITERAL it would refuse — the one governed git
-	// lane must work on exactly the network it exists for.
+	// proxy this sends the CONNECT to github.com BY NAME rather than a
+	// resolved IP literal the corp proxy would refuse.
 	target, _, err := p.egressTarget(githubHost, 443)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
@@ -256,9 +195,8 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the upstream URL from the MATCHED key + validated rest — never the raw
-	// request path — so nothing attacker-controlled beyond a granted map key and a
-	// closed-enum verb flows outbound.
+	// Build the upstream URL from the MATCHED key + validated rest, never the
+	// raw request path, so nothing attacker-controlled beyond it flows outbound.
 	upstreamURL := "https://" + githubHost + "/" + orgRepo + ".git/" + rest
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
@@ -271,24 +209,16 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		p.httpError(w, "build git request", err, http.StatusBadGateway)
 		return
 	}
-	// Stream the body straight through (the only buffered part is a validated
-	// receive-pack command section, re-prepended above) — upload-pack/receive-pack
-	// packs can be large. Preserve the client's declared length; unknown => chunked.
+	// Stream the body straight through (only the validated receive-pack command
+	// section was buffered above). Preserve declared length; unknown => chunked.
 	outReq.ContentLength = r.ContentLength
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
-	// Defensive: strip any sandbox-supplied credential before injecting ours, so a
-	// rogue in-sandbox client can't smuggle its own onto the outbound request.
-	// stripSandboxCredentials is the one definition of that set (inject.go); a
-	// local Header.Del("Authorization") would leave X-Api-Key, Cookie and
-	// X-Access-Token beside the brokered installation token.
+	// Defensive: strip any sandbox-supplied credential before injecting ours
+	// (stripSandboxCredentials, inject.go) so a rogue client can't smuggle its own.
 	stripSandboxCredentials(outReq.Header, "")
-	// Content rules need a pack they can read, and a client only sends one when
-	// the server asks (push_advert.go). The advertisement must be PARSEABLE to be
-	// rewritten, so the sandbox's own content-coding negotiation does not go out
-	// on this ONE request: identity is asked for explicitly rather than merely
-	// deleting the header, which would leave the transport free to negotiate a
-	// coding of its own.
+	// Content rules need a readable pack, sent only when asked (push_advert.go);
+	// identity is asked for explicitly so the transport can't negotiate its own coding.
 	noThin := p.noThinAdvert(r, rest)
 	if noThin {
 		outReq.Header.Set("Accept-Encoding", "identity")
@@ -298,9 +228,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	outReq.Header.Del("Host")
 
 	// roundTripUpstream, not the transport directly: this forge speaks HTTP/2,
-	// and a peer that speaks it without negotiating it gets the same fallback
-	// the MITM and plain lanes get (upstream_protocol.go). The allow row follows
-	// a successful round trip only (failUpstream).
+	// same fallback the MITM/plain lanes get. The allow row follows success only.
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}, githubHost, "git upstream error")
@@ -317,16 +245,13 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 }
 
 // isBrokeredGitGrant reports whether a sandbox-supplied mint body names one of
-// THIS run's git-broker grants — the guard that keeps the App installation token
-// out of the sandbox (handleBrokerMint). handleGitBroker's own mint does NOT come
-// through here: it calls mintGitToken -> forwardToControlPlane directly, so the
-// broker never refuses itself.
+// THIS run's git-broker grants — the guard that keeps the App installation
+// token out of the sandbox (handleBrokerMint). handleGitBroker's own mint
+// bypasses this (mintGitToken -> forwardToControlPlane directly).
 //
 // Decoding mirrors the control plane's handleInternalMint EXACTLY (same
-// encoding/json Decoder, same one-field struct, same "grant_id" tag), so any body
-// that would mint a brokered grant there decodes to that grant id here —
-// including trailing-garbage and duplicate-key bodies, where a json.Unmarshal
-// here would have differed and become a bypass.
+// Decoder, same struct, same tag), so a body that mints there decodes to the
+// same grant id here.
 //
 // ponytail: fail OPEN on an undecodable body. A body we cannot decode cannot name
 // a brokered grant the control plane would accept either (it 400s), so forwarding
@@ -361,29 +286,17 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 }
 
 // brokeredToken returns a cached (or freshly minted) broker credential for
-// grantID, re-minting only when unset or within brokerRefreshMargin of a STATED
-// expiry. reMu single-flights per grant so concurrent git sub-requests don't
-// double-mint.
+// grantID, re-minting only when unset or within brokerRefreshMargin of a
+// STATED expiry. reMu single-flights per grant so concurrent sub-requests
+// don't double-mint (fatal for a single-use approval-gated grant, whose
+// second mint 409s ErrAlreadyMinted; a PENDING 409 is waited out here).
 //
-// Both broker lanes route through here — one credential lifecycle in one
-// place — because a lane that re-implements the mint separately, calling it on
-// EVERY sub-request (one clone is two: GET info/refs then POST
-// git-upload-pack), cannot clone at all against a single-use, approval-gated
-// git_pat grant: the second mint 409s ErrAlreadyMinted, and a 409 PENDING must
-// be waited out here rather than surfaced as a hard error.
+// A mint stating NO expiry (expiresAt == 0, or unparseable) is cached for the
+// process rather than re-minted per request, since re-minting is the fatal
+// act for a single-use grant.
 //
-// A mint that states NO expiry (expiresAt == 0 — an unparseable expiry lands
-// here too) is cached for the process rather than re-minted per request:
-// re-minting is precisely the fatal act for a single-use grant, and a
-// credential whose expiry the mint never stated cannot be re-validated by
-// minting it again. Every kind the control plane mints DOES state one
-// (internal/broker/broker_mint_kinds.go: ttlFor, clamped to 1h), so this is the
-// unparseable-response arm, not the normal one.
-//
-// wireUser maps the mint's username to the one the CALLING LANE will actually
-// put on the wire, so the mask registered below covers the rendering that
-// leaves the process — the GitHub lane always sends gitBrokerUsername,
-// while a github_token mint returns no username at all.
+// wireUser maps the mint's username to what the CALLING LANE actually puts on
+// the wire, so the mask registered below covers the rendering that leaves the process.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
 	p.gitTokMu.Lock()
 	e, ok := p.gitTokens[grantID]
@@ -399,62 +312,39 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 		time.Now().Before(time.UnixMilli(e.expiresAt).Add(-brokerRefreshMargin))) {
 		return e.token, e.username, nil
 	}
-	// One budget for the whole acquisition below — the first mint, the approval
-	// wait and every poll (see gitApprovalBudget). Armed after the
-	// cache check so a cache hit costs nothing.
+	// One budget for the whole acquisition below (see gitApprovalBudget), armed
+	// after the cache check so a cache hit costs nothing.
 	ctx, cancel := context.WithTimeout(ctx, gitApprovalBudget())
 	defer cancel()
-	// one token per grant for the run. Auto-mintable grants re-mint past
-	// TTL fine; approval-gated grants are single-use, so a run outliving the ~1h
-	// installation-token TTL fails here on re-mint — a pre-existing ceiling.
+	// Auto-mintable grants re-mint past TTL fine; approval-gated grants are
+	// single-use, so a run outliving the ~1h token TTL fails here (a pre-existing ceiling).
 	tok, user, expMs, err := p.mintGitToken(ctx, grantID)
 	if err != nil {
 		return "", "", err
 	}
-	// Register the installation token in the process-global mask registry, the
-	// same place injector values land (inject.go) and the same one httpError's
-	// maskDecisionBytes reads — so a `ghs_...` can never ride out on a
-	// sandbox-visible error string or a decision-log line. Defense in depth: no
-	// live leak is known (this token is set as Basic auth on the OUTBOUND request
-	// only and never appears in an error the sandbox sees), but "no path today"
-	// is not a property of the token, it is a property of the current call sites.
-	// procMask dedupes by value, so the cache's re-mints add at most one entry
-	// per rotation on a process that lives one run.
+	// Register the installation token in the process-global mask registry
+	// (inject.go) so it can never ride out on a sandbox-visible error string or
+	// decision-log line. Both renderings are registered: the raw token AND the
+	// base64(username+":"+tok) SetBasicAuth puts on the wire — registering only
+	// the raw token would leave the wire form unmasked.
 	//
-	// Both renderings: the raw token AND the base64(username + ":" + tok)
-	// that SetBasicAuth puts on the wire. Registering only the raw token leaves the
-	// wire form — the one a transport error quoting the outbound request carries —
-	// unmasked; the mask is exact-bytes, so it protects exactly the renderings it
-	// was given. registerBasicAuthCredential (inject.go) is the one definition of
-	// that set.
-	//
-	// wireUser(user), NOT the mint's username: the two lanes send
-	// different usernames and only the caller knows which. internal/broker
-	// leaves Username empty for a github_token (broker.go, "Empty for
-	// github_token") while handleGitBroker authenticates as the constant
-	// gitBrokerUsername — so registering base64(":"+tok) masked a rendering that
-	// never goes on the wire and left base64("x-access-token:"+tok), the one
-	// that does, in cleartext through httpError and the decision log.
-	// Honest residual, same as inject.go's: verbatim bytes of those renderings
-	// only — a hex or model-narrated form of the token is not caught.
+	// wireUser(user), NOT the mint's username: the two lanes send different
+	// usernames, and masking the wrong rendering (the mint's, rather than what
+	// actually goes on the wire) would leave the real one in cleartext.
+	// Residual: only verbatim bytes of those renderings are caught.
 	registerBasicAuthCredential(wireUser(user), tok)
 	e.token, e.username, e.expiresAt = tok, user, expMs
 	return tok, user, nil
 }
 
-// mintGitToken calls the control-plane mint route server-side (run token injected
-// by forwardToControlPlane) — the exact route wardyn-git-helper uses, so no broker
-// change is needed. Returns the token and its expiry (unix ms; 0 if unparseable).
+// mintGitToken calls the control-plane mint route server-side (the exact
+// route wardyn-git-helper uses). Returns the token and its expiry (unix ms; 0 if unparseable).
 //
-// On the FIRST clone/fetch/push against an approval-gated github_token grant
-// (the New Run wizard's default), the control plane 409s with an approval_id
-// instead of minting — there is nothing for a human to approve yet otherwise.
-// Unlike the sandbox-facing /wardyn/v1/credentials/mint route (which passes a
-// 409 straight through for the CALLER to poll, e.g. wardyn-git-helper's own
-// mintWithApproval loop for the git_pat lane), the broker mints server-side
-// with no caller able to retry — so it polls the SAME approval itself here
-// (the proxy already holds the run token) rather than 502ing the clone before
-// any human could possibly have approved it.
+// On the FIRST clone/fetch/push against an approval-gated grant, the control
+// plane 409s with an approval_id instead of minting. Unlike the sandbox-facing
+// mint route (which passes the 409 through for the caller to poll), the
+// broker mints server-side with no caller able to retry, so it polls the SAME
+// approval itself here rather than 502ing the clone.
 func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, err error) {
 	tok, user, exp, status, body, err := p.callMintGit(ctx, grantID)
 	if err != nil {
@@ -473,12 +363,9 @@ func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (token, use
 	return p.waitForGitApproval(ctx, grantID, *approvalID)
 }
 
-// callMintGit issues ONE POST to the control-plane mint route and reports its
-// raw outcome: (token, username, expiry, 200) on success, ("", "", 0, 409,
-// body-with-approval_id) when approval-gated and pending, or an error for
-// anything the caller cannot itself retry (network failure, malformed response).
-// username is the git user a git_pat mint returns; the GitHub lane always
-// authenticates as x-access-token and discards it at the call site.
+// callMintGit issues ONE POST to the control-plane mint route: (token,
+// username, expiry, 200) on success, (409, body-with-approval_id) when
+// pending, or an error the caller cannot retry. username is discarded by the GitHub lane.
 func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, status int, body []byte, err error) {
 	reqBody, err := json.Marshal(map[string]string{"grant_id": grantID.String()})
 	if err != nil {
@@ -497,10 +384,8 @@ func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, user
 	var mr struct {
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
-		// Username is set for a git_pat mint (the host's expected git username:
-		// "pat" for Azure DevOps, "oauth2" for GitLab, or an operator override).
-		// Empty for a github_token mint, which always authenticates as
-		// x-access-token.
+		// Username is set for a git_pat mint (the host's expected git username);
+		// empty for a github_token mint (always x-access-token).
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(respBody, &mr); err != nil {
@@ -516,11 +401,9 @@ func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, user
 }
 
 // waitForGitApproval polls approvalID (the SAME control-plane route
-// handleBrokerApproval forwards for the sandbox-facing lane, GET
-// /api/v1/internal/approvals/{id}) until it reaches a terminal state or
-// gitApprovalTimeout elapses, then re-mints exactly once on APPROVED. A
-// transient poll error is retried, not fatal — the same posture
-// approvalClient.poll takes for the egress_domain flow.
+// handleBrokerApproval forwards) until it reaches a terminal state or
+// gitApprovalTimeout elapses, re-minting exactly once on APPROVED. A
+// transient poll error is retried, not fatal.
 func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid.UUID) (token, username string, expMs int64, err error) {
 	timeout := gitApprovalBudget()
 	deadline := time.NewTimer(timeout)
@@ -530,10 +413,8 @@ func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid
 	for {
 		select {
 		case <-ctx.Done():
-			// brokeredToken's budget can expire before this timer does — they
-			// share it (gitApprovalBudget) — so say what the deadline arm says
-			// rather than a bare "context deadline exceeded". A CANCELLED ctx is
-			// the sandbox hanging up, which is a different thing.
+			// Say what the deadline arm says rather than a bare "context deadline
+			// exceeded"; a CANCELLED ctx (sandbox hanging up) is a different thing.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return "", "", 0, fmt.Errorf("timed out after %s waiting for credential approval %s — "+
 					"approve it in the Wardyn UI and re-run", timeout, approvalID)
@@ -563,9 +444,8 @@ func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid
 		case types.ApprovalExpired:
 			return "", "", 0, fmt.Errorf("credential approval %s expired before a decision was made", approvalID)
 		case types.ApprovalCancelled:
-			// Terminal, like DENIED/EXPIRED: the default arm keeps polling until
-			// the deadline, so a run that was killed while this mint waited would
-			// block the git operation for the whole timeout for no reason.
+			// Terminal, like DENIED/EXPIRED — else a killed run would block the
+			// git operation for the whole timeout for no reason.
 			return "", "", 0, fmt.Errorf("credential approval %s was cancelled: the run ended before anyone decided it", approvalID)
 		default: // still PENDING: keep polling
 		}
@@ -637,68 +517,40 @@ func validGitRest(method, rest, service string) bool {
 	}
 }
 
-// BranchNSPrefix is the ONLY ref prefix a governed run may push to: the branch
-// namespace the broker records in github_token grant metadata, `wardyn/<run-id>/*`,
-// rooted under refs/heads/. It is a pure function of the run id (which this proxy
-// already holds), so enforcement needs no extra plumbing — but it MUST stay in
-// lockstep with internal/broker.branchNamespaceFormat; that constant's comment
-// points back here and broker's TestBranchNamespaceLockstepWithProxy fails on
-// drift (the reason this is exported). Everything else (other branches, the
-// default branch, tags, refs/pull/*, refs/notes/*) is outside the namespace.
+// BranchNSPrefix is the ONLY ref prefix a governed run may push to:
+// `wardyn/<run-id>/*` under refs/heads/. MUST stay in lockstep with
+// internal/broker.branchNamespaceFormat (TestBranchNamespaceLockstepWithProxy
+// fails on drift, the reason this is exported).
 func BranchNSPrefix(runID uuid.UUID) string {
 	return "refs/heads/wardyn/" + runID.String() + "/"
 }
 
 // BranchNSEnforced reports whether push branch-namespace confinement is ON for
-// THIS proxy process (env, like the WARDYN_LLM_SCAN kill-switch). Exported so
-// cmd/wardyn-proxy can state the posture ONCE at boot: this is the only
-// default-ON control in the git-broker path, and without that boot line a run
-// with =false gives no signal anywhere — no boot line, no distinct decision
-// row — because the per-mint branch_namespace metadata is written identically
-// either way, so an opted-out proxy would read exactly like a confined one.
+// THIS proxy process. Exported so cmd/wardyn-proxy can state the posture ONCE
+// at boot: the per-mint branch_namespace metadata is written identically
+// either way, so without that boot line an opted-out proxy reads exactly like
+// a confined one.
 //
-// ON by default: agent-run checks every cloned repo out onto
-// `wardyn/$WARDYN_RUN_ID/work` and sets push.default=current (name_run_branch
-// in deploy/images/common/agent-run-lib.sh), so a stock run is already inside
-// its namespace and complies without the operator pinning the convention in
-// task text. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt back out
-// (e.g. an image whose agent-run predates the run branch).
+// ON by default: agent-run already checks every cloned repo out onto
+// `wardyn/$WARDYN_RUN_ID/work`, so a stock run is already inside its
+// namespace. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt back out.
 //
-// Scope, honestly: THIS switch binds the BROKERED GITHUB path only —
-// handleGitBroker, not its git_pat sibling. It sees git-receive-pack because the
-// sandbox->proxy hop is cleartext on the proxy's own route, and the installation
-// token itself is repo-scoped but not ref-scoped.
-//
-// An SSH push is still an opaque tunnel no pkt-line parser can read. A PAT push
-// is NOT, and saying so was the stale half of this comment: the never-resident
-// git_pat lane (default ON since 0.7) removes that tunnel by design — the proxy
-// terminates the request itself and holds the same cleartext command section
-// (see pat_broker.go). Since 0.7.2 the parser IS wired in there, through the same
+// Scope: THIS switch binds the BROKERED GITHUB path only (handleGitBroker),
+// not its git_pat sibling. An SSH push is an opaque tunnel no pkt-line parser
+// can read. A PAT push is NOT, and saying so was the stale half of this
+// comment. Since 0.7.2 the parser IS wired in there, through the same
 // confinePush step, but behind its OWN switch and DEFAULT OFF
-// (WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, PATBranchNSEnforced) — the widening
-// stayed deliberate rather than implied, because a PAT carries whatever scope the
-// operator issued and Wardyn cannot narrow it, so on forges whose push ref
-// conventions are not GitHub's the namespace is a convention Wardyn asks for, not
-// a bound it can enforce. The two defaults are therefore opposite ON PURPOSE, and
-// each switch says only what its own lane does. This is not a hole in THIS lane's
-// confinement:
-// api.validateGrantLaneExclusivity already refuses a git_pat grant for the same
-// forge as a github_token grant, so a brokered repo has no PAT path beside it. Dispatch removes AND
-// denies the broker-managed GitHub host names on a brokered run — plus that forge's
-// ssh.<forge> endpoint, so a co-granted ssh_key leaves no push path beside the
-// brokered one (confineGitBrokerEgress in internal/api/runs_dispatch_gitbroker.go,
-// and validateGrantLaneExclusivity refuses the combination at policy-write), and
-// the forge's ssh_key AND git_pat grants are withheld from the sandbox entirely
-// at dispatch (dropBrokeredGrants) so no unusable credential is left resident.
-// With one
-// standing caveat, the same one docs/POLICIES.md gives the four HTTPS denies:
-// those are NAME-based denies and a name-based deny does not bind an IP LITERAL
-// (under allow_all_egress a CONNECT to 140.82.114.4:22 is still allowed). The
-// brokered route is the only CONVENIENT route — the one git itself takes, since
-// a clone URL carries a name — not the only conceivable one.
+// (PATBranchNSEnforced) — a PAT carries whatever scope the operator issued on
+// forges whose push-ref conventions aren't GitHub's, and Wardyn cannot narrow
+// it by default. Not a hole either way: a brokered repo has no co-granted
+// PAT/ssh_key path beside it (validateGrantLaneExclusivity refuses the
+// combination at policy-write; dispatch removes the forge's ssh/PAT egress
+// and withholds those grants from the sandbox). One standing caveat, shared
+// with docs/POLICIES.md's four HTTPS denies: a name-based deny does not bind
+// an IP literal, so the brokered route is the only CONVENIENT route, not the
+// only conceivable one.
 //
-// Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
-// silently disabling a security control on a typo.
+// Loud parse: an unrecognized value fails CLOSED (enforce + error log).
 func BranchNSEnforced() bool {
 	return branchNSSwitch(envEnforceBranchNS, true, &branchNSWarnOnce)
 }
@@ -706,25 +558,16 @@ func BranchNSEnforced() bool {
 var branchNSWarnOnce sync.Once
 
 // confinePush is the push branch-namespace confinement STEP, shared by both
-// brokered git lanes: it reads the receive-pack command section, validates every
-// ref against this run's namespace, and returns the body to forward (the
-// buffered command section followed by the still-streaming packfile).
+// brokered git lanes: it reads the receive-pack command section, validates
+// every ref against this run's namespace, and returns the body to forward.
 //
-// On a refusal it writes the 403 itself — through deny, so each lane records the
-// decision against ITS OWN host (github.com vs the granted forge) — and returns
-// ok=false. The REFUSAL TEXT is deliberately here and not at the call sites: the
-// git_pat lane must refuse in the same words as the App lane, and the only way
-// two lanes say the same thing forever is that there is one place saying it.
-//
-// The name is the lane-neutral half of the split: the confinement is
-// ONE rule with two brokers, which is also why the git_pat lane reuses the
-// brokered:git:branch-ns* rule sources rather than minting its own vocabulary.
-// Which lane may reach it, and under which switch, stays the caller's decision —
-// BranchNSEnforced for the App lane, PATBranchNSEnforced for git_pat.
+// On a refusal it writes the 403 itself (through deny, against each lane's
+// own host) and returns ok=false — kept here, not at the call sites, so both
+// lanes refuse in the same words. Which lane may call it, and under which
+// switch, stays the caller's decision.
 func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog.Attr, deny func(ruleSource string)) (io.Reader, bool) {
-	// git does not gzip receive-pack bodies (remote-curl only sets
-	// gzip_request for fetch), but a compressed body must never be waved
-	// through unparsed — that would be a silent bypass.
+	// git does not gzip receive-pack bodies, but a compressed body must never
+	// be waved through unparsed — that would be a silent bypass.
 	if enc, bad := nonIdentityEncoding(r.Header); bad {
 		deny(ruleSourceGitEnc)
 		http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
@@ -751,35 +594,23 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 }
 
 // PATBranchNSEnforced reports whether push branch-namespace confinement is ON
-// for the git_pat lane of THIS proxy process. OFF unless the operator opts in
-// with WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS.
+// for the git_pat lane. OFF unless the operator opts in
+// (WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS).
 //
-// It is a SECOND switch, with the OPPOSITE default, rather than a widening of
-// BranchNSEnforced, and the asymmetry is the decision itself: a GitHub App
-// installation token is Wardyn's own mint, so a namespace is a bound Wardyn put
-// on a credential it issued, and agent-run already checks the work tree out onto
-// wardyn/<run-id>/work. A PAT is the operator's, carrying whatever scope they
-// issued it with and used against forges whose push-ref conventions are not
-// GitHub's — so the namespace there is a convention imposed on a credential
-// Wardyn cannot narrow, and turning it on by default would break pushes that
-// were never promised to be confined.
-//
-// Once opted IN, the parse is the same loud, fail-closed one BranchNSEnforced
-// uses: garbage ENFORCES and logs, because a typo must never silently undo a
-// control the operator deliberately turned on.
+// A SECOND switch with the OPPOSITE default, not a widening of
+// BranchNSEnforced: a GitHub App token is Wardyn's own mint, but a PAT is the
+// operator's, carrying whatever scope they issued against forges whose
+// push-ref conventions aren't GitHub's — Wardyn cannot narrow it, so it isn't
+// confined by default. Once opted IN, the parse is the same loud, fail-closed one.
 func PATBranchNSEnforced() bool {
 	return branchNSSwitch(envEnforcePATBranchNS, false, &patBranchNSWarnOnce)
 }
 
 var patBranchNSWarnOnce sync.Once
 
-// branchNSSwitch parses one branch-namespace enforcement env var: unset (or
-// whitespace) means dflt, the disable words mean off, the enable words mean on,
-// and anything else ENFORCES while logging once per process — a misconfiguration
-// is boot-level state, and per-request ERROR spam would bury the signal.
-//
-// One body for both switches so the two can never drift into parsing the same
-// words differently; only the NAME and the unset default differ.
+// branchNSSwitch parses one branch-namespace enforcement env var: unset means
+// dflt, recognized words mean off/on, anything else ENFORCES while logging
+// once per process. One body for both switches so they can never drift.
 func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(name))); v {
 	case "":
@@ -799,17 +630,14 @@ func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
 }
 
 // readReceivePackCommands consumes the pkt-line COMMAND SECTION of a
-// git-receive-pack request body — everything up to and INCLUDING the flush-pkt —
-// validating every ref update against prefix, and returns those bytes VERBATIM so
-// the caller can forward them ahead of the still-streaming packfile.
+// git-receive-pack request body (up to and INCLUDING the flush-pkt),
+// validating every ref update against prefix, and returns those bytes
+// VERBATIM to forward ahead of the still-streaming packfile.
 //
-// Wire shape (protocol v2 leaves push unchanged): every pkt-line starts with 4 hex
-// length digits that COUNT THEMSELVES; "0000" is the flush-pkt ending the section;
-// the first command carries "\0<capability-list>" after the refname; optional
-// "shallow <oid>" lines may precede the commands. A delete (new-oid all zeros) is a
-// mutation like any other, so it is checked identically — a delete outside the
-// namespace is refused. Anything not understood — a signed push-cert, a bad length,
-// a section over maxReceivePackCmds — is refused: fail closed.
+// Wire shape: every pkt-line starts with 4 hex length digits that COUNT
+// THEMSELVES; "0000" is the flush-pkt; the first command carries
+// "\0<capability-list>"; optional "shallow <oid>" lines may precede commands.
+// Anything not understood (signed push-cert, bad length, oversized section) is refused.
 func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 	var buf bytes.Buffer
 	hdr := make([]byte, 4)
@@ -847,14 +675,11 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 }
 
 // checkPushCommand validates ONE command-section pkt-line payload:
-// "<old-oid> SP <new-oid> SP <refname>", with "\0<capabilities>" on the first and
-// an optional trailing LF, or a "shallow <oid>" line (no ref to check). first
-// reports whether this is the first command line.
+// "<old-oid> SP <new-oid> SP <refname>", with "\0<capabilities>" on the
+// first, or a "shallow <oid>" line. first reports whether this is the first line.
 //
-// A NUL anywhere but the first command is refused: git's receive-pack reads a
-// capability list only there, and a forge whose parser differs could read
-// "<old> <new> refs/heads/wardyn/<run>/x\0refs/heads/main" on a later line as a
-// different ref than the one checked here.
+// A NUL anywhere but the first command is refused: a forge whose parser
+// differs could read a later NUL-hidden ref as a different ref than checked here.
 func checkPushCommand(line, prefix string, first bool) error {
 	line, _, caps := strings.Cut(line, "\x00") // capabilities ride the FIRST command only
 	line = strings.TrimSuffix(line, "\n")
@@ -870,10 +695,8 @@ func checkPushCommand(line, prefix string, first bool) error {
 		return fmt.Errorf("unsupported receive-pack command %q (only <old> <new> <ref> updates are allowed)", line)
 	}
 	ref := parts[2]
-	// Defense in depth: receive-pack refuses funny refnames server-side, but a
-	// prefix test must never be the only thing between "wardyn/<id>/x" and a
-	// traversal or an embedded second ref. The rule is adoscope.CheckRefName,
-	// the ONE ref-name check the Azure DevOps REST refs door applies too.
+	// Defense in depth: a prefix test alone must never be the only thing
+	// between "wardyn/<id>/x" and a traversal (adoscope.CheckRefName).
 	if err := adoscope.CheckRefName(ref); err != nil {
 		return err
 	}

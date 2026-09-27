@@ -48,10 +48,12 @@ GO_EXIT=$?
 # G11: a red `build`/`test-pg` job used to say only `make: *** [Makefile:195:
 # test-report] Error 1` — the failing test names and any compiler output were
 # visible only in the uploaded JSON artifact (gh run download -n
-# go-test-reports). Surface both directly in the job log on a red run, plus
-# any package that failed with no failing test to name (a -timeout panic, a
-# panic in init, os.Exit or a failure in TestMain): its package name and the
-# panic, or else its last few output lines.
+# go-test-reports). Surface both directly in the job log on a red run: a
+# named test failure (e.g. an ordinary t.Fatalf, which the compact `go test`
+# summary line never echoes) prints its own last few output lines right under
+# its name (#1209), and any package that failed with no failing test to name
+# (a -timeout panic, a panic in init, os.Exit or a failure in TestMain) prints
+# its package name and the panic, or else its last few output lines.
 if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
   python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
 import json
@@ -63,6 +65,7 @@ build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fa
 build_fails = {}   # ImportPath -> [Output, ...]
 pkg_fails = set()  # Package: failed with no Test and not a build failure
 tail = {}          # Package -> its last few output lines
+test_tail = {}     # (Package, Test) -> that test's last few output lines (#1209)
 panics = {}        # Package -> its first `panic:` line and the lines after it
 panic_test = {}    # Package -> the test that panic was attributed to, if any
 
@@ -88,6 +91,8 @@ with open(sys.argv[1]) as f:
         elif action == "output" and ev.get("Package"):
             pkg, out = ev["Package"], ev.get("Output", "")
             tail.setdefault(pkg, deque(maxlen=8)).append(out)
+            if ev.get("Test"):
+                test_tail.setdefault((pkg, ev["Test"]), deque(maxlen=8)).append(out)
             # A -timeout panic is attributed to the running test but emits no
             # fail event for it, and its last lines are goroutine frames: the
             # `panic:` line and the ones after it are what name the cause.
@@ -105,6 +110,8 @@ if fails:
     print(">> failing tests:")
     for pkg, test in sorted(fails):
         print(f">>   {pkg} {test}")
+        for out in test_tail.get((pkg, test), []):
+            emit(out)
 
 if build_fails:
     print(">> failed to build:")

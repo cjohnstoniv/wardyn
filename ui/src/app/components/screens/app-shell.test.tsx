@@ -614,19 +614,19 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, the nine items, then Setup and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, the ten items, then Setup and Settings", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions",
+      "Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "User types",
       "Secrets", "Audit", "Recordings", "Setup", "Settings",
     ]);
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
   });
 
-  it("a security admin's Admin view: Drives joins; Secrets, Recordings, Setup and Settings do not", async () => {
+  it("a security admin's Admin view: User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Drives", "Audit"]);
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "User types", "Drives", "Audit"]);
   });
 
   it("a user: no eyebrow, three items, then Getting started and Your account", async () => {

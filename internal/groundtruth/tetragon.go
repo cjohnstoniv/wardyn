@@ -17,22 +17,16 @@ import (
 // ── Minimal Tetragon JSON-export structs ────────────────────────────────────
 //
 // We deliberately define only the fields we read, against Tetragon's JSON
-// export shape (the top-level GetEventsResponse, one JSON object per line). This
-// avoids pulling github.com/cilium/tetragon (and its gRPC/protobuf graph) into
-// go.mod — the dependency choice documented in the package doc. The field names
-// and nesting below match Tetragon's protojson output for process_exec and
-// process_kprobe events.
+// export shape (the top-level GetEventsResponse, one JSON object per line).
+// This avoids pulling github.com/cilium/tetragon (and its gRPC/protobuf graph)
+// into go.mod. Field names and nesting match Tetragon's protojson output for
+// process_exec and process_kprobe events.
 //
-// FINDING (medium, fixed): an earlier version mapped network connects off a
-// fictional top-level "process_connect" event kind. Tetragon has NO such kind:
-// the GetEventsResponse oneof is process_exec / process_exit / process_kprobe /
-// process_tracepoint / process_uprobe / process_lsm / process_loader / ...
-// (https://tetragon.io/docs/reference/grpc-api/). A TCP connect is observed via
-// a process_kprobe on a connect kprobe (tcp_connect / security_socket_connect /
-// __sys_connect) whose socket argument is a sock_arg (KprobeSock:
-// family/protocol/saddr/daddr/sport/dport). Because the old code keyed on a kind
-// the kernel never emits, live escape/connect detection NEVER fired. Connects
-// are now routed through the kprobe handler against the real shape.
+// Tetragon has no top-level "process_connect" event kind: a TCP connect is
+// observed via a process_kprobe on a connect kprobe (tcp_connect /
+// security_socket_connect / __sys_connect) whose socket argument is a
+// sock_arg (KprobeSock: family/protocol/saddr/daddr/sport/dport). Connects are
+// routed through the kprobe handler against this real shape.
 
 // TetragonEvent is one line of the Tetragon JSON export. Exactly one of the
 // event-kind fields is set per line. We map process_exec and process_kprobe;
@@ -191,19 +185,13 @@ func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg) (types.Au
 	if ip != "" {
 		dst = net.JoinHostPort(ip, strconv.Itoa(port))
 	}
-	// Outcome: this target-agnostic mapper CANNOT know the run's proxy address,
-	// so it does NOT infer escape-ness from the destination's IP class. Under the
-	// primary L0 topology (Internal + gatewayless) the SOLE reachable dst is
-	// wardyn-proxy on a PRIVATE bridge IP — so an IP-class guess would stamp every
-	// legitimate agent->proxy connect "failure" (alert fatigue) while a direct
-	// public-C2 connect (the real escape) has a public dst and gets "success":
-	// inverted for the shipped topology. Default to "success" (the connect
-	// happened); the raw dst is preserved in the event so a proxy-address-aware
-	// comparer CAN flag escapes later (not built yet — future work). ACCEPTED
-	// CEILING until then: a private-IP lateral connect (e.g. 10.0.0.5:22) that the
-	// old heuristic stamped "failure" is now "success" and unflagged. The ONE
-	// exception kept: a reach to the cloud metadata IP is a credential-theft blind
-	// spot worth flagging regardless of topology.
+	// This target-agnostic mapper cannot know the run's proxy address, so it
+	// does NOT infer escape-ness from destination IP class (an IP-class guess
+	// is inverted under the primary L0 topology, where the sole legitimate
+	// dst is a private bridge IP). Defaults to "success"; raw dst is preserved
+	// for a future proxy-address-aware comparer. ACCEPTED CEILING: a private-IP
+	// lateral connect is unflagged until then. Exception: the cloud metadata
+	// IP is always flagged as a credential-theft blind spot.
 	outcome := "success"
 	if isMetadataIP(ip) {
 		outcome = "failure"
@@ -351,12 +339,9 @@ func kprobePath(e *TetragonProcessKprobe) string {
 }
 
 // isMetadataIP reports whether ipStr is the cloud instance-metadata address
-// (169.254.169.254). A kernel-observed connect there is a credential-theft
-// blind spot worth a "failure" flag regardless of topology. This mapper
-// deliberately does NOT flag other IP classes (private/loopback/link-local):
-// under the primary L0 topology the agent's only legal destination is the proxy
-// on a PRIVATE bridge IP, so an IP-class guess is inverted (see mapConnect).
-// Empty/unparseable IPs are not flagged.
+// (169.254.169.254), flagged regardless of topology (see mapConnect). Other
+// IP classes are deliberately not flagged; empty/unparseable IPs are not
+// flagged.
 func isMetadataIP(ipStr string) bool {
 	ip := net.ParseIP(ipStr)
 	return ip != nil && ip.Equal(net.ParseIP("169.254.169.254"))

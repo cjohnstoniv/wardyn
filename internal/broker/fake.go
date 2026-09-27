@@ -30,23 +30,21 @@ type FakeGitHubMinter struct {
 	LastTTL         time.Duration
 	Calls           int
 
-	// RefRulesetConfined/Detail/Err drive VerifyRefRuleset. The zero value
-	// answers "not confined", which is the honest default for a fake with no
-	// GitHub behind it — a test that wants the WARDYN_GITHUB_REQUIRE_REF_RULESET
-	// gate to PASS has to say so.
+	// RefRulesetConfined/Detail/Err drive VerifyRefRuleset. Zero value is "not
+	// confined"; a test wanting the WARDYN_GITHUB_REQUIRE_REF_RULESET gate to
+	// PASS must set it explicitly.
 	RefRulesetConfined bool
 	RefRulesetDetail   string
 	RefRulesetErr      error
 	// LastVerifiedRepos records every repo VerifyRefRuleset was asked about.
 	LastVerifiedRepos []string
 
-	// Revoked counts Revoke calls and RevokedTokens records what was handed
-	// back, so a test can assert BOTH that every discarded token was revoked
-	// (Revoked == Calls-1 on a lost race) and that the RETURNED one was not.
+	// Revoked/RevokedTokens let a test assert every discarded token was
+	// revoked (Revoked == Calls-1 on a lost race) and the returned one was not.
 	Revoked       int
 	RevokedTokens []string
-	// RevokeErr, if set, is returned by Revoke — the best-effort contract says
-	// a failed revoke must not change the caller's own error.
+	// RevokeErr, if set, is returned by Revoke; a failed revoke must not
+	// change the caller's own error (best-effort contract).
 	RevokeErr error
 }
 
@@ -57,11 +55,9 @@ func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []stri
 	f.LastRepos = repos
 	f.LastPermissions = permissions
 	f.LastTTL = ttl
-	// Reproduce the ONE precondition the real minter enforces before it talks to
-	// GitHub (githubMinter.MintInstallationToken): an installation token is
-	// per-installation and the owner is derived from the first repo, so an empty
-	// repo list cannot mint. A fake that accepted it made every caller with an
-	// empty scope.repos look healthy in tests while 502-ing in production.
+	// Reproduce the real minter's one precondition: an installation token is
+	// per-installation, owner derived from the first repo, so an empty repo
+	// list cannot mint.
 	if len(repos) == 0 {
 		return "", time.Time{}, errors.New("broker: github token requires at least one repo")
 	}
@@ -79,9 +75,8 @@ func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []stri
 	return tok, exp, nil
 }
 
-// Revoke records the hand-back. An empty token is a no-op here exactly as it is
-// in the real minter, so a fake that is asked to revoke "nothing" does not
-// inflate the count a test is asserting on.
+// Revoke records the hand-back. An empty token is a no-op, as in the real
+// minter, so it does not inflate the revoke count a test asserts on.
 func (f *FakeGitHubMinter) Revoke(_ context.Context, token string) error {
 	if token == "" {
 		return nil

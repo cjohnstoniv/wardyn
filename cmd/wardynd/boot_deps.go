@@ -828,12 +828,13 @@ func buildDirectoryConnector(f *bootFlags) (directory.Directory, error) {
 	return dir, nil
 }
 
-// loginStampStore is the two-method slice of the store refreshLoginStamps needs,
+// loginStampStore is the three-method slice of the store refreshLoginStamps needs,
 // declared so the demoted-admin bound can be DRIVEN by a test rather than
 // asserted by grepping this file for a method name.
 type loginStampStore interface {
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
 	RefreshAPITokenIdentity(ctx context.Context, principal, role, userType string, groups []string, truncated bool) error
+	MarkPersonSignedIn(ctx context.Context, principal string, now time.Time) error
 }
 
 // refreshLoginStamps re-stamps the identity a login just derived onto both
@@ -870,6 +871,11 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, user
 	}
 	if err := st.RefreshAPITokenIdentity(ctx, sub, role, userType, groups, groupsTruncated); err != nil {
 		slog.Warn("wardynd: api token identity refresh at login failed", slog.String("err", err.Error()))
+	}
+	// A pre-created person (#1157) attaches here, by subject alone: the row an
+	// admin keyed by this sub records that its person has now signed in.
+	if err := st.MarkPersonSignedIn(ctx, sub, now); err != nil {
+		slog.Warn("wardynd: marking a pre-created person signed in failed", slog.String("err", err.Error()))
 	}
 }
 

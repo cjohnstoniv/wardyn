@@ -325,6 +325,9 @@ type bootFlags struct {
 	uiOriginTemplate *string
 	// uiSessionTTL bounds the relay session cookie — see api.Config.UISessionTTL.
 	uiSessionTTL *time.Duration
+	// uiStripCookies is the relay's inbound cookie policy — see
+	// api.Config.UICookiePolicy.
+	uiStripCookies *string
 
 	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
 	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
@@ -558,6 +561,7 @@ func parseBootFlags() *bootFlags {
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),
 		uiAdvertise:      flagEnv("ui-sandbox-advertise", "WARDYN_UI_SANDBOX_ADVERTISE", "", "externally-reachable base URL of the UI-sandbox gateway, published on /healthz for the console's Open button; advisory only"),
 		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration)"),
+		uiStripCookies:   flagEnv("ui-sandbox-strip-cookies", "WARDYN_UI_SANDBOX_STRIP_COOKIES", "", `inbound cookie policy for the UI-sandbox gateway: "allow:<names>" forwards only those cookies to a sandbox app, "deny:<names>" strips them (comma-separated names, "prefix*" for a prefix). Empty (default) forwards every cookie but wardyn_*`),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn ssh" refuses`),
