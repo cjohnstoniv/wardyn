@@ -318,6 +318,12 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 20m ./test/conformance/...
+	@echo "Running docker L0 structural-egress negatives (#707: PR-time, not nightly-only)..."
+	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil (internal/runner/docker/network_test.go)"
+	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
+	@echo "surface until the next nightly run. Scoped to just these three by -run: the rest of"
+	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
+	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
 
 # 30m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
