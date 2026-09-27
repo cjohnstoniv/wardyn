@@ -49,6 +49,15 @@ func TestPG_MintSSHKey_OwnerOnlyNeverServesTheOperatorRow(t *testing.T) {
 	if m, err := b.mintSSHKey(ctx, caller, strict); !errors.Is(err, secretstore.ErrNotFound) || m.Token != "" {
 		t.Fatalf("owner_only, no own row: (%q, %v), want a not-found refusal and never the operator key", m.Token, err)
 	}
+	// Operator ownership is the signed claim, never the subject's spelling.
+	impostor := &identity.Claims{RunID: uuid.New(), Sub: "admin-token"}
+	if m, err := b.mintSSHKey(ctx, impostor, strict); !errors.Is(err, secretstore.ErrNotFound) || m.Token != "" {
+		t.Fatalf("owner_only, sub \"admin-token\" without the claim: (%q, %v), want a not-found refusal", m.Token, err)
+	}
+	operator := &identity.Claims{RunID: uuid.New(), Sub: "admin-token", OperatorOwned: true}
+	if m, err := b.mintSSHKey(ctx, operator, strict); err != nil || m.Token != "operator-key" || m.Metadata["secret_scope"] != "operator" {
+		t.Fatalf("owner_only, operator-owned run: (%q, %v, %v), want the operator row, its own", m.Token, m.Metadata, err)
+	}
 	if m, err := b.mintSSHKey(ctx, caller, sshKeySpec("github.com", key, "", "")); err != nil ||
 		m.Token != "operator-key" || m.Metadata["secret_scope"] != "operator" {
 		t.Fatalf("unflagged: (%q, %v, %v), want today's operator fallback", m.Token, m.Metadata, err)

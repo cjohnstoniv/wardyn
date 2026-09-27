@@ -252,7 +252,7 @@ func run() error {
 	if *f.printGroundtruthToken {
 		mintCtx, mintCancel := context.WithTimeout(rootCtx, 10*time.Second)
 		defer mintCancel()
-		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience)
+		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
 		if merr != nil {
 			return fmt.Errorf("mint groundtruth token: %w", merr)
 		}

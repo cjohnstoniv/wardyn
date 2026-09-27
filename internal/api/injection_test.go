@@ -477,7 +477,7 @@ func TestSecretsAPI_ReservesOAuthSentinels(t *testing.T) {
 // itself hardcodes "alice@example.com" for every other test in this file).
 func mintRunTokenAs(t *testing.T, h *harness, runID uuid.UUID, sub string) string {
 	t.Helper()
-	id, err := h.idp.MintRunIdentity(context.Background(), runID, sub, "", internalAudience)
+	id, err := h.idp.MintRunIdentity(context.Background(), runID, sub, "", internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint run identity: %v", err)
 	}

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -506,23 +505,32 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 	return actor
 }
 
-// operatorOwnsRun reports whether a run identity subject is the operator
-// itself rather than a person: the admin token, or local mode's operator.
-// ponytail: keyed on the subject string, as credentialPerson is; an IdP sub
-// equal to "admin-token" would read as the operator.
-func (s *Server) operatorOwnsRun(subject string) bool {
-	return subject == adminTokenPrincipal || (s.cfg.LocalMode && subject == s.cfg.LocalOperator)
+// operatorOwnedRequest reports whether the request on ctx is the operator
+// itself rather than a person: local mode's injected principal, or
+// actorFromRequest's system actor that is not a device — the real admin token.
+// It reads what authenticated the request, never a principal string, so an
+// IdP sub spelled like the admin token is still a person. Run creation records
+// it (AgentRun.OperatorOwned, identity.Claims.OperatorOwned).
+func operatorOwnedRequest(ctx context.Context) bool {
+	if localPrincipalFromContext(ctx) != "" {
+		return true
+	}
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false
+	}
+	t, _ := actorFromRequest((&http.Request{}).WithContext(ctx))
+	return t == types.ActorSystem
 }
 
-// ownerOnlyCtx prepares ctx for a grant read on behalf of run subject. An
-// operator-owned run can store no row but the operator's (every operator
-// write lands in ""), so an owner_only grant's own row for it is that one
-// (secretstore.OperatorOwned); a person's never is.
-func (s *Server) ownerOnlyCtx(ctx context.Context, subject string) context.Context {
-	if s.operatorOwnsRun(subject) {
-		return secretstore.OperatorOwned(ctx)
+// grantReadOwner is the namespace a grant's stored secret is read from for a
+// run whose identity subject is subject: that subject's (falling back to the
+// operator's unless the grant is owner_only), except that an owner_only grant
+// on an operator-owned run reads the operator's "" namespace, its own.
+func grantReadOwner(subject string, ownerOnly, operatorOwned bool) string {
+	if ownerOnly && operatorOwned {
+		return ""
 	}
-	return ctx
+	return subject
 }
 
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit

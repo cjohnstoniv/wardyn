@@ -42,6 +42,16 @@ func ownerOf(caller *identity.Claims) string {
 	return caller.Sub
 }
 
+// grantOwner is the namespace a grant's stored secret is read from: ownerOf,
+// except that an owner_only grant on a run the operator itself owns (the
+// signed Claims.OperatorOwned, never Sub) reads the operator's "", its own.
+func grantOwner(caller *identity.Claims, spec types.GrantSpec) string {
+	if spec.OwnerOnly && caller != nil && caller.OperatorOwned {
+		return ""
+	}
+	return ownerOf(caller)
+}
+
 // mintAPIKey resolves the secret NAME to a proxy InjectionRule. The secret
 // VALUE is never read or returned here — late binding happens proxy-side, at
 // egress time, by name. This is intentional late binding, not an oversight:
@@ -111,7 +121,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	// The run's own owner's row wins, falling back to the operator's (ownerOf)
 	// unless the grant is owner_only.
 	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
-	value, err := b.secrets.For(ownerOf(caller)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
+	value, err := b.secrets.For(grantOwner(caller, spec)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
 	if err != nil {
 		return Minted{}, grantReadError("git_pat", sc.SecretName, spec.OwnerOnly, err)
 	}
@@ -160,7 +170,7 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 	}
 	// Same owner-then-operator-fallback rule as mintGitPAT (owner_only
 	// included), for both the key and its optional known_hosts material below.
-	owned := b.secrets.For(ownerOf(caller))
+	owned := b.secrets.For(grantOwner(caller, spec))
 	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
 	rctx := secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint)
 	key, err := owned.Get(rctx, sc.KeySecretRef)

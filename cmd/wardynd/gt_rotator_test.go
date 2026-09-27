@@ -23,7 +23,7 @@ type fakeGTMinter struct {
 	calls  int
 }
 
-func (f *fakeGTMinter) MintRunIdentity(context.Context, uuid.UUID, string, string, string) (identity.RunIdentity, error) {
+func (f *fakeGTMinter) MintRunIdentity(context.Context, uuid.UUID, string, string, string, bool) (identity.RunIdentity, error) {
 	f.calls++
 	return identity.RunIdentity{Token: f.token, Expiry: f.expiry}, nil
 }

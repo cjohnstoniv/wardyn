@@ -183,7 +183,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	retiring := cfg.RunToken
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "mint run identity: "+err.Error())
 	}

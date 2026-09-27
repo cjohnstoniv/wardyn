@@ -88,7 +88,7 @@ type Store interface {
 	//     operator's ("") row — a member with no key of their own still
 	//     resolves the operator's, exactly as before For existed. A read
 	//     under GrantRead(ctx, true) (an owner_only grant) never falls back:
-	//     only the owner's own row, and none for owner "".
+	//     only the owner's own row ("" reads the operator's, its own).
 	//   - Put and Delete are scoped to the owner's row ONLY. They never read
 	//     or write the operator's row, and never fall back — a write always
 	//     means what it says.

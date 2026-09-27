@@ -692,7 +692,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	minted, err := s.cfg.Broker.MintForGrant(s.ownerOnlyCtx(r.Context(), claims.Sub), claims, body.GrantID)
+	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
 	if err != nil {
 		s.writeMintError(w, r, err)
 		return
@@ -933,7 +933,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
+	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return

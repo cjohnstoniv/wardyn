@@ -23,7 +23,7 @@ import (
 // groundtruth audience.
 func (h *harness) mintGroundtruthToken(t *testing.T) string {
 	t.Helper()
-	id, err := h.idp.MintRunIdentity(context.Background(), uuid.Nil, groundtruth.SensorActor, "", groundtruthAudience)
+	id, err := h.idp.MintRunIdentity(context.Background(), uuid.Nil, groundtruth.SensorActor, "", groundtruthAudience, false)
 	if err != nil {
 		t.Fatalf("mint groundtruth token: %v", err)
 	}

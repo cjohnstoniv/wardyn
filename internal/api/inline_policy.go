@@ -976,7 +976,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 		// A person's owner_only grant never reads the operator namespace (#1106):
 		// only the row the mint reads. An operator-owned run's own row is the
 		// operator's, which the check below finds.
-		if n.ownerOnly && !s.operatorOwnsRun(subject) {
+		if n.ownerOnly && !operatorOwnedRequest(ctx) {
 			if !s.ownsSecretMemoized(ctx, subject, n.name) {
 				return http.StatusUnprocessableEntity, fmt.Errorf(ownerOnlyMissingRefusal, n.kind, n.name)
 			}

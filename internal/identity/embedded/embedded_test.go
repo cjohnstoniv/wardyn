@@ -108,7 +108,7 @@ func TestMintVerifyRoundtrip(t *testing.T) {
 	ctx := context.Background()
 
 	runID := uuid.New()
-	id, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "bob@example.com", testAudience)
+	id, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "bob@example.com", testAudience, false)
 	if err != nil {
 		t.Fatalf("MintRunIdentity: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestMintVerifyRoundtrip(t *testing.T) {
 func TestSponsorDefaultsToSub(t *testing.T) {
 	p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 	ctx := context.Background()
-	id, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", testAudience)
+	id, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", testAudience, false)
 	if err != nil {
 		t.Fatalf("MintRunIdentity: %v", err)
 	}
@@ -178,10 +178,10 @@ func TestSponsorDefaultsToSub(t *testing.T) {
 func TestMintInputValidation(t *testing.T) {
 	p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 	ctx := context.Background()
-	if _, err := p.MintRunIdentity(ctx, uuid.New(), "", "", testAudience); err == nil {
+	if _, err := p.MintRunIdentity(ctx, uuid.New(), "", "", testAudience, false); err == nil {
 		t.Fatal("expected error for empty humanSub")
 	}
-	if _, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", ""); err == nil {
+	if _, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", "", false); err == nil {
 		t.Fatal("expected error for empty audience")
 	}
 }
@@ -193,7 +193,7 @@ func TestVerifyFailures(t *testing.T) {
 		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 		// Mint as if it were 2h ago so exp is in the past (beyond leeway).
 		p.now = func() time.Time { return time.Now().Add(-2 * time.Hour) }
-		id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
+		id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -205,7 +205,7 @@ func TestVerifyFailures(t *testing.T) {
 
 	t.Run("wrong audience", func(t *testing.T) {
 		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
-		id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
+		id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -216,7 +216,7 @@ func TestVerifyFailures(t *testing.T) {
 
 	t.Run("empty expected audience rejected", func(t *testing.T) {
 		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
-		id, _ := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
+		id, _ := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience, false)
 		if _, err := p.Verify(ctx, id.Token, ""); err == nil {
 			t.Fatal("expected error for empty expected audience")
 		}
@@ -226,7 +226,7 @@ func TestVerifyFailures(t *testing.T) {
 		store := identitytest.NewMemRevocationStore()
 		p1 := newProvider(t, store, &recordingRecorder{})
 		p2 := newProvider(t, store, &recordingRecorder{}) // different key
-		id, err := p1.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
+		id, err := p1.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -249,7 +249,7 @@ func TestVerifyRevokedJTI(t *testing.T) {
 	p := newProvider(t, store, &recordingRecorder{})
 
 	runID := uuid.New()
-	id, err := p.MintRunIdentity(ctx, runID, "alice", "", testAudience)
+	id, err := p.MintRunIdentity(ctx, runID, "alice", "", testAudience, false)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -272,8 +272,8 @@ func TestRevokeRunCascade(t *testing.T) {
 	p := newProvider(t, store, rec)
 
 	runID := uuid.New()
-	id1, _ := p.MintRunIdentity(ctx, runID, "alice", "", testAudience)
-	id2, _ := p.MintRunIdentity(ctx, runID, "alice", "", testAudience)
+	id1, _ := p.MintRunIdentity(ctx, runID, "alice", "", testAudience, false)
+	id2, _ := p.MintRunIdentity(ctx, runID, "alice", "", testAudience, false)
 
 	if err := p.RevokeRun(ctx, runID); err != nil {
 		t.Fatalf("RevokeRun: %v", err)
@@ -301,7 +301,7 @@ func TestVerifyFailsClosedOnStoreError(t *testing.T) {
 	// Mint with a good store, verify with an erroring store: must fail closed.
 	good := identitytest.NewMemRevocationStore()
 	p := newProvider(t, good, &recordingRecorder{})
-	id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
+	id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience, false)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestVerifyRejectsForeignTrustDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New pB: %v", err)
 	}
-	id, err := pA.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
+	id, err := pA.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience, false)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestAuditWriteFailureIsBestEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", testAudience); err != nil {
+	if _, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", testAudience, false); err != nil {
 		t.Fatalf("mint must succeed despite audit write failure: %v", err)
 	}
 	if err := p.RevokeRun(ctx, uuid.New()); err != nil {

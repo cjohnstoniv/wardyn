@@ -39,7 +39,7 @@ const expiredIdentityToken = "expired-run-token"
 
 func (e *expiredIdentity) Name() string { return "expired-test" }
 
-func (e *expiredIdentity) MintRunIdentity(context.Context, uuid.UUID, string, string, string) (identity.RunIdentity, error) {
+func (e *expiredIdentity) MintRunIdentity(context.Context, uuid.UUID, string, string, string, bool) (identity.RunIdentity, error) {
 	return identity.RunIdentity{}, errors.New("not used")
 }
 

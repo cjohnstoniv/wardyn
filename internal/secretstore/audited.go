@@ -166,22 +166,6 @@ func OwnRowOnly(ctx context.Context) bool {
 	return g.ownOnly
 }
 
-type operatorOwnerKey struct{}
-
-// OperatorOwned marks ctx for reads on behalf of a run whose owner is the
-// operator itself, not a person (the admin token, local mode). Such an owner
-// can store no row but the operator's, so under OwnRowOnly its own row IS the
-// operator's ("", name) row. The caller decides; the store only honors it.
-func OperatorOwned(ctx context.Context) context.Context {
-	return context.WithValue(ctx, operatorOwnerKey{}, true)
-}
-
-// IsOperatorOwned reports whether ctx carries OperatorOwned.
-func IsOperatorOwned(ctx context.Context) bool {
-	v, _ := ctx.Value(operatorOwnerKey{}).(bool)
-	return v
-}
-
 // Audited wraps s so that every Get records one secret.read on rec, carrying
 // the owner, the store, the row's ref and the context's purpose — unless the
 // context is SiteAudited. A Get that finds no row records nothing: no value

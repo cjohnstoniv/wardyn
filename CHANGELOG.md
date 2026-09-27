@@ -1191,7 +1191,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   secret from the run owner's own row only; a member with none is refused at launch with a named
   reason instead of being served the operator row of that name, and a row removed after launch is
   refused at mint. A grant without the flag keeps the fallback. A run with no person behind it
-  (the admin token, local mode) reads the operator row as its own. An `owner_only` on a pairing
+  (the admin token, local mode) reads the operator row as its own; that is decided from what
+  authenticated the creating request, recorded on the run (migration
+  `0086_agent_runs_operator_owned`, false for every existing run) and signed into the run's token,
+  never from the creator's name, so a person whose sign-in subject is spelled `admin-token` is
+  still a person. An `owner_only` on a pairing
   in the deployment ceiling or a governance profile binds a member's proposal for it, and a
   profile may not drop it. `credential.mint` (`git_pat`, `ssh_key`) and `run.env_secret.resolve`
   now record `secret_scope` (`own` or `operator`). **Upgrading:** upgrade the proxy image
