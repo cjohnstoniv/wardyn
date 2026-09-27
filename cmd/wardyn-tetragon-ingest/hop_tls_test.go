@@ -5,6 +5,7 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -125,12 +126,16 @@ func TestControlPlaneClient_FailsClosedOnWrongCA(t *testing.T) {
 }
 
 // httptest's own certificate is not the internal CA's: a client that fell
-// back to the system roots or skipped verification would reach it.
+// back to the system roots or skipped verification would reach it. httptest's
+// certificate is not in the system pool, so a client that trusts the system
+// roots PLUS the internal CA would still refuse this dial — that mutation is
+// caught below by asserting the pool itself holds the internal CA alone.
 func TestControlPlaneClient_TrustsNoOtherRoot(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
 	defer srv.Close()
-	c, err := controlPlaneClient(srv.URL, caFileFor(t, newCA(t)))
+	caBlob := newCA(t)
+	c, err := controlPlaneClient(srv.URL, caFileFor(t, caBlob))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,5 +145,21 @@ func TestControlPlaneClient_TrustsNoOtherRoot(t *testing.T) {
 	}
 	if hits.Load() != 0 {
 		t.Fatal("a request reached a server outside the internal CA")
+	}
+
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		t.Fatal("expected an *http.Transport with a TLS config")
+	}
+	ca, err := hoptls.ParseCA(caBlob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPool := x509.NewCertPool()
+	if !wantPool.AppendCertsFromPEM(ca.CertPEM) {
+		t.Fatal("failed to build the expected CA-only pool")
+	}
+	if !tr.TLSClientConfig.RootCAs.Equal(wantPool) {
+		t.Fatal("the pinned client's root pool holds more than the internal CA alone (e.g. a system-roots fallback)")
 	}
 }
