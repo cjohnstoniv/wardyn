@@ -174,9 +174,11 @@ func TestLive_TransitStoreOutageIsTransient(t *testing.T) {
 	}
 }
 
-// -rewrap against live Transit: a run that aborts at an unreadable row keeps
-// the rows before it, a re-run moves only the rest, and a third moves
-// nothing. Then min_decryption_version retires v1 with every row readable.
+// -rewrap against live Transit: a run that aborts at an unreadable row is
+// all-or-nothing (rewrapAll commits in one transaction, so nothing moves and
+// every row still decrypts under the old key version), a re-run moves every
+// row once it is readable again, and a third moves nothing. Then
+// min_decryption_version retires v1 with every row readable.
 func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 	testfloor.Mark(t, "kek-vault")
 	testfloor.Mark(t, "kek-openbao")
@@ -205,12 +207,30 @@ func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 	}
 	setWrap(bad)
 	res, err := rewrap()
-	if err == nil || !strings.Contains(err.Error(), `name="b"`) || res.Rewrapped != 1 {
-		t.Fatalf("Rewrap over an unreadable row = (%+v, %v); want an abort naming b after 1 row", res, err)
+	if err == nil || !strings.Contains(err.Error(), `name="b"`) || res.Rewrapped != 0 {
+		t.Fatalf("Rewrap over an unreadable row = (%+v, %v); want an all-or-nothing abort naming b, nothing committed", res, err)
+	}
+	for _, n := range []string{"a", "b", "c"} {
+		_, w := rowKEK(t, pool, "", n)
+		if v, _ := tr.WrapVersion(w); v != 1 {
+			t.Errorf("row %s is under v%d after the aborted rewrap, want v1 (nothing committed)", n, v)
+		}
+	}
+	// a and c were never touched by the aborted run; b's corrupted payload is
+	// restored before checking it, so all three prove readable under the
+	// pre-rewrap (v1) key, not just the ones the abort left alone.
+	if v, err := s.Get(ctx, "a"); err != nil || string(v) != "v-a" {
+		t.Fatalf("Get(a) after the aborted rewrap = (%q, %v); want it still readable under v1", v, err)
+	}
+	if v, err := s.Get(ctx, "c"); err != nil || string(v) != "v-c" {
+		t.Fatalf("Get(c) after the aborted rewrap = (%q, %v); want it still readable under v1", v, err)
 	}
 	setWrap(good)
-	if res, err = rewrap(); err != nil || res.Rewrapped != 2 || res.KeyVersion != 2 {
-		t.Fatalf("re-run = (%+v, %v); want the 2 rows left, to v2", res, err)
+	if v, err := s.Get(ctx, "b"); err != nil || string(v) != "v-b" {
+		t.Fatalf("Get(b) after the aborted rewrap = (%q, %v); want it still readable under v1", v, err)
+	}
+	if res, err = rewrap(); err != nil || res.Rewrapped != 3 || res.KeyVersion != 2 {
+		t.Fatalf("re-run = (%+v, %v); want all 3 rows moved (the aborted run committed nothing), to v2", res, err)
 	}
 	if res, err = rewrap(); err != nil || res.Rewrapped != 0 {
 		t.Fatalf("third run = (%+v, %v); want nothing to move", res, err)
