@@ -1,10 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197 L1a: GET /runs' opt-in view/owner/status/ended_within/include_killed/
-// workspace/q params, and the H-4 fix (view=user forces owner=me for EVERY
-// caller, admins and security operators included). Attention projection is
-// L1b's — nothing here asserts on it.
+// #1197: GET /runs' opt-in view/owner/status/ended_within/include_killed/
+// workspace/q params, and the owner-forcing fix (view=user forces owner=me
+// for EVERY caller, admins and security operators included). Attention
+// projection is a later lane's — nothing here asserts on it.
 package api
 
 import (
@@ -13,7 +13,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -24,7 +27,8 @@ import (
 
 // ListRunsFiltered/CountHiddenRuns on authzStore, so the existing route-matrix
 // fixture (authz_test.go) can drive the new filtered branch. Owner is the only
-// predicate exercised here (H-4 is an ownership question); the SQL-level
+// predicate exercised here (ownership scoping is what this file's tests are
+// about); the SQL-level
 // predicates (status/ended_within/include_killed/workspace/q/ordering) are
 // pinned against real Postgres in store_runs_filtered_pg_test.go, which is
 // where they actually run.
@@ -60,7 +64,7 @@ func getRunsJSON(t *testing.T, w *httptest.ResponseRecorder) []types.AgentRun {
 	return got
 }
 
-// TestHandleListRuns_H4_ViewUserForcesOwnerMe is the H-4 pin: every caller
+// TestHandleListRuns_H4_ViewUserForcesOwnerMe pins the owner-forcing fix: every caller
 // tier — an admin-token caller, an SSO admin, an SSO security_admin, and an
 // SSO member (which was already forced, and must stay so) — sees ONLY their
 // own runs under ?view=user&owner=all, even though `owner=all` on its own
@@ -122,7 +126,7 @@ func TestHandleListRuns_H4_ViewUserForcesOwnerMe(t *testing.T) {
 				t.Errorf("%s: own run %s missing from view=user&owner=all", c.name, mine)
 			}
 			if ids[foreign] {
-				t.Errorf("%s: foreign run %s leaked through owner=all under view=user (%d rows total) — the H-4 force did not apply",
+				t.Errorf("%s: foreign run %s leaked through owner=all under view=user (%d rows total) — the owner force did not apply",
 					c.name, foreign, len(got))
 			}
 		})
@@ -132,7 +136,7 @@ func TestHandleListRuns_H4_ViewUserForcesOwnerMe(t *testing.T) {
 // TestHandleListRuns_NoView_OperatorSeesEverything is the control for the test
 // above: WITHOUT view=user, an operator's owner=all still means everyone (the
 // pre-existing admin scope, now reached through the filtered branch because
-// ?owner= alone is one of the opt-in params). Proves the H-4 force is
+// ?owner= alone is one of the opt-in params). Proves the owner force is
 // view-gated, not an unconditional new narrowing of every operator read.
 func TestHandleListRuns_NoView_OperatorSeesEverything(t *testing.T) {
 	srv, ast, _, _ := newAuthzMatrixServer(t)
@@ -148,6 +152,110 @@ func TestHandleListRuns_NoView_OperatorSeesEverything(t *testing.T) {
 	}
 	if got := getRunsJSON(t, w); len(got) != 2 {
 		t.Errorf("owner=all with no view = %d row(s), want 2 (both creators)", len(got))
+	}
+}
+
+// TestHandleListRuns_MemberOwnerForceSurvivesOwnerAll pins the member
+// fail-closed owner force directly — the unconditional force at the very end
+// of parseRunsListParams' owner resolution: a member sending ?owner=all, or
+// ?view=admin&owner=all, still gets only their own runs.
+// TestHandleListRuns_H4_ViewUserForcesOwnerMe only drives ?view=user&owner=all,
+// which a DIFFERENT branch (the view=="user" case, earlier in the same
+// function) already forces to "me" — deleting the unconditional force at the
+// end leaves that test green while a plain member ?owner=all (no view at
+// all) leaks every run.
+func TestHandleListRuns_MemberOwnerForceSurvivesOwnerAll(t *testing.T) {
+	srv, ast, _, _ := newAuthzMatrixServer(t)
+	seed := func(createdBy string) uuid.UUID {
+		id := uuid.New()
+		ast.mu.Lock()
+		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, Agent: "claude-code"}
+		ast.mu.Unlock()
+		return id
+	}
+	const memberSub = "sub-member-owner-force"
+	mine := seed(memberSub)
+	foreign := seed("someone-else")
+	member := ssoSession(t, memberSub, "member-owner-force@corp.example", oidc.RoleUser)
+
+	for _, query := range []string{"owner=all", "view=admin&owner=all"} {
+		t.Run(query, func(t *testing.T) {
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/runs?"+query, member, "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			got := getRunsJSON(t, w)
+			ids := map[uuid.UUID]bool{}
+			for _, r := range got {
+				ids[r.ID] = true
+			}
+			if !ids[mine] {
+				t.Errorf("%s: member's own run missing", query)
+			}
+			if ids[foreign] {
+				t.Errorf("%s: foreign run %s leaked through (%d rows total) — the member owner force did not apply",
+					query, foreign, len(got))
+			}
+		})
+	}
+}
+
+// runsFilterRecorder is store.Store plus store.RunsFilteredPager, recording
+// the exact RunFilter each call receives and answering CountHiddenRuns with
+// fixed, DISTINCT non-zero counts. authzStore's own fake (above) zeroes
+// CountHiddenRuns and ignores Workspace/Query entirely, so no test that only
+// uses it exercises either the X-Wardyn-Hidden-* header wiring or the
+// workspace/q pass-through from the query string to the store filter.
+type runsFilterRecorder struct {
+	store.Store
+	got store.RunFilter
+}
+
+func (r *runsFilterRecorder) ListRunsFiltered(_ context.Context, f store.RunFilter, _ store.Page) ([]types.AgentRun, error) {
+	r.got = f
+	return nil, nil
+}
+
+func (r *runsFilterRecorder) CountHiddenRuns(context.Context, store.RunFilter) (int, int, error) {
+	return 3, 5, nil
+}
+
+var _ store.RunsFilteredPager = (*runsFilterRecorder)(nil)
+
+// TestHandleListRuns_FilterWiring pins two things a fake that zeroes or
+// ignores them would hide: every opt-in filter field reaches store.RunFilter
+// unchanged (status, ended_within, include_killed, workspace and q — owner
+// resolution has its own dedicated tests above), and the two
+// X-Wardyn-Hidden-* headers report exactly what CountHiddenRuns returns,
+// never swapped or off by a constant.
+func TestHandleListRuns_FilterWiring(t *testing.T) {
+	h := newHarness(t)
+	rec := &runsFilterRecorder{}
+	srv := New(baseTestConfig(h, rec))
+
+	w := do(t, srv, http.MethodGet,
+		"/api/v1/runs?owner=all&status=active&status=ended&ended_within=7d&include_killed=1&workspace=acme/widgets&q=refund",
+		adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	want := store.RunFilter{
+		Statuses:      []string{"active", "ended"},
+		EndedWithin:   7 * 24 * time.Hour,
+		IncludeKilled: true,
+		Workspace:     "acme/widgets",
+		Query:         "refund",
+	}
+	if !reflect.DeepEqual(rec.got, want) {
+		t.Errorf("RunFilter reaching the store = %+v, want %+v", rec.got, want)
+	}
+
+	if got := w.Header().Get("X-Wardyn-Hidden-Older"); got != "3" {
+		t.Errorf("X-Wardyn-Hidden-Older = %q, want \"3\"", got)
+	}
+	if got := w.Header().Get("X-Wardyn-Hidden-Killed"); got != "5" {
+		t.Errorf("X-Wardyn-Hidden-Killed = %q, want \"5\"", got)
 	}
 }
 
@@ -223,6 +331,7 @@ func TestParseRunsListParams_Validation(t *testing.T) {
 		"status=bogus",
 		"ended_within=nonsense",
 		"include_killed=maybe",
+		"q=" + strings.Repeat("a", maxRunsListQueryLen+1),
 	} {
 		t.Run(q, func(t *testing.T) {
 			w := do(t, srv, http.MethodGet, "/api/v1/runs?"+q, adminToken, "")
@@ -230,6 +339,24 @@ func TestParseRunsListParams_Validation(t *testing.T) {
 				t.Errorf("?%s: code = %d, want 400; body=%s", q, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestParseRunsListParams_StatusDeduplicates pins that a repeated ?status=
+// value reaches store.RunFilter once, not once per repetition — a longer,
+// equivalent OR clause is wasted work, and a naive de-dup bug could instead
+// drop a value entirely.
+func TestParseRunsListParams_StatusDeduplicates(t *testing.T) {
+	h := newHarness(t)
+	rec := &runsFilterRecorder{}
+	srv := New(baseTestConfig(h, rec))
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs?status=active&status=active&status=ended&status=active", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if want := []string{"active", "ended"}; !reflect.DeepEqual(rec.got.Statuses, want) {
+		t.Errorf("Statuses = %v, want %v", rec.got.Statuses, want)
 	}
 }
 

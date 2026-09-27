@@ -1,9 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197 L1a: ListRunsFiltered/CountHiddenRuns — the landing page's SQL-level
+// #1197: ListRunsFiltered/CountHiddenRuns — the landing page's SQL-level
 // predicates (status, ended_within, include_killed/killedVisibleFor,
-// workspace, q, ordering) and F4's lease-ended end-time correction. Guarded
+// workspace, q, ordering) and the lease-ended end-time correction. Guarded
 // by WARDYN_TEST_PG, same as every other store_*_pg_test.go file. Every test
 // scopes RunFilter.Owner to its own unique creator string, so it is isolated
 // within the shared DB regardless of what else is in agent_runs.
@@ -118,8 +118,8 @@ func TestPG_ListRunsFiltered_StatusFilters(t *testing.T) {
 	}
 }
 
-// TestPG_ListRunsFiltered_EndedWithinNeverWindowsLiveRows is H-2: a live
-// (RUNNING, not lease-ended) row is never hidden by ended_within, however
+// TestPG_ListRunsFiltered_EndedWithinNeverWindowsLiveRows pins the rule that a
+// live (RUNNING, not lease-ended) row is never hidden by ended_within, however
 // short, while an ended row outside that same window is.
 func TestPG_ListRunsFiltered_EndedWithinNeverWindowsLiveRows(t *testing.T) {
 	pool := runsPGPool(t)
@@ -148,7 +148,7 @@ func TestPG_ListRunsFiltered_EndedWithinNeverWindowsLiveRows(t *testing.T) {
 	}
 }
 
-// TestPG_ListRunsFiltered_KilledVisibilityDefault is H-2's killedVisibleFor
+// TestPG_ListRunsFiltered_KilledVisibilityDefault pins killedVisibleFor's
 // rule: a KILLED row older than 24h is hidden unless IncludeKilled is set,
 // and CountHiddenRuns reports it under killedHidden specifically (not
 // olderHidden, since it is inside an "all" ended_within window).
@@ -191,8 +191,8 @@ func TestPG_ListRunsFiltered_KilledVisibilityDefault(t *testing.T) {
 // TestPG_CountHiddenRuns_OlderVsKilled distinguishes the two hidden counts on
 // one owner: a completed row outside a 1h ended_within window counts as
 // olderHidden (any state), while a KILLED row INSIDE that same window still
-// counts as killedHidden via the 24h default — the two headers' disjoint
-// definitions (attention-decision.md's AGED note).
+// counts as killedHidden via the 24h default — the two headers have
+// disjoint definitions and must never double-count the same row.
 func TestPG_CountHiddenRuns_OlderVsKilled(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -291,9 +291,8 @@ func TestPG_ListRunsFiltered_QueryEscaping(t *testing.T) {
 
 // TestPG_ListRunsFiltered_OrderingAndLeaseEndedEndTime pins the landing-page
 // order (live rows first by created_at DESC, then ended rows by end time
-// DESC) AND F1197-L1a-F4: a lease-ended row's end time is lost_at, not
-// ended_at, even when both columns are set on the row (the verify finding's
-// exact repro shape).
+// DESC) and the lease-ended end-time correction: a lease-ended row's end
+// time is lost_at, not ended_at, even when both columns are set on the row.
 func TestPG_ListRunsFiltered_OrderingAndLeaseEndedEndTime(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -306,8 +305,8 @@ func TestPG_ListRunsFiltered_OrderingAndLeaseEndedEndTime(t *testing.T) {
 
 	// A lease-ended run: lost_reason='ended', BOTH lost_at and ended_at set,
 	// to DISAGREE with each other — lost_at is recent (the lease end), ended_at
-	// is old (a later grace-stop timestamp the F4 fix must NOT read for this
-	// row's end time or its ordering).
+	// is old (a later grace-stop timestamp the end-time correction must NOT
+	// read for this row's end time or its ordering).
 	leaseEnded := persistRun(t, ctx, pool, newFilterRun(owner, types.RunRunning))
 	recentLostAt := time.Now().UTC().Add(-time.Minute)
 	oldEndedAt := time.Now().UTC().Add(-30 * 24 * time.Hour)
@@ -327,15 +326,16 @@ func TestPG_ListRunsFiltered_OrderingAndLeaseEndedEndTime(t *testing.T) {
 		}
 	}
 
-	// F4 in the window predicate too: an ended_within window that EXCLUDES
-	// ended_at (30 days ago) but INCLUDES lost_at (1 minute ago) must still show
-	// the row — proving the window reads lost_at, not ended_at, for this row.
+	// The same correction applies in the window predicate: an ended_within
+	// window that EXCLUDES ended_at (30 days ago) but INCLUDES lost_at (1
+	// minute ago) must still show the row — proving the window reads
+	// lost_at, not ended_at, for this row.
 	windowed, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, Statuses: []string{"ended"}, EndedWithin: time.Hour}, store.Page{})
 	if err != nil {
 		t.Fatalf("ListRunsFiltered: %v", err)
 	}
 	if len(windowed) != 1 || windowed[0].ID != leaseEnded.ID {
-		t.Fatalf("ended_within=1h, status=ended: got %+v, want only the lease-ended row (F4: window must read lost_at)", windowed)
+		t.Fatalf("ended_within=1h, status=ended: got %+v, want only the lease-ended row (the window must read lost_at)", windowed)
 	}
 }
 

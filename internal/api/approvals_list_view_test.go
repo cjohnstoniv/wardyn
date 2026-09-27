@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197 L1a F5: GET /approvals' opt-in ?view=user|admin.
+// #1197: GET /approvals' opt-in ?view=user|admin.
 package api
 
 import (
@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestListApprovals_ViewUserForcesOwnerScope is F5's pin: an ADMIN who passes
+// TestListApprovals_ViewUserForcesOwnerScope pins #1197's approvals scoping: an ADMIN who passes
 // ?view=user sees only approvals on runs THEY created — the same shape
 // TestListApprovals_MemberSeesOnlyTheirOwnRuns already proves for a plain
 // member, now proven for the tier that ?view=user exists to narrow.
@@ -70,7 +70,7 @@ func TestListApprovals_ViewUserForcesOwnerScope(t *testing.T) {
 		t.Errorf("admin, view=user: own approval %s missing", mineAP)
 	}
 	if ids[foreignAP] {
-		t.Errorf("admin, view=user: foreign approval %s leaked through (%d rows total) — the F5 force did not apply",
+		t.Errorf("admin, view=user: foreign approval %s leaked through (%d rows total) — the view=user owner force did not apply",
 			foreignAP, len(scoped))
 	}
 

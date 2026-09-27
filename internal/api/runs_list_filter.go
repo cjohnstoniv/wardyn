@@ -30,6 +30,11 @@ func hasRunsListFilterParams(q url.Values) bool {
 		q.Has("ended_within") || q.Has("include_killed") || q.Has("workspace") || q.Has("q")
 }
 
+// maxRunsListQueryLen bounds ?q=: it is parameterised (store_runs_filtered.go
+// escapes it before binding), so it is not injectable, but an unbounded value
+// is still an ILIKE scan across four columns over a caller-controlled length.
+const maxRunsListQueryLen = 400
+
 // endedWithinDurations maps ?ended_within= to a window; "all" and the zero
 // value both mean unbounded (store.RunFilter's <= 0 convention).
 var endedWithinDurations = map[string]time.Duration{
@@ -47,7 +52,7 @@ var endedWithinDurations = map[string]time.Duration{
 var runsListStatuses = map[string]bool{"active": true, "ended": true, "failed": true, "killed": true}
 
 // parsedRunsListParams is handleListRuns's filtered-branch input: view only
-// resolves ownership defaults/forcing (H-4) at this lane — attention/ordering
+// resolves the owner default/force at this lane — attention/ordering
 // is unconditional on the filtered path (see handleListRuns's own doc) — the
 // rest is store.RunFilter plus the resolved owner.
 type parsedRunsListParams struct {
@@ -56,7 +61,7 @@ type parsedRunsListParams struct {
 }
 
 // parseRunsListParams reads and validates the opt-in params, resolving
-// ?owner= (and the view=user H-4 force) against the caller's own tier. principal
+// ?owner= (and the view=user owner force) against the caller's own tier. principal
 // is the caller's own principal (principalFromRequest), used when the
 // resolved owner is "me". Writes a 400 and returns ok=false on any malformed
 // value; callers must return immediately when ok is false.
@@ -82,7 +87,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		writeError(w, http.StatusBadRequest, "invalid owner")
 		return parsedRunsListParams{}, false
 	}
-	// H-4: view=user forces owner=me for EVERY caller, admins and security
+	// #1197: view=user forces owner=me for EVERY caller, admins and security
 	// operators included — the bug this lane fixes (a non-operator was
 	// already forced regardless of view, below). Absent a view, an explicit
 	// ?owner= is honoured as asked; absent both, an operator defaults to
@@ -106,11 +111,16 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	}
 
 	var statuses []string
+	seenStatus := map[string]bool{}
 	for _, st := range q["status"] {
 		if !runsListStatuses[st] {
 			writeError(w, http.StatusBadRequest, "invalid status filter")
 			return parsedRunsListParams{}, false
 		}
+		if seenStatus[st] {
+			continue // a repeated value adds nothing (the arms are OR'd); dedupe rather than build a longer, equivalent OR clause
+		}
+		seenStatus[st] = true
 		statuses = append(statuses, st)
 	}
 
@@ -130,6 +140,12 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		return parsedRunsListParams{}, false
 	}
 
+	searchQuery := q.Get("q")
+	if len(searchQuery) > maxRunsListQueryLen {
+		writeError(w, http.StatusBadRequest, "q is too long")
+		return parsedRunsListParams{}, false
+	}
+
 	return parsedRunsListParams{
 		view: view,
 		filter: store.RunFilter{
@@ -138,7 +154,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 			EndedWithin:   endedWithin,
 			IncludeKilled: includeKilled,
 			Workspace:     q.Get("workspace"),
-			Query:         q.Get("q"),
+			Query:         searchQuery,
 		},
 	}, true
 }
@@ -146,10 +162,10 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 // handleListRunsFiltered is handleListRuns' branch for any opt-in param.
 // Ordering (live-first, then end time) and the two X-Wardyn-Hidden-* headers
 // are unconditional here regardless of which param triggered the branch —
-// `view`'s own job at this lane is only the owner default/force (H-4); the
-// attention-decision brief's "order/headers only with view" is about the
-// FULL #1197 contract, and no legacy caller reaches this branch with SOME
-// filter but no view, so there is no compatibility promise to keep narrower.
+// `view`'s own job at this lane is only the owner default/force; a design
+// that ties ordering/headers to `view` alone is a later refinement, and no
+// legacy caller reaches this branch with SOME filter but no view, so there
+// is no compatibility promise to keep narrower.
 //
 // Fail CLOSED, same posture as the existing member branch above: a store
 // that cannot answer this scoped/filtered read must never fall back to the

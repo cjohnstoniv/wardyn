@@ -100,12 +100,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityRun, readers: []string{"handleUIEnter"},
 		pinnedBy: "TestUIGateway_EnterRejectsNonOwnerTicket",
 	},
-	// #1197 L1a: ?owner=me|all resolves WHICH principal's runs the filtered
+	// #1197: ?owner=me|all resolves WHICH principal's runs the filtered
 	// listing is scoped to, but it is a closed enum (parseRunsListParams 400s
 	// anything else) — there is no arbitrary foreign PRINCIPAL a caller can
 	// name through it the way ?owner= on the secrets route can, so foreign is
-	// 0 and the H-4 scoping (view=user forces "me" for every caller) is
-	// proven in depth by the dedicated test instead of the matrix's probe.
+	// 0 and the owner-forcing scoping (view=user forces "me" for every caller)
+	// is proven in depth by the dedicated test instead of the matrix's probe.
 	"GET /api/v1/runs?owner": {
 		entity: entityPrincipal, readers: []string{"parseRunsListParams", "hasRunsListFilterParams"},
 		ownAdmitted: true, pinnedBy: "TestHandleListRuns_H4_ViewUserForcesOwnerMe",
@@ -136,7 +136,7 @@ var queryParamNotAnID = map[string]string{
 	"rows":                      "terminal geometry",
 	"cols":                      "terminal geometry",
 	"type":                      "directory search kind (security tier route)",
-	"q":                         "directory search text (security tier route)",
+	"q":                         "free-text search over an already-scoped listing: directory search (security tier route) and #1197's run list (every tier)",
 	"ticket":                    "single-use attach ticket: the credential itself, redeemed against the run it was minted for",
 	"app":                       "UI gateway app name, checked against the run's effective policy",
 	"code":                      "OAuth authorization code, bound to the caller's signed state",

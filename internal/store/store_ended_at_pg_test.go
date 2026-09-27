@@ -15,11 +15,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_UpdateRunStateIf_StampsEndedAtOnTerminalOnly is the F1197-L1a pin:
+// TestPG_UpdateRunStateIf_StampsEndedAtOnTerminalOnly pins #1197's writer:
 // UpdateRunStateIf sets ended_at on a transition INTO a terminal state, and
 // leaves it nil on a transition between two non-terminal ones. Proven red by
 // reverting the CASE WHEN $n THEN now() clause to a bare no-op (equivalent to
-// dropping the ended_at write entirely) — see the lane's revert-proof note.
+// dropping the ended_at write entirely).
 func TestPG_UpdateRunStateIf_StampsEndedAtOnTerminalOnly(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
