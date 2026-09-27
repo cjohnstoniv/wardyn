@@ -183,7 +183,7 @@ materialize_managed_claude_config() {
 # set), so an INTERACTIVE run came up on a product tour instead of a prompt — the
 # reason ui/e2e/live/sso-member.spec.ts could only ever launch an AUTONOMOUS run.
 #
-# Measured on claude 2.1.231 (local/v075/evidence/w0-spike/RESULT.md):
+# Measured on claude 2.1.231:
 # `{"hasCompletedOnboarding": true}` alone removes BOTH of those screens, so that
 # is the WHOLE key set. Deliberately NOT seeded:
 #   - `theme` — the picker is already gone with the key above; seeding it would

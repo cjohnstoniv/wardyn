@@ -504,8 +504,7 @@ drive() {
   # DIALOG-NEW-BEAT (dialog review, P10c): the episode is titled "Audit &
   # attach" and the browser half never says the word — the attach is HERE, and
   # this is the frame where it lands (the owner's key accepted, the run's own
-  # shell on screen). One line names it. Drafted; see
-  # local/light-episodes-dialog-flags.md.
+  # shell on screen). One line names it, drafted from the dialog review.
   say "This is attach — stepping into the live session."
   # KEEP-VERIFY: both clauses below check against the SSH lane's actual
   # implementation (internal/api/sshgateway.go: "ssh <run-id>@<advertise-host>

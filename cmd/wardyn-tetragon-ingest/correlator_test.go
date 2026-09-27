@@ -257,7 +257,7 @@ func TestDockerCorrelator_ResolvesAfterContainerExits(t *testing.T) {
 
 // TestDockerCorrelator_WatchLearnsShortLivedContainer is the other half: a
 // container that starts and exits BETWEEN two polls is never in any snapshot at
-// all (the live one-shot repro in local/gt-diagnosis.md). Only the docker event
+// all (reproduced live, one-shot). Only the docker event
 // stream can bind it, and it must be bound without any successful listing.
 func TestDockerCorrelator_WatchLearnsShortLivedContainer(t *testing.T) {
 	run := uuid.MustParse("66666666-6666-6666-6666-666666666666")

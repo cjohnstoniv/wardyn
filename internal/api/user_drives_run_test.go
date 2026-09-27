@@ -386,7 +386,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			// subject — it cannot fail, and the member supplied neither it nor
 			// the override. The sentence is byte-exact ONLY because §7.7 is
 			// frozen and no row covers an admin-set value; the corrected
-			// sentence is filed (local/FILED-COPY.md), and when it lands THIS
+			// sentence is filed, and when it lands THIS
 			// Row must change — which is the point of asserting it byte-exact
 			// rather than by prefix.
 			//

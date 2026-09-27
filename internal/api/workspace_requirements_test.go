@@ -221,8 +221,7 @@ func TestSetWorkspaceRequirements_HappyPath(t *testing.T) {
 }
 
 // TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract pins the
-// HANDLER half of the h4 server guard (local/hardening-0.4.5/h4-design.md §3,
-// HANDOFF-2026-08-06.md §4 moving part 3): the wizard's step ③ now persists a
+// HANDLER half of the h4 server guard: the wizard's step ③ now persists a
 // named integration through THIS endpoint on every "Continue", so
 // handleSetWorkspaceRequirements/scopedWorkspaceWrite must forward whatever
 // row the store hands back into the JSON response VERBATIM — not

@@ -122,8 +122,7 @@ export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 // by a role comparison of the reader's own: a surface gated on isOperator keeps
 // OPERATOR_ONLY_REASON above. Used by ui-member-cluster's own sites AND by
 // approvals.tsx's decide-gate chip (ui-workspaces-approvals, also keyed off
-// useSecurityOperator) — one definition, canon owned by ui-member-cluster
-// (local/v074/canon/ui-member-cluster.md).
+// useSecurityOperator) — one definition, canon owned by ui-member-cluster.
 export const SECURITY_ONLY_REASON = "Requires the admin or security admin role.";
 
 
