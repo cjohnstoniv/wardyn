@@ -1,36 +1,22 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package groundtruth maps kernel-level observations (from an eBPF sensor —
-// specifically Tetragon) into Wardyn's append-only audit vocabulary
-// (types.AuditEvent). It is the SECOND of Wardyn's three advertised audit
-// streams: the tamper-proof "ground-truth" counterpart to the agent's own
-// self-report (the Postgres event log) and the human-watchable PTY replay.
-//
-// DESIGN (mirrors the proxy -> /internal/decisions -> recordAudit pattern):
-// a host-scoped sidecar (cmd/wardyn-tetragon-ingest) consumes Tetragon kernel
-// events, correlates each to a Wardyn run via the container label
-// `wardyn.run-id`, maps a bounded subset to types.AuditEvent here, and POSTs
-// batches to a new internal endpoint that records them append-only — so they
-// land in Postgres AND fan to every SIEM sink with ZERO new fanout code. Every
-// mapped event is keyed on run_id and discriminated by a `kernel.*` action
-// prefix plus data.stream="ebpf".
-//
-// DEPENDENCY CHOICE: this package consumes Tetragon's JSON EXPORT stream
-// (line-delimited JSON written to a file/stdout via Tetragon's export feature),
-// NOT the Tetragon gRPC client. Defining the minimal structs we need (below)
-// keeps go.mod light — no github.com/cilium/tetragon dependency — and is honest
-// about exactly which fields we read.
+// Package groundtruth maps kernel-level eBPF (Tetragon) observations into
+// Wardyn's audit vocabulary (types.AuditEvent) — the tamper-proof
+// "ground-truth" counterpart to the agent's own self-report and the
+// human-watchable PTY replay. A host-scoped sidecar (cmd/wardyn-tetragon-ingest)
+// correlates each kernel event to a run via the `wardyn.run-id` container
+// label, maps it here, and POSTs batches to an endpoint that records them
+// append-only, keyed on run_id with a `kernel.*` action prefix and
+// data.stream="ebpf". It consumes Tetragon's JSON export stream, not its gRPC
+// client, to keep go.mod light.
 //
 // HONESTY: this stream is DETECTION, not prevention. The ld-linux/mmap
-// dynamic-linker bypass of execve hooks is real (the documented egress-veto
-// overclaim lesson) and is surfaced (not hidden) via data.loader=true rather
-// than suppressed; we never
-// claim exec-blocking. Host eBPF is also blind inside CC3/Kata microVM guests —
-// callers must emit a one-time kernel.sensor.bypass event for such runs.
-//
-// This package is target-agnostic: it has zero knowledge of Docker, HTTP, the
-// store, or how runs are correlated beyond the small Correlator interface.
+// dynamic-linker bypass of execve hooks is real and surfaced via
+// data.loader=true rather than hidden; host eBPF is also blind inside
+// CC3/Kata microVM guests, so callers emit a one-time kernel.sensor.bypass
+// event for such runs. This package is target-agnostic beyond the small
+// Correlator interface.
 package groundtruth
 
 import (
@@ -119,10 +105,8 @@ type EventData struct {
 	// Path is the written file path for file_write events.
 	Path string `json:"path,omitempty"`
 	// Loader is true when the exec'd binary is a dynamic linker (ld-linux /
-	// ld-musl). This is the ld-linux/mmap bypass surfaced honestly: such an
-	// exec can load+run an arbitrary ELF the execve hook never named, so the
-	// argv of an ld-linux invocation is the real program. We FLAG it, we do
-	// not claim to block it.
+	// ld-musl): such an exec can load+run an arbitrary ELF the execve hook
+	// never named. Flagged, not blocked.
 	Loader bool `json:"loader,omitempty"`
 	// Correlation is "mapped" or "unmapped".
 	Correlation Correlation `json:"correlation"`
@@ -136,20 +120,17 @@ type EventData struct {
 func (d EventData) marshal() json.RawMessage {
 	b, err := json.Marshal(d)
 	if err != nil {
-		// A fixed-shape struct cannot fail to marshal; fall back to a minimal
-		// valid object rather than emit invalid JSONB.
 		return json.RawMessage(`{"stream":"ebpf","correlation":"unmapped"}`)
 	}
 	return b
 }
 
 // Correlator resolves a container id to a Wardyn run. The ingest sidecar
-// implements this by indexing docker containers labelled wardyn.managed=true by
-// container id — fed by `docker events` (so a short-lived container is known
-// before its first kernel event) and reconciled by `docker ps -a`. There is NO
-// cgroup-id index: this export shape carries no cgroup id (an earlier version of
-// this comment claimed one). It is the only knowledge this package has about how
-// correlation happens — keeping the mapper target-agnostic and unit-testable.
+// implements this by indexing docker containers labelled wardyn.managed=true,
+// fed by `docker events` and reconciled by `docker ps -a`. There is no
+// cgroup-id index: this export shape carries no cgroup id. It is the only
+// knowledge this package has about correlation, keeping the mapper
+// target-agnostic and unit-testable.
 type Correlator interface {
 	// RunForContainer returns the run id for a container id (any prefix length
 	// Tetragon emits) and whether it is a Wardyn-managed agent container. ok
@@ -168,11 +149,9 @@ var loaderPrefixes = []string{
 	"/usr/lib/ld-musl",
 }
 
-// IsDynamicLinker reports whether binary is a dynamic linker / loader. Exec of a
-// loader is the ld-linux/mmap bypass surface: it can run an ELF the execve hook
-// never named. We flag it (data.loader=true) so it is visible; we do NOT claim
-// to prevent it. The check also matches the loader appearing as the FIRST argv
-// token (the common `ld-linux.so ./payload` invocation form).
+// IsDynamicLinker reports whether binary is a dynamic linker / loader (the
+// ld-linux/mmap bypass surface). Flagged, not prevented. Also matches the
+// loader appearing as the FIRST argv token (`ld-linux.so ./payload`).
 func IsDynamicLinker(binary string) bool {
 	b := strings.TrimSpace(binary)
 	if b == "" {

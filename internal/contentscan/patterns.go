@@ -13,9 +13,8 @@ import (
 // ─── regex secret catalog ─────────────────────────────────────────────────────
 
 // secretRule matches a well-known secret FORMAT. The catalog is intentionally
-// limited to HIGH-PRECISION, prefixed patterns (AKIA…, ghp_…, AIza…, etc.) — we
-// deliberately omit broad "any 40-char base64" rules (the generic AWS secret-key
-// shape) that would false-positive on every hash/asset in a codebase.
+// limited to HIGH-PRECISION, prefixed patterns (AKIA…, ghp_…, AIza…, etc.) —
+// broad "any 40-char base64" rules would false-positive on every hash/asset.
 type secretRule struct {
 	name     string
 	re       *regexp.Regexp
@@ -58,8 +57,8 @@ func (regexSecretDetector) Scan(s Span, dst *[]Finding) {
 
 const (
 	// entropyMinLen / entropyThreshold gate the high-FP entropy detector: only
-	// long base64-ish tokens with high per-char Shannon entropy are flagged. Pure
-	// hex is skipped (git SHAs / hashes are everywhere and would storm).
+	// long base64-ish tokens with high per-char Shannon entropy are flagged.
+	// Pure hex is skipped (git SHAs/hashes are everywhere and would storm).
 	entropyMinLen    = 24
 	entropyThreshold = 4.2 // bits/char (base64 max ~6; English prose ~3-4)
 )
@@ -159,36 +158,23 @@ func shannonEntropy(s string) float64 {
 
 // maxFieldPathBytes bounds one Finding's FieldPath.
 //
-// TRUST BOUNDARY: the per-request findings cap bounds the NUMBER
-// of findings, not their SIZE, and a FieldPath is built by walkValue (extract.go)
-// as `path + "." + key` out of AGENT-CONTROLLED JSON keys — sanitized, never
-// truncated. The scan budget counts span TEXT (values), so a body of enormous
-// KEYS burns neither limit: a measured 324,654-byte body of 301 long-key leaves
-// produced 301 findings (cap 500 never fires, Skipped=false) whose marshalled
-// findings JSON was 46,323,600 bytes — 143x the body, and 44x
-// internal/api/helpers.go's 1 MiB maxJSONBody, so the audit POST is refused,
-// the decision is silently lost, and the proxy still mirrors the whole 46 MB
-// line to stdout. Bounding the path is what makes the decision log bounded in
-// BYTES rather than only in rows.
-//
-// 256 bytes is far beyond any real field path (the deepest schema paths this
-// repo extracts are tens of bytes) and small enough that a full cap's worth of
-// findings cannot approach the control plane's body limit.
+// TRUST BOUNDARY: the per-request findings cap bounds the NUMBER of
+// findings, not their SIZE, and a FieldPath is built out of AGENT-CONTROLLED
+// JSON keys — the scan budget counts span TEXT (values), so a body of
+// enormous KEYS burns neither limit (measured: a 324KB body of long-key
+// leaves produced a 46 MB findings JSON, 44x the control plane's body limit,
+// silently losing the decision). Bounding the path is what makes the
+// decision log bounded in BYTES, not only in rows. 256 is far beyond any
+// real field path and small enough that a full cap's worth of findings
+// cannot approach the control plane's body limit.
 const maxFieldPathBytes = 256
 
 // sanitizePath masks any well-known secret FORMAT appearing in a field path
-// (agent-controlled JSON object keys can contain one) so a Finding stays
-// content-free by construction, and TRUNCATES it to maxFieldPathBytes so one
-// finding cannot be arbitrarily large. The known-secret detector additionally
-// masks operator-declared corpus values from the path (see
-// knownSecretDetector.safePath).
-//
-// Masking runs BEFORE truncation so a secret-shaped key is masked wherever it
-// sits, including in the part that is then cut. The head+tail form keeps both
-// ends an operator navigates by (the root object and the leaf key) and states
-// the original length, so a truncated path reads as truncated rather than as a
-// different path. Idempotent: re-sanitizing a truncated path is a no-op,
-// because the result is already under the bound.
+// so a Finding stays content-free by construction, and TRUNCATES it to
+// maxFieldPathBytes so one finding cannot be arbitrarily large. Masking runs
+// BEFORE truncation so a secret-shaped key is masked wherever it sits. The
+// head+tail form keeps both ends an operator navigates by and states the
+// original length. Idempotent.
 func sanitizePath(path string) string {
 	if path == "" {
 		return path

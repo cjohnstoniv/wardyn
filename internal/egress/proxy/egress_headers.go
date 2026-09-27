@@ -9,11 +9,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// Egress-refusal header values. Both a deny and an approval-pending are a bare
-// 403 whose body a CONNECT client discards, so the reason rides response HEADERS
-// (visible to `curl -sD-`) instead: the sandbox can then tell "retry after
-// approval" (pending) from "permanently blocked" (denied) and stop routing
-// around a wait that just needs a human. See deploy/images/common/attach-bashrc.
+// Egress-refusal header values. Both a deny and an approval-pending are a
+// bare 403 whose body a CONNECT client discards, so the reason rides
+// response HEADERS instead: the sandbox can tell "retry after approval" from
+// "permanently blocked" and stop routing around a wait that just needs a human.
 const (
 	egressRefusalDenied  = "denied"
 	egressRefusalPending = "approval-pending"
@@ -21,17 +20,12 @@ const (
 
 // egressHeaderStatus / egressHeaderHost / egressHeaderReason name those headers.
 //
-// The REASON header exists because "denied" alone is ambiguous in a way that
-// costs a developer real time: NINE distinct outcomes collapse into it —
-// builtin:private-ip, builtin:resolve-failed (the name never resolved, which is
-// not the address-range guard), policy:denied (an explicit deny-list hit),
-// policy:default-deny (simply not on the allowlist), policy:method,
-// approval:denied (a human said no), policy:evaluator-error and
-// builtin:dial-failed among them. Those call for completely different actions —
-// ask the operator to allowlist a host, versus stop trying because a human
-// already refused, versus fix a broken policy — and the sandbox could not tell
-// them apart. The value is the same static reason string the decision log
-// already records, so this discloses nothing the audit trail does not.
+// The REASON header exists because "denied" alone is ambiguous: NINE
+// distinct outcomes collapse into it (private-ip, resolve-failed,
+// policy:denied, default-deny, method, approval:denied, evaluator-error,
+// dial-failed...) that call for completely different developer actions. The
+// value is the same static reason string the decision log already records,
+// so this discloses nothing the audit trail does not.
 const (
 	egressHeaderStatus = "X-Wardyn-Egress"
 	egressHeaderHost   = "X-Wardyn-Host"
@@ -58,12 +52,9 @@ func setEgressRefusalHeadersWithReason(w http.ResponseWriter, status, host, reas
 	}
 }
 
-// decisionReason extracts the decision log's RuleSource for the refusal-reason
-// header, tolerating a nil log.
-//
-// RuleSource is the SAME static string the decision log records — never
-// attacker-influenced text — so surfacing it to the sandbox discloses nothing
-// the audit trail does not already hold, and there is no user input to sanitise.
+// decisionReason extracts the decision log's RuleSource for the
+// refusal-reason header, tolerating a nil log. RuleSource is the SAME static
+// string the decision log records, never attacker-influenced text.
 func decisionReason(log *egress.DecisionLog) string {
 	if log == nil {
 		return ""

@@ -4,23 +4,15 @@
 package proxy
 
 // git through the /wardyn/git/ broker for a host the run's per-person Azure
-// DevOps (Entra) grant covers.
-//
-// The REST gate (ado_gate.go) refuses git on the intercepted connection, so
-// this route is the one door git has to Azure DevOps on this lane. It does
-// what the REST gate does, in git's terms:
-//
-//   - THE ORGANISATION PIN on every request. An Entra access token carries no
-//     organisation claim (measured), so only the URL binds it.
-//   - THE CAPABILITY CHECK, through adoscope.Permits. The token carries every
-//     scope the person consented to, so this is what bounds the run. Clone and
-//     fetch need read. The receive-pack ADVERTISEMENT is a read too: Azure
-//     DevOps serves it to a read-only credential (measured), so a push is
-//     decided on the pack POST, from the ref updates it carries.
-//   - THE CONTENT RULES (push_rules.go), first for a push: deny, hold for
-//     review, or refuse on an unattended run, before any capability is asked.
-//   - THE CREDENTIAL is the person's bearer, resolved through the same
-//     injector entry the REST lane's MITM uses for this host.
+// DevOps (Entra) grant covers. The REST gate (ado_gate.go) refuses git on the
+// intercepted connection, so this route is the one door git has to Azure
+// DevOps on this lane; it enforces the same four things the REST gate does,
+// in git's terms: the organisation pin (an Entra token carries no org claim),
+// the capability check via adoscope.Permits (a push is decided on the pack
+// POST, since the receive-pack advertisement is served to a read-only
+// credential too), the content rules (push_rules.go, before any capability
+// ask), and the person's bearer credential via the same injector the REST
+// lane's MITM uses.
 //
 // A refusal never reaches git as a 401: git reads a 401 as a credential
 // challenge and prints "could not read Username", which hides the reason.
@@ -87,13 +79,9 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
-		// CONTENT rules, the same step the other two lanes run and on the same
-		// trigger, and BEFORE the capability check below: nobody is asked to
-		// approve policy_bypass for a push the rules refuse, and a push held
-		// for review is decided before any capability hold. A probe that moves
-		// no ref carries nothing to inspect and stays the read it is. What
-		// the pack does not carry cannot be compared with Azure DevOps' trees
-		// (push_forge.go reads GitHub only), so it keeps the strict reading.
+		// Content rules run BEFORE the capability check: nobody is asked to
+		// approve policy_bypass for a push the rules refuse. A probe moving
+		// no ref carries nothing to inspect and stays a read.
 		if len(push.refs) > 0 {
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
 				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
@@ -170,13 +158,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 // lane, and its hold point. held is non-nil only for a capability the run does
 // not hold; that request is escalated (awaitADOCapability) and, if a person
 // approves it in time, refuseADOGit reports true and the caller forwards.
-// Every other refusal, and an escalation that ends without an approval, is
-// answered here in git's own terms.
-//
-// Only a pack upload or an upload-pack/advertisement the run cannot read ever
-// reaches the hold: the receive-pack advertisement is a read (F-LIVE-8), so a
-// `once` approval raised for a push is spent by its pack upload and never by
-// the advertisement in front of it.
+// Every other refusal is answered here in git's own terms.
 func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string, held *adoscope.Verdict, push *adoGitPush, msg string) bool {
 	if held != nil {
 		var ok bool
@@ -220,13 +202,10 @@ func adoGitAsk(r *http.Request) adoAsk {
 }
 
 // adoGitKeys is every segment of a git request's broker-stripped path as
-// adoscope.NameKey reads it — the rule the REST gate classifies with — taken
-// from the path as it ARRIVED (EscapedPath). Never the decoded Path: decoding
-// first and keying after would decode a name holding "%" twice. ok=false when
-// any segment is one that rule refuses (a trailing dot or edge space the
-// service trims, an escape decoding to a separator, a double encoding), so a
-// spelling the REST gate refuses is refused here too rather than keyed as a
-// second repository.
+// adoscope.NameKey reads it, taken from the path as it ARRIVED (EscapedPath),
+// never the decoded Path (decoding first would decode a name holding "%"
+// twice). ok=false when any segment is one adoscope.NameKey refuses, so a
+// spelling the REST gate refuses is refused here too.
 func adoGitKeys(r *http.Request) ([]string, bool) {
 	_, rest, _ := parsePATBrokerPath(r.URL.EscapedPath())
 	var keys []string
@@ -243,15 +222,11 @@ func adoGitKeys(r *http.Request) ([]string, bool) {
 	return keys, true
 }
 
-// adoGitRepoKeys is adoGitKeys truncated to the repository itself — the org
-// and project segments, "_git", and the repository name — with the verb
-// segments after it (git-receive-pack, info/refs, …) dropped, so a held
-// push's pushTarget.repo names the same string adoRESTTarget already builds
-// from the REST route's org/project/_git/repo. serveADOGit already refused
-// any path adoGitKeys cannot read (adoGitKeys' own ok=false) before reaching
-// a push, so a missing "_git" here would be that invariant broken, not a
-// request to answer for — the empty repo it falls back to still keys as ITS
-// OWN approval rather than silently reusing another push's.
+// adoGitRepoKeys is adoGitKeys truncated to the repository itself — org,
+// project, "_git", and repo name, verb segments dropped — so a held push's
+// pushTarget.repo names the same string adoRESTTarget builds from the REST
+// route. A missing "_git" here is an invariant broken, not a request to
+// answer for; the empty repo it falls back to still keys as its own approval.
 func adoGitRepoKeys(r *http.Request) []string {
 	keys, ok := adoGitKeys(r)
 	if !ok {
@@ -263,14 +238,11 @@ func adoGitRepoKeys(r *http.Request) []string {
 	return nil
 }
 
-// writeADOGitRefusal answers git in its own terms, never as a 401.
-//
-// A push that asked for report-status gets a 200 receive-pack result whose
-// unpack status is an error (never "unpack ok" for a pack nobody read) and
-// whose every ref is "ng" with the reason, so git prints
-// "! [remote rejected] <ref> (<reason>)"; over side-band the reason also goes
-// out on the progress band, which git prints as "remote: <reason>". Anything
-// else gets a 403 with a plain-text body, which git prints as "remote: …".
+// writeADOGitRefusal answers git in its own terms, never as a 401. A push
+// that asked for report-status gets a 200 receive-pack result with an error
+// unpack status and every ref "ng" with the reason (git prints
+// "! [remote rejected] <ref> (<reason>)"); anything else gets a 403 with a
+// plain-text body.
 func writeADOGitRefusal(w http.ResponseWriter, push *adoGitPush, msg string) {
 	if push == nil || !slices.ContainsFunc(push.caps, func(c string) bool { return c == "report-status" || c == "report-status-v2" }) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -314,12 +286,9 @@ func writeADOGitRefusal(w http.ResponseWriter, push *adoGitPush, msg string) {
 // pktLine frames s as one git pkt-line.
 func pktLine(s string) string { return fmt.Sprintf("%04x", len(s)+4) + s }
 
-// readADOGitPush reads a receive-pack command section through the same
-// parser the branch-namespace confinement uses (an empty prefix admits every
-// well-formed ref) and returns its bytes for the forward, the refs it moves and
-// the capabilities git asked for. msg is the refusal when it cannot be read;
-// push then still carries the first command's capabilities, when there were
-// any, so the refusal can be spelled in receive-pack terms.
+// readADOGitPush reads a receive-pack command section and returns its bytes
+// for the forward, the refs it moves and the capabilities git asked for. msg
+// is the refusal when it cannot be read.
 func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string) {
 	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
 		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {

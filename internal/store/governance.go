@@ -1,15 +1,13 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Governance profiles and their subject assignments (migration 0052). Kept out
-// of store.go on purpose, mirroring store_capabilities.go's split.
+// Governance profiles and their subject assignments (migration 0052).
 //
-// This file is DUMB on purpose: it round-trips rows and owns exactly one piece
-// of logic, ResolveGovernanceProfile's ORDER BY, because that precedence has to
-// be a property of the single indexed read rather than of a caller that could
-// forget it. Every write is validated at the API boundary (internal/api/
-// governance.go) — the ceiling through validatePolicySpec, the eligible grants
-// through the monotone-⊆ bound — exactly as run_policies is.
+// This file is DUMB on purpose: it round-trips rows and owns exactly one
+// piece of logic, ResolveGovernanceProfile's ORDER BY, so that precedence is
+// a property of the single indexed read rather than of a caller that could
+// forget it. Every write is validated at the API boundary
+// (internal/api/governance.go).
 package store
 
 import (
@@ -29,25 +27,16 @@ const governanceProfileCols = `id, name, ceiling, limits, created_at, updated_at
 
 const governanceAssignmentCols = `id, subject_type, subject, profile_id, priority, created_at, created_by`
 
-// UpsertGovernanceProfile writes one profile, keyed on its PRIMARY KEY: a
-// caller-minted id that does not exist yet INSERTs, and one that does UPDATEs
-// in place (name included, so a profile can be renamed while assignments still
-// point at it — which they must be able to be, since ON DELETE RESTRICT makes
-// delete-and-recreate impossible for an assigned profile).
+// UpsertGovernanceProfile writes one profile, keyed on its PRIMARY KEY: an
+// unminted id INSERTs, an existing one UPDATEs in place (name included, so a
+// profile can be renamed while assignments still point at it — ON DELETE
+// RESTRICT makes delete-and-recreate impossible for an assigned profile).
+// One statement serves both write routes: POST always inserts (fresh id),
+// PUT always updates (id from the path).
 //
-// That single statement serves both write routes: POST mints a fresh id and
-// therefore always inserts, PUT passes the id from the path and therefore
-// always updates. A PUT naming an id no row has creates it at that id, which is
-// what PUT means and costs no existence read.
-//
-// Returns ErrConflict when the UNIQUE(name) index rejects the write — a NEW
-// profile taking a taken name, or a rename onto another row's name. The caller
-// maps that to 409 with the name in the message, never a raw driver error
-// (the CreatePolicy contract).
-//
-// created_by and created_at are NOT touched on the update path: creation
-// provenance stays with whoever authored the profile, even after a later edit
-// by a different admin (the A-9 rule UpsertRoleMapping follows).
+// Returns ErrConflict when UNIQUE(name) rejects the write. created_by and
+// created_at are NOT touched on update: creation provenance stays with
+// whoever authored the profile (the A-9 rule).
 func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
@@ -68,10 +57,8 @@ func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfi
 			    ceiling = (governance_profiles.ceiling - $6::text[]) || EXCLUDED.ceiling,
 			    limits = (governance_profiles.limits - $7::text[]) || EXCLUDED.limits, updated_at = now()
 		RETURNING ` + governanceProfileCols
-	// ceiling and limits each keep the keys this binary's RunPolicySpec/
-	// GovernanceLimits do not declare: a field a newer wardynd set must survive
-	// this binary's edit (declaredJSONKeys) — the same skew rule as limits, now
-	// applied to ceiling too (#675).
+	// ceiling and limits each keep the keys this binary's types don't
+	// declare, so a field a newer wardynd set survives this binary's edit.
 	out, err := scanGovernanceProfile(s.Pool.QueryRow(ctx, q,
 		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy, declaredJSONKeys(p.Ceiling), declaredJSONKeys(p.Limits)))
 	if err != nil {
@@ -91,16 +78,13 @@ func (s PG) GetGovernanceProfile(ctx context.Context, id uuid.UUID) (types.Gover
 }
 
 // DeleteGovernanceProfile removes one profile by id. ErrNotFound when no row
-// matched (admin-only surface — no principal to scope to, no existence oracle
-// to protect).
+// matched.
 //
-// ErrConflict when the row is still ASSIGNED. governance_assignments.profile_id
-// is ON DELETE RESTRICT, so Postgres refuses with a foreign-key violation
-// (23503) rather than cascading the assignments away — and that refusal is the
-// point: cascading would silently widen every member of the deleted profile
-// back to the deployment ceiling with nothing said. Translating the driver
-// error into a sentinel here is what lets the route answer a caller-fixable
-// 409 ("unassign it first") instead of a 500.
+// ErrConflict when the row is still ASSIGNED: governance_assignments'
+// ON DELETE RESTRICT refuses (23503) rather than cascading, since cascading
+// would silently widen every assigned member back to the deployment ceiling.
+// Translated into a sentinel so the route answers a caller-fixable 409
+// instead of a 500.
 func (s PG) DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM governance_profiles WHERE id = $1`, id)
 	if err != nil {
@@ -116,11 +100,9 @@ func (s PG) DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// ListGovernanceProfiles returns every profile by name — the console's whole
-// table in one read, and name is the handle an admin actually looks for, so
-// creation order (what the other List* calls sort by) would be the wrong axis
-// here. This is deployment-wide config; there is no per-caller scoping to
-// filter on.
+// ListGovernanceProfiles returns every profile by name (the handle an admin
+// looks for), unlike the creation order other List* calls use. Deployment-
+// wide config, so there's no per-caller scoping to filter on.
 func (s PG) ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error) {
 	const q = `SELECT ` + governanceProfileCols + ` FROM governance_profiles ORDER BY name`
 	return collect(ctx, s.Pool, "list", "governance profiles", q, nil, scanGovernanceProfile)
@@ -128,19 +110,14 @@ func (s PG) ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfi
 
 // UpsertGovernanceAssignment binds one subject to one profile, keyed on the
 // natural UNIQUE (subject_type, subject): re-assigning a subject REPOINTS its
-// single row rather than leaving a second one behind. Two rows for one subject
-// would make "which profile does Bob get" depend on the priority/name
-// tie-breaks instead of on the admin's last write — resolvable, but not
-// explainable, and an admin who cannot explain a ceiling cannot trust it.
+// single row rather than leaving a second one behind (two rows for one
+// subject would make "which profile does Bob get" a tie-break instead of the
+// admin's last write).
 //
-// The returned row carries the row's real id, which on a conflict is the
-// EXISTING one, not a.ID: the caller needs the id the DELETE route will be
-// given, and an admin re-submitting the same subject must not be handed an id
-// that names no row (the UpsertCapabilityGrant contract).
+// The returned row carries the EXISTING id on conflict, not a.ID, so the
+// caller gets the id the DELETE route needs.
 //
-// Returns ErrNotFound when profile_id names no profile — the FK rejects it
-// (23503), and "the profile you named does not exist" is a 404 the caller can
-// act on, not a 500.
+// Returns ErrNotFound when profile_id names no profile (FK 23503 → 404).
 func (s PG) UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
@@ -163,10 +140,9 @@ func (s PG) UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAs
 	return out, nil
 }
 
-// DeleteGovernanceAssignment removes one assignment by id, ErrNotFound when no
-// row matched. Unassigning is the SUPPORTED way to widen someone back to the
-// deployment ceiling — the deliberate act the RESTRICT on the profile delete
-// exists to force.
+// DeleteGovernanceAssignment removes one assignment by id, ErrNotFound when
+// no row matched. Unassigning is the SUPPORTED way to widen someone back to
+// the deployment ceiling.
 func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM governance_assignments WHERE id = $1`, id)
 	if err != nil {
@@ -178,10 +154,9 @@ func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error 
 	return nil
 }
 
-// ListGovernanceAssignments returns every assignment in the order the resolver
-// itself would rank them (tier, then priority, then subject) so the console's
-// "who gets what" table reads top-down as the precedence rule, not as insertion
-// order that an admin then has to re-sort in their head.
+// ListGovernanceAssignments returns every assignment in the order the
+// resolver itself would rank them (tier, then priority, then subject), so
+// the console's table reads top-down as the precedence rule.
 func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error) {
 	const q = `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments
 		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
@@ -237,11 +212,9 @@ func scanGovernanceProfile(row pgx.Row) (types.GovernanceProfile, error) {
 	return scanGovernanceProfileInto(row, nil)
 }
 
-// scanGovernanceProfileInto is scanGovernanceProfile plus the ONE extra column
-// the resolver selects: the matched assignment's subject_type. It is a
-// parameter rather than a second scan function because the ceiling/limits
-// unmarshal below is the part that must never fork — a second copy of it is
-// how one of the two paths quietly stops validating.
+// scanGovernanceProfileInto is scanGovernanceProfile plus the ONE extra
+// column the resolver selects (subject_type), taken as a parameter rather
+// than a second scan function so the ceiling/limits unmarshal never forks.
 func scanGovernanceProfileInto(row pgx.Row, tier *string) (types.GovernanceProfile, error) {
 	var p types.GovernanceProfile
 	var ceilingRaw, limitsRaw []byte

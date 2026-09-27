@@ -838,7 +838,20 @@ type APIToken struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	Token           string     `json:"token,omitempty"` // plaintext, create response ONLY
+	// MintedBy is the admin who minted this token for its owner
+	// (POST /people/{principal}/tokens); empty when the owner minted it.
+	MintedBy string `json:"minted_by,omitempty"`
+	Token    string `json:"token,omitempty"` // plaintext, create response ONLY
+}
+
+// Person is an identity an admin created or confirmed before its first sign-in
+// (migration 0090), keyed by the identity provider's subject.
+type Person struct {
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	CreatedBy       string     `json:"created_by"`
+	CreatedAt       time.Time  `json:"created_at"`
+	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
 }
 
 // CapabilitySubjectType names WHO a capability grant is written against

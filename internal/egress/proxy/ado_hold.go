@@ -3,22 +3,16 @@
 
 package proxy
 
-// The Azure DevOps capability HOLD: when the REST gate meets a request needing a
-// grantable capability this run does not hold, the request is parked while a
-// person decides, and resumes on the same connection if they approve.
+// The Azure DevOps capability HOLD: when the REST gate meets a request
+// needing a capability this run does not hold, the request is parked while a
+// person decides, and resumes on the same connection if approved. The
+// control plane decides everything (ceiling, first-use mode, per-run cap,
+// unspent `once` approvals) and raises the approval; this file only asks,
+// waits on the re-auth workflow (credhold.go), and re-resolves once.
 //
-// The control plane decides everything that is a decision — the administrator's
-// ceiling, the run's first-use mode, the per-run cap, whether a `once` approval
-// is still unspent — and raises the approval itself. This file only asks,
-// waits by approval id on the re-auth workflow machinery (credhold.go), and
-// re-resolves exactly once when the answer arrives.
-//
-// WHAT A `once` APPROVAL BUYS: one request. The control plane spends it (the
-// approval row's minted_jti) on the re-resolve, and every request parked on the
-// same approval shares one workflow, so the workflow's onceTaken picks the ONE
-// waiter that forwards. A `run` approval comes back as a capability in the
-// resolve's own set and joins the run's standing set here, so later requests
-// need no second ask.
+// A `once` approval buys ONE request (spent on the re-resolve; parked
+// requests share one workflow whose onceTaken picks the ONE forwarder). A
+// `run` approval joins the run's standing set, so later requests ask again.
 
 import (
 	"context"
@@ -64,11 +58,9 @@ const (
 	adoCredentialFailedRefusal = "Wardyn could not renew this run's Azure DevOps credential."
 )
 
-// adoCredentialRefusalFor is the sentence for a failed credential resolve on an
-// Azure DevOps host, and the decision row's source: credential:reauth-timeout
-// for the FIRST observer of a hold's expiry (one row per hold, as on the AWS
-// lane), fallback otherwise. A control-plane refusal (a closed sign-in
-// request, the per-run cap) keeps its own sentence.
+// adoCredentialRefusalFor is the sentence for a failed credential resolve,
+// and the decision row's source (credential:reauth-timeout for the FIRST
+// observer of a hold's expiry, fallback otherwise); a control-plane refusal keeps its own sentence.
 func adoCredentialRefusalFor(err error, fallback string) (string, string) {
 	switch {
 	case errors.Is(err, errReauthTimedOutAgain):
@@ -81,9 +73,8 @@ func adoCredentialRefusalFor(err error, fallback string) (string, string) {
 	return adoControlPlaneRefusal(err, adoCredentialFailedRefusal), fallback
 }
 
-// refuseADOCredential answers a REST request whose credential could not be
-// resolved, in Azure DevOps' own error shape. 403 for all of them, never 401:
-// git and several tools read a 401 as "try another credential".
+// refuseADOCredential answers a REST request whose credential failed, in
+// ADO's own error shape — always 403, never 401 (tools read that as "try another credential").
 func (p *Proxy) refuseADOCredential(w http.ResponseWriter, r *http.Request, host string, port int, err error) {
 	msg, src := adoCredentialRefusalFor(err, ruleSourceADODenied)
 	if p.sink != nil {
@@ -94,29 +85,23 @@ func (p *Proxy) refuseADOCredential(w http.ResponseWriter, r *http.Request, host
 }
 
 // adoAsk is what the control plane is told about a held request besides the
-// capability. repo and refClass are part of the approval's canonical identity;
-// method and path are for the human-readable card and the audit row only.
+// capability: repo and ref class are the approval's canonical identity;
+// method/path are for the card and audit row only.
 type adoAsk struct {
 	method, path, repo string
 }
 
-// adoRequestDetail extracts an adoAsk from r.
 func adoRequestDetail(r *http.Request) adoAsk {
 	path := adoRawPath(r)
 	return adoAsk{method: r.Method, path: path, repo: adoRepoOf(path)}
 }
 
 // adoRepoOf is the repository a REST path addresses under
-// `_apis/git/repositories/{repo}`, as adoscope.NameKey reads it (decoded and
-// case-folded — the same key the git broker's ask carries for the same
-// repository), or "".
-//
-// It is the NAME the sandbox chose — a repository name or its GUID — not a
-// resolved identity, and the approval's canonical scope (and so a sticky deny)
-// is keyed on it. A denied repo re-asked under its GUID is a new ask; one
-// re-asked under another percent-escaping of its name is not. That is bounded,
-// not closed: every ask spends one of the run's maxCapabilityHolds (16), and a
-// person answers each.
+// `_apis/git/repositories/{repo}` (decoded/case-folded via adoscope.NameKey,
+// matching the git broker's key), or "". It is the NAME the sandbox chose,
+// not a resolved identity — the approval's scope is keyed on it, so a denied
+// repo re-asked under its GUID is a new ask. Bounded: every ask spends one of
+// the run's maxCapabilityHolds (16).
 func adoRepoOf(path string) string {
 	segs := strings.Split(strings.Trim(path, "/"), "/")
 	for i := range segs {
@@ -130,24 +115,19 @@ func adoRepoOf(path string) string {
 	return ""
 }
 
-// awaitADOCapability asks the control plane for v's capability on host and, if
-// it answers with an open approval, holds until that is decided. ok=true means
-// the request may be forwarded; otherwise refusal is the sentence to answer
-// with (fallback when nothing better is known).
-//
-// THE SEAM for the git broker: a git push arrives on a different door
-// (pat_broker_entra.go) and answers in plain text, but the question and the
-// wait are this one. It needs the host, the classified verdict and an adoAsk
-// (method, path, repo); "once" there must cover one git OPERATION, which is the
-// caller's to carry from the receive-pack advertisement to its pack upload.
+// awaitADOCapability asks the control plane for v's capability on host and,
+// if it answers with an open approval, holds until decided (ok=true means
+// forward, else refusal is the sentence to answer with). THE SEAM for the
+// git broker: a git push arrives on a different door (pat_broker_entra.go);
+// "once" there must cover one git OPERATION, carried by the caller to its
+// pack upload.
 func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.Verdict, ask adoAsk, fallback string) (bool, string) {
 	inj := p.inject
 	if inj == nil || inj.reauth == nil || inj.approvals == nil {
 		return false, fallback
 	}
-	// A run-scoped widening is cached for the run. The live ceiling is held at
-	// each control-plane ask, so an administrator narrowing the row stops the
-	// NEXT escalation, not a capability this proxy already widened to.
+	// A run-scoped widening is cached; the live ceiling is re-checked at each
+	// ask, so a narrowed row stops the NEXT escalation, not one already widened.
 	if inj.reauth.holds(v.Capability) {
 		return true, ""
 	}
@@ -165,14 +145,12 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 		q.Set("repo", ask.repo)
 	}
 	if v.Capability == adoscope.CapPolicyBypass {
-		// A protected-ref move (adoRunRefProtected). A ref inside the run's
-		// own namespace classifies as code_write and is not this class.
+		// A protected-ref move; a ref in the run's own namespace is code_write, not this class.
 		q.Set("ref_class", "protected")
 	}
 	out, err := resolveInjectionQuery(ctx, inj.base, inj.token.Get(), grantID, q, inj.client)
 	if err == nil {
-		// A 200 to a FIRST ask is a standing grant, which names the capability.
-		// One that does not is a control plane that ignored the ask: refuse.
+		// A 200 to a FIRST ask is a standing grant naming the capability; else refuse (an ignored ask).
 		if !slices.Contains(out.Capabilities, string(v.Capability)) {
 			return false, fallback
 		}
@@ -211,9 +189,8 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	return true, ""
 }
 
-// adoControlPlaneRefusal is the control plane's own refusal sentence (a 403 it
-// wrote for this ask: above the ceiling, always_deny, a raised-and-refused
-// request under deny_with_review), or fallback.
+// adoControlPlaneRefusal is the control plane's own refusal sentence (a 403
+// for above-ceiling, always_deny, or a refused deny_with_review ask), or fallback.
 func adoControlPlaneRefusal(err error, fallback string) string {
 	var se injectionStatusError
 	if !errors.As(err, &se) || se.status != http.StatusForbidden {

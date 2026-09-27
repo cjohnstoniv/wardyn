@@ -8,16 +8,12 @@ import (
 	"strings"
 )
 
-// declaredJSONKeys returns the top-level object keys encoding/json can write for
-// the struct type of v: the keys THIS binary owns in a stored JSONB document.
-//
-// A document write replaces those keys and keeps every other one
-// (`(old - declared) || new`), so a key a NEWER wardynd wrote survives an older
-// binary's save. Without it, the older binary's whole-document replace silently
-// dropped the newer keys — and for governance limits an absent limit means no
-// limit, so the drop was a widening. Keys this binary declares still clear
-// normally (an omitempty field left out is gone). Only the top level is kept:
-// an unknown key nested inside a known one is still dropped.
+// declaredJSONKeys returns the top-level JSON keys encoding/json can write for
+// v's struct type: the keys THIS binary owns in a stored JSONB document. A
+// write merges as (old - declared) || new, so a key a NEWER binary wrote
+// survives an older binary's save — critical for governance limits, where an
+// absent limit means no limit and a silent drop would be a widening. Only the
+// top level is preserved; a nested unknown key is still dropped.
 func declaredJSONKeys(v any) []string {
 	var keys []string
 	var walk func(t reflect.Type)
