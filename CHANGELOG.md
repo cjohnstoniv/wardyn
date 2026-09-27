@@ -10,13 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **Kubernetes runs no longer attempt a recording upload when recording is off (#1113).** The
-  k8s substrate wrapped every `Exec` with `wardyn-rec` unconditionally, so an install with session
-  recording off still attempted the brokered upload on every run and logged a `brokered:recording`
-  deny for a feature that was switched off. The k8s driver now carries the same `Config.Record`
-  opt-out the docker driver has: off skips the recorder wrap entirely (no upload attempt), on
-  wraps and uploads exactly as before. The image contract is unchanged — agent images still ship
-  `wardyn-rec`.
+- **Runs no longer attempt a recording upload when recording is off (#1113).** Both the k8s and
+  docker substrates registered `Config.Record: true` unconditionally, so an install with
+  `WARDYN_RECORDING_STORE=off` still wrapped every `Exec` with `wardyn-rec`, still attempted the
+  brokered upload on every run, and still logged a `brokered:recording` deny for a feature that was
+  switched off. `Config.Record` on both drivers now follows the boot recording-store selection
+  (off skips the recorder wrap entirely — no upload attempt; `pg`/`fs` wrap and upload exactly as
+  before). The image contract is unchanged — agent images still ship `wardyn-rec`.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
