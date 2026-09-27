@@ -15,6 +15,8 @@ import { STATES } from "../src/app/components/wardyn/states";
 import {
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
+  CHIP_WAITING_FOR_MACHINE,
+  PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
   STUCK_IMAGE_PULL,
 } from "../src/app/components/screens/run-status-detail";
@@ -232,7 +234,7 @@ test.describe("Run detail (/runs/:id)", () => {
     // Clicking the run card navigates to the addressable /runs/:id page (the old
     // slide-over Sheet is gone).
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     // The command bar carries the task (h1) + the RUNNING badge.
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
@@ -277,7 +279,7 @@ test.describe("Run detail (/runs/:id)", () => {
   test("detail of a COMPLETED run renders and has a disabled Kill button", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
     await expect(page.getByText("Completed", { exact: true })).toBeVisible();
@@ -296,7 +298,7 @@ test.describe("Run detail (/runs/:id)", () => {
   }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
     const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
@@ -371,7 +373,7 @@ test.describe("Run detail (/runs/:id)", () => {
     });
 
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
 
     const header = page.getByTestId("run-summary-header");
@@ -470,7 +472,7 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
     });
 
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
     // The internal wire level stays out of accessible content (D4) — same
@@ -481,7 +483,7 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
   test("an ordinary run (empty autonomy_level) renders no autonomy chip at all", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const header = page.getByTestId("run-summary-header");
     for (const meta of Object.values(AUTONOMY_META)) {
       await expect(header.getByText(meta.label, { exact: true })).toHaveCount(0);
@@ -516,7 +518,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     });
     await openRuns(page);
     await page.getByText("e2e fixture 1").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText("Starting", { exact: true })).toBeVisible();
@@ -541,7 +543,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     });
     await openRuns(page);
     await page.getByText("e2e fixture 1").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText(CHIP_IMAGE_PULL_FAILED)).toBeVisible();
@@ -603,7 +605,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     });
 
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
 
     await page.setViewportSize({ width: 420, height: 720 });
@@ -624,6 +626,46 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
 
     // NEVER hidden — the chip may truncate, but it must still be on screen.
     await expect(page.getByTitle(hint)).toBeVisible();
+  });
+});
+
+// #125 — PENDING's own first tick, before the substrate has sent anything at
+// all: statusChip widens from STARTING-only to STARTING || PENDING, and an
+// empty status_detail on a PENDING run gets PENDING_NO_DETAIL instead of
+// rendering nothing. Route-spliced on fixture 0 (seeded PENDING) the same
+// shape the STARTING cases above use — anchored on the run's own id
+// (**/api/v1/runs/*, a single path segment), never a bare `/\/runs\/.+/`
+// against the page URL, which also matches /runs/new.
+test.describe("Run header — PENDING's own queued sentence (#125)", () => {
+  test("shows the queued sentence with no status_detail, and a real stage line replaces it", async ({ page }) => {
+    let stage: { status_detail: string; status_reason: string } | null = null;
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 0") {
+        json.status_detail = stage?.status_detail ?? "";
+        json.status_reason = stage?.status_reason ?? "";
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 0").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText("Pending", { exact: true })).toBeVisible();
+    // SF-25: the mock (packet-4.html state 3) has only the reused Pending
+    // badge plus this sentence as a visible line — no separate "Queued" info
+    // chip, which would say the badge's own fact a second time.
+    await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toBeVisible();
+    await expect(header.getByText("Queued", { exact: true })).toHaveCount(0);
+
+    // The next poll tick (DETAIL_POLL_MS) picks up a real stage line, which
+    // supersedes the queued sentence.
+    stage = { status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" };
+    await expect(header.getByText(CHIP_WAITING_FOR_MACHINE)).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });
 
@@ -667,7 +709,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
 
     // A different fixture first: the note must not be a banner every run grew.
     await page.getByText("e2e fixture 5").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByTestId("run-summary-header")).toBeVisible();
     await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
 
@@ -675,13 +717,13 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     // here is false on all three of its clauses.
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByTestId("run-summary-header")).toBeVisible();
     await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
 
     await openRuns(page);
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const note = page.getByTestId("login-sandbox-note");
     await expect(note).toBeVisible();
     await expect(note).toContainText(LOGIN_SANDBOX_NOTE);
@@ -715,7 +757,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     });
 
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const note = page.getByTestId("login-sandbox-note");
     await expect(note).toBeVisible();
     await expect(note).toContainText(LOGIN_SANDBOX_NOTE);
@@ -752,7 +794,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
         await route.fulfill({ response, json });
       });
       await page.getByText("e2e fixture 2").click();
-      await expect(page).toHaveURL(/\/runs\/.+/);
+      await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
       await expect(page.getByTestId("run-summary-header")).toBeVisible();
       await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
       await page.unrouteAll({ behavior: "ignoreErrors" });
@@ -828,7 +870,7 @@ test.describe("Killing an active run", () => {
 
     await openRuns(page);
     await page.getByText(victim!.task).click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(badge, { exact: true })).toBeVisible();
 
     const killBtn = page.getByRole("button", { name: "Kill", exact: true });
@@ -884,7 +926,7 @@ test.describe("Run detail — approvals are scoped on the wire", () => {
 
     await openRuns(page);
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
 
     const runId = new URL(page.url()).pathname.split("/").pop() ?? "";
@@ -917,7 +959,7 @@ test.describe("Run cockpit — the layout catalog offers no dead controls", () =
 
     await openRuns(page);
     await page.getByText("e2e fixture 4").click(); // Completed
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
 
     await page.getByRole("button", { name: "Edit layout" }).click();
@@ -964,7 +1006,7 @@ test.describe("Run detail — a failing side fetch is not an outage", () => {
     );
 
     await page.getByText("e2e fixture 2").click(); // RUNNING
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
     await expect(page.getByText(STATES.ERROR_DEFAULT)).toHaveCount(0);
@@ -987,7 +1029,7 @@ test.describe("Run cockpit — the failure block sizes to its content, not to ha
   test("a killed run keeps its replay pane", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 7").click(); // KILLED — always gets the block
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByRole("heading", { name: "e2e fixture 7", level: 1 })).toBeVisible();
 
     const block = page.getByTestId("run-failure-block");
@@ -1042,7 +1084,7 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
     );
 
     await page.getByText("e2e fixture 2").click(); // RUNNING — the card's gate
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     // The card still renders: the CLI lane needs no gateway at all.
     await expect(page.getByText("Attach from your terminal")).toBeVisible();
     await expect(page.getByText("Wardyn CLI")).toBeVisible();
@@ -1363,7 +1405,7 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
 // with no second "Sign in to AWS" beside it. The real refusal, from a real
 // per-user AWS session that lapsed, is live case J (lane e2e-sso-path).
 const CREDENTIAL_REFUSAL =
-  "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+  "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
 const CREDENTIAL_VIEWER = "alice@corp.example";
 
 /** The viewer's own subject, so `created_by === principal` can be true of a
@@ -1436,7 +1478,7 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
 
     await openRuns(page);
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const block = page.getByTestId("run-failure-block");
     await expect(block).toHaveAttribute("data-ending", "credential");

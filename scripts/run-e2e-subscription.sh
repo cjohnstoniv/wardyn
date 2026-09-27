@@ -27,14 +27,13 @@
 # rate-limit reply counts as PASS, only an auth error fails.
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "run-e2e-subscription: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent subscription e2e (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
+  skip_lane "run-e2e-subscription: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent subscription e2e (skipping)."
+fi
 BASE="${WARDYN_E2E_BASE_URL:-http://localhost:8080}"
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
 WARDYND_LOG="$(mktemp /tmp/wardynd-e2e-sub.XXXXXX.log)"
@@ -59,8 +58,7 @@ command -v fuser >/dev/null 2>&1 || command -v ss >/dev/null 2>&1 \
 CREDS_DIR="${WARDYN_E2E_CLAUDE_CREDS:-$HOME/.wardyn/claude-creds}"
 if [[ ! -d "${CREDS_DIR}/.claude" || ! -f "${CREDS_DIR}/.claude.json" ]]; then
   warn "no staged Claude subscription creds at ${CREDS_DIR} (run scripts/stage-claude-creds.sh)."
-  warn "the subscription lanes REQUIRE the .claude mounts to engage subscription mode — nothing to prove; exiting 0 (skip)."
-  exit 0
+  skip_lane "run-e2e-subscription: the subscription lanes REQUIRE the .claude mounts to engage subscription mode — nothing to prove (skip)."
 fi
 
 # ── build the pieces ─────────────────────────────────────────────────────────

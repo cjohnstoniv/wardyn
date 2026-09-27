@@ -38,9 +38,29 @@ type ownerStore struct {
 	*authzStore
 	siteConfig types.SiteConfig
 	caps       *capStore
+	token      *types.APIToken // see humanToken
 }
 
 func newOwnerStore() *ownerStore { return &ownerStore{authzStore: newAuthzStore()} }
+
+// ownerStoreTokenRaw is the one wdn_ bearer an ownerStore answers.
+const ownerStoreTokenRaw = apiTokenPrefix + "owner-store"
+
+// humanToken gives the store one wdn_ token for (sub, role) and returns its
+// bearer. It is how a test launches as a named admin: an SSO session in the
+// Admin view cannot launch (refuseAdminViewLaunch), and the token lane can.
+func (s *ownerStore) humanToken(sub, role string) string {
+	complete := false
+	s.token = &types.APIToken{ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: role, GroupsTruncated: &complete}
+	return ownerStoreTokenRaw
+}
+
+func (s *ownerStore) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
+	if s.token == nil || raw != ownerStoreTokenRaw {
+		return s.authzStore.GetAPITokenByRaw(ctx, raw)
+	}
+	return *s.token, nil
+}
 
 func (s *ownerStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.siteConfig, nil

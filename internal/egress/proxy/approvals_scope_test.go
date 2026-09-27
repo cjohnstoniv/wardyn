@@ -355,7 +355,7 @@ func TestResolveThenResolveWaitDoesNotDoubleConsume(t *testing.T) {
 	}
 }
 
-// TestApprovalGrantReleasesEveryPortOnTheHost (F145) is the missing PORT axis of
+// TestApprovalGrantReleasesEveryPortOnTheHost is the missing PORT axis of
 // this file. Every test above locks a scope down along TIME (once / run / until
 // / always); nothing anywhere encoded how WIDE one grant reaches, and neither
 // approvals test file contained the string "port" or a port literal at all.

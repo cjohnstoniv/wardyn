@@ -25,7 +25,7 @@ func RunConformance(t *testing.T, newProvider func(t *testing.T) identity.Provid
 	t.Run("mint_verify_roundtrip_and_spiffe_shape", func(t *testing.T) {
 		p := newProvider(t)
 		runID := uuid.New()
-		ri, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "sponsor@example.com", aud)
+		ri, err := p.MintRunIdentity(ctx, runID, "alice@example.com", "sponsor@example.com", aud, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -39,14 +39,25 @@ func RunConformance(t *testing.T, newProvider func(t *testing.T) identity.Provid
 		if err != nil {
 			t.Fatalf("verify: %v", err)
 		}
-		if cl.RunID != runID || cl.Sub != "alice@example.com" || cl.SPIFFEID != ri.SPIFFEID {
+		if cl.RunID != runID || cl.Sub != "alice@example.com" || cl.SPIFFEID != ri.SPIFFEID || cl.OperatorOwned {
 			t.Fatalf("claims mismatch: %+v", cl)
+		}
+	})
+
+	t.Run("operator_owned_is_carried_signed", func(t *testing.T) {
+		p := newProvider(t)
+		ri, err := p.MintRunIdentity(ctx, uuid.New(), "admin-token", "admin-token", aud, true)
+		if err != nil {
+			t.Fatalf("mint: %v", err)
+		}
+		if cl, err := p.Verify(ctx, ri.Token, aud); err != nil || !cl.OperatorOwned {
+			t.Fatalf("verify = (%+v, %v), want OperatorOwned carried from the mint", cl, err)
 		}
 	})
 
 	t.Run("wrong_audience_fails_closed", func(t *testing.T) {
 		p := newProvider(t)
-		ri, err := p.MintRunIdentity(ctx, uuid.New(), "a", "a", aud)
+		ri, err := p.MintRunIdentity(ctx, uuid.New(), "a", "a", aud, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -57,7 +68,7 @@ func RunConformance(t *testing.T, newProvider func(t *testing.T) identity.Provid
 
 	t.Run("tampered_token_fails_closed", func(t *testing.T) {
 		p := newProvider(t)
-		ri, err := p.MintRunIdentity(ctx, uuid.New(), "a", "a", aud)
+		ri, err := p.MintRunIdentity(ctx, uuid.New(), "a", "a", aud, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -69,7 +80,7 @@ func RunConformance(t *testing.T, newProvider func(t *testing.T) identity.Provid
 	t.Run("revoke_run_is_kill_switch", func(t *testing.T) {
 		p := newProvider(t)
 		runID := uuid.New()
-		ri, err := p.MintRunIdentity(ctx, runID, "a", "a", aud)
+		ri, err := p.MintRunIdentity(ctx, runID, "a", "a", aud, false)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}

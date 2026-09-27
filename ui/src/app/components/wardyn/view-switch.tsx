@@ -13,6 +13,7 @@ import { health } from "../../lib/api/health";
 import { onForbidden } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { useRequestLeave } from "../../lib/use-unsaved-guard";
+import { appURL, routerPath } from "../../lib/base-path";
 import {
   currentView,
   isSwitching,
@@ -139,8 +140,8 @@ export function useViewResync(access: ViewAccess, loadedMemberMode: boolean): vo
     try {
       const me = await health.whoami();
       if (!me || isSwitching() || (me.user_view ?? false) === loadedMemberMode) return;
-      const { pathname, search, hash } = window.location;
-      window.location.assign(viewTarget(me.user_view ? "user" : "admin", pathname, `${search}${hash}`));
+      const { search, hash } = window.location;
+      window.location.assign(appURL(viewTarget(me.user_view ? "user" : "admin", routerPath(), `${search}${hash}`)));
     } finally {
       inFlight.current = false;
     }

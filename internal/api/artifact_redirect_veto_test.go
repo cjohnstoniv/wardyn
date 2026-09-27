@@ -74,7 +74,7 @@ func TestPlanArtifactRedirect_ToPublicProviderRefused(t *testing.T) {
 }
 
 // TestPlanArtifactRedirect_ToBedrockHostRefused pins B1, the reject-direction
-// sibling of F019: this veto is a REJECT test, but it consulted the
+// sibling of the accept-direction check: this veto is a REJECT test, but it consulted the
 // anthropic/openai-only isModelProviderHost, so a redirect whose To named the
 // Bedrock lane's data/control host (or a WARDYN_BEDROCK_BASE_URL endpoint) was
 // still allowed to author an artifact-token injection — and buildInjector's

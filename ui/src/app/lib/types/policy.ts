@@ -21,6 +21,9 @@ export interface GrantSpec {
   scope?: Record<string, unknown>;
   ttl_seconds?: number;
   requires_approval: boolean;
+  // Resolve the named stored secret from the run owner's own row only, never
+  // the operator's (api_key / git_pat / ssh_key / env_secret).
+  owner_only?: boolean;
 }
 
 // A single operator/policy-controlled host bind mount. Mirrors the wire shape
@@ -221,6 +224,13 @@ export interface PushRulesSpec {
   require_review_paths?: string[];
   hold_seconds?: number;
 }
+
+// pushRulesIsSet moved to new-run-rail.tsx (bundle-split fix, #181): its only
+// caller is that lazy screen's own RunRail, and this module is eager (some
+// of policy.ts's other exports reach the runs board), so a runtime function
+// living here bundled into the entry chunk for a reader that never runs
+// there — same pattern push-content-card.tsx's isPushContentRequest and
+// audit-decision.tsx's ruleSourceLabel document.
 
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on

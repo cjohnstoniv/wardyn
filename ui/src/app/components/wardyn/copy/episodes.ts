@@ -52,8 +52,8 @@ export const EPISODES_COPY = {
 // DRAFT (M2 canon pending) — X4-F3 (runs-first-run-demos.tsx's "See it work"
 // grid subtitle): the prior sentence "No model, no key, no repo" was
 // contradicted ten lines below by needsModel/needsSecret — some demo cards
-// genuinely require a connected model or a stored secret. Canon row:
-// local/v074/canon/docs.md, key runs-first-run-demos.subtitle.
+// genuinely require a connected model or a stored secret. Canon key:
+// runs-first-run-demos.subtitle.
 export const FIRST_RUN_DEMOS_SUBTITLE =
   "No repo needed. Most need no model or key either — a few show what a connected model or a stored secret additionally protects. Each one runs a real governed sandbox in about a minute.";
 

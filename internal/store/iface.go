@@ -188,6 +188,8 @@ type Store interface {
 	ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error)
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
+	// DeleteSSHKeys removes one principal's keys, or all keys when principal is empty.
+	DeleteSSHKeys(ctx context.Context, principal string) (int, error)
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
 	// RefreshAPITokenIdentity re-stamps role, user type AND the group snapshot
 	// (plus its completeness bit) on every unrevoked api_tokens row a principal
@@ -294,6 +296,13 @@ type Store interface {
 	// UserTypeTokenStamps counts the unrevoked API tokens stamped with the type.
 	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
 	DeleteUserType(ctx context.Context, id string) error
+
+	// Launch presets (migration 0087, store_launch_presets.go). PutLaunchPreset
+	// is an upsert by name that moves the version only when the row changes.
+	ListLaunchPresets(ctx context.Context) ([]types.LaunchPreset, error)
+	GetLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error)
+	PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.LaunchPreset, PresetWrite, error)
+	DeleteLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error)
 
 	// Governance profiles and their subject assignments (migration 0052,
 	// governance.go): the assignable ceiling that replaces Config.DefaultPolicy

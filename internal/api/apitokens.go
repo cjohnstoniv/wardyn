@@ -181,6 +181,12 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// already refuses to shed. The cost is one re-mint, and only on a
 		// deployment that actually assigns profiles to groups — the resolver's
 		// refusal is itself gated on a group-tier row existing at all.
+		if t.Principal == "" {
+			// A person-less token row would read as the admin-token lane
+			// (no human on the context): refuse it rather than treat it as the operator.
+			fallback.ServeHTTP(w, r)
+			return
+		}
 		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
 		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))

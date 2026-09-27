@@ -1,0 +1,26 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- A run that is slow to START had nothing on the row saying what it was waiting
+-- ON. The substrate knows — the kubelet's waiting reason and the scheduler's
+-- PodScheduled verdict are read every 200ms inside CreateSandbox — but there is
+-- no sandbox_ref during that whole window, so nothing outside the driver could
+-- ask, and the answer was formatted and discarded once per poll. status_detail
+-- is where the driver's callback (runner.SandboxSpec.OnWaiting) writes it, in
+-- the substrate's own "<component>: <Reason>[: <message>]" words, so the run
+-- header, the Runs board and the sign-in pane can say "waiting for a machine"
+-- rather than showing two minutes of identical silence.
+--
+-- Written by a scoped UPDATE (SetRunStatusDetail) that deliberately does NOT
+-- touch updated_at: that column is the idle reaper's clock and the killed-run
+-- tail-upload grace's clock, and a status heartbeat must not extend either.
+-- Never cleared: the read path blanks it for any run not STARTING (except a run
+-- that FAILED on a terminal reason, whose reason IS the failure), so the last
+-- reason survives on the row for a postmortem without ever being re-rendered as
+-- if it were current.
+--
+-- NOT NULL DEFAULT '' — a metadata-only add on PG11+ — exactly as
+-- 0044_run_failure_hint did, so scanRun keeps scanning into a plain string and
+-- every legacy row reads "nothing was recorded" rather than threading a nullable
+-- through the agent_runs column lists.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS status_detail TEXT NOT NULL DEFAULT '';

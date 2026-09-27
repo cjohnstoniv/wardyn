@@ -49,7 +49,7 @@ import { cn } from "../../ui/utils";
 import { MODEL_LEDE } from "../../../lib/model-providers-copy";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 
-// Canon strings (local/ux-0.5-mock/CANON-STRINGS.md § Settings). Kept here
+// Canon strings, reviewed against the settings mock. Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
 // deleted and shrinks with it.
 export const S = {

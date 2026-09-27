@@ -9,6 +9,7 @@ import (
 	"log/syslog"
 	"net"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -121,13 +122,18 @@ func TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector(t *testing.T) {
 			}(conn)
 		}
 	}()
-	t.Cleanup(func() { close(stallDone) })
+	release := sync.OnceFunc(func() { close(stallDone) })
+	t.Cleanup(release)
 
 	s, err := NewSyslogSink("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("NewSyslogSink (tcp, hung collector): %v", err)
 	}
 	t.Cleanup(func() {
+		// Release the collector before closing: a Close that drains into a
+		// collector that never reads waits out the 5s bound below, which is
+		// teardown, not the property this test asserts.
+		release()
 		// Close in a goroutine with a timeout so a wedged drain can't hang the
 		// test process; Drops() is already asserted below.
 		closed := make(chan struct{})
@@ -199,13 +205,15 @@ func TestSyslogSink_RemoteWriteTimeoutCounts(t *testing.T) {
 			}(conn)
 		}
 	}()
-	t.Cleanup(func() { close(stallDone) })
+	release := sync.OnceFunc(func() { close(stallDone) })
+	t.Cleanup(release)
 
 	s, err := NewSyslogSink("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("NewSyslogSink: %v", err)
 	}
 	t.Cleanup(func() {
+		release() // as above: teardown need not wait out a collector that never reads
 		closed := make(chan struct{})
 		go func() { _ = s.Close(); close(closed) }()
 		select {

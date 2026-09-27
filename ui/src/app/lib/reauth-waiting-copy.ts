@@ -44,7 +44,7 @@
 // could never clear it. Only the run's owner can.
 //
 // Defaulted TRUE rather than required: the one caller this module cannot reach
-// is ui/e2e/live/sso-reauth-hold.spec.ts, which lane e2e-sso-path owns and
+// is ui/e2e/walk/sso-reauth-hold.spec.ts, which lane e2e-sso-path owns and
 // which asserts this string on the OWNER's own run. The two console callers
 // (run-detail-summary-header.tsx, runs/run-card.tsx) both pass it explicitly.
 export const waitingReauth = (n: number, mine = true): string => {

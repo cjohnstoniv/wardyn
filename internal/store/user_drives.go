@@ -522,7 +522,7 @@ func (s PG) ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, er
 // userDriveGrantList is the grant read WITHOUT its window, written once so the
 // whole-list and paged forms cannot drift into two different orders.
 const userDriveGrantList = `SELECT ` + userDriveGrantCols + ` FROM user_drive_grants
-		ORDER BY ` + userDriveTierOrder + `, priority DESC, subject`
+		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
 
 // ListUserDriveGrantsPage is ListUserDriveGrants bounded to one window.
 //
@@ -537,62 +537,39 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 	return collect(ctx, s.Pool, "list", "user drive grants", q, args, scanUserDriveGrant)
 }
 
-// userDriveTierOrder ranks the four subject tiers MOST SPECIFIC FIRST — user >
-// group > user_type > all. Spliced into both the resolver and the console
-// listing so the two can't disagree. A SEPARATE constant from
-// governanceTierOrder despite identical text: same rule, different tables, so
-// a future per-table divergence reads as deliberate rather than a typo.
-//
-// subject_type is deliberately UNQUALIFIED so the one string works in both the
-// resolver's JOIN and the single-table listing — safe because user_drives has
-// no subject_type column; a migration that added one would make Postgres
-// refuse the ambiguity loudly.
-const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 WHEN 'user_type' THEN 2 ELSE 3 END`
-
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the grant
 // that won, and the tier it won at — or ErrNotFound (the absent-row doctrine).
 //
-// The whole precedence rule is the ORDER BY, copied from
-// ResolveGovernanceProfile (the same rule over the same subject vocabulary),
-// one indexed read on UNIQUE(subject_type, subject) so there's no second Go
-// implementation to skip or mis-order. Ranked, in order:
+// The whole precedence rule is the ORDER BY: subjectMatch and
+// subjectPrecedence, the fragments ResolveGovernanceProfile splices too,
+// because it is the same rule about the same subject vocabulary. It is one
+// indexed read on the UNIQUE(subject_type, subject) btree, so there is no second
+// implementation in Go for a caller to skip, mis-order, or forget. The last key
+// (grants.subject) matters more here than for the ceiling: THIS RESOLVER
+// RETURNS THE GRANT, and the grant is what carries writable_override,
+// size_mib_override, home_override and enabled.
 //
-//  1. tier — user > group > user_type > all: a more specific naming always
-//     wins outright.
-//  2. within the user tier, a sub-keyed match beats an email-keyed one
-//     (capabilitySubjects returns up to two). Sub wins because it's the
-//     stable identifier — inheriting a departed colleague's drive by taking
-//     their email must never be possible. Encoded as the MATCH POSITION in
-//     the caller's own userSubjects slice, so the caller's ordering IS the
-//     precedence.
-//  3. priority DESC — the admin's explicit tie-break.
-//  4. drives.name ASC — a total order across DISTINCT drives (name is
-//     UNIQUE), deciding which of two drives wins when nothing above
-//     separates them.
-//  5. grants.subject ASC — THE FLOOR: two grants CAN name the same drive
-//     (UNIQUE is per subject, and priority defaults to 0), so ties reach here
-//     and this resolver returns the grant itself — the one carrying
-//     writable_override/size_mib_override/home_override/enabled. Subject is
-//     a total order within a tier and EXPLAINABLE, unlike a row id.
+// Disabled grants are in the query, and the winner's own `enabled` decides
+// PAUSED vs MOUNTED — a disabled row that wins its tier yields paused, never
+// the wider row beneath it (DESIGN §2.2: turning Bob's row off cannot silently
+// hand him the group's writable drive). Excluding them in the WHERE instead
+// reads tidier and is the widening this must not do: the pause would fall
+// through to whatever `all`-tier row exists, which is a drive no admin decided
+// this member should have — and it would do so silently, because the member's
+// only signal is a mount that appeared rather than an allocation that stopped.
+// So there is ONE read, its ORDER BY is the whole precedence rule, and the
+// caller reads g.Enabled to tell the two answers apart.
 //
-// Copied from ResolveGovernanceProfile, which doesn't need the last key
-// (governance_assignments carries no per-assignment override, so ties there
-// are unobservable) — user_drive_grants' rows DO carry per-row overrides,
-// turning a benign gap into a real decision.
+// The tier comes back as the winning grant's own subject_type rather than a
+// separately selected column — this resolver returns the grant itself, so
+// unlike the governance one it has the answer in hand and cannot disagree with
+// it.
 //
-// Disabled grants are IN the query; the winner's own `enabled` decides PAUSED
-// vs MOUNTED (DESIGN §2.2: turning Bob's row off must not silently hand him
-// the group's drive). Excluding them in the WHERE would widen instead —
-// falling through to a wider row nobody decided this member should have, with
-// no signal but a mount appearing.
-//
-// The tier comes back as the winning grant's own subject_type, not a
-// separately selected column — this resolver has the grant in hand and can't
-// disagree with it.
-//
-// userSubjects/groups are normalized from nil to empty for the reason
-// ResolveGovernanceProfile does: a nil slice binds as SQL NULL and `x =
-// ANY(NULL)` is NULL, not false.
+// userSubjects/groups are normalized from nil to empty for the same reason
+// ResolveGovernanceProfile normalizes them: a nil Go slice binds as SQL NULL
+// and `x = ANY(NULL)` is NULL rather than false. It fails closed either way,
+// but a predicate whose behavior depends on a driver detail is not one to leave
+// standing at an authorization boundary.
 //
 // userType is the caller's one type id; "" matches no row.
 func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string, userType string) (
@@ -603,25 +580,15 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string,
 	if groups == nil {
 		groups = []string{}
 	}
-	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
+	q := `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
 			g.id, g.subject_type, g.subject, g.drive_id, g.priority,
 			g.size_mib_override, g.writable_override, g.home_override, g.enabled,
 			g.created_at, g.created_by
 		FROM user_drive_grants g
 		JOIN user_drives d ON d.id = g.drive_id
-		WHERE (g.subject_type = 'all'
-		   OR (g.subject_type = 'user'  AND g.subject = ANY($1::text[]))
-		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[]))
-		   OR (g.subject_type = 'user_type' AND g.subject = $3))
-		ORDER BY
-			` + userDriveTierOrder + `,
-			CASE g.subject_type WHEN 'user'
-				THEN COALESCE(array_position($1::text[], g.subject), 2147483647)
-				ELSE 0 END,
-			g.priority DESC,
-			d.name ASC,
-			g.subject ASC
+		WHERE ` + subjectMatch("g") + `
+		ORDER BY ` + subjectPrecedence("g", "d") + `
 		LIMIT 1`
 	var d types.UserDrive
 	var g types.UserDriveGrant
@@ -636,22 +603,10 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string,
 	return &d, &g, g.SubjectType, nil
 }
 
-// HasGroupTierDriveGrants reports whether ANY group-tier grant exists.
-//
-// The gate on the stale/truncated-snapshot refusal: a caller whose group
-// snapshot is missing or truncated cannot have their group grants evaluated,
-// but on a deployment with NO group-tier rows there's nothing an unknown
-// group could have matched — refusing there would break "no grant ⇒ no
-// drive" for every pre-upgrade session. EXISTS, not a count: Postgres stops
-// at the first row.
+// HasGroupTierDriveGrants reports whether ANY group-tier grant exists: the
+// gate on the stale-snapshot refusal (see hasGroupTierRows).
 func (s PG) HasGroupTierDriveGrants(ctx context.Context) (bool, error) {
-	var has bool
-	err := s.Pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM user_drive_grants WHERE subject_type = 'group')`).Scan(&has)
-	if err != nil {
-		return false, fmt.Errorf("store: check group-tier user drive grants: %w", err)
-	}
-	return has, nil
+	return s.hasGroupTierRows(ctx, "user_drive_grants", "user drive grants")
 }
 
 func scanUserDrive(row pgx.Row) (types.UserDrive, error) {

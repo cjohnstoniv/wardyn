@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// B11a-F3. credInput.Protocol was parsed and never used, so `git clone
+// credInput.Protocol was parsed and never used, so `git clone
 // http://dev.azure.com/…` (ADO is allowlisted, and a bare allow entry matches
 // any port) got the brokered PAT emitted and git sent it as `Authorization:
 // Basic` in CLEARTEXT. ADO is not on the git-broker route — it rides handlePlain
@@ -82,7 +82,7 @@ func TestGetProtocolCaseInsensitive(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F3: an ordinary https request over the SAME grant
+// NEGATIVE CONTROL for an ordinary https request over the SAME grant
 // still emits. The gate must refuse a transport, not a forge.
 func TestGetHTTPSStillEmits(t *testing.T) {
 	mux := http.NewServeMux()
@@ -126,7 +126,7 @@ func TestGetPlainHTTPUnmatchedHostIsSilent(t *testing.T) {
 	}
 }
 
-// B11a-F11. strings.Cut(v, ":") split at the FIRST colon, truncating a
+// strings.Cut(v, ":") split at the FIRST colon, truncating a
 // bracketed IPv6 literal to "[2001" — fail-safe (nothing matches that key) but
 // silently unbrokered, with no explanation for an operator who wired the grant.
 func TestParseInputHostPort(t *testing.T) {

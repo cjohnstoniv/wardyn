@@ -97,6 +97,16 @@ func (s PG) DeleteSSHKey(ctx context.Context, fingerprint, principal string) err
 	return nil
 }
 
+// DeleteSSHKeys removes a principal's registered keys, or every key when
+// principal is empty. The count comes from the DELETE, not a prior snapshot.
+func (s PG) DeleteSSHKeys(ctx context.Context, principal string) (int, error) {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM ssh_public_keys WHERE $1 = '' OR principal = $1`, principal)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete ssh keys: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // sshKeyCols is THE ssh_public_keys column list, in scanSSHKey's order (four
 // pasted sites). One list, not two: every column is written at registration,
 // and RefreshSSHKeyRoles updates two in place rather than adding any.

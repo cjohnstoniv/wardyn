@@ -54,6 +54,31 @@ func TestParseRoleMapAliasesLegacyMember(t *testing.T) {
 	}
 }
 
+// TestLegacyMemberAliasLosesToCustomUserType (0.8 testing plan T-23, UT-2b):
+// proves the FULL path from a raw WARDYN_OIDC_ROLE_MAP string through
+// ParseRoleMap's "=member" substitution into the type-precedence decision —
+// not DeriveForTest fed a hand-built roleMap that already assumes the
+// substitution happened (TestDeriveUserType's "the built-in type never wins
+// against a custom one" case does that). ParseRoleMap turns "=member" into
+// the plain user-tier value, which SplitMappingTarget resolves to the
+// built-in type; pickUserType must still let a custom type mapped alongside
+// it win, so a leftover chart alias can never lock an org onto "standard".
+func TestLegacyMemberAliasLosesToCustomUserType(t *testing.T) {
+	logs := captureWarnings(t)
+
+	m, err := oidc.ParseRoleMap("eng-team=member,pm-group=portfolio-manager")
+	if err != nil {
+		t.Fatalf("ParseRoleMap refused a legacy alias beside a custom type: %v", err)
+	}
+	d := oidc.DeriveForTest(nil, []string{"eng-team", "pm-group"}, "", m, nil, "", orgTypes)
+	if d.Denial != "" || d.Role != oidc.RoleUser || d.UserType != "portfolio-manager" {
+		t.Fatalf("derivation = %+v, want the user tier on the custom type \"portfolio-manager\", not the aliased built-in one", d)
+	}
+	if !strings.Contains(logs.String(), `Entry \"eng-team=member\"`) {
+		t.Errorf("the alias substitution logged no warning:\n%s", logs.String())
+	}
+}
+
 // TestLegacyMemberIsNeverARole: the alias lives only where configuration is
 // parsed. "member" is not a role a console row, a session or a token snapshot
 // can carry, so ValidRole refuses it and the fold ignores a map that holds it.

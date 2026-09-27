@@ -144,7 +144,9 @@ func (d *Driver) ProxyConfig(ctx context.Context, ref string) ([]byte, error) {
 // pins. The new one takes that address, read from the agent's own hosts entry
 // (immutable, and still there after a stopped proxy gave its address back),
 // and re-joins the control-plane-facing network as at create. Every check
-// that can fail without touching the old sidecar runs before the remove.
+// that can fail without touching the old sidecar runs before the remove. A
+// new one that does not start leaves the old one restored, stopped (see
+// restoreProxy).
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
@@ -180,9 +182,27 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 		return fmt.Errorf("%w: docker: remove proxy: %w", runner.ErrProxyReplaceFailed, err)
 	}
 	if _, err := d.startProxy(ctx, id, labels, proxyEnvFromJSON(id, cfgJSON, cp.ControlPlaneURL), ip); err != nil {
-		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
+		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, d.restoreProxy(ctx, id, old.Container, err))
 	}
 	return nil
+}
+
+// restoreProxy re-creates the removed proxy old under its name, from its own
+// config, and does not start it. The run still has no egress, as
+// ErrProxyReplaceFailed says: its token is the retiring one, and nothing here
+// could pin its address. But its config, and the per-run MITM CA inside it,
+// can be read back again, so a later revive can bring the run back instead of
+// it staying dead until a re-launch. It returns cause, with the restore's own
+// failure when that fails too.
+func (d *Driver) restoreProxy(ctx context.Context, runID uuid.UUID, old container.InspectResponse, cause error) error {
+	if _, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     old.Config,
+		HostConfig: old.HostConfig,
+		Name:       proxyContainerName(runID),
+	}); err != nil {
+		return fmt.Errorf("%w; restoring the old proxy also failed: %w", cause, err)
+	}
+	return cause
 }
 
 // StartSandbox starts the agent ref's kept, stopped container again

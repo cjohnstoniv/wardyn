@@ -159,47 +159,28 @@ func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error 
 // the console's table reads top-down as the precedence rule.
 func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error) {
 	const q = `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments
-		ORDER BY ` + governanceTierOrder + `, priority DESC, subject`
+		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
 	return collect(ctx, s.Pool, "list", "governance assignments", q, nil, scanGovernanceAssignment)
 }
 
-// governanceTierOrder ranks the four subject tiers MOST SPECIFIC FIRST —
-// user > group > user_type > all — written once as SQL and spliced into
-// both the resolver and the console listing so the two can never disagree.
+// ResolveGovernanceProfile returns THE ONE profile that applies to a caller, or
+// ErrNotFound when no assignment matches (which the caller reads as "fall
+// through to the deployment ceiling", the absent-row back-compat rule).
 //
-// subject_type is deliberately UNQUALIFIED so the same string works in the
-// resolver's JOIN and the single-table listing; safe because
-// governance_profiles has no subject_type column to collide with.
-const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 WHEN 'user_type' THEN 2 ELSE 3 END`
-
-// ResolveGovernanceProfile returns THE ONE profile that applies to a caller,
-// or ErrNotFound when no assignment matches (caller falls through to the
-// deployment ceiling).
+// The whole precedence rule is the ORDER BY, and that is deliberate: it is one
+// indexed read on the UNIQUE(subject_type, subject) btree, so there is no
+// second implementation in Go for a caller to skip, mis-order, or forget. The
+// match and the ranking are subjectMatch and subjectPrecedence, the same
+// fragments ResolveUserDrive splices, so the ceiling and the drive cannot
+// disagree about what "most specific" means.
 //
-// The whole precedence rule is the ORDER BY — one indexed read, so there is
-// no second implementation in Go to skip, mis-order, or forget. Ranked:
+// users/groups are normalized from nil to empty for the same reason
+// ListCapabilityGrantsFor normalizes them: a nil Go slice binds as SQL NULL and
+// `x = ANY(NULL)` is NULL rather than false. It fails closed either way, but a
+// predicate whose behavior depends on a driver detail is not one to leave
+// standing at an authorization boundary.
 //
-//  1. tier — user > group > user_type > all; no group-tier priority beats a
-//     user-tier row.
-//  2. within the user tier, a sub-keyed match beats an email-keyed one (sub
-//     is the stable identifier; an email is reassignable and must not let
-//     someone inherit a departed colleague's ceiling). Encoded as match
-//     position in the caller's own userSubjects slice, so that slice's order
-//     IS the precedence.
-//  3. priority DESC — the admin's explicit tie-break, and the group tier's
-//     working lever.
-//  4. profiles.name ASC — without it, two same-priority rows make LIMIT 1
-//     depend on the query plan.
-//  5. assignments.subject ASC — deterministic total-order floor, matching
-//     ListGovernanceAssignments' own last key. Changes no answer today (the
-//     SELECT carries no per-assignment column beyond subject_type, so a tie
-//     surviving (4) is byte-identical either way), but removes the
-//     dependency before a future SELECT adds one and makes it observable.
-//
-// users/groups are normalized from nil to empty because a nil Go slice binds
-// as SQL NULL and `x = ANY(NULL)` is NULL rather than false — fails closed
-// either way, but not a detail to leave implicit at an authorization
-// boundary. userType is the caller's one type id; "" matches no row.
+// userType is the caller's one type id; "" matches no row.
 func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if userSubjects == nil {
 		userSubjects = []string{}
@@ -207,21 +188,11 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 	if groups == nil {
 		groups = []string{}
 	}
-	const q = `SELECT p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, a.subject_type
+	q := `SELECT p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, a.subject_type
 		FROM governance_assignments a
 		JOIN governance_profiles p ON p.id = a.profile_id
-		WHERE a.subject_type = 'all'
-		   OR (a.subject_type = 'user'  AND a.subject = ANY($1::text[]))
-		   OR (a.subject_type = 'group' AND a.subject = ANY($2::text[]))
-		   OR (a.subject_type = 'user_type' AND a.subject = $3)
-		ORDER BY
-			` + governanceTierOrder + `,
-			CASE a.subject_type WHEN 'user'
-				THEN COALESCE(array_position($1::text[], a.subject), 2147483647)
-				ELSE 0 END,
-			a.priority DESC,
-			p.name ASC,
-			a.subject ASC
+		WHERE ` + subjectMatch("a") + `
+		ORDER BY ` + subjectPrecedence("a", "p") + `
 		LIMIT 1`
 	var tier string
 	p, err := scanGovernanceProfileInto(s.Pool.QueryRow(ctx, q, userSubjects, groups, userType), &tier)
@@ -231,19 +202,10 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 	return &p, types.CapabilitySubjectType(tier), nil
 }
 
-// HasGroupTierAssignments reports whether ANY group-tier assignment exists.
-// Gates the stale/truncated-snapshot refusal: that refusal must not fire on
-// a deployment with no group-tier rows, since nothing there could have
-// matched an unknown group. EXISTS, not a count, since Postgres then stops
-// at the first row.
+// HasGroupTierAssignments reports whether ANY group-tier assignment exists:
+// the gate on the stale-snapshot refusal (see hasGroupTierRows).
 func (s PG) HasGroupTierAssignments(ctx context.Context) (bool, error) {
-	var has bool
-	err := s.Pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM governance_assignments WHERE subject_type = 'group')`).Scan(&has)
-	if err != nil {
-		return false, fmt.Errorf("store: check group-tier governance assignments: %w", err)
-	}
-	return has, nil
+	return s.hasGroupTierRows(ctx, "governance_assignments", "governance assignments")
 }
 
 func scanGovernanceProfile(row pgx.Row) (types.GovernanceProfile, error) {

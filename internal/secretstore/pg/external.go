@@ -144,11 +144,15 @@ func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFun
 // DeleteEverywhere calls could deadlock through one, which Postgres detects
 // and one retries.
 func lockRow(ctx context.Context, tx pgx.Tx, owner, name string) error {
-	key := int32(crc32.ChecksumIEEE([]byte(owner + "\x00" + name)))
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.SecretRowLockClass, key); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.SecretRowLockClass, rowLockKey(owner, name)); err != nil {
 		return fmt.Errorf("lock the row: %w", err)
 	}
 	return nil
+}
+
+// rowLockKey is lockRow's second advisory-lock key for the row.
+func rowLockKey(owner, name string) int32 {
+	return int32(crc32.ChecksumIEEE([]byte(owner + "\x00" + name)))
 }
 
 // removeOld removes the object a row pointed to before a Put moved it. The Put

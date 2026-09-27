@@ -139,39 +139,39 @@ const (
 	// ssoTokenAccountPinRefusal: the sign-in captured a different account/role
 	// than the one this deployment pinned at launch. It names BOTH pairs because
 	// the person reading it on a terminal is the one who has to pick again.
-	ssoTokenAccountPinRefusal = "this sign-in captured account %s / role %s, but this deployment pins AWS sign-ins for this agent to account %s / role %s — sign in again and choose that account and role, or ask an admin to change the pin"
+	ssoTokenAccountPinRefusal = "This sign-in captured account %s / role %s, but this deployment pins AWS sign-ins for this agent to account %s / role %s — sign in again and choose that account and role, or ask an admin to change the pin"
 	// ssoTokenModelAccountRefusal: "Wardyn holds both halves — say so at
 	// capture". Refused rather than warned: a wrong-account blob pre-empts
 	// every other Bedrock lane the moment it is stored, because
 	// resolveBedrockAuth selects a stored SSO credential first.
-	ssoTokenModelAccountRefusal = "this session is for account %s; the configured Bedrock model lives in account %s — a run using this session would be refused by IAM, so it was not stored"
+	ssoTokenModelAccountRefusal = "This session is for account %s; the configured Bedrock model lives in account %s — a run using this session would be refused by IAM, so it was not stored"
 	// ssoTokenAccountShapeRefusal / ssoTokenRoleShapeRefusal: the capture named
 	// an account or role that is not shaped like one. It names the SHAPE rather
 	// than echoing the value back: the person reading it on the login terminal
 	// picked from a portal list, so "that is not a 12-digit account" tells them
 	// the pick did not resolve — and the value itself is already in their
 	// terminal.
-	ssoTokenAccountShapeRefusal = "this sign-in did not resolve to a 12-digit AWS account id, so nothing was stored — sign in again and choose an account from the list"
+	ssoTokenAccountShapeRefusal = "This sign-in did not resolve to a 12-digit AWS account id, so nothing was stored — sign in again and choose an account from the list"
 	// DRAFT (M2 canon pending)
-	ssoTokenRoleShapeRefusal = "this sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
+	ssoTokenRoleShapeRefusal = "This sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
 	// dispatchRosterUnreadableRefusal answers a DISPATCH whose roster read failed
 	// (enforceReadableRosterForCredential, runs_dispatch_llm_mechanism.go): the
 	// roster is what says whose model credential this run may use, and serving
 	// one from a namespace the daemon could not resolve is the outage that cannot
 	// be taken back. Surfaces as the run's failure reason, not an HTTP body.
-	dispatchRosterUnreadableRefusal = "the agent roster could not be read, so Wardyn cannot tell whose model credential this run may use — nothing was started; try again in a moment"
+	dispatchRosterUnreadableRefusal = "The agent roster could not be read, so Wardyn cannot tell whose model credential this run may use — nothing was started; try again in a moment"
 	// harnessLoginRosterUnavailable answers a LAUNCH whose roster read failed
 	// (authorizeHarnessLogin, harnesscred.go): the pin and the admin's access
 	// portal both come off that row, so there is nothing to bind a capture to.
 	// It lives in THIS file, with the rest of the pin's vocabulary, because
 	// harnesscred.go sits against the 1000-line file-size gate — the same reason
 	// csrf.go was split out of http.go.
-	harnessLoginRosterUnavailable = "the agent roster could not be read, so this sign-in cannot be bound to the account and access portal it was meant for — try again in a moment"
+	harnessLoginRosterUnavailable = "The agent roster could not be read, so this sign-in cannot be bound to the account and access portal it was meant for — try again in a moment"
 	// harnessDisconnectRosterUnavailable answers a DISCONNECT whose roster read
 	// failed (handleHarnessDisconnect, harnesscred.go): the roster is what says
 	// whether captures live per-person or deployment-wide, so without it there is
 	// no way to tell which stored session this would remove.
-	harnessDisconnectRosterUnavailable = "the agent roster could not be read, so Wardyn cannot tell whose stored sign-in this would remove — try again in a moment"
+	harnessDisconnectRosterUnavailable = "The agent roster could not be read, so Wardyn cannot tell whose stored sign-in this would remove — try again in a moment"
 	// credentialConfinementAdvisorySentence (0.8 #150): the confinement-visibility
 	// WARNING for a run whose model credential is a stored AWS SSO session
 	// delivered to the sandbox at dispatch, under a confinement class weaker than
@@ -181,7 +181,7 @@ const (
 	// exactly what "weaker" means for this run, and it is a WARNING, never a
 	// refusal: a deployment offering only the weakest confinement class must
 	// still be able to launch.
-	credentialConfinementAdvisorySentence = "this run's model credential is a stored AWS SSO session, delivered to the sandbox at dispatch — it is not counted toward the confinement floor, and the enforced class %s is weaker than the Vault (CC3) floor a credential like this would otherwise require"
+	credentialConfinementAdvisorySentence = "This run's model credential is a stored AWS SSO session, delivered to the sandbox at dispatch — it is not counted toward the confinement floor, and the enforced class %s is weaker than the Vault (CC3) floor a credential like this would otherwise require"
 )
 
 // awsAccountID matches an AWS account id. ONE var for the package: the ARN

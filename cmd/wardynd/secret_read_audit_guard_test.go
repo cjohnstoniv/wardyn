@@ -856,7 +856,7 @@ func TestEverySecretReadIsAuditedOnce(t *testing.T) {
 
 	// Guard the guard: the scan must see the reads this rule was written for.
 	for _, fn := range []string{
-		guardModPath + "/cmd/wardynd.loadOrCreateSecret",
+		guardModPath + "/cmd/wardynd.loadBootKey", // loadOrCreateSecret's read
 		guardModPath + "/internal/api.readHarnessBlob",
 		"(*" + guardModPath + "/internal/api.Server).handleInternalInjection",
 		"(*" + guardModPath + "/internal/broker.Broker).mintGitPAT",

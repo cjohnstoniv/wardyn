@@ -48,7 +48,7 @@ import (
 )
 
 // pushContentUnattendedBody is the refusal a raise for an unattended run gets.
-const pushContentUnattendedBody = "this run is unattended, so a push that needs review is refused rather than held"
+const pushContentUnattendedBody = "This run is unattended, so a push that needs review is refused rather than held"
 
 // maxPushPathListsPerRun bounds the path lists one run may store, each up to
 // types.PushPathListMaxBytes (owner ruling, #1087). admitPushPathList checks
@@ -186,7 +186,7 @@ func (s *Server) admitPushPathList(w http.ResponseWriter, r *http.Request, runID
 	return true
 }
 
-const pushPathListCapBody = "this run has held too many pushes for review; no more will be accepted"
+const pushPathListCapBody = "This run has held too many pushes for review; no more will be accepted"
 
 // recordPushPathList keeps a raise's verified list with the approval it raised
 // or was deduplicated to (the same push, so the same list), and the first time

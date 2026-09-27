@@ -53,8 +53,7 @@ export const C = {
 };
 
 // WORKSPACE_DETAIL_DRAFT
-// DRAFT (M2 canon pending): new strings staged in
-// local/v074/canon/ui-workspaces-approvals.md — not part of the frozen `C`
+// DRAFT (M2 canon pending): new strings staged for review — not part of the frozen `C`
 // export above (workspace-copy.test.ts's byte-checks parse only `C`).
 export const WORKSPACE_DETAIL_DRAFT = {
   // F5-F6: the Add-workspace dialog's one honest image choice — replaces the

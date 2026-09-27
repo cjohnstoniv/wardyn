@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Recording-Mode profile review — a drawer that calls POST /runs/{id}/profile and
+// Recording-Mode profile review — a drawer that calls POST /runs/{id}/profile/synthesize and
 // renders the synthesized least-privilege proposal. The layout CLONES
 // compose-review.tsx (overall-risk header, summary grid, deterministic risk rows,
 // warnings, verbatim inline_policy) and ADDS the raw observations block (egress
@@ -188,7 +188,7 @@ function ProfileBody({
   // 0.7 §B: both save paths below POST /policies, which stays operatorOnly
   // (routes.go:294) — stored run_policies are selectable CONTENT, and a
   // security-tier write path there re-opens the PF-22 mint through a side
-  // door. The REVIEW itself (POST /runs/{id}/profile) is member-tier and stays
+  // door. The REVIEW itself (POST /runs/{id}/profile/synthesize) is member-tier and stays
   // open to them; this drawer became reachable by a security admin when
   // record-pane.tsx moved to useSecurityOperator, so the gate belongs here,
   // beside the call it actually guards, rather than on the button that opens

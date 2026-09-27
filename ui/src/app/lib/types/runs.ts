@@ -190,6 +190,11 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // Set while a kept run's stop could not be confirmed (migration 0088,
+  // #1060): the latest stop error and when containment first failed. The
+  // lease sweep retries every pass and clears both once the stop lands.
+  containment_error?: string;
+  containment_error_at?: string;
   // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
   // the id of the model provider chooseModelProvider (#526) resolved this run
   // to at create time. The KIND is not here (it can change later on the
@@ -198,6 +203,11 @@ export interface AgentRun {
   // block serving no provider for the agent, or a run created before this
   // field existed.
   model_provider_id?: string;
+  // AgentRun.Preset / PresetVersion (migration 0087, #1143): the launch
+  // preset this run was expanded from, and which version. Absent for a run
+  // sent as an explicit spec.
+  preset?: string;
+  preset_version?: number;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
@@ -281,7 +291,7 @@ export interface AttachModeMsg {
   holder?: AttachHolder;
 }
 
-// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach-holder).
+// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach/holder).
 // Attach is a SHARED session: without this, opening the run page while a CLI
 // holds it silently competes for the same PTY.
 export interface AttachHolder {

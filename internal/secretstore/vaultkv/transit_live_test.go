@@ -26,9 +26,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func TestLive_Transit(t *testing.T) {
+	testfloor.Mark(t, "kek-vault")
+	testfloor.Mark(t, "kek-openbao")
 	a, _, _ := liveSetup(t)
 	mount := "wardyn-transit-" + uuid.NewString()[:8]
 	a.must(http.MethodPost, "sys/mounts/"+mount, map[string]any{"type": "transit"})
@@ -115,7 +118,9 @@ path "%[1]s/decrypt/rsa" { capabilities = ["update"] }
 			t.Skip("WARDYN_TEST_PG not set")
 		}
 		pool := throwawayDB(t)
-		secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) })
+		newStore := func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) }
+		secretstoretest.RunConformance(t, newStore)
+		secretstoretest.RunTamperConformance(t, newStore, secretstoretest.FlipCiphertext(pool))
 	})
 
 	// `wardynd -rewrap`'s body on the live server: local rows move onto

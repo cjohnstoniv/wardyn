@@ -48,7 +48,7 @@ func invocations(t *testing.T, counter string) int {
 	return len(strings.Fields(string(b)))
 }
 
-// B11a-F7. delegateRefresh had no single-flight: the proxy single-flights per
+// delegateRefresh had no single-flight: the proxy single-flights per
 // HOST (inject.go's reMu), so N runs each POSTing /internal/injection inside the
 // 10-minute margin arrived here as N concurrent refreshes, each spawning its own
 // `claude -p ok` — N processes writing the ONE resident ~/.claude credentials
@@ -207,7 +207,7 @@ func TestCurrent_NegativeCacheExpires(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F7: a SINGLE caller is unchanged — it still
+// NEGATIVE CONTROL for a SINGLE caller is unchanged — it still
 // delegates, still gets the refreshed token, and the single-flight adds no
 // extra invocation of its own.
 func TestCurrent_SingleCaller_StillDelegatesExactlyOnce(t *testing.T) {

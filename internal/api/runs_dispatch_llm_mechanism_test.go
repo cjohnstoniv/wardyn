@@ -399,10 +399,40 @@ func TestLLMMechanismRefusal_NamesBothLanes(t *testing.T) {
 	}
 }
 
+// TestCreateDoorIsModelRun pins the ONE predicate llmMechanismGateApplies and
+// enforceRunModelProvider (run_model_provider.go) now share (#767 step 2): a
+// bug in either used to have to be found and fixed twice, since each carried
+// its own copy of this same question.
+func TestCreateDoorIsModelRun(t *testing.T) {
+	wsID := uuid.New()
+	for _, tc := range []struct {
+		name string
+		req  createRunRequest
+		want bool
+	}{
+		{name: "a non-interactive workspace launch IS a model run at this door (#767)",
+			req: createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: false}, want: true},
+		{name: "an interactive workspace run is human-driven, so it IS a model run",
+			req: createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: true}, want: true},
+		{name: "an ordinary agent run", req: createRunRequest{Agent: "claude-code", Task: "fix it"}, want: true},
+		{name: "an exec run runs a plain shell command",
+			req: createRunRequest{Agent: "claude-code", TaskMode: "exec", Task: "ls"}, want: false},
+		{name: "a harness login run is never a model run, whatever isModelRun would answer",
+			req: createRunRequest{Agent: "claude-code", Task: harnessLoginTask, WorkspaceID: &wsID, Interactive: false}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := createDoorIsModelRun(tc.req); got != tc.want {
+				t.Errorf("createDoorIsModelRun(%+v) = %v, want %v", tc.req, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestEnforceCreateLLMMechanism_RefusesBeforeARunExists is the create/Review
 // half: the same declaration, the same sentence, answered as a 422 — and, in
 // legacy open mode, nothing refused at all.
 func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
+	wsID := uuid.New()
 	cases := map[string]struct {
 		req         createRunRequest
 		sc          types.SiteConfig
@@ -430,6 +460,25 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 		"exec run": {
 			req: createRunRequest{Agent: "claude-code", TaskMode: "exec"},
 			sc:  agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
+		},
+		// #767 parity: a non-interactive `--workspace` launch is the ordinary
+		// CLI/console shape (docs/OPERATIONS.md), never a scan — the create door
+		// never sets run.WorkspaceID from req.WorkspaceID (seedRequestWorkspace),
+		// so dispatch decides this exact shape IS a model run. Before the fix,
+		// llmMechanismGateApplies read workspace_id + non-interactive as a scan
+		// and skipped the gate entirely, admitting a run dispatch would have
+		// refused for the wrong lane.
+		"declared api key, bedrock would dispatch, workspace_id + non-interactive": {
+			req:         createRunRequest{Agent: "claude-code", Task: "ship it", WorkspaceID: &wsID, Interactive: false},
+			sc:          agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
+			wantRefused: true,
+		},
+		// The parity's other half: the SAME shape under a mechanism the resolved
+		// transport actually satisfies must be admitted, exactly like its no-workspace
+		// twin above — workspace_id must never turn an admit into a refusal either.
+		"declared bedrock, bedrock dispatches, workspace_id + non-interactive": {
+			req: createRunRequest{Agent: "claude-code", Task: "ship it", WorkspaceID: &wsID, Interactive: false},
+			sc:  agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer}),
 		},
 	}
 	for name, c := range cases {
@@ -640,7 +689,7 @@ func TestRecordLaunchRefusedMintsNothing(t *testing.T) {
 	}
 }
 
-// TestDispatch_UnreadableRosterRefusesTheCredential (V1-r2 fix-s2 review R-02).
+// TestDispatch_UnreadableRosterRefusesTheCredential (V1-r2 fix-s2).
 //
 // The scope that decides WHOSE captured AWS SSO session a run is served — and
 // whether the operator-wide Bedrock bearer key is reachable at all — is resolved
