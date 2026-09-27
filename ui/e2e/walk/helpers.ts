@@ -374,6 +374,42 @@ export async function openLoginPane(page: Page): Promise<void> {
 }
 
 /**
+ * #891: the same door as openLoginPane, but for the ONE sign-in in the walk
+ * that scripts/kind-sso-walk.sh's registry step guarantees is a genuine cold
+ * pull — the aws-sso login image is served from a local registry under a
+ * fresh tag every walk (never `kind load`ed any more), so the kubelet has
+ * never seen this manifest and must actually pull it. On a warm node
+ * (`kind load`, or a tag it already holds) the step goes start -> wait with no
+ * "download" li ever rendered, so this assertion is not vacuous — dropping
+ * the runner Role's `events: list` (the fail-closed path the k8s runner reads
+ * pod Events through, #881) reproduces that same skip, which is how this was
+ * proven non-vacuous by hand rather than asserted from a guess.
+ *
+ * Polls from the moment "Start login" is clicked, before signInThroughPane's
+ * race to capture — the download li can be gone within seconds on a small
+ * image, so this must not wait for openLoginPane's own return (which only
+ * guarantees STEP_START, not that a caller saw everything after it).
+ */
+export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> {
+  await page.goto("/setup");
+  const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
+  await expect(cta).toBeVisible({ timeout: 60_000 });
+  await cta.click();
+  const start = page.getByRole("button", { name: "Start login" });
+  if (await start.isVisible().catch(() => false)) {
+    await start.click();
+  }
+  const progress = page.getByTestId("signin-progress").first();
+  await expect(progress).toContainText(SIGNIN_PROGRESS.STEP_START);
+
+  const downloadStep = progress.getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE });
+  await expect(
+    downloadStep,
+    "the download step never lit — either the aws-sso image was not a cold pull (see scripts/kind-sso-walk.sh's registry step), or the runner Role lost events:list (#881's fail-closed path)",
+  ).toHaveAttribute("data-state", "active", { timeout: 90_000 });
+}
+
+/**
  * Wait for the SANDBOX to announce that it is running the sign-in itself.
  *
  * 0.7.5 (lane login-sandbox-selfrun): the aws-sso image creates the `wardyn`

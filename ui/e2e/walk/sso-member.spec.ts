@@ -66,6 +66,7 @@ import {
   me,
   modelAccess,
   openLoginPane,
+  openLoginPaneAssertingColdPull,
   putRoster,
   seen,
   signInThroughPane,
@@ -239,7 +240,13 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   // which a boot-time sign-in against a pre-approving fake can reach before the
   // assertion's first poll. signInThroughPane() takes the sandbox's own banner
   // or the server's moved capture instead — see there.
-  await signInThroughPane(page, openLoginPane);
+  //
+  // #891: this is the walk's ONE genuinely cold pull — scripts/kind-sso-walk.sh
+  // now serves the aws-sso image from a local registry under a fresh tag every
+  // run instead of `kind load`ing it, so the door's download step must light
+  // here. The re-sign-in later in this file (the heal, after a pin contradiction)
+  // reuses the plain openLoginPane: by then the node already pulled this image.
+  await signInThroughPane(page, openLoginPaneAssertingColdPull);
 
   // THE MEMBER'S OWN STATUS, from the member's own session.
   await page.goto("/setup");

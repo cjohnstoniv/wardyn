@@ -308,6 +308,15 @@ jobs:
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # #703 (T-43): test/awsssofake.requireDockerBinary skips (not fails) every
+      # test that needs wardyn/agent-aws-sso:local when the image is absent —
+      # TestDeviceCodeLoginRealCLI here, and TestParseRealAWSCLICacheFile /
+      # TestAWSSSOConfigAcceptedByRealBotocore in the other packages this suite
+      # also covers. Nothing built it here before, so the "fake lane" never ran
+      # for real in this job. scripts/test-report.sh's new REQUIRE_ALL floor for
+      # suite "docker" (below) is what turns a silent skip back into red.
+      - name: Build agent-aws-sso image (local only — the real AWS CLI these tests drive)
+        run: docker build -f deploy/images/aws-sso/Dockerfile -t wardyn/agent-aws-sso:local .
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -332,9 +341,26 @@ jobs:
   #                             been run live.
   #   make test-e2e-subscription  needs a real vendor subscription credential,
   #                             which no CI runner has or should have.
-  #   make test-e2e-concurrent  not wired; no blocker other than runner time.
   #
   # A regression in any of those still ships silently.
+  #
+  # `make test-e2e-concurrent` (#697, T-37) is wired below as its own job —
+  # it needed no blocker to clear, only a job. It is NOT the ui/e2e/walk
+  # kind-cluster sign-in concurrency spec #697 also names (two Dex members
+  # signing in to AWS SSO at once, per-owner /_seen attribution, the
+  # L-identity-1 lock): that spec is real, separate follow-on work this PR
+  # does not build — see the PR body. This job proves the OTHER half of
+  # #697's ask that was already sitting finished and unwired: the compose
+  # control plane's own shared-host concurrency safety (scripts/test-concurrent.sh).
+  test-e2e-concurrent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Docker available
+        run: docker --version
+      - name: Shared-host concurrency test (two project-scoped stacks up at once)
+        run: make test-e2e-concurrent
 
   # ── B7a: the BYOI wrap lane ────────────────────────────────────────────────
   # `make test-e2e-byoi` ran in NO workflow. It is also the lane that reproduces

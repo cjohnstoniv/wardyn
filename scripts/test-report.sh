@@ -205,6 +205,16 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
   fi
+  # #703 (T-43): these three top-level funcs all self-skip
+  # (test/awsssofake.SkipUnlessDocker + requireDockerBinary's own
+  # `docker image inspect wardyn/agent-aws-sso:local`) whenever that image is
+  # absent — which was EVERY run of the "docker" suite in nightly.yml's
+  # docker-tagged-live job, since nothing there built it. Naming them here
+  # turns "the fake lane never really ran" into a red job the moment that stops
+  # being true, the same shape as the three floors above.
+  if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore'
+  fi
 fi
 if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then
   REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"
