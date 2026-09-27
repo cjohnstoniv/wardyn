@@ -60,6 +60,15 @@ export interface ApprovalRequest {
   // from the run row (#567). Absent for a run created before run limits; the
   // deployment's approval expiry still applies.
   expires_at?: string;
+  // held / held_until (#1197): internal/approval.Hold(this, now),
+  // projected at response time — see isHeld below, the ONE reader of these
+  // two fields. held is present on every row; held_until only on a row whose
+  // hold is bounded (egress wait_for_review, an Azure DevOps capability
+  // escalation, push_content) — absent for an unconditional hold (tool_call,
+  // credential_reauth) and for any row that is not held. Both are absent on
+  // a DECIDED row.
+  held?: boolean;
+  held_until?: string;
 }
 
 // canDecideApproval mirrors internal/api/approvals.go's decide() exactly: an
@@ -127,56 +136,18 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 // This file is the right home for the same reason decisionArgs is: it is the
 // module both sides already depend on, and it is never mocked.
 
-const HOLD_TIMEOUT_MS = 30_000;
-
-// The proxy's own ceiling for an Azure DevOps capability escalation
-// (internal/egress/proxy/credhold.go's maxCapabilityHoldTimeout) — exported
-// so ado-capability-card.tsx's stillHeld() and isHeld() below read ONE
-// number instead of two independently-maintained 240_000s that could drift.
-export const ADO_HOLD_WINDOW_MS = 240_000;
-
-// clamped to it server-side). Used as isHeld's push_content window; exported
-// so push-content-card.tsx's own held-vs-expired timer can schedule its
-// re-render off the SAME number isHeld uses — two independently-typed
-// 600_000s would be two constants that could drift apart.
-export const PUSH_HOLD_CEILING_MS = 600_000;
-
-// True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
-// an unparseable timestamp fails TOWARD showing the hold (not stale), the same
-// direction isHeld's own unparseable case below takes.
-function isStale(requestedAt: string, ceilingMs: number): boolean {
-  const t = Date.parse(requestedAt);
-  return !Number.isNaN(t) && Date.now() - t >= ceilingMs;
-}
-
-// A held request is one the sandbox is still parked on. THREE shapes reach
-// that state, and only one of them carries a mode:
-//
-//  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
-//    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
-//    -deadline mirrors the operator's own approval ceiling and normally denies
-//    the call BEFORE the row's own server-side expiry sweeps it EXPIRED), and
-//    the scope it raises is {tool,cmd,env} with no
-//    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
-//    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
-//    bounds the egress case — the row's own server-side expiry ends it, and
-//    only that ends it: #509 — a client-side stale-hold ceiling (60 minutes,
-//    #160) was declaring a row dead while the server kept the agent parked on
-//    it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h default,
-//    cmd/wardynd/boot_flags.go), which a returning operator's own inbox never
-//    agreed with. A PENDING row is live and still decidable until the
-//    approval.ExpireStale sweeper actually moves it to EXPIRED — no client
-//    constant can know better than the row's own state.
-//  - egress wait_for_review — the proxy carries the mode in the approval's
-//    requested_scope so the UI can flag it, but PENDING alone doesn't mean
-//    "still holding the sandbox": the connection fails closed at
-//    HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
-//    afterward.
-//  - push_content — the SAME shape as egress wait_for_review, not tool_call:
-//    the proxy parks git for a BOUNDED window (push_rules.hold_seconds, at
-//    most maxHoldTimeout) and then refuses with a timeout, leaving the row
-//    PENDING for the sweeper's own 24h window — see isHeld's own arm below
-//    for the retry-re-hold caveat.
+// isHeld: a held request is one the sandbox is still parked on. #1197
+// moved the rule server-side (internal/approval.Hold — same arm order, same
+// three windows, ported verbatim from what this function used to compute
+// client-side) and projects its answer onto the wire as `held`/`held_until`
+// (ApprovalRequest above). This is now a ONE-LINE reader of those two fields:
+// PENDING alone is not enough (a decided row clears both), held answers
+// whether the server currently considers this row parked, and held_until —
+// present only on a BOUNDED hold (egress wait_for_review, an Azure DevOps
+// capability escalation, push_content; absent for the two unconditional
+// holds, tool_call and credential_reauth) — is the boundary this reader
+// checks itself against, so the UI flips to "not held" the instant the
+// window passes rather than waiting for the next poll.
 //
 // Exported because the run cockpit's command bar and the board's card state
 // the same fact ("N waiting · sandbox held"). Two copies of this test would be
@@ -284,39 +255,8 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
 }
 
 export function isHeld(a: ApprovalRequest): boolean {
-  // An Azure DevOps capability escalation is a tool_call row, but the proxy
-  // releases ITS hold after ADO_HOLD_WINDOW_MS (credhold.go's
-  // maxCapabilityHoldTimeout) while the row stays PENDING —
-  // ado-capability-card.tsx counts down the same ADO_HOLD_WINDOW_MS and
-  // already flips its own text to "no longer waiting" at that point. Without
-  // this arm the board and the cockpit header kept saying "sandbox held" after
-  // the card itself said the opposite (#725/F1).
-  if (isAdoCapabilityRequest(a)) return a.state === "PENDING" && !isStale(a.requested_at, ADO_HOLD_WINDOW_MS);
-  // #509 — PENDING alone is live for both of these, at any age: see the
-  // tool_call bullet above for why no client ceiling belongs here.
-  if (a.kind === "tool_call") return a.state === "PENDING";
-  // A credential_reauth row is raised BECAUSE the proxy is holding a request.
-  // It carries no first_use mode of its own — the mode vocabulary belongs to
-  // the egress lane — so without this it would read as a passive pending and
-  // the run would show no hold while a model call was parked.
-  if (a.kind === "credential_reauth") return a.state === "PENDING";
-  // push_content is DIFFERENT from tool_call/credential_reauth (review
-  // finding, #181): the proxy parks git for at most push_rules.hold_seconds
-  // (internal/egress/proxy/push_hold.go's defaultPushHold, 120s unset, or the
-  // caller's own value clamped to maxHoldTimeout, 600s) and then REFUSES with
-  // a timeout — the row stays PENDING (holdPush's own doc: "a hold that times
-  // out leaves its row PENDING, and a retry waits on that same row instead of
-  // raising a second one"). So past the hold window a PENDING push_content
-  // row is a PASSIVE pending, exactly like an egress wait_for_review past its
-  // own HOLD_TIMEOUT_MS — the sandbox is NOT parked on it, though a retry of
-  // the same push (identical commits) rejoins the SAME row and re-enters the
-  // hold. No console surface reads a run's resolved push_rules.hold_seconds
-  // today, so PUSH_HOLD_CEILING_MS (the proxy's own absolute ceiling,
-  // maxHoldTimeout) is the conservative bound: this never reports "not held"
-  // while the proxy could still legitimately be holding it.
-  if (a.kind === "push_content") return a.state === "PENDING" && !isStale(a.requested_at, PUSH_HOLD_CEILING_MS);
-  if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
-  const requestedAt = Date.parse(a.requested_at);
-  if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
-  return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
+  if (a.state !== "PENDING" || !a.held) return false;
+  if (!a.held_until) return true; // an unconditional hold (tool_call, credential_reauth)
+  const until = Date.parse(a.held_until);
+  return Number.isNaN(until) || Date.now() < until;
 }

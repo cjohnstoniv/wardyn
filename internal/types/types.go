@@ -307,6 +307,10 @@ type AgentRun struct {
 	// OperatorOwned is identity.Claims.OperatorOwned, stored (migration 0089)
 	// so dispatch and a revive's re-mint read what create decided.
 	OperatorOwned bool `json:"-"`
+	// CreatedVia is the registered portal (types.Delegate) this run was
+	// launched through on the person's behalf (migration 0094, #1142); nil for
+	// a run its creator launched themselves. The owner is still the person.
+	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -326,6 +330,14 @@ type AgentRun struct {
 	HasRecording         bool    `json:"has_recording"`
 	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
+	// Attention is #1197's projection: what this LIVE run is waiting on,
+	// and who (in the caller's own view) can clear it. DERIVED, never stored,
+	// like the three recording fields above — projected only by the
+	// GET /runs?view=/GET /me/attention read paths, and only onto a live
+	// (non-terminal, non-lease-ended) row. Nil everywhere else: an ended run,
+	// a live run this lane's rule has nothing to say about, and every read
+	// path that does not opt into `view`.
+	Attention *RunAttention `json:"attention,omitempty"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.
@@ -638,6 +650,15 @@ type ApprovalRequest struct {
 	// when the run has neither (a run created before migration 0072); the
 	// deployment's approval expiry still applies to every row.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Held / HeldUntil are #1197's projection of approval.Hold(this, now)
+	// — computed at response time, never stored. Held is set on every row;
+	// HeldUntil only on a row whose hold is bounded (egress wait_for_review,
+	// an Azure DevOps capability escalation, push_content), nil for an
+	// unconditional hold (tool_call, credential_reauth) and for any row that
+	// is not held at all. Both are zero-valued (false / nil) on a DECIDED
+	// row — a decision already answered the question a hold was asking.
+	Held      bool       `json:"held,omitempty"`
+	HeldUntil *time.Time `json:"held_until,omitempty"`
 }
 
 // ApprovalDecision is what a human — or the sweeper, for a stale-PENDING

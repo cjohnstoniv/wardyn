@@ -216,6 +216,26 @@ export interface AgentRun {
   // sent as an explicit spec.
   preset?: string;
   preset_version?: number;
+  // AgentRun.CreatedVia (migration 0094, #1142): the registered portal this
+  // run was launched through on its owner's behalf. Absent for a run its
+  // owner launched themselves.
+  created_via?: string;
+  // internal/types/attention.go's RunAttention (#1197) — what this LIVE
+  // run is waiting on and who (in the caller's own console view) can clear
+  // it, projected only when the caller's GET /runs (or GET /me/attention)
+  // request opted into the `view` contract. Absent on every other read, and
+  // on a terminal or lease-ended run even under `view`. A SEPARATE named
+  // interface (not inline), not just style: runs.wire.fields.test.ts's
+  // tsInterfaceKeys scrapes an interface body LINE BY LINE with no brace
+  // tracking, so an inline nested object's own keys (kind/by/pending) would
+  // misread as top-level AgentRun keys and fail that parity test.
+  attention?: RunAttention;
+}
+
+export interface RunAttention {
+  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  by: "you" | "owner" | "admin";
+  pending: number;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

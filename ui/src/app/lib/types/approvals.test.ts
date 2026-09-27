@@ -5,7 +5,6 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  ADO_HOLD_WINDOW_MS,
   canDecideApproval,
   decisionArgs,
   isHeld,
@@ -13,16 +12,24 @@ import {
   type ApprovalRequest,
 } from "./approvals";
 import { aheadByHours } from "../test-clock";
+import { heldFieldsFor, TEST_HOLD_WINDOWS } from "../test-hold-fixture";
 
-const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
-  id: "a1",
-  run_id: "run-1",
-  kind: "tool_call",
-  requested_scope: {},
-  state: "PENDING",
-  requested_at: new Date().toISOString(),
-  ...over,
-});
+// #1197: held/held_until are now server fields (internal/approval.Hold's
+// projection), so this fixture computes them the same way the server would —
+// heldFieldsFor mirrors Hold's own arms — letting every existing case below
+// keep constructing rows by kind/requested_at/state exactly as it always has.
+const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => {
+  const base = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "tool_call" as ApprovalKind,
+    requested_scope: {},
+    state: "PENDING" as const,
+    requested_at: new Date().toISOString(),
+    ...over,
+  };
+  return { ...base, ...heldFieldsFor(base) };
+};
 
 // canDecideApproval is the ONE predicate both approvals.tsx and run-detail.tsx
 // gate their decide buttons on — it must mirror internal/api/approvals.go's
@@ -150,7 +157,7 @@ describe("isHeld — an Azure DevOps capability escalation is a bounded hold", (
   });
 
   it("a PENDING ADO escalation 5 minutes old is past the 240s window: not held", () => {
-    expect(ADO_HOLD_WINDOW_MS).toBe(240_000);
+    expect(TEST_HOLD_WINDOWS.ado).toBe(240_000);
     expect(isHeld(ado({ requested_at: new Date(Date.now() - 5 * 60_000).toISOString() }))).toBe(false);
   });
 

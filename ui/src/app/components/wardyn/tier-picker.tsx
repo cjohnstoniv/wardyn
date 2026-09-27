@@ -115,13 +115,13 @@ export interface TierPickerProps {
    *  when a governance floor actually removed one. A caller whose single
    *  survivor is for some other reason (the host itself has only one tier
    *  installed, or the run's OWN authored policy floor) must pass a neutral
-   *  line instead — e.g. `TIER_PICKER.SOLE_QUALIFIER`. */
+   *  line instead — e.g. `RUN.BARRIER_ONLY_QUALIFIER`. */
   decidedLine?: (tierLabel: string) => string;
   /** The instruction line under a real (2+-tier) choice. Defaults to
    *  `TIER_PICKER.PICK_ONE`, which claims the pick "saves it in this browser
-   *  as the default barrier for new runs" — true for Getting started and
-   *  Settings, FALSE for New Run, where nothing persists across runs
-   *  (#1200 review P2-3). Pass an override wherever that claim doesn't hold. */
+   *  as the default barrier for new runs". No surface persists a pick
+   *  (default-confinement.ts), so a caller must pass an override; New Run
+   *  passes PICK_ONE_PER_RUN (#1200 review P2-3). */
   pickOneNote?: React.ReactNode;
   className?: string;
 }

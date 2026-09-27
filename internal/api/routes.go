@@ -258,6 +258,11 @@ func (s *Server) routes() chi.Router {
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
 			r.Get("/me", s.handleMe)
+			// #1197: the shell's two nav badges in one small object, replacing
+			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
+			// the caller's own view exactly as GET /runs?view= and GET /approvals
+			// are (handleMeAttention's own doc).
+			r.Get("/me/attention", s.handleMeAttention)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
 			// a member reading only their OWN grants (ListCapabilityGrantsFor,
@@ -687,7 +692,8 @@ func (s *Server) routes() chi.Router {
 		// Hybrid enrolment: anonymous enrol, the wdd_ device routes and the admin
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
-		s.mountBrandingRoutes(r) // console branding: anonymous reads, SUPER writes (branding.go)
+		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
+		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)
 	})
 
 	s.mountUI(r)
@@ -706,12 +712,16 @@ func (s *Server) mountRenamedRunRoutes(r chi.Router) {
 	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
 }
 
-// mountRunLeaseRoutes registers a run's end/wait change, its kill and its
-// revive on r — carved out of routes() purely for funlen.
+// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill
+// and its revive on r — carved out of routes() purely for funlen.
 func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// The run's end and wait (#569): owner or SUPER admin, clamped to the
 	// run's captured limits — handleSetRunEndAndWait.
 	r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+	// The run's title (#1197 L2): OWNER ONLY (ownsRun, no admin bypass), any
+	// run state, unlike the lease PATCH above — see run_title.go's own doc
+	// comment for why this stays a separate route.
+	r.Patch("/runs/{id}/title", s.handleSetRunTitle)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
 }

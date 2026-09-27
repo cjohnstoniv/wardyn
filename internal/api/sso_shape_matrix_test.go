@@ -172,14 +172,29 @@ func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc class
 	if code := on(cast.member2); code != http.StatusNotFound {
 		t.Errorf("member2 on member's entity: %d, want 404", code)
 	}
-	if code := on(cast.admin); !reached(code) {
-		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", code)
+	// tierOwnerOnly (#1197 L2): no admin bypass AT ALL — a SUPER admin gets
+	// the SAME 404 a non-owner gets, unlike every other tier.
+	if adminCode := on(cast.admin); rc.ownerTier == tierOwnerOnly {
+		if adminCode != http.StatusNotFound {
+			t.Errorf("admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", adminCode)
+		}
+	} else if !reached(adminCode) {
+		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", adminCode)
 	}
 	code := on(cast.sec)
-	if rc.ownerTier == tierSuper && code != http.StatusNotFound {
-		t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
-	} else if rc.ownerTier == tierSecurity && !reached(code) {
-		t.Errorf("security_admin on a foreign tierSecurity entity: %d, want the handler's own answer", code)
+	switch rc.ownerTier {
+	case tierSuper:
+		if code != http.StatusNotFound {
+			t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
+		}
+	case tierSecurity:
+		if !reached(code) {
+			t.Errorf("security_admin on a foreign tierSecurity entity: %d, want the handler's own answer", code)
+		}
+	case tierOwnerOnly:
+		if code != http.StatusNotFound {
+			t.Errorf("security_admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", code)
+		}
 	}
 }
 

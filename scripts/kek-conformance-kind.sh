@@ -62,6 +62,14 @@ vx vault secrets enable -path=wardyn -version=2 kv >/dev/null
 vx vault secrets enable transit >/dev/null
 vx vault write -f transit/keys/wardyn type=aes256-gcm96 >/dev/null
 vx vault policy write wardyn-kv - >/dev/null <<EOF
+# read on wardyn/config is the documented stanza (docs/OPERATIONS.md's Vault
+# KV Policy section): vaultkv.New's boot-time check that a KV v2 engine is
+# mounted at WARDYN_VAULT_KV_MOUNT (GET wardyn/config) needs it, on every
+# role that opens a KV Store — this harness's role is the only one, so it
+# carries the stanza the docs would otherwise reserve for wardyn-credentials.
+path "wardyn/config" {
+  capabilities = ["read"]
+}
 path "wardyn/data/{{identity.entity.aliases.$ACCESSOR.metadata.service_account_namespace}}/*" {
   capabilities = ["create", "update", "read"]
 }

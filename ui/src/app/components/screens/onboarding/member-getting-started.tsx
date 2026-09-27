@@ -48,6 +48,9 @@ import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
+import { TierPicker, allowedFromFloor, visibleTiers } from "../../wardyn/tier-picker";
+import { TIER_PICKER } from "../../../lib/tier-picker-copy";
+import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { useMemberLocalDirRoot, useUserDrive, useUserType } from "../../wardyn/operator-context";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { MeUserDrive } from "../../../lib/api/health";
@@ -67,6 +70,7 @@ import { modelKeyState, ownKeyApplies } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
 import { ceilingNarrows, walkableDemos } from "../setup/steps";
+import { vaultRequirementReason } from "../setup/environment-step";
 import { useViewAccess } from "../../wardyn/console-view";
 
 // M-6 (D5, admin-member-modes-design.md §4.8): a demo is a sandbox run, a
@@ -173,11 +177,21 @@ export function MemberGettingStarted() {
   // moments do not render, which is the absent-row doctrine: no assignment, no
   // chip, no line, today's card byte-for-byte.
   const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  // #1200 — the SAME read's min_confinement_class: the floor this member's
+  // barrier chip must respect. Undefined for the same two reasons
+  // governanceProfile is (no assignment, or a read that failed), in which
+  // case the chip below falls back to every installed tier, unrestricted.
+  const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
   React.useEffect(() => {
     let active = true;
     policiesApi
       .getDefaultPolicy()
-      .then((p) => active && setGovernanceProfile(p.governance_profile_name))
+      .then((p) => {
+        if (!active) return;
+        setGovernanceProfile(p.governance_profile_name);
+        const f = p.min_confinement_class;
+        setGovFloor(f && (CC_ORDER as string[]).includes(f) ? (f as ConfinementClass) : undefined);
+      })
       .catch(() => {
         /* unknown stays unknown — never name a ceiling that could not be read */
       });
@@ -271,6 +285,19 @@ export function MemberGettingStarted() {
   const strongest = status
     ? strongestAvailable(status.runner.confinement_classes)
     : undefined;
+  // #1200 — the barrier chip's OWN value: installed ∧ allowed (visibleTiers,
+  // the same filter every user-facing picker now applies), never `strongest`
+  // above (which only reads what the HOST can build, blind to this member's
+  // governance floor — the exact gap T-9 exists to close). `strongest` keeps
+  // its own meaning (barrierReady, below) unchanged: whether the host can
+  // build ANY barrier at all, independent of who is asking.
+  const installedTiers = status ? CC_ORDER.filter((cc) => (status.runner.confinement_classes ?? []).includes(cc)) : [];
+  const allowedTiers = allowedFromFloor(govFloor);
+  const visibleBarrierTiers = visibleTiers(installedTiers, allowedTiers);
+  const visibleBarrier = strongestAvailable(visibleBarrierTiers);
+  // The floor requires a tier this host cannot build (T-9) — only possible
+  // when SOME tier is installed but none of it is allowed.
+  const barrierBlocked = installedTiers.length > 0 && visibleBarrierTiers.length === 0;
 
   // U-1: the chip row's own model-access chip, or null for a state outside the
   // five (unknown ≠ not configured — the absent-row doctrine).
@@ -358,10 +385,31 @@ export function MemberGettingStarted() {
             </div>
           ) : (
             <>
+              {/* #1200 review P2-4 — the blocked case renders the SAME
+                  requirement card every other TierPicker consumer shows for
+                  T-9 (a runner exists, but nothing it can build is allowed
+                  under this member's governance floor), never a hover-only
+                  tooltip (invisible on touch and to most AT) behind a
+                  non-canon "blocked" chip. It sits below the chip row, not
+                  inside it — the card is a block, not a pill. */}
+              {barrierBlocked && (
+                <TierPicker
+                  className="mb-2"
+                  tiers={[]}
+                  selected={null}
+                  onSelect={() => {}}
+                  requirementNote={TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE(
+                    CC_META[govFloor ?? "CC1"].label,
+                    // Review R2-5 — the same Vault reason New Run names.
+                    (govFloor === "CC3" && status && vaultRequirementReason(status.runner.driver, status.platform)) ||
+                      `${CC_META[govFloor ?? "CC1"].label} isn't installed on this host.`,
+                  )}
+                />
+              )}
               <div className="flex flex-wrap gap-2">
-                {strongest && (
+                {!barrierBlocked && visibleBarrier && (
                   <Chip tone="neutral">
-                    {T.BARRIER_CHIP(CC_META[strongest].label)}
+                    {T.BARRIER_CHIP(CC_META[visibleBarrier].label)}
                   </Chip>
                 )}
                 {ownKeyCounts ? (
