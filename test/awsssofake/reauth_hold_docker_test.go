@@ -265,12 +265,18 @@ func TestDocker_TheSandboxCacheHoldsOnlyThePlaceholder(t *testing.T) {
 		"111111111111", "AdministratorAccess", true, realToken)
 
 	dir := t.TempDir()
+	// World-readable: this host process's uid and the image's baked-in `agent`
+	// uid (1000) need not match (they don't on a GitHub-hosted runner, whose
+	// default user is uid 1001) — 0600/0700 left the container's `cat` reading
+	// as a uid that does not own these files. The content is synthetic/inert
+	// (the whole point of this test), never a real secret, and t.TempDir()
+	// removes it after the test.
 	for rel, contents := range home {
 		dst := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(dst, []byte(contents), 0o600); err != nil {
+		if err := os.WriteFile(dst, []byte(contents), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
