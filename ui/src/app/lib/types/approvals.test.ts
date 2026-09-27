@@ -14,7 +14,7 @@ import {
 import { aheadByHours } from "../test-clock";
 import { heldFieldsFor, TEST_HOLD_WINDOWS } from "../test-hold-fixture";
 
-// #1197 L1b: held/held_until are now server fields (internal/approval.Hold's
+// #1197: held/held_until are now server fields (internal/approval.Hold's
 // projection), so this fixture computes them the same way the server would —
 // heldFieldsFor mirrors Hold's own arms — letting every existing case below
 // keep constructing rows by kind/requested_at/state exactly as it always has.

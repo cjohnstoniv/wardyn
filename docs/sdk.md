@@ -269,7 +269,7 @@ accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs
 approvals for every caller.
 
 `view=user`/`view=admin` on `GET /api/v1/runs` also projects `attention:
-{kind, by, pending}` onto each LIVE run (#1197 L1b) — what it is waiting on
+{kind, by, pending}` onto each LIVE run (#1197) — what it is waiting on
 (`approval`/`reauth`/`ado_consent`/`lost`) and who, in the caller's own view,
 can clear it (`you`/`owner`/`admin`); `status=needs` (requires `view=`) narrows
 the list to runs where `attention.by=="you"`. Every PENDING row on

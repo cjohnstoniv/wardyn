@@ -60,7 +60,7 @@ export interface ApprovalRequest {
   // from the run row (#567). Absent for a run created before run limits; the
   // deployment's approval expiry still applies.
   expires_at?: string;
-  // held / held_until (#1197 L1b): internal/approval.Hold(this, now),
+  // held / held_until (#1197): internal/approval.Hold(this, now),
   // projected at response time — see isHeld below, the ONE reader of these
   // two fields. held is present on every row; held_until only on a row whose
   // hold is bounded (egress wait_for_review, an Azure DevOps capability
@@ -136,7 +136,7 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 // This file is the right home for the same reason decisionArgs is: it is the
 // module both sides already depend on, and it is never mocked.
 
-// isHeld: a held request is one the sandbox is still parked on. #1197 L1b
+// isHeld: a held request is one the sandbox is still parked on. #1197
 // moved the rule server-side (internal/approval.Hold — same arm order, same
 // three windows, ported verbatim from what this function used to compute
 // client-side) and projects its answer onto the wire as `held`/`held_until`

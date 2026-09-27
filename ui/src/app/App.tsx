@@ -314,7 +314,7 @@ export function RequireSetup({ status }: { status: SetupStatus | null }) {
 }
 
 // What needs an operator's attention — surfaced as the amber count badge on
-// the Runs nav entry — is now GET /me/attention's own needs_you (#1197 L1b:
+// the Runs nav entry — is now GET /me/attention's own needs_you (#1197:
 // internal/api/run_attention.go's attention rule, projected server-side). A
 // second, hand-copied predicate here could disagree with the server about
 // the same run; the Runs board's own local count (screens/runs/board-groups)
@@ -370,7 +370,7 @@ export default function App() {
   }, [auth]);
   const location = useLocation();
 
-  // Both badges come off ONE small object now (#1197 L1b): GET /me/attention
+  // Both badges come off ONE small object now (#1197): GET /me/attention
   // replaces the old two-list join (an unscoped listApprovals + listRuns,
   // joined client-side via board-groups.ts's approvalSignals/needsAttention)
   // with one server-scoped read. Counts, not lists, stay in state: this
@@ -447,7 +447,7 @@ export default function App() {
   // X3-F13: EXCEPT on /runs itself — the board still runs its own listRuns +
   // listApprovals poll (runs.tsx, 3s; L3 folds this into the same
   // GET /me/attention read), so this tick would be a redundant second read of
-  // the same facts while parked there — cheap now (#1197 L1b), but still
+  // the same facts while parked there — cheap now (#1197), but still
   // pure duplication. R-1: that only holds because the board PUBLISHES its
   // counts back up through publishAttention below — pausing this tick with
   // nothing feeding the badges from the other side would freeze both of them

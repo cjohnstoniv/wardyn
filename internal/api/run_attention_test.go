@@ -77,7 +77,7 @@ func TestAttentionRules(t *testing.T) {
 			t.Fatalf("User view: attention = %+v, want {lost you}", got)
 		}
 		if got := s.attention(req, run, nil, true); got == nil || got.Kind != types.AttentionLost || got.By != types.AttentionOwner {
-			t.Fatalf("Admin view: attention = %+v, want {lost owner} (H-3: Sign-in/revive is a User-view action)", got)
+			t.Fatalf("Admin view: attention = %+v, want {lost owner} (Sign-in/revive is a User-view-only action)", got)
 		}
 	})
 
@@ -113,7 +113,7 @@ func TestAttentionRules(t *testing.T) {
 		}
 	})
 
-	t.Run("row 8: a member's held admin-only row (tool_call/push_content/credential) is by=admin (H-3a)", func(t *testing.T) {
+	t.Run("row 8: a member's held admin-only row (tool_call/push_content/credential) is by=admin (only an admin can decide it, so it never counts toward the member's own badge)", func(t *testing.T) {
 		memberReq := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(memberCtxFor("sub-member"))
 		run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-member"}
 		for _, kind := range []types.ApprovalKind{types.ApprovalToolCall, types.ApprovalPushContent, types.ApprovalCredential} {
@@ -142,7 +142,7 @@ func TestAttentionRules(t *testing.T) {
 		}
 	})
 
-	t.Run("row 8: four-eyes on, the creator viewing their own egress is by=admin (H-3a)", func(t *testing.T) {
+	t.Run("row 8: four-eyes on, the creator viewing their own egress is by=admin (the creator cannot clear their own held egress under that switch)", func(t *testing.T) {
 		t.Setenv(envEgressSecondHuman, "1")
 		adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(adminCtx())
 		run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-admin"}
@@ -168,8 +168,8 @@ func TestAttentionRules(t *testing.T) {
 			t.Fatalf("attention = %+v, want {approval you pending=2}", got)
 		}
 
-		// In the ADMIN view, rule 6/7's `by` is unconditionally "owner" (H-3:
-		// Sign-in/revive is a User-view-only action), so a security operator
+		// In the ADMIN view, rule 6/7's `by` is unconditionally "owner"
+		// (Sign-in/revive is a User-view-only action), so a security operator
 		// looking at a MEMBER's run sees a genuine conflict: rule 7's reauth
 		// is "owner" (nobody but the run's own owner clears a reauth), but
 		// the operator CAN decide the plain tool_call (rule 8, operator
@@ -191,7 +191,7 @@ func ptrTime(t time.Time) *time.Time { return &t }
 // fakeRunsFilteredStore is store.RunsFilteredPager backed by authzStore's own
 // run map — an in-memory stand-in for the SQL predicates ListRunsFiltered
 // applies, narrow enough for handleMeAttention's own tests (owner scope +
-// the "active" status only; #1197 L1b's /me/attention never asks for more).
+// the "active" status only; /me/attention never asks for more).
 type fakeRunsFilteredStore struct{ *authzStore }
 
 func (s *fakeRunsFilteredStore) ListRunsFiltered(_ context.Context, f store.RunFilter, _ store.Page) ([]types.AgentRun, error) {
@@ -261,7 +261,7 @@ func TestMeAttentionCounts(t *testing.T) {
 	// capEgressHost is unenforced by default) -> counts toward needs_you.
 	aap.mu.Lock()
 	aap.byID[uuid.New()] = pendingRow(ownRun, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
-	// An admin-only held row on the SAME run -> does NOT count (H-3a).
+	// An admin-only held row on the SAME run -> does NOT count.
 	aap.byID[uuid.New()] = pendingRow(ownRun, types.ApprovalToolCall, `{}`, nil)
 	// A foreign run's own pending approval must never be visible to this member at all.
 	aap.byID[uuid.New()] = pendingRow(foreignRun, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
@@ -277,9 +277,9 @@ func TestMeAttentionCounts(t *testing.T) {
 	}
 }
 
-// TestMeAttentionAdminOnlyRowIsZeroForTheMember is F9's second required
-// H-3a test in isolation: a member whose run is held ENTIRELY on rows only
-// an admin can decide has needs_you==0.
+// TestMeAttentionAdminOnlyRowIsZeroForTheMember pins the same rule in
+// isolation: a member whose run is held ENTIRELY on rows only an admin can
+// decide has needs_you==0.
 func TestMeAttentionAdminOnlyRowIsZeroForTheMember(t *testing.T) {
 	srv, ast, aap := meAttentionFixture(t)
 	memberSess := ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleUser)
@@ -298,5 +298,49 @@ func TestMeAttentionAdminOnlyRowIsZeroForTheMember(t *testing.T) {
 	}
 	if got.PendingApprovals != 1 {
 		t.Fatalf("pending_approvals = %d, want 1", got.PendingApprovals)
+	}
+}
+
+// TestMeAttentionMemberViewAdminIsCoercedToUser is the security pin: a
+// member is not a security operator, so their own ?view=admin on
+// /me/attention must come back downgraded to exactly the ?view=user answer
+// — never the deployment-wide counts the admin view would otherwise give
+// (every PENDING approval, every live run's needs_you). Proven by seeding a
+// foreign run with its own pending approval and asserting neither count
+// moves when the SAME member asks for view=admin.
+func TestMeAttentionMemberViewAdminIsCoercedToUser(t *testing.T) {
+	srv, ast, aap := meAttentionFixture(t)
+	memberSess := ssoSession(t, "sub-member3", "member3@corp.example", oidc.RoleUser)
+
+	ownRun := uuid.New()
+	foreignRun := uuid.New()
+	ast.mu.Lock()
+	ast.runs[ownRun] = types.AgentRun{ID: ownRun, CreatedBy: "sub-member3", State: types.RunRunning}
+	ast.runs[foreignRun] = types.AgentRun{ID: foreignRun, CreatedBy: "sub-someone-else", State: types.RunRunning}
+	ast.mu.Unlock()
+	aap.mu.Lock()
+	// The member's own decidable egress -> counts toward needs_you/pending_approvals.
+	aap.byID[uuid.New()] = pendingRow(ownRun, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
+	// A foreign run's own pending approval: MUST be invisible to this member,
+	// in either view — this is exactly what a broken coercion would leak.
+	aap.byID[uuid.New()] = pendingRow(foreignRun, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
+	aap.mu.Unlock()
+
+	userView := meAttentionOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/attention?view=user", memberSess, ""))
+	adminView := meAttentionOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/attention?view=admin", memberSess, ""))
+
+	if adminView.NeedsYou != userView.NeedsYou {
+		t.Fatalf("member ?view=admin needs_you = %d, want it coerced to the ?view=user answer (%d), not the deployment-wide count",
+			adminView.NeedsYou, userView.NeedsYou)
+	}
+	if adminView.PendingApprovals != userView.PendingApprovals {
+		t.Fatalf("member ?view=admin pending_approvals = %d, want it coerced to the ?view=user answer (%d), not the deployment-wide count",
+			adminView.PendingApprovals, userView.PendingApprovals)
+	}
+	// Pin the actual numbers too, not just their equality: a coercion that
+	// silently returned zero for BOTH views would also pass an equality-only
+	// check.
+	if userView.NeedsYou != 1 || userView.PendingApprovals != 1 {
+		t.Fatalf("?view=user = %+v, want {needs_you:1 pending_approvals:1} (only the member's own run)", userView)
 	}
 }

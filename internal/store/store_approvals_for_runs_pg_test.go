@@ -1,9 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197 L1b: ListPendingApprovalsForRuns — the attention projection's one
-// extra read. Guarded by WARDYN_TEST_PG, same as every other
-// store_*_pg_test.go file.
+// #1197: ListPendingApprovalsForRuns and the two scoped PENDING counts — the
+// attention projection's and GET /me/attention's own reads. Guarded by
+// WARDYN_TEST_PG, same as every other store_*_pg_test.go file.
 package store_test
 
 import (
@@ -80,5 +80,102 @@ func TestPG_ListPendingApprovalsForRuns(t *testing.T) {
 	empty, err := pg.ListPendingApprovalsForRuns(ctx, nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty runIDs: got %v, %v; want an empty slice, no error", empty, err)
+	}
+}
+
+// TestPG_CountPendingApprovals pins the deployment-wide count GET
+// /me/attention's admin view answers with: every PENDING row, regardless of
+// which run raised it, and nothing else.
+func TestPG_CountPendingApprovals(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	runA := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	runB := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+
+	before, err := pg.CountPendingApprovals(ctx)
+	if err != nil {
+		t.Fatalf("CountPendingApprovals (before): %v", err)
+	}
+
+	mkPending := func(runID uuid.UUID) types.ApprovalRequest {
+		ap, err := pg.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"h` + uuid.New().String() + `","mode":"wait_for_review"}`),
+			State:          types.ApprovalPending, RequestedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+		return ap
+	}
+	mkDecided := func(runID uuid.UUID) {
+		ap := mkPending(runID)
+		if _, err := pg.DecideApproval(ctx, ap.ID, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "tester"}); err != nil {
+			t.Fatalf("decide approval: %v", err)
+		}
+	}
+
+	mkPending(runA) // +1 PENDING
+	mkPending(runB) // +1 PENDING, a DIFFERENT run — the count is deployment-wide, not per-run
+	mkDecided(runA) // a decided row must not count
+
+	got, err := pg.CountPendingApprovals(ctx)
+	if err != nil {
+		t.Fatalf("CountPendingApprovals (after): %v", err)
+	}
+	if got != before+2 {
+		t.Fatalf("CountPendingApprovals = %d, want %d (before=%d, +2 PENDING, +0 for the decided row)", got, before+2, before)
+	}
+}
+
+// TestPG_CountPendingApprovalsByRunCreator pins the owner-scoped count GET
+// /me/attention's user view answers with: only PENDING rows on runs this
+// principal created — a foreign run's own PENDING row must never count.
+func TestPG_CountPendingApprovalsByRunCreator(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	owner := "counter-owner-" + uuid.New().String()
+	other := "counter-other-" + uuid.New().String()
+	ownRun := persistRun(t, ctx, pool, func() types.AgentRun { r := newRun(types.RunRunning); r.CreatedBy = owner; return r }()).ID
+	foreignRun := persistRun(t, ctx, pool, func() types.AgentRun { r := newRun(types.RunRunning); r.CreatedBy = other; return r }()).ID
+
+	mk := func(runID uuid.UUID, state types.ApprovalState) {
+		ap, err := pg.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"h` + uuid.New().String() + `","mode":"wait_for_review"}`),
+			State:          types.ApprovalPending, RequestedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+		if state != types.ApprovalPending {
+			if _, err := pg.DecideApproval(ctx, ap.ID, types.ApprovalDecision{State: state, DecidedBy: "tester"}); err != nil {
+				t.Fatalf("decide approval: %v", err)
+			}
+		}
+	}
+
+	mk(ownRun, types.ApprovalPending)  // counts
+	mk(ownRun, types.ApprovalApproved) // decided — does not count
+	mk(foreignRun, types.ApprovalPending) // a foreign run's own PENDING row — must never count
+
+	got, err := pg.CountPendingApprovalsByRunCreator(ctx, owner)
+	if err != nil {
+		t.Fatalf("CountPendingApprovalsByRunCreator: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("CountPendingApprovalsByRunCreator(%q) = %d, want 1 (only the owner's own PENDING row)", owner, got)
+	}
+
+	gotOther, err := pg.CountPendingApprovalsByRunCreator(ctx, other)
+	if err != nil {
+		t.Fatalf("CountPendingApprovalsByRunCreator (other): %v", err)
+	}
+	if gotOther != 1 {
+		t.Fatalf("CountPendingApprovalsByRunCreator(%q) = %d, want 1 (the foreign run's own PENDING row)", other, gotOther)
 	}
 }

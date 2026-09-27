@@ -31,7 +31,7 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   ...over,
 });
 
-// #1197 L1b: held/held_until are now server fields — heldFieldsFor mirrors
+// #1197: held/held_until are now server fields — heldFieldsFor mirrors
 // internal/approval.Hold so this fixture keeps constructing rows by
 // kind/requested_at/state exactly as it always has.
 const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => {

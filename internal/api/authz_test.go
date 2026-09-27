@@ -460,7 +460,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
-	// #1197 L1b: the shell's nav-badge counts, scoped to the caller's own
+	// #1197: the shell's nav-badge counts, scoped to the caller's own
 	// view exactly as GET /runs?view=/GET /approvals are (handleMeAttention's
 	// own doc) — classMember, not classOwner: there is no foreign-id path to
 	// distinguish.
@@ -2125,7 +2125,7 @@ func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, e
 	return n, nil
 }
 
-// ListPendingApprovalsForRuns is #1197 L1b's attention-projection read
+// ListPendingApprovalsForRuns is #1197's attention-projection read
 // (store.ApprovalsForRunsPager) — every PENDING row whose run_id is in
 // runIDs, the same in-memory shape ListApprovalsPageByRunCreator already
 // uses for its own optional-capability twin.
@@ -2143,6 +2143,37 @@ func (a *authzApprovals) ListPendingApprovalsForRuns(_ context.Context, runIDs [
 		}
 	}
 	return out, nil
+}
+
+// CountPendingApprovals / CountPendingApprovalsByRunCreator back GET
+// /me/attention's pending_approvals count in each view — counted here rather
+// than listed, the same in-memory shape as the pagers above.
+func (a *authzApprovals) CountPendingApprovals(_ context.Context) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, ap := range a.byID {
+		if ap.State == types.ApprovalPending {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (a *authzApprovals) CountPendingApprovalsByRunCreator(ctx context.Context, createdBy string) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, ap := range a.byID {
+		if ap.State != types.ApprovalPending {
+			continue
+		}
+		run, err := a.store.GetRun(ctx, ap.RunID)
+		if err == nil && run.CreatedBy == createdBy {
+			n++
+		}
+	}
+	return n, nil
 }
 
 var _ store.ApprovalsForRunsPager = (*authzApprovals)(nil)

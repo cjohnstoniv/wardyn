@@ -24,7 +24,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the run's terminal state transition; a lease-ended run's end time is still its lease end
   (`lost_at`), not this column.
 
-- **One server-side hold/attention rule replaces the console's own client-side copy (#1197 L1b).**
+- **One server-side hold/attention rule replaces the console's own client-side copy (#1197).**
   A PENDING row on `GET /approvals` now carries `held` and, for a bounded hold, `held_until`
   (`internal/approval.Hold` — a verbatim port of the console's former `isHeld`, same three windows).
   Each live run returned from `GET /runs?view=` (and from the new `GET /me/attention`) now carries

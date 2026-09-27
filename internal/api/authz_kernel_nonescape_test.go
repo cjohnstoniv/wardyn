@@ -55,7 +55,7 @@ var kernelDoors = map[string][]string{
 	"ownerCapabilityRefusal": {"d.kind"},
 	// Deciding an approval the person's own run raised.
 	"authorizeUserDecision": {"capEgressHost"},
-	// #1197 L1b: mayDecide's own read-only mirror of authorizeUserDecision's
+	// #1197: mayDecide's own read-only mirror of authorizeUserDecision's
 	// egress-host gate — asked from the attention rule (row 8) and from
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},

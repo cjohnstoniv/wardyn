@@ -32,7 +32,7 @@ func adoScope(t *testing.T, grantID uuid.UUID) json.RawMessage {
 }
 
 // Every case here is ported from ui/src/app/lib/types/approvals.test.ts's
-// now-retired isHeld suite (#1197 L1b): same fixtures, same expectations —
+// now-retired isHeld suite (#1197): same fixtures, same expectations —
 // this table is what proves the Go port is behaviour-identical to the TS
 // rule it replaces.
 func TestHold(t *testing.T) {

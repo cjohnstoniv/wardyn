@@ -326,7 +326,7 @@ type AgentRun struct {
 	HasRecording         bool    `json:"has_recording"`
 	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
-	// Attention is #1197 L1b's projection: what this LIVE run is waiting on,
+	// Attention is #1197's projection: what this LIVE run is waiting on,
 	// and who (in the caller's own view) can clear it. DERIVED, never stored,
 	// like the three recording fields above — projected only by the
 	// GET /runs?view=/GET /me/attention read paths, and only onto a live
@@ -646,7 +646,7 @@ type ApprovalRequest struct {
 	// when the run has neither (a run created before migration 0072); the
 	// deployment's approval expiry still applies to every row.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	// Held / HeldUntil are #1197 L1b's projection of approval.Hold(this, now)
+	// Held / HeldUntil are #1197's projection of approval.Hold(this, now)
 	// — computed at response time, never stored. Held is set on every row;
 	// HeldUntil only on a row whose hold is bounded (egress wait_for_review,
 	// an Azure DevOps capability escalation, push_content), nil for an

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// GET /api/v1/me/attention (#1197 L1b) — the shell's two nav-badge counts in
+// GET /api/v1/me/attention (#1197) — the shell's two nav-badge counts in
 // one small object, replacing App.tsx's old refreshBadges (two unscoped
 // LIST_LIMIT reads of /runs and /approvals, joined client-side via
 // board-groups.ts's approvalSignals/needsAttention). See

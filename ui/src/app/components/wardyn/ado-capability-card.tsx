@@ -203,7 +203,7 @@ export function AdoCapabilityCard({
 }) {
   const [scope, setScope] = React.useState<"once" | "run">("run");
   const [menuOpen, setMenuOpen] = React.useState(false);
-  // The hold window's own timer (#458, #1197 L1b): `held`/`held_until` are
+  // The hold window's own timer (#458, #1197): `held`/`held_until` are
   // now server fields (internal/approval.Hold's projection) — reading
   // item.held at render alone would let REQ_HELD survive past its own
   // 4-minute window until some UNRELATED re-render happened to catch it up,

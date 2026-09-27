@@ -216,7 +216,7 @@ export interface AgentRun {
   // sent as an explicit spec.
   preset?: string;
   preset_version?: number;
-  // internal/types/attention.go's RunAttention (#1197 L1b) — what this LIVE
+  // internal/types/attention.go's RunAttention (#1197) — what this LIVE
   // run is waiting on and who (in the caller's own console view) can clear
   // it, projected only when the caller's GET /runs (or GET /me/attention)
   // request opted into the `view` contract. Absent on every other read, and

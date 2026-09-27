@@ -15,7 +15,7 @@ import { heldFieldsFor } from "../../lib/test-hold-fixture";
 const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 const ENDED_RUN: AdoCardRun = { created_by: "dana@acme.example", state: "COMPLETED" };
 
-// #1197 L1b: held/held_until are now server fields — heldFieldsFor mirrors
+// #1197: held/held_until are now server fields — heldFieldsFor mirrors
 // internal/approval.Hold so this fixture keeps constructing rows by
 // kind/requested_at/state/grant_id exactly as it always has.
 function escalation(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {

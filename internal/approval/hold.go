@@ -14,7 +14,7 @@ import (
 // BOUNDED hold, when that parking ends. It is a verbatim port of
 // ui/src/app/lib/types/approvals.ts's now-retired isHeld: same arm order,
 // same three windows (internal/types/holds.go), no behaviour change
-// (#1197 L1b decision brief, "the rule", row 1).
+// (#1197 decision brief, "the rule", row 1).
 //
 // A row that is not PENDING is never held — a decision (or the expiry
 // sweeper) already answered the question a hold was asking — so every

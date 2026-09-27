@@ -116,13 +116,13 @@ type mdCase struct {
 	verbs []string // which verbs this row pins — both by default
 }
 
-// TestMayDecideAgreesWithDecide is #1197 L1b's F2 pin: mayDecide must answer
+// TestMayDecideAgreesWithDecide is #1197's pin: mayDecide must answer
 // exactly what a real POST /approvals/{id}/{approve,deny} would (200 vs any
 // non-2xx), over role x kind x ownership x four-eyes x local-mode x capability
 // grant. A hand-matched mirror of authorizeUserDecision/requireSecondHuman
 // alone would miss any gate decide() has that those two helpers do not name
-// (F2's own finding) — driving the SAME identity through the real handler is
-// what catches that class of drift.
+// — driving the SAME identity through the real handler is what catches that
+// class of drift.
 func TestMayDecideAgreesWithDecide(t *testing.T) {
 	adminSub := "sub-admin-md"
 	memberSub := "sub-member-md"
@@ -144,6 +144,14 @@ func TestMayDecideAgreesWithDecide(t *testing.T) {
 			},
 		},
 		{
+			// This case's own coverage does not depend on deliberately breaking
+			// the gate to watch the test fail: with the credential_reauth guard
+			// removed, decidableKindAndOwner answers true for a security
+			// operator on any kind, and secondHumanAllows passes for a
+			// non-egress kind regardless — so mayDecide would say true here
+			// while the real POST still answers 409, and this case would fail
+			// on its own, by the same identity-comparison every other row
+			// already relies on.
 			name: "credential_reauth is decidable by NOBODY, security operator included",
 			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
 				f := newMDFixture(t, types.ApprovalCredentialReauth, json.RawMessage(`{}`), nil, adminSub, nil, nil)
@@ -295,9 +303,9 @@ func TestMayDecideAgreesWithDecide(t *testing.T) {
 	}
 }
 
-// TestGetApprovalsProjectsHold pins the ONE projection point (F5/F9's spec):
-// a PENDING row on GET /approvals carries held/held_until; a decided row
-// carries neither, regardless of what its hold once was.
+// TestGetApprovalsProjectsHold pins the ONE projection point: a PENDING row
+// on GET /approvals carries held/held_until; a decided row carries neither,
+// regardless of what its hold once was.
 func TestGetApprovalsProjectsHold(t *testing.T) {
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)

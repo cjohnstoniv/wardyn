@@ -68,7 +68,7 @@ const (
 	// request's body readable — a request whose body the gate didn't peek is
 	// read after the hold, and ReadTimeout counts from its headers, so
 	// serveMITMRequest re-arms the read deadline after each holding point.
-	// #1197 L1b: points at types.HoldWindowADOCapability, the ONE definition
+	// #1197: points at types.HoldWindowADOCapability, the ONE definition
 	// of this number — internal/approval.Hold reads the same constant, so the
 	// api layer's Held/HeldUntil projection can never drift from this clamp.
 	maxCapabilityHoldTimeout = types.HoldWindowADOCapability

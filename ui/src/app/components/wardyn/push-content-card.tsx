@@ -168,7 +168,7 @@ export function PushContentCard({
   // eventually catches it too, but a member sitting on this card between
   // ticks must not keep reading a promise that already lapsed.
   //
-  // #1197 L1b: the window itself is now item.held_until (the server's own
+  // #1197: the window itself is now item.held_until (the server's own
   // projection, internal/approval.Hold), not a client-guessed ceiling.
   const [, forceRerenderAtWindowEnd] = React.useReducer((n: number) => n + 1, 0);
   React.useEffect(() => {

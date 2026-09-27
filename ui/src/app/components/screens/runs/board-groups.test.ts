@@ -33,7 +33,7 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   ...over,
 });
 
-// #1197 L1b: held/held_until are now server fields (internal/approval.Hold's
+// #1197: held/held_until are now server fields (internal/approval.Hold's
 // projection) — heldFieldsFor mirrors that same rule so every case below can
 // keep constructing rows by kind/requested_at/state exactly as it always has.
 const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => {

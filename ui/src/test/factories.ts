@@ -43,7 +43,7 @@ export function makeWorkspace(o: Partial<Workspace> = {}): Workspace {
   };
 }
 
-// #1197 L1b: held/held_until are now server fields (internal/approval.Hold's
+// #1197: held/held_until are now server fields (internal/approval.Hold's
 // projection) — heldFieldsFor mirrors that same rule so every caller of this
 // factory keeps building rows by kind/requested_at/state exactly as before.
 export function makeApproval(o: Partial<ApprovalRequest> = {}): ApprovalRequest {

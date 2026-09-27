@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// #1197 L1b moved isHeld's rule server-side (internal/approval.Hold); the
+// #1197 moved isHeld's rule server-side (internal/approval.Hold); the
 // wire now carries its answer as held/held_until rather than a client
 // computing it from kind/requested_at/state. This is a TEST-ONLY mirror of
 // that same rule (the three windows and the arm order are pinned server-side

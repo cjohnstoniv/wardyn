@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197 L1b: the attention rule (attention/heldCandidates), its projection
+// #1197: the attention rule (attention/heldCandidates), its projection
 // onto a page of runs (projectAttention), and GET /me/attention
 // (handleMeAttention). New file, beside approvals_decidable.go, for the same
 // reason: approvals.go and runs_policy.go are both close to
@@ -41,7 +41,8 @@ func isADOReauth(ap types.ApprovalRequest) bool {
 // only on which view is asking (view=user forces owner=me, so "you" IS the
 // run's owner there; the Admin view is never forced to it, so a
 // credential_reauth/lost run's clearer is always the run's owner, "owner" —
-// H-3). Rule 8's `by` depends on THIS caller's own mayDecide verdict, since
+// only the actor who can actually act is ever shown "you"). Rule 8's `by`
+// depends on THIS caller's own mayDecide verdict, since
 // unlike 6/7 a member CAN sometimes clear one of these.
 func (s *Server) heldCandidates(r *http.Request, run types.AgentRun, pending []types.ApprovalRequest, adminView bool) []attentionCandidate {
 	ownerBy := types.AttentionOwner
@@ -72,7 +73,7 @@ func (s *Server) heldCandidates(r *http.Request, run types.AgentRun, pending []t
 	return append(out, rule8...)
 }
 
-// attention is #1197 L1b's rule table (rows 1-8), given run and every PENDING
+// attention is #1197's rule table (rows 1-8), given run and every PENDING
 // approval it has raised (already projectHolds'd — see projectAttention).
 // Nil means the run needs nobody's attention right now.
 func (s *Server) attention(r *http.Request, run types.AgentRun, pending []types.ApprovalRequest, adminView bool) *types.RunAttention {
@@ -88,8 +89,8 @@ func (s *Server) attention(r *http.Request, run types.AgentRun, pending []types.
 		return nil
 	}
 	// Row 3: lost for any OTHER reason (reboot, outage) needs a revive —
-	// owner-or-super-admin only (run_revive.go), hence H-3's `owner` in the
-	// Admin view.
+	// owner-or-super-admin only (run_revive.go), hence `owner` in the
+	// Admin view: reviving is only ever offered on the User view's own page.
 	if run.LostAt != nil {
 		by := types.AttentionOwner
 		if !adminView {
@@ -155,7 +156,7 @@ func (s *Server) projectAttention(r *http.Request, runs []types.AgentRun, adminV
 	if err != nil {
 		return err
 	}
-	// One capability batch for the WHOLE page (#1197 L1b F3): mayDecide's
+	// One capability batch for the WHOLE page (#1197): mayDecide's
 	// egress_host check would otherwise cost one grant+subject read per held
 	// egress row per poll. Installed once here, at the top of the one
 	// resolution every held row in this page is projected under.
@@ -176,8 +177,9 @@ type meAttention struct {
 // handleMeAttention answers the shell's nav badges: needs_you (live runs in
 // this view's own default scope whose attention.by=="you") and
 // pending_approvals (the PENDING count GET /approvals?state=PENDING scopes
-// today — unchanged so the badge matches the page it links to, per #1197
-// L1's own H-3 follow-on note).
+// today — unchanged so the badge matches the page it links to; the owner's
+// own ruling on this is that the badge counts only what the viewer could act
+// on, which is exactly what attention.by=="you" already answers).
 //
 // ?view=user|admin, same coercion GET /runs?view= applies: absent means
 // "user", and "admin" from a non-security-operator is coerced to "user"
@@ -236,24 +238,19 @@ func (s *Server) handleMeAttention(w http.ResponseWriter, r *http.Request) {
 // scopedPendingApprovalsCount mirrors handleListApprovals' own scoping
 // EXACTLY (approvals.go's scopeToOwner branch): an admin view counts every
 // PENDING approval in the deployment; the user view counts only PENDING
-// approvals on runs this principal created, fail-closed (500) without
-// ApprovalsByRunCreatorPager — the same posture handleListApprovals takes for
-// an unscoped member list.
+// approvals on runs this principal created — fail-closed (500) without
+// ApprovalsForRunsPager, the same posture handleListApprovals takes for an
+// unscoped member list. COUNTED in the database (CountPendingApprovals /
+// CountPendingApprovalsByRunCreator), never listed: a poll every 5 s from
+// every open console must not read every PENDING row's full columns just to
+// answer "how many" — the same rule CountApprovalsForRun's own doc states.
 func (s *Server) scopedPendingApprovalsCount(r *http.Request, adminView bool, principal string) (int, error) {
-	if adminView {
-		all, err := s.cfg.Approvals.List(r.Context(), types.ApprovalPending)
-		if err != nil {
-			return 0, err
-		}
-		return len(all), nil
-	}
-	pager, ok := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
+	counter, ok := s.cfg.Approvals.(store.ApprovalsForRunsPager)
 	if !ok {
 		return 0, errNoAttentionCapability
 	}
-	rows, err := pager.ListApprovalsPageByRunCreator(r.Context(), principal, types.ApprovalPending, store.Page{})
-	if err != nil {
-		return 0, err
+	if adminView {
+		return counter.CountPendingApprovals(r.Context())
 	}
-	return len(rows), nil
+	return counter.CountPendingApprovalsByRunCreator(r.Context(), principal)
 }

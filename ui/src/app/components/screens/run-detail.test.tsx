@@ -535,7 +535,7 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
         kind: "egress_domain",
         state: "PENDING",
         requested_at: new Date().toISOString(),
-        held: true, // #1197 L1b: held is now a server field, not derived client-side
+        held: true, // #1197: held is now a server field, not derived client-side
         requested_scope: { host: "api.github.com", mode: "wait_for_review" },
       },
     ]);
@@ -561,7 +561,7 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
         kind: "tool_call",
         state: "PENDING",
         requested_at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
-        held: true, // #1197 L1b: held is now a server field, not derived client-side
+        held: true, // #1197: held is now a server field, not derived client-side
         requested_scope: { tool: "Bash", cmd: "rm -rf build" },
       },
     ]);

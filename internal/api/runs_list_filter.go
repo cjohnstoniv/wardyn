@@ -46,11 +46,11 @@ var endedWithinDurations = map[string]time.Duration{
 	"30d": 30 * 24 * time.Hour,
 }
 
-// runsListStatuses is the run-list status enum. "needs" (#1197 L1b) is
-// active runs whose attention.by=="you" — the ONE status that reads the
-// attention projection rather than a bare SQL predicate, and therefore the
-// one that must fetch the live set unpaged and filter/window in Go (F8) —
-// see handleListRunsFiltered's own "needs" branch.
+// runsListStatuses is the run-list status enum. "needs" (#1197) is active
+// runs whose attention.by=="you" — the ONE status that reads the attention
+// projection rather than a bare SQL predicate, and therefore the one that
+// must fetch the live set unpaged and filter/window in Go — see
+// handleListRunsFiltered's own "needs" branch.
 var runsListStatuses = map[string]bool{"active": true, "ended": true, "failed": true, "killed": true, "needs": true}
 
 // isNeedsStatus reports whether the caller asked for status=needs — always
@@ -203,10 +203,10 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 	}
 	adminView := params.view == "admin"
 
-	// #1197 L1b: status=needs reads the attention projection, which no SQL
+	// #1197: status=needs reads the attention projection, which no SQL
 	// predicate can express — the live set (bounded by state,
 	// agent_runs_state_idx) is fetched UNPAGED, projected, filtered to
-	// attention.by=="you", and THEN windowed to the caller's own page (F8).
+	// attention.by=="you", and THEN windowed to the caller's own page.
 	// "needs" implies live-only by construction, so neither hidden-count
 	// header ever hides anything under it — both are always 0.
 	if isNeedsStatus(params.filter.Statuses) {
@@ -251,7 +251,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		if err != nil {
 			return nil, err
 		}
-		// #1197 L1b: attention is projected only when the caller opted into
+		// #1197: attention is projected only when the caller opted into
 		// the `view` contract — see this function's own doc for why
 		// order/headers are unconditional on this branch but attention is
 		// not: no legacy caller reaches this branch with a filter but no
