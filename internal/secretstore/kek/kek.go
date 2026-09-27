@@ -39,6 +39,12 @@ type KEK interface {
 	Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error)
 }
 
+// ErrService marks a key service's own definitive answer to a call — an
+// error status such as a deleted key, a revoked policy or a missing mount —
+// as opposed to a refusal of the row's wrap by a local key. It is never
+// transient: an unreachable service is secretstore.ErrUnavailable instead.
+var ErrService = errors.New("key service error")
+
 // Versioned is a KEK whose key has versions (Vault Transit): each wrap names
 // the version it was made under, and `wardynd -rewrap` moves every row still
 // wrapped under an older one to the latest, so the old versions can be retired.

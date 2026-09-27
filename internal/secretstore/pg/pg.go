@@ -365,6 +365,11 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	if errors.Is(err, secretstore.ErrUnavailable) {
 		return nil, fmt.Errorf("pg secretstore: %s could not be unlocked — key service %q did not answer: %w", ref, e.kekID, err)
 	}
+	// The key service's own error (a deleted key, a revoked policy) is its to
+	// name; calling it a forged row would send the operator to the database.
+	if errors.Is(err, kek.ErrService) {
+		return nil, fmt.Errorf("pg secretstore: %s could not be unlocked: %w", ref, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its data key does not unwrap for this row (moved, forged, corrupted, or its key version retired): %w", ref, err)
 	}
