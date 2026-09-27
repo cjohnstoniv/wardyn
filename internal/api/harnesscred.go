@@ -543,6 +543,11 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 			"runner %q cannot enforce confinement_class %s (available: %s)",
 			s.cfg.Runner.Name(), cc, classesOrNone(caps.ConfinementClasses))
 	}
+	// Host capacity, before the lock and the supersede for the same reason as
+	// the class check above: a refusal must not first end an existing sign-in.
+	if err := s.admitHostCapacity(ctx, actor, "harness_login", true); err != nil {
+		return types.AgentRun{}, harnessLoginDispatch{}, err
+	}
 	// Serialized per person, across replicas, for the whole span below: the
 	// supersede pass, the insert, and the SECOND pass after it are independent
 	// statements, and two launches interleaving through them leave two live

@@ -297,6 +297,8 @@ type bootFlags struct {
 	vault vaultFlags
 	azure azureFlags
 
+	hostCapacity hostCapacityFlags
+
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
 	// (claimSingleInstance). Like rotateAgeKey it has NO WARDYN_* env pair — a
@@ -545,6 +547,7 @@ func parseBootFlags() *bootFlags {
 		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
 		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit key at its latest version), then exit; values are never decrypted. See docs/OPERATIONS.md (default false)"),
 		vault:          registerVaultFlags(),
+		hostCapacity:   registerHostCapacityFlags(),
 		azure:          registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
@@ -606,6 +609,13 @@ func finalizeBootFlags(f *bootFlags) {
 	// bad file is a malformed setting like a bad flag, so it exits here the way
 	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
 	// budget left for another early return).
+	exitOnBadSecretFiles(f)
+	return f
+}
+
+// exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted
+// because that function sits at the funlen ratchet.
+func exitOnBadSecretFiles(f *bootFlags) {
 	if err := resolveSecretFiles(secretFileSettings(f)); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
 		os.Exit(1)

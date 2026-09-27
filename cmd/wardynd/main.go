@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -494,6 +495,8 @@ func run() error {
 		UIOriginTemplate: *f.uiOriginTemplate,
 		UISessionTTL:     *f.uiSessionTTL,
 		UISessionKey:     feats.uiSessionKey,
+		// Admits every run unless a WARDYN_HOST_* limit is set.
+		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
