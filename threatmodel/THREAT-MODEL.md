@@ -1955,12 +1955,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     database writer until the key is rotated past the old wrap
     (`wardynd -rotate-age-key`). A database writer is already super-admin
     equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered
-    around. (b) **The `local` KEK is the only one so far:** whoever
-    holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value,
-    offline and unlogged; a deleted credential still decrypts from any earlier
-    backup while both exist — the erasure horizon is the deployment's backup
-    retention. A key service (Vault/OpenBao Transit, Azure Key Vault) that keeps
-    the KEK away from the database is the next lane, not this one. (c)
+    around. (b) **Under the default, `local` KEK**, whoever holds both the
+    database (or a backup) and `WARDYN_AGE_KEY` reads every value, offline and
+    unlogged; a deleted or erased credential (`DELETE
+    /people/{principal}/credentials`, or the daily expiry sweep) still decrypts
+    from any earlier backup while both exist — the erasure horizon is the
+    deployment's backup retention, not the API call. **A key service that keeps
+    the KEK away from the database has shipped for one provider**: `WARDYN_KEK=
+    transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows
+    this to residual 49(c)'s shape — a Vault-side actor, not a database reader
+    alone — rather than closing it; Azure Key Vault and AWS KMS key-wrapping
+    (as opposed to Azure Key Vault as a plain external secret STORE, which has
+    also shipped and inherits this residual unchanged, since Wardyn does no
+    at-rest cryptography of its own on a row held there) remain planned. (c)
     **Metadata stays in the clear:** who holds which named credential, and since
     when, is readable to anyone who can read the table.
 
@@ -2198,6 +2205,30 @@ hiding them would repeat the failure mode we are designed to avoid.
     operator-wide credential rides in `UpstreamProxyURL` into every run's
     proxy container, so that part of the exposure is never scoped to one
     run: it is the fleet's.
+60. **A stored key keeps working for a bounded time after it is revoked,
+    rotated, or refused at the store — up to the injection TTL plus a
+    transient-failure grace, never indefinitely.** A stored API key the proxy
+    injects is re-resolved from the injection sink at most every ten minutes
+    (`storedKeyTTL` in `internal/api/injection.go`) — a MODEL-PROVIDER stored
+    key instead re-resolves every fifteen minutes (`providerKeyRecheck` in
+    `internal/api/injection_provider_key.go`) — an approval-gated grant is the
+    exception in either case: minted once, static for the
+    run — rather than held for the run's whole life, so a key removed,
+    replaced or refused there stops being injected within that window — this
+    is the "revocation" half of CS-4's memory/revocation/failure hygiene, not
+    literal in-process zeroing (nothing in the secret store or the broker
+    scrubs a plaintext buffer after use; the actual controls are the TTL
+    above, `internal/nodump`'s no-core-dump/no-same-uid-ptrace hardening on
+    both `wardynd` and `wardyn-proxy`, and a definitive-vs-transient failure
+    split that drops an injected header at once on anything but a bare
+    transient store error). That split is also where the bound sits: a
+    TRANSIENT failure (the store did not answer) keeps serving the
+    last-known-good header for a further fifteen minutes before it, too, is
+    dropped — so the worst case between a revocation and the proxy actually
+    stopping is the TTL plus that grace: about twenty-five minutes for most
+    stored keys, about thirty for a model-provider key's fifteen-minute TTL —
+    not the ten minutes alone, and a store outage that outlasts the grace
+    fails CLOSED (no header) rather than open.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
