@@ -27,6 +27,11 @@ export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
 // instead of a clear mismatch).
 export const TOKEN_KEY = "wardyn_admin_token";
 
+// Synthetic credentials: e2e-backend.sh stores only their SHA-256 hashes.
+export const MEMBER_TOKEN = `wdn_${"1".repeat(64)}`;
+const SECURITY_ADMIN_TOKEN = `wdn_${"2".repeat(64)}`;
+export const MEMBER_PRINCIPAL = "e2e-member";
+
 // `test` boots the app pre-authenticated so each spec lands directly in the
 // console. Auth-flow specs that exercise sign-in/sign-out should import the raw
 // `test` from "@playwright/test" instead and manage storage themselves.
@@ -35,7 +40,10 @@ export const test = base.extend({
     await page.addInitScript(
       ([key, tok]) => {
         try {
-          localStorage.setItem(key, tok);
+          // Keep a real actor selected before navigation; one initializer owns auth.
+          if (!sessionStorage.getItem(key) && !localStorage.getItem(key)) {
+            localStorage.setItem(key, tok);
+          }
         } catch {
           /* private mode — ignore */
         }
@@ -143,24 +151,46 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
   }, path);
 }
 
-// Member console (B3) — the seeded e2e backend authenticates every spec with a
-// bare admin bearer token (ADMIN_TOKEN above), and isOperator
-// (internal/api/http.go) reads "no session role to demote" for any caller with
-// no OIDC human session — so a bearer-token caller is ALWAYS admin
-// server-side; there is no way to reach a genuine member session through this
-// harness without standing up OIDC. GET /api/v1/me's `role`/`operator` fields
-// are spliced onto the REAL response (route.fetch() + patch + refulfill —
-// same technique settings-connections.spec.ts and workspace-detail.spec.ts
-// already use) so principal/method stay
-// genuine while the client believes it is signed in as a member. Everything
-// else (runs list, secrets, approvals list) still comes from the real,
-// unmodified, admin-scoped backend — specs using this prove the RENDER
-// behavior a member role drives, not server-side ownership scoping itself
-// (that's proven server-side: B2's own tests, and
-// internal/api/runs_policy.go's handleListRuns / approvals.go's
-// handleListApprovals creator-pager branches). Shared here (not declared in
-// one spec file) because Playwright refuses a spec that imports another spec
-// file (`--list` collects zero tests when it sees one).
+// Uses the browser's actual stored credential, including token-field sign-ins.
+// Returning only the response keeps bearer values out of assertion diagnostics.
+export async function consoleAPI(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> {
+  return page.evaluate(async ({ key, method, path, body }) => {
+    const token = sessionStorage.getItem(key) ?? localStorage.getItem(key);
+    const response = await fetch(path, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: response.status, text: await response.text() };
+  }, { key: TOKEN_KEY, method, path, body });
+}
+
+async function asRealPerson(page: Page, token: string, principal: string, role: string): Promise<void> {
+  // A same-origin document lets us select storage before any console request.
+  await page.goto("/healthz");
+  await page.evaluate(([key, token]) => {
+    sessionStorage.removeItem(key);
+    localStorage.setItem(key, token);
+  }, [TOKEN_KEY, token]);
+  const response = await consoleAPI(page, "GET", "/api/v1/me");
+  expect(response.status, response.text).toBe(200);
+  expect(JSON.parse(response.text)).toMatchObject({
+    principal, method: "token", role, operator: false,
+    security_operator: role === "security_admin",
+    user_type: { id: "standard" },
+  });
+}
+
+export async function asRealMember(page: Page): Promise<void> {
+  await asRealPerson(page, MEMBER_TOKEN, MEMBER_PRINCIPAL, "user");
+}
+
+export async function asRealSecurityAdmin(page: Page): Promise<void> {
+  await asRealPerson(page, SECURITY_ADMIN_TOKEN, "e2e-security-admin", "security_admin");
+}
+
+// Render-only splices for specs that supply deliberately hypothetical states.
+// Requests still carry the operator token; use asRealMember for authorization.
 export async function mockMemberRole(page: Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
@@ -224,18 +254,8 @@ export async function mockMemberSetupStatus(page: Page): Promise<void> {
   });
 }
 
-// Security-admin console (0.7's third tier) — the same splice technique and the
-// same harness ceiling as mockMemberRole above: the bearer-token backend is
-// always admin server-side, so this proves the RENDER behavior the tier drives,
-// never server-side authorization (that is pinned in Go — internal/api's
-// isSecurityOperator tests and authz_test.go's route matrix).
-//
-// The three fields together ARE the tier's contract, and the asymmetry is the
-// point: operator FALSE (the super-admin surfaces — secrets, LLM credential,
-// setup, workspace writes, run attach — stay hidden) with security_operator
-// TRUE (approvals, audit, permissions, governance profiles are offered). A
-// fixture setting both true would prove nothing this tier does not already
-// share with an admin.
+// Render-only security tier: server authorization is unchanged by this splice.
+// Use asRealSecurityAdmin when a refusal or ownership check is under test.
 export async function mockSecurityAdminRole(page: Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
@@ -270,6 +290,8 @@ export function sql(statement: string): string {
       "wardyn",
       "-d",
       PG_DBNAME,
+      "-v",
+      "ON_ERROR_STOP=1",
       "-tAc",
       statement,
     ],
