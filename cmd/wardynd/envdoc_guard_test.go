@@ -72,7 +72,7 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_TOKEN": true, "WARDYN_E2E_AGE_KEY": true,
 	"WARDYN_E2E_SKIP_BUILD": true, "WARDYN_E2E_NO_UI_BUILD": true,
 	"WARDYN_E2E_KEEP": true, "WARDYN_E2E_NO_BUILD": true,
-	"WARDYN_E2E_ANTHROPIC_KEY": true,
+	"WARDYN_E2E_ANTHROPIC_KEY": true, "WARDYN_E2E_CC_IMAGE": true,
 	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
