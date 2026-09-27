@@ -33,7 +33,7 @@ import (
 // different blast radii — one shows a member another member's files, this one
 // destroys them.
 //
-// Three refusals and one non-error, in the order they are asked:
+// Four refusals and one non-error, in the order they are asked:
 //
 //  1. NotFound → DriveReclaimAlreadyAbsent. Nothing answers to the name, so
 //     nothing was destroyed and nothing is wrong: an operator's own
@@ -52,6 +52,12 @@ import (
 //     (errDriveClaimTerminating) in the meantime — the worst of both answers.
 //     The pods List is the `pods: list` verb the Role already grants for the
 //     orphan sweep; no new verb is asked for to make this safe.
+//  5. The claim changed after it was judged → ErrDriveNotReclaimable. The
+//     delete carries the inspected claim's UID and resourceVersion as
+//     preconditions, so a claim deleted and re-created under the same name
+//     between the Get and the Delete (or relabelled in place) answers Conflict
+//     instead of being destroyed unjudged. Never retried by name: a fresh
+//     reclaim re-reads and re-judges whatever answers to the name now.
 func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runner.DriveReclaimOutcome, error) {
 	ns := d.cfg.Namespace
 	claims := d.clientset.CoreV1().PersistentVolumeClaims(ns)
@@ -80,11 +86,22 @@ func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runn
 	} else if holder != "" {
 		return "", fmt.Errorf("k8s: drive: claim %q is mounted by pod %q: %w", drive.ObjectName, holder, runner.ErrDriveInUse)
 	}
-	if err := claims.Delete(ctx, drive.ObjectName, metav1.DeleteOptions{}); err != nil {
+	pre := metav1.Preconditions{UID: &claim.UID, ResourceVersion: &claim.ResourceVersion}
+	if err := claims.Delete(ctx, drive.ObjectName, metav1.DeleteOptions{Preconditions: &pre}); err != nil {
+		if apierrors.IsConflict(err) {
+			// The apiserver's text names both UIDs; it goes to the operator's
+			// log, never into the error the API turns into a 409 body.
+			slog.Warn("wardynd: k8s substrate: a drive's volume claim changed between its inspection and its reclaim; nothing was deleted",
+				slog.String("claim", drive.ObjectName), slog.String("namespace", ns),
+				slog.String("inspected_uid", string(claim.UID)), slog.String("error", err.Error()))
+			return "", fmt.Errorf("k8s: drive: claim %q changed after it was inspected, nothing was deleted: %w",
+				drive.ObjectName, runner.ErrDriveNotReclaimable)
+		}
 		if apierrors.IsNotFound(err) {
-			// Raced by another reclaim between the Get and the Delete. The end
-			// state is the one that was asked for, and this call did not cause
-			// it — the same distinction the NotFound arm above draws.
+			// Raced by another reclaim between the Get and the Delete, and
+			// nothing has replaced it (a replacement answers Conflict above).
+			// The end state is the one that was asked for, and this call did
+			// not cause it — the same distinction the NotFound arm above draws.
 			return runner.DriveReclaimAlreadyAbsent, nil
 		}
 		if apierrors.IsForbidden(err) {

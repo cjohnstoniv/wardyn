@@ -73,6 +73,11 @@ func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runn
 			slog.String("drive_id", drive.DriveID.String()), slog.String("reason", adoptErr.Error()))
 		return "", fmt.Errorf("docker: drive: refusing to reclaim volume %q: %w", name, runner.ErrDriveNotReclaimable)
 	}
+	// RESIDUAL, stated rather than hidden: unlike the Kubernetes claim delete
+	// (UID + resourceVersion preconditions), Docker's DELETE /volumes/{name}
+	// takes no precondition — a local volume has no identity but its name, and
+	// its labels cannot change in place. A volume removed and re-created under
+	// this name between the inspect above and this call is removed unjudged.
 	if _, err := d.cli.VolumeRemove(ctx, name, client.VolumeRemoveOptions{}); err != nil {
 		switch {
 		case isNotFound(err):

@@ -11,9 +11,12 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -180,5 +183,103 @@ func TestReclaimDrive_APodMountingAnotherClaimIsNotAHolder(t *testing.T) {
 	}
 	if claimExists(t, cs, drive.ObjectName) {
 		t.Error("the claim survived a reported delete")
+	}
+}
+
+// honourDeletePreconditions makes the fake apiserver enforce a PVC delete's
+// UID and resourceVersion preconditions the way a real one does (Conflict,
+// object kept). The fake ignores them on its own, so without this a test could
+// not tell a bound delete from a name-only one.
+func honourDeletePreconditions(cs *fake.Clientset) {
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	cs.PrependReactor("delete", "persistentvolumeclaims", func(a ktesting.Action) (bool, runtime.Object, error) {
+		del := a.(ktesting.DeleteAction)
+		obj, err := cs.Tracker().Get(gvr, a.GetNamespace(), del.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		cur := obj.(*corev1.PersistentVolumeClaim)
+		if p := del.GetDeleteOptions().Preconditions; p != nil &&
+			((p.UID != nil && *p.UID != cur.UID) || (p.ResourceVersion != nil && *p.ResourceVersion != cur.ResourceVersion)) {
+			return true, nil, apierrors.NewConflict(gvr.GroupResource(), del.GetName(), errors.New("precondition failed"))
+		}
+		return false, nil, nil
+	})
+}
+
+// TestReclaimDrive_RefusesAClaimThatChangedAfterInspection is the PR #326
+// review's finding: the claim is judged by its labels, then deleted — and a
+// delete by NAME alone would land on whatever answers to that name by then.
+// Each case swaps the claim between the Get and the Delete (inside the pods
+// List the reclaim makes in between) and requires a refusal that leaves the
+// swapped-in claim intact.
+func TestReclaimDrive_RefusesAClaimThatChangedAfterInspection(t *testing.T) {
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	for _, tc := range []struct {
+		name string
+		swap func(t *testing.T, cs *fake.Clientset, judged *corev1.PersistentVolumeClaim)
+	}{
+		{"another drive's claim re-created under the same name", func(t *testing.T, cs *fake.Clientset, judged *corev1.PersistentVolumeClaim) {
+			repl := judged.DeepCopy()
+			repl.UID, repl.ResourceVersion = "uid-replacement", "2"
+			repl.Labels[labelDrive] = "99999999-8888-7777-6666-555555555555"
+			if err := cs.Tracker().Delete(gvr, testNamespace, judged.Name); err != nil {
+				t.Fatal(err)
+			}
+			if err := cs.Tracker().Add(repl); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the same claim relabelled to another person in place", func(t *testing.T, cs *fake.Clientset, judged *corev1.PersistentVolumeClaim) {
+			relabelled := judged.DeepCopy()
+			relabelled.ResourceVersion = "2"
+			relabelled.Labels[labelDriveSubject] = "ffffffffffffffffffff"
+			if err := cs.Tracker().Update(gvr, relabelled, testNamespace); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drive := testDriveMount()
+			claim := existingDriveClaim(drive)
+			claim.UID, claim.ResourceVersion = "uid-original", "1"
+			cs, d := reclaimDriver(claim)
+			honourDeletePreconditions(cs)
+			cs.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+				tc.swap(t, cs, claim)
+				return false, nil, nil
+			})
+
+			got, err := d.ReclaimDrive(context.Background(), *drive)
+			if !errors.Is(err, runner.ErrDriveNotReclaimable) || got == runner.DriveReclaimDeleted {
+				t.Fatalf("outcome = %q, err = %v; want a refusal wrapping ErrDriveNotReclaimable", got, err)
+			}
+			if !claimExists(t, cs, drive.ObjectName) {
+				t.Error("the claim that replaced the judged one was deleted without ever being judged")
+			}
+		})
+	}
+}
+
+// …and the CONTROL: an unchanged claim under the same enforcing fake is still
+// deleted, and the delete is bound to exactly the object that was judged.
+func TestReclaimDrive_BindsTheDeleteToTheJudgedClaim(t *testing.T) {
+	drive := testDriveMount()
+	claim := existingDriveClaim(drive)
+	claim.UID, claim.ResourceVersion = "uid-original", "1"
+	cs, d := reclaimDriver(claim)
+	honourDeletePreconditions(cs)
+
+	if got, err := d.ReclaimDrive(context.Background(), *drive); err != nil || got != runner.DriveReclaimDeleted {
+		t.Fatalf("outcome = %q, err = %v; want %q", got, err, runner.DriveReclaimDeleted)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "delete" {
+			continue
+		}
+		p := a.(ktesting.DeleteAction).GetDeleteOptions().Preconditions
+		if p == nil || p.UID == nil || *p.UID != "uid-original" || p.ResourceVersion == nil || *p.ResourceVersion != "1" {
+			t.Errorf("delete preconditions = %+v, want the judged claim's UID and resourceVersion", p)
+		}
 	}
 }
