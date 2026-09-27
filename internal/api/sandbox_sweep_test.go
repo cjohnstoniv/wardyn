@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,14 +49,19 @@ func (r *sweepGoneRunner) StopSandbox(_ context.Context, ref string) error {
 }
 
 // sweepStore serves a fixed run list to ListRuns; the sweep never writes run
-// state. GetRun and QueryAuditEvents back the KILLED-recovery path
+// state. GetRun and HasRunAuditEvent back the KILLED-recovery path
 // (recoverAbandonedKillTail, via killTeardownTail's reconcileWorkspaceRun/
-// reconcileRecordRun and its own audit read-back) — both embedded store.Store
-// methods are nil otherwise, which would panic the moment that path runs.
+// reconcileRecordRun and its own settled-row probe) — both embedded
+// store.Store methods are nil otherwise, which would panic the moment that
+// path runs.
 type sweepStore struct {
 	store.Store
 	runs       []types.AgentRun
 	auditByRun map[uuid.UUID][]types.AuditEvent // nil is fine: a nil map read returns empty
+	// written, when set, is the recorder the sweep audits into: its rows are
+	// read back like the store's, so a row one pass writes is seen by the next
+	// exactly as it is on Postgres.
+	written *recRecorder
 }
 
 func (s *sweepStore) ListRuns(context.Context) ([]types.AgentRun, error) { return s.runs, nil }
@@ -69,8 +75,16 @@ func (s *sweepStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, er
 	return types.AgentRun{}, store.ErrNotFound
 }
 
-func (s *sweepStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
-	return s.auditByRun[runID], nil
+func (s *sweepStore) HasRunAuditEvent(_ context.Context, runID uuid.UUID, f store.AuditFilter) (bool, error) {
+	events := append([]types.AuditEvent(nil), s.auditByRun[runID]...)
+	if s.written != nil {
+		for _, ev := range s.written.snapshot() {
+			if ev.RunID != nil && *ev.RunID == runID {
+				events = append(events, ev)
+			}
+		}
+	}
+	return slices.ContainsFunc(events, f.Matches), nil
 }
 
 func sweepRun(state types.RunState, sandboxRef string) types.AgentRun {
@@ -243,7 +257,7 @@ func TestSweepTerminalSandboxes_RecoversKilledRunAfterSandboxGone(t *testing.T) 
 func TestSweepTerminalSandboxes_RetainsFailedRecovery(t *testing.T) {
 	h := newHarness(t)
 	killed := sweepRunAt(types.RunKilled, "", staleKilledAt())
-	fake := &sweepStore{runs: []types.AgentRun{killed}}
+	fake := &sweepStore{runs: []types.AgentRun{killed}, written: h.audit}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	failingBroker := &killTailBroker{fakeBroker: h.broker, revokeErr: errors.New("broker unreachable")}
@@ -335,5 +349,39 @@ func TestSweepTerminalSandboxes_LeavesActiveTailAlone(t *testing.T) {
 	}
 	if rows := killAuditRows(h.audit.snapshot(), killed.ID); len(rows) != 0 {
 		t.Errorf("must not write a run.kill row for a possibly-in-flight tail; rows=%+v", rows)
+	}
+}
+
+// TestSweepTerminalSandboxes_ProbeReclaimedRunIsNotRecovered: reclaimProbeRun
+// KILLs a hung site-config probe through finalizeRunTail, which writes
+// site_config.probe.kill (outcome failure, by design) and never run.kill. That
+// run is settled, not an abandoned kill tail, and must not be re-killed.
+func TestSweepTerminalSandboxes_ProbeReclaimedRunIsNotRecovered(t *testing.T) {
+	h := newHarness(t)
+	killed := sweepRunAt(types.RunKilled, "", staleKilledAt())
+	fake := &sweepStore{
+		runs: []types.AgentRun{killed},
+		auditByRun: map[uuid.UUID][]types.AuditEvent{
+			killed.ID: {{RunID: &killed.ID, Action: "site_config.probe.kill", Outcome: "failure"}},
+		},
+		written: h.audit,
+	}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Errorf("swept = %d, want 0 (a probe-reclaimed run is settled)", swept)
+	}
+	if len(h.broker.revoked) != 0 {
+		t.Errorf("must not revoke a probe-reclaimed run; broker.revoked=%v", h.broker.revoked)
+	}
+	if rows := killAuditRows(h.audit.snapshot(), killed.ID); len(rows) != 0 {
+		t.Errorf("must not write a run.kill row for a probe-reclaimed run; rows=%+v", rows)
 	}
 }

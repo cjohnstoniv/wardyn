@@ -10,18 +10,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **The terminal-sandbox sweep now recovers a KILLED run whose kill tail never
-  finished (#710).** `killTeardownTail` runs detached after the KILLED
-  transition wins its CAS, and a shutdown past its grace or a crash could kill
-  it mid-cascade — leaving the run correctly marked KILLED but with no
-  `run.kill` audit row, its sandbox possibly still live, and its credentials
-  possibly still un-revoked, including runs whose tail died before ever
-  reaching `KillSandbox` (`SandboxRef` empty, nothing for the existing
-  sandbox-ref probe to find). `SweepTerminalSandboxes` now also re-runs the
-  idempotent kill teardown for any KILLED row old enough that its own tail
-  could not still be running (`killTailRecoveryGrace`, past `killCascadeTimeout`)
-  and that has no successful `run.kill` row yet; a row younger than the grace
-  is left alone so a genuinely in-flight tail is never entered twice.
+- **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
+  recovers a KILLED run whose kill tail never finished (#710).** That route is
+  the sweep's only caller: it does not run at boot or on a timer, so recovery
+  happens when an operator (or their scheduler) calls it. `killTeardownTail`
+  runs detached after the KILLED transition wins its CAS, and a shutdown past
+  its grace or a crash could kill it mid-cascade — leaving the run correctly
+  marked KILLED but with no `run.kill` audit row, its sandbox possibly still
+  live, and its credentials possibly still un-revoked, including runs whose
+  tail died before ever reaching `KillSandbox` (`SandboxRef` empty, nothing for
+  the existing sandbox-ref probe to find). The sweep now re-runs the idempotent
+  kill teardown for any KILLED row old enough that its own tail could not still
+  be running (`killTailRecoveryGrace`, past `killCascadeTimeout`) and whose
+  audit trail has no successful `run.kill` row, however long that trail is. A
+  row younger than the grace is left alone so a genuinely in-flight tail is
+  never entered twice, and a hung site-config probe reclaimed to KILLED (its
+  own `site_config.probe.kill` row, never `run.kill`) is not treated as an
+  abandoned kill.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

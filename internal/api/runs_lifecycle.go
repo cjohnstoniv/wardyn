@@ -21,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -407,12 +408,18 @@ func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 // on top absorbs scheduling/clock slack rather than racing the bound exactly.
 const killTailRecoveryGrace = killCascadeTimeout + 30*time.Second
 
-// killTailAuditScan bounds the read-back recoverAbandonedKillTail does to
-// decide whether a run's kill tail already finished. A run.kill row is
-// ordinarily the last audit event a run ever gets; a generous scan absorbs a
-// run whose own kill was retried (handleKillRun's documented KILLED->KILLED
-// re-kill) without truncating past the row that matters.
-const killTailAuditScan = 50
+// killTailSettled lists the audit rows that each prove a KILLED run needs no
+// kill-tail recovery. Matched with an EXISTS over the run's whole trail, never
+// a bounded read: a settled run.kill behind more rows than the window was
+// missed, and the run was re-killed on every sweep.
+var killTailSettled = []store.AuditFilter{
+	// Its own kill tail (killTeardownTail) finished cleanly.
+	{Action: "run.kill", Outcome: "success"},
+	// reclaimProbeRun (site_config_probe.go) KILLs a hung probe through
+	// finalizeRunTail, which writes this row and never run.kill. Any outcome:
+	// that path records the reclaim itself as a failure by design.
+	{Action: "site_config.probe.kill"},
+}
 
 // recoverAbandonedKillTail retries an interrupted kill tail: a KILLED run
 // whose killTeardownTail died — a shutdown past backgroundShutdownBudget, a
@@ -442,13 +449,14 @@ func (s *Server) recoverAbandonedKillTail(ctx context.Context, run types.AgentRu
 	if s.cfg.Now().UTC().Sub(run.UpdatedAt) < killTailRecoveryGrace {
 		return false // may still be an in-flight tail — leave it alone
 	}
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, killTailAuditScan)
-	if err != nil {
-		return false // unprobeable this pass; the next pass tries again
+	matcher, ok := s.cfg.Store.(store.RunAuditMatcher)
+	if !ok {
+		return false // cannot answer exactly: never re-kill on a guess
 	}
-	for _, ev := range events {
-		if ev.Action == "run.kill" && ev.Outcome == "success" {
-			return false // the tail already finished cleanly
+	for _, f := range killTailSettled {
+		found, err := matcher.HasRunAuditEvent(ctx, run.ID, f)
+		if err != nil || found {
+			return false // settled, or unprobeable this pass (the next pass tries again)
 		}
 	}
 	s.killTeardownTail(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "sweep_recovered_kill_tail"})
