@@ -282,6 +282,15 @@ export type RunPrefill = {
    *  carry the one thing that governed the run it copies — a named ceiling the
    *  wizard states, never a silent fall back to the default policy. */
   inlinePolicy: boolean;
+  /** Review F4 (#1197 L3): the Runs landing page's composer rides this SAME
+   *  channel (task + an optional workspace, no policy/state overlay beyond
+   *  them) rather than a second one, but it is not a clone — there is no
+   *  source run, so the clone banner's two sentences (RUN.CLONE_NOTE,
+   *  RUN.CLONE_CEILING_NOTE: "prefilled from THIS RUN…", "…this run had
+   *  above it…") would both be false copy. Absent (the default) means a
+   *  clone, unchanged for every existing caller; "composer" suppresses just
+   *  that banner. */
+  source?: "composer";
 };
 
 /** The request-scoped half of a run, as read back off its `run.create` audit

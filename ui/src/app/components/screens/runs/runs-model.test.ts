@@ -103,6 +103,30 @@ describe("rowPresentation — lost (H-7 seam: no Revive action built here)", () 
   });
 });
 
+describe("rowPresentation — a lease-ended run (review F5)", () => {
+  it("reads grey 'Ended at its end time', never the live blue Running word — even though state is still RUNNING", () => {
+    const r = run({ state: "RUNNING", lost_reason: "ended", lost_at: new Date(NOW - 3600_000).toISOString() });
+    expect(rowPresentation(r, false)).toMatchObject({
+      hue: "grey",
+      word: "Ended at its end time",
+      action: null,
+      needsYou: false,
+    });
+  });
+});
+
+describe("rowPresentation — STARTING/PENDING carry the substrate's stage line (review F8)", () => {
+  it("STARTING with a status_detail gets it as the subword", () => {
+    const r = run({ state: "STARTING", status_detail: "image: Pulling: acme/agent:latest", status_reason: "Pulling" });
+    expect(rowPresentation(r, false).subword).toBeTruthy();
+  });
+
+  it("PENDING/STARTING with no status_detail has no subword (never an empty string)", () => {
+    const r = run({ state: "STARTING" });
+    expect(rowPresentation(r, false).subword).toBeUndefined();
+  });
+});
+
 describe("rowPresentation — plain state words with no attention", () => {
   it.each([
     ["RUNNING", "blue", "Running"],
@@ -187,6 +211,21 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
     const s = sectionRuns([r], NOW);
     expect(s.decide).toEqual([]);
     expect(s.running.map((x) => x.id)).toEqual(["run-1"]);
+  });
+
+  // Review F5: a lease-ended run (state still RUNNING, lost_reason "ended")
+  // must land in the ENDED buckets, not Running — and its age is keyed on
+  // lost_at (the lease end), not ended_at (absent) or updated_at.
+  it("a lease-ended run is bucketed as over, keyed on lost_at, never in running", () => {
+    const r = run({
+      id: "le1",
+      state: "RUNNING",
+      lost_reason: "ended",
+      lost_at: new Date(NOW - 60_000).toISOString(),
+    });
+    const s = sectionRuns([r], NOW);
+    expect(s.running).toEqual([]);
+    expect(s.endedToday.map((x) => x.id)).toEqual(["le1"]);
   });
 });
 

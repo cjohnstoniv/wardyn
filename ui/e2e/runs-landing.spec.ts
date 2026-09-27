@@ -137,12 +137,25 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
       runs: [
         baseRun("a1", "Held approval", { state: "RUNNING", attention: { kind: "approval", by: "you", pending: 1 } }),
         baseRun("a2", "AWS sign-in wait", { state: "RUNNING", attention: { kind: "reauth", by: "you", pending: 1 } }),
+        baseRun("a3", "Azure DevOps sign-in wait", {
+          state: "RUNNING",
+          attention: { kind: "ado_consent", by: "you", pending: 1 },
+        }),
+        baseRun("a4", "Lost sandbox", { state: "RUNNING", attention: { kind: "lost", by: "you", pending: 0 } }),
+        // H-3: a run needing an ADMIN (by="admin") is NOT in Needs you — it
+        // sits under Running, amber, "Waiting for an admin".
+        baseRun("a5", "Needs an admin", {
+          state: "RUNNING",
+          attention: { kind: "approval", by: "admin", pending: 1 },
+        }),
         baseRun("r1", "Live and running", { state: "RUNNING" }),
         baseRun("r2", "Starting up", { state: "STARTING" }),
         baseRun("r3", "Queued run", { state: "PENDING" }),
         baseRun("e1", "Wrapped up fine", { state: "COMPLETED", ended_at: new Date().toISOString() }),
         baseRun("e2", "Blew up", { state: "FAILED", ended_at: new Date().toISOString() }),
         baseRun("e3", "Stopped by hand", { state: "STOPPED", ended_at: new Date().toISOString() }),
+        baseRun("e4", "Killed on purpose", { state: "KILLED", ended_at: new Date().toISOString() }),
+        baseRun("e5", "Archived long ago", { state: "ARCHIVED", ended_at: new Date().toISOString() }),
       ],
     }));
     await gotoConsole(page);
@@ -150,11 +163,19 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByRole("heading", { name: /Needs you/ })).toBeVisible();
     await expect(page.getByText("Held approval")).toBeVisible();
     await expect(page.getByText("Needs your approval")).toBeVisible();
-    await expect(page.getByText("1 waiting · sandbox held")).toBeVisible();
+    // Both "a1" (by=you) and "a5" (H-3's by=admin) carry this same subword —
+    // the design table doesn't differ on it, only on the WORD above it.
+    await expect(page.getByText("1 waiting · sandbox held").first()).toBeVisible();
     await expect(page.getByText("AWS sign-in wait")).toBeVisible();
     await expect(page.getByText("Waiting for your AWS sign-in")).toBeVisible();
+    await expect(page.getByText("Azure DevOps sign-in wait")).toBeVisible();
+    await expect(page.getByText("Waiting for your Azure DevOps sign-in")).toBeVisible();
+    await expect(page.getByText("Lost sandbox")).toBeVisible();
+    await expect(page.getByText("Sandbox stopped")).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "Running" })).toBeVisible();
+    await expect(page.getByText("Needs an admin")).toBeVisible();
+    await expect(page.getByText("Waiting for an admin")).toBeVisible();
     await expect(page.getByText("Live and running")).toBeVisible();
     await expect(page.getByText("Starting up")).toBeVisible();
     await expect(page.getByText("Starting", { exact: true })).toBeVisible();
@@ -168,6 +189,10 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
     await expect(page.getByText("Stopped by hand")).toBeVisible();
     await expect(page.getByText("Stopped", { exact: true })).toBeVisible();
+    await expect(page.getByText("Killed on purpose")).toBeVisible();
+    await expect(page.getByText("Killed", { exact: true })).toBeVisible();
+    await expect(page.getByText("Archived long ago")).toBeVisible();
+    await expect(page.getByText("Archived", { exact: true })).toBeVisible();
   });
 
   test("'Earlier this week' expands, aria-expanded toggles, and focus stays on the toggle", async ({ page }) => {
@@ -218,6 +243,25 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Killed 2 days ago")).toBeVisible();
   });
 
+  // Review F1: real per-keystroke typing (`pressSequentially`, not `fill()`'s
+  // one input event) — the exact shape that lost focus/characters after one
+  // keystroke, since each keystroke's own filter-driven refetch used to
+  // unmount the whole page including this input.
+  test("search keeps focus and every character while typing one at a time", async ({ page }) => {
+    await mockRunsList(page, (url) => ({
+      runs: url.searchParams.get("q") === "abc" ? [baseRun("r1", "abc task")] : [baseRun("r0", "unrelated task")],
+    }));
+    await gotoConsole(page);
+    await expect(page.getByText("unrelated task")).toBeVisible();
+
+    const search = page.getByLabel("Search runs", { exact: true });
+    await search.click();
+    await search.pressSequentially("abc", { delay: 60 });
+    await expect(search).toHaveValue("abc");
+    await expect(search).toBeFocused();
+    await expect(page.getByText("abc task")).toBeVisible();
+  });
+
   test("no match, then Clear restores the default filters", async ({ page }) => {
     await mockRunsList(page, (url) => ({
       runs: url.searchParams.has("q") ? [] : [baseRun("r1", "The only run")],
@@ -238,9 +282,13 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
   test("400px: no horizontal scroll", async ({ page }) => {
     await mockRunsList(page, () => ({
       runs: [
+        // The review's own repro (F3) used an ado_consent row — its long
+        // sign-in sentence is what actually pushes the title to 0px on a
+        // fixed 3-column grid; a shorter word doesn't leave enough room to
+        // reproduce it.
         baseRun("a1", "A long enough task title to stress the row at 400 pixels wide", {
           state: "RUNNING",
-          attention: { kind: "approval", by: "you", pending: 1 },
+          attention: { kind: "ado_consent", by: "you", pending: 1 },
         }),
         baseRun("r1", "example-org/a-fairly-long-workspace-name", { state: "RUNNING", repo: "example-org/a-fairly-long-workspace-name" }),
       ],
@@ -259,6 +307,14 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
       clientWidth: document.documentElement.clientWidth,
     }));
     expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+
+    // Review F3: the title must not collapse to 0px — the side column moves
+    // under it at this width (design.md §5, mock :176) instead of sharing
+    // its row and shrinking it away.
+    const titleLink = page.getByRole("link", { name: /A long enough task title/ });
+    const box = await titleLink.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(100);
   });
 
   // No pixel-diff gate in this repo (screenshots/docs.spec.ts's own header:

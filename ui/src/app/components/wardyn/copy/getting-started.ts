@@ -90,20 +90,8 @@ export const RUNS_MEMBER_EMPTY = {
   GUIDE: MEMBER_GETTING_STARTED.TITLE,
 } as const;
 
-// #160 — TitleGroup's second chip row (runs/title-group.tsx): what a group's
-// runs are waiting on, one counted chip per reason instead of a bare count.
-// `n` is always the GROUP's count for that reason — CONSOLE-RULES §10's "say
-// how many", never "some runs need attention".
-export const RUNS_WAIT = {
-  HELD: (n: number) => `${n} awaiting confirmation`,
-  REAUTH: (n: number) => `${n} awaiting AWS sign-in`,
-  STARTING: (n: number) => `${n} waiting to start`,
-  // Absent while anything else waits; a single UNCOUNTED chip, and only once
-  // the approvals fetch has resolved enough to know the group is really clean.
-  NONE: "Nothing waiting",
-  // The pre-fetch window: nothing derived from the approvals fetch may paint
-  // before it resolves, so this stands alone rather than reading as "nothing
-  // is held" (the empty-Map default's lie).
-  CHECKING: "Checking…",
-} as const;
+// RUNS_WAIT (title-group.tsx's per-group wait chip) was removed here —
+// #1197 L3 review F12: title-group.tsx is gone (the Runs landing page
+// groups by need then time, not by title), and it was RUNS_WAIT's only
+// consumer.
 

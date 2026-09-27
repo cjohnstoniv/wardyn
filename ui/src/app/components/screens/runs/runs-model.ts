@@ -20,6 +20,7 @@ import { isTerminalRunState } from "../../../lib/types";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
+import { statusDetailSentence } from "../run-status-detail";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
 export type RowAction = "review" | "sign-in" | null;
@@ -54,6 +55,16 @@ export function isLiveRunState(state: RunState): boolean {
  * real ceiling is enforced — same as today).
  */
 export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentation {
+  // Review F5: a lease-ended run (lost_reason "ended") stays RUNNING until
+  // the ended-run grace stops it, but it has no network and is already OVER
+  // — the server excludes it from the live set (store_runs_filtered.go's
+  // runLiveSQL) and the cockpit for the same run says "This run ended at its
+  // end time". Pre-empts the state switch below, since `state` is still
+  // RUNNING. Revive and the run-page copy stay L5; this is the row-anatomy
+  // half only (design.md §2.2).
+  if (run.lost_reason === "ended") {
+    return { hue: "grey", word: "Ended at its end time", action: null, needsYou: false };
+  }
   const a = run.attention;
   if (a) {
     const you = a.by === "you";
@@ -95,9 +106,24 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
     case "RUNNING":
       return { hue: "blue", word: RUNS_ROW_WORD.RUNNING, action: null, needsYou: false };
     case "STARTING":
-      return { hue: "blue", word: RUNS_ROW_WORD.STARTING, action: null, needsYou: false };
+      return {
+        hue: "blue",
+        word: RUNS_ROW_WORD.STARTING,
+        // Review F8: the substrate's own stage line ("Downloading the
+        // image" etc, design.md §2.2's STARTING/PENDING subline) — dropped
+        // when the rewrite moved off run-card.tsx, which rendered it.
+        subword: statusDetailSentence(run.status_detail, run.status_reason) || undefined,
+        action: null,
+        needsYou: false,
+      };
     case "PENDING":
-      return { hue: "blue", word: RUNS_ROW_WORD.QUEUED, action: null, needsYou: false };
+      return {
+        hue: "blue",
+        word: RUNS_ROW_WORD.QUEUED,
+        subword: statusDetailSentence(run.status_detail, run.status_reason) || undefined,
+        action: null,
+        needsYou: false,
+      };
     case "WAITING_FOR_CONFIRMATION":
       // Row 4 (run_attention.go) — "reserved, no producer today": a state
       // reaching here with no attention projected is not currently possible,
@@ -127,6 +153,10 @@ export interface RunSections {
 }
 
 function endedAtMs(run: AgentRun): number {
+  // A lease-ended run's own end time is lost_at (the lease end), never
+  // ended_at — the ended-run grace that eventually stops it for real would
+  // set ended_at LATER, at the wrong moment (design.md §2.2's own note).
+  if (run.lost_reason === "ended" && run.lost_at) return Date.parse(run.lost_at);
   return Date.parse(run.ended_at ?? run.updated_at ?? run.created_at);
 }
 
@@ -152,10 +182,11 @@ export function sectionRuns(runs: readonly AgentRun[], now: number = Date.now())
   for (const run of runs) {
     if (run.attention?.by === "you") {
       decide.push(run);
+    } else if (run.lost_reason === "ended") {
+      // Review F5: over, even though `state` is still RUNNING (see
+      // rowPresentation's own note above).
+      over.push(run);
     } else if (!isTerminalRunState(run.state)) {
-      // Includes a lease-ended run (lost_reason "ended") — it stays RUNNING
-      // until the ended-run grace, and its own "Ended at its end time" grey
-      // placement is L5 scope (design.md §4/§6); this is that seam.
       running.push(run);
     } else {
       over.push(run);

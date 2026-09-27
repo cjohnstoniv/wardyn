@@ -12,9 +12,26 @@ import {
   serializeRunsFilters,
 } from "./runs-filters";
 
+// Review F6: DEFAULT_RUNS_FILTERS.endedWithin as a hand-typed literal, not
+// read back through the constant — the test right below this one compared
+// parseRunsFilters' output against DEFAULT_RUNS_FILTERS itself, a tautology
+// that cannot catch the constant changing (the reviewer's M2b mutation, 7d
+// -> 30d, survived it).
+describe("DEFAULT_RUNS_FILTERS", () => {
+  it("H-2: ended runs default to the last 7 days", () => {
+    expect(DEFAULT_RUNS_FILTERS.endedWithin).toBe("7d");
+  });
+});
+
 describe("parseRunsFilters", () => {
   it("defaults an empty URL to the H-2 defaults (7d, killed off)", () => {
-    expect(parseRunsFilters(new URLSearchParams())).toEqual(DEFAULT_RUNS_FILTERS);
+    expect(parseRunsFilters(new URLSearchParams())).toEqual({
+      q: "",
+      status: "all",
+      endedWithin: "7d",
+      includeKilled: false,
+      workspace: "all",
+    });
   });
 
   it("reads every field back", () => {
