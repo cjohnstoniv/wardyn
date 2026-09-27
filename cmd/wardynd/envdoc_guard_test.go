@@ -417,7 +417,7 @@ func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
 // surface entirely, where the replacement's own docs/ENV.md row still spells
 // the OLD name for cross-reference (so an operator who remembers it can find
 // where it went) — unlike envDocAllow, these are not test-only and have no
-// reader anywhere, in test Go or otherwise. Keep in sync with the CHANGELOG's
+// reader anywhere, in test Go or otherwise. Keep in sync with docs/ENV.md's
 // "Renamed in 0.8" table.
 var envDocRetired = map[string]bool{
 	// #203: folded into WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's {app,pat} scope.

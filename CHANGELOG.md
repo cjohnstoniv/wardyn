@@ -3020,6 +3020,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   matching `wardynd`'s own fail-closed contract instead of guessing. `WARDYN_RUNNER_TARGET` keeps
   its name, moved to `docs/ENV.md`'s Test / internal-only section (it was never operator
   configuration). Full old → new table: `docs/ENV.md`'s "Renamed in 0.8" section.
+- **If you set `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` to an enable word, git_pat pushes are
+  UNCONFINED after this upgrade until you set `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=pat:on` (#203).**
+  The old name is no longer read anywhere and no longer forwarded to the proxy sidecar, so an
+  install that relied on it opting the PAT lane in silently falls back to that lane's own default,
+  OFF — nothing refuses boot, and the only signal is that the proxy's boot INFO line
+  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (pat scope) is on`) simply stops appearing. Translate the
+  old pair as `app:<old App value>,pat:<old PAT value>` (for example, if you had left the App lane
+  at its default and set only the PAT lane on, the equivalent single value is `app:on,pat:on`, or
+  just `pat:on` since the App lane's default is unchanged). Confirm the fix took by watching for
+  that same boot INFO line. Upgrade the proxy image together with wardynd: a 0.7.x proxy sidecar
+  behind a 0.8 wardynd (for example a pinned `WARDYN_PROXY_IMAGE`) reads the merged value with its
+  own old, bare-word-only parser — any `app:`/`pat:`-scoped value reads as garbage there, so it
+  enforces the App lane and logs a warning while the PAT lane stays at its own old default, OFF,
+  regardless of what the scoped value asked for.
 
 ### Added
 

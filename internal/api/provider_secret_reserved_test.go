@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -172,5 +173,45 @@ func TestSecretNameFormat_RefusedAtWrite(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestSecretRefsOf_RefusesProviderKeyDirectly pins inline_policy.go's
+// secretRefsOf guard (git_pat/ssh_key -> nameSinkReservedSecret) ON ITS OWN,
+// bypassing every HTTP door and policy.go's validatePolicySpec — the review
+// round for PR #1248 (finding F6) found that guard was, in every real call
+// path, unreachable-as-primary-defense: validatePolicySpec is the single
+// chokepoint every door (POST /policies, POST /runs, POST /runs/preflight,
+// presets, profiles, governance ceilings, LoadPolicySpec at boot) reaches
+// FIRST, so reverting only inline_policy.go's guard left the HTTP-level test
+// suite green. That makes it defense in depth, not dead code: a future call
+// path that reaches secretRefsOf before validatePolicySpec (or bypasses it
+// entirely) would still be caught here. Calling the method directly, with no
+// HTTP layer in between, is what actually exercises that on its own.
+func TestSecretRefsOf_RefusesProviderKeyDirectly(t *testing.T) {
+	s := &Server{}
+	for _, tc := range []struct {
+		name       string
+		spec       types.RunPolicySpec
+		errNamesIt bool // ssh_key's message deliberately doesn't name the offender (policy.go)
+	}{
+		{"git_pat", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{
+			Kind:  types.GrantGitPAT,
+			Scope: json.RawMessage(`{"host":"github.com","secret_name":"` + providerSecretNames[0] + `"}`),
+		}}}, true},
+		{"ssh_key", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{
+			Kind:  types.GrantSSHKey,
+			Scope: json.RawMessage(`{"host":"github.com","key_secret_ref":"` + providerSecretNames[0] + `"}`),
+		}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := func() error { _, err := s.secretRefsOf(tc.spec); return err }()
+			if err == nil {
+				t.Fatalf("secretRefsOf(%s naming %q) = nil, want an error", tc.name, providerSecretNames[0])
+			}
+			if tc.errNamesIt && !strings.Contains(err.Error(), providerSecretNames[0]) {
+				t.Fatalf("secretRefsOf(%s naming %q) = %v, want an error naming it", tc.name, providerSecretNames[0], err)
+			}
+		})
 	}
 }

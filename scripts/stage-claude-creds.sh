@@ -158,7 +158,7 @@ echo "sanitized: MCP servers + mcpOAuth tokens stripped from the sandbox copy"
 # exactly. A garbage value now fails loud (exit 2), matching cliutil.EnvBool's
 # own fail-closed contract, instead of silently taking the safe branch and
 # masking the typo.
-inject_word="$(printf '%s' "${WARDYN_SUBSCRIPTION_INJECT:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+inject_word="$(printf '%s' "${WARDYN_SUBSCRIPTION_INJECT:-}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 sanitize=1
 case "${inject_word}" in
   ""|1|true|yes|on) sanitize=1 ;;
