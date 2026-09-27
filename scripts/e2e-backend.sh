@@ -222,7 +222,6 @@ cmd_up() {
   cmd_seed
   log "Seeded backend ready:"
   log "  URL:   ${BASE_URL}"
-  log "  token: ${TOKEN}"
   log "  logs:  ${LOG_FILE}"
 }
 
@@ -277,6 +276,18 @@ cmd_down() {
 # crucially COMPLETED, the state that previously crashed the console.
 cmd_seed() {
   log "Seeding deterministic fixtures via API + SQL"
+  # Match fixtures.ts's synthetic per-person tokens; never persist the bearer.
+  psql_e2e -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256)
+VALUES
+  ('69800000-0000-4000-8000-000000000001', 'e2e-member', 'member@e2e.wardyn.invalid',
+   'user', 'standard', '[]', false, 'e2e member',
+   encode(sha256(convert_to('wdn_' || repeat('1', 64), 'UTF8')), 'hex')),
+  ('69800000-0000-4000-8000-000000000002', 'e2e-security-admin', 'security-admin@e2e.wardyn.invalid',
+   'security_admin', 'standard', '[]', false, 'e2e security admin',
+   encode(sha256(convert_to('wdn_' || repeat('2', 64), 'UTF8')), 'hex'))
+ON CONFLICT (id) DO NOTHING;
+SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,
   # not the first-run funnel (which has its own specs and mocks) — and this
   # backend deliberately runs with NO runner, whose permanent runner:fail would

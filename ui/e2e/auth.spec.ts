@@ -4,6 +4,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { MEMBER_TOKEN, MEMBER_PRINCIPAL, consoleAPI } from "./fixtures";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
@@ -176,6 +177,26 @@ test.describe("auth / sign-in gate", () => {
 
     // The accepted token is persisted.
     expect(await readToken(page)).toBe(GOOD_TOKEN);
+  });
+
+  test("a per-person token works through the token field", async ({ page }) => {
+    await page.goto("/");
+    await signInToken(page).fill(MEMBER_TOKEN);
+    await useTokenButton(page).click();
+    await expect(runsNav(page)).toBeVisible();
+    await expect(signInToken(page)).toHaveCount(0);
+
+    for (const reload of [false, true]) {
+      if (reload) await page.reload();
+      await expect(runsNav(page)).toBeVisible();
+      const response = await consoleAPI(page, "GET", "/api/v1/me");
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text)).toMatchObject({
+        principal: MEMBER_PRINCIPAL, method: "token", role: "user",
+        operator: false, security_operator: false, user_type: { id: "standard" },
+      });
+      expect((await consoleAPI(page, "GET", "/api/v1/site-config")).status).toBe(403);
+    }
   });
 
   test("reload keeps the session (a stored token boots straight into the console)", async ({ page }) => {
@@ -572,19 +593,8 @@ test.describe("the restored path is checked against the re-authenticated role", 
     );
     await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
 
-    // Re-authenticate as a MEMBER (the harness's bearer token is always
-    // admin server-side — splice GET /me the same way mockMemberRole does
-    // for every other member-render spec).
     await page.unroute("**/api/v1/**");
-    await page.route("**/api/v1/me", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.role = "user";
-      json.operator = false;
-      json.security_operator = false;
-      await route.fulfill({ response, json });
-    });
-    await signInToken(page).fill(GOOD_TOKEN);
+    await signInToken(page).fill(MEMBER_TOKEN);
     await useTokenButton(page).click();
 
     // /drives has no member surface at all — landed on Runs instead of a
