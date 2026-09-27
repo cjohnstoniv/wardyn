@@ -703,5 +703,5 @@ repository.
 | `WARDYN_LIVE_BEDROCK_MODEL` | string | Claude Haiku 4.5 (`us.` profile) | Refused unless the base model is Claude Haiku 4.5 or Amazon Nova Micro |
 | `WARDYN_LIVE_BEDROCK_MAX_CALLS` | int | `5` | Model calls allowed per test process; `1`–`20`, anything else is refused |
 | `WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID` | string | (none) | The AI-provider Integration id (LL3w) bound to this install's Bedrock lane and the member's captured AWS SSO session |
-| `WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID` | string | (none) | Optional: a second Bedrock Integration bound to a model the capped account's SCP denies, for LL3w's forced-AccessDenied half. Unset skips only that half |
+| `WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID` | string | (none) | Optional: a second Bedrock Integration on the BEARER (API-key) lane, bound to a model the capped account's SCP denies, for LL3w's forced-AccessDenied half. Unset skips only that half |
 | `WARDYN_LIVE_AUTONOMY_INTEGRATION_ID` | string | (none) | A working AI-provider Integration id (LL5) for the L0-capped member, so the request reaches the autonomy gate instead of failing earlier on an unrelated credential refusal |

@@ -17,10 +17,14 @@ import (
 // network. It also proves the check is not vacuous — a body that is a 403 for
 // some OTHER reason, or that resolves to a different rung, must fail it.
 func TestAutonomyL0RefusalOK(t *testing.T) {
+	// No "reason" key: refuse() -> writeError -> writeErrorReason(w, status,
+	// "", msg) always sends an EMPTY reason on this refusal (errorBody.Reason
+	// is omitempty). A fixture that added one would hide a check against it
+	// from ever failing red against a real server (#1247 review F1).
 	const l0Body = `{"error":"unattended runs are not allowed by your governance profile ` +
 		`\"capped-l0\" at this run's posture: it permits autonomy level L0 (bound by egress_sealed), ` +
 		`which requires a human at the pane. Launch with --interactive, or narrow the run's egress, ` +
-		`secrets or confinement.","reason":"governance_profile"}`
+		`secrets or confinement."}`
 	if err := AutonomyL0RefusalOK(l0Body); err != nil {
 		t.Fatalf("a genuine L0 refusal body was rejected: %v", err)
 	}
@@ -56,13 +60,12 @@ func agentPolicyEvent(t *testing.T, level string, delivered bool, reason string)
 	return types.AuditEvent{ID: uuid.New(), Action: "run.agent_policy.write", Data: data}
 }
 
-// TestAgentPolicyDeliveredAndNoExec pins the LL5 k8s/Docker delivery check
-// hermetically: delivered=true at the right level with no run.exec row
-// passes; a missing row, the wrong level, delivered=false, or a run.exec row
-// alongside it must all fail.
-func TestAgentPolicyDeliveredAndNoExec(t *testing.T) {
+// TestAgentPolicyDeliveredOK pins the LL5 k8s/Docker delivery check
+// hermetically: delivered=true at the right level passes; a missing row, the
+// wrong level or delivered=false must all fail.
+func TestAgentPolicyDeliveredOK(t *testing.T) {
 	good := []types.AuditEvent{agentPolicyEvent(t, "L0", true, "")}
-	if err := AgentPolicyDeliveredAndNoExec(good, "L0"); err != nil {
+	if err := AgentPolicyDeliveredOK(good, "L0"); err != nil {
 		t.Fatalf("a genuine delivered=true L0 row was rejected: %v", err)
 	}
 
@@ -73,13 +76,9 @@ func TestAgentPolicyDeliveredAndNoExec(t *testing.T) {
 		{"no agent_policy row at all", nil},
 		{"delivered=false", []types.AuditEvent{agentPolicyEvent(t, "L0", false, "the sandbox spec did not carry the file")}},
 		{"wrong level", []types.AuditEvent{agentPolicyEvent(t, "L1", true, "")}},
-		{"a run.exec row is present too", []types.AuditEvent{
-			agentPolicyEvent(t, "L0", true, ""),
-			{ID: uuid.New(), Action: "run.exec"},
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := AgentPolicyDeliveredAndNoExec(tc.events, "L0"); err == nil {
+			if err := AgentPolicyDeliveredOK(tc.events, "L0"); err == nil {
 				t.Fatalf("events %+v were accepted", tc.events)
 			}
 		})

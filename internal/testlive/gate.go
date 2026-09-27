@@ -16,11 +16,11 @@ import (
 // The live suites' environment. Values that are secrets are never read from
 // the environment: the *_FILE names hold a path to a file outside the repo.
 const (
-	EnvEntra      = "WARDYN_LIVE_ENTRA"
-	EnvADO        = "WARDYN_LIVE_ADO"
-	EnvADOWrite   = "WARDYN_LIVE_ADO_WRITE" // LL2b: pushes and deletes one scratch branch
-	EnvBedrock    = "WARDYN_LIVE_BEDROCK"
-	EnvAWSSSO     = "WARDYN_LIVE_AWS_SSO"
+	EnvEntra    = "WARDYN_LIVE_ENTRA"
+	EnvADO      = "WARDYN_LIVE_ADO"
+	EnvADOWrite = "WARDYN_LIVE_ADO_WRITE" // LL2b: pushes and deletes one scratch branch
+	EnvBedrock  = "WARDYN_LIVE_BEDROCK"
+	EnvAWSSSO   = "WARDYN_LIVE_AWS_SSO"
 	// EnvBedrockWardyn (LL3w) is Bedrock reached THROUGH a Wardyn run — a
 	// governed sandbox's own model call — as opposed to EnvBedrock (LL3),
 	// which drives the Bedrock data plane directly from the test process.
