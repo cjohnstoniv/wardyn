@@ -65,21 +65,13 @@ async function asViewer(page: Page, principal: string, admin = false): Promise<v
  *  than its result closes that window: a second request arriving before the
  *  first resolves awaits the same promise instead of starting its own fetch.
  *
- *  `statusRefreshed` resolves once that SECOND request has round-tripped
- *  (#1291): caching the promise stops the handler dialing the real backend
- *  twice, but the BROWSER still gets two separate Response bodies — one per
- *  fetch() call — so the failure block's own refresh still lands as a genuine
- *  second context update, re-rendering ProviderDoor's button after the page's
- *  first paint. A caller about to click a door button a credential-ending
- *  failed run renders awaits this so the click lands after that churn
- *  settles, not mid-way through it. */
-async function withProviders(page: Page): Promise<{ statusRefreshed: Promise<void> }> {
+ *  This is NOT the only caller of /setup/status in a session that reaches a
+ *  failed run — the App shell's auth effect, a member's Getting-started mount
+ *  and the Runs screen's own mount read all hit it first (#1291) — so a wait
+ *  keyed on a request COUNT cannot find the failure block's own call; see
+ *  statusSettledOnRunPage below, which keys on the page instead. */
+async function withProviders(page: Page): Promise<void> {
   let cachedPromise: Promise<Record<string, unknown>> | null = null;
-  let calls = 0;
-  let resolveRefreshed: () => void;
-  const statusRefreshed = new Promise<void>((resolve) => {
-    resolveRefreshed = resolve;
-  });
   await page.route("**/api/v1/setup/status*", async (route: Route) => {
     if (!cachedPromise) {
       cachedPromise = (async () => {
@@ -94,14 +86,27 @@ async function withProviders(page: Page): Promise<{ statusRefreshed: Promise<voi
       })();
     }
     await route.fulfill({ json: await cachedPromise });
-    calls += 1;
-    if (calls === 2) resolveRefreshed();
   });
   // The AWS and Claude doors start their sign-in at once; nothing here signs in.
   await page.route("**/api/v1/model-providers/*/sign-in", (route) =>
     route.fulfill({ status: 503, json: { error: "e2e: no sign-in here" } }),
   );
-  return { statusRefreshed };
+}
+
+/** Resolves on the FIRST /setup/status response that lands while `page` is
+ *  already ON a run detail page (#1291) — the failure block's own
+ *  credential-ending refresh, never the App shell's, Getting-started's or the
+ *  Runs screen's own reads, which all happen earlier and off that URL.
+ *  /setup/status carries no request marker of its own, so the URL at response
+ *  time is the one signal that reliably tells this call apart from the other
+ *  three. Safe to arm before navigation even starts: Playwright only matches
+ *  responses that occur AFTER this is called, and the URL guard, evaluated
+ *  per response, is what keeps an early arm from matching one of the earlier
+ *  three calls once they land. */
+function statusSettledOnRunPage(page: Page): Promise<unknown> {
+  return page.waitForResponse(
+    (r) => r.url().includes("/api/v1/setup/status") && /\/runs\/[^/]+$/.test(new URL(page.url()).pathname),
+  );
 }
 
 /** Fixture 6 (FAILED) refused over `provider`'s credential, created by `owner`. */
@@ -160,7 +165,10 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
     test(`${c.p.kind}: the owner's "${c.label}" opens ${c.p.name}'s door`, async ({ page }) => {
       const sentence = refusal(c.p.name, c.state);
       await asViewer(page, VIEWER);
-      const { statusRefreshed } = await withProviders(page);
+      // Armed before navigation, not after the click — see the function's
+      // own comment on why an early arm is still safe here.
+      const statusRefreshed = statusSettledOnRunPage(page);
+      await withProviders(page);
       await refusedRun(page, c.p, sentence);
       await openFailedRun(page);
 
@@ -176,6 +184,10 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       // mount effect, failure-block.tsx) to land before clicking (#1291): it
       // re-renders this button's parent a second time, close on the first
       // paint's heels, and a click that lands inside that window can miss.
+      // Playwright's own click() actionability polling (attached, visible,
+      // stable, receives events — re-checked immediately before dispatch)
+      // covers the remaining gap between the response landing and React
+      // committing the re-render it causes.
       await statusRefreshed;
       await button.click();
       const dialog = page.getByRole("dialog", { name: c.dialog });
