@@ -53,6 +53,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   behavior is otherwise unchanged. Two refusals are deliberately still bare: an unanswered AWS
   Bedrock SSO renewal (an outage, not an actionable class) and a push-content approval's
   foreign-owner 404 (must stay byte-identical to a missing approval's).
+- **`/site-config` (including its probe and egress-redirect routes), `/governance`, `/secrets`,
+  `/people`, `/access`, `/permissions`, `/admin/delegates`, `/setup/integrations`,
+  `/setup/onboarding-complete`, `/sessions/revoke`, `/ssh-keys` (self-service and admin), and the
+  user-drive doors (allocation, reclaim, the naming/bind previews, and the launch-time drive
+  resolver) now send the same machine-readable `reason` on every refusal (#656 slice 2).**
+  `refuseDrive`'s existing metric/audit reason (its closed set now declared in
+  `internal/api/reasons.go`, already used for `wardyn_drive_refusals_total`) now also reaches the
+  wire, and `groups_snapshot_stale` is the SAME registered reason as `authz.ReasonGroupsSnapshotStale`
+  — a literal in `reasons.go`, not a reference, so the docs⟷reasons.go guard can see it, tied to
+  authz's value by a documented `TestNoAdHocAuthz` exception rather than a second copy invented for
+  this package. `docs/sdk.md`'s reason table covers the new routes.
 - **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
   rail lists every provider you may use for it, with its kind, your connection state and where
   the credential lives during the run, and the run is sent with the one you pick. The agent's

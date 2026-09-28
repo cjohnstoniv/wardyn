@@ -816,7 +816,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigProbeRequestInvalid, "invalid JSON body: "+err.Error())
 		return
 	}
 	// A caller-supplied probe target is a deliberate exception to the rule
@@ -829,7 +829,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// the same validation every stored site-config URL does.
 	custom := strings.TrimSpace(req.URL)
 	if custom != "" && !validSiteURL(custom) {
-		writeError(w, http.StatusBadRequest,
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigProbeURLInvalid,
 			"url: must be a plain http(s) URL with a real host, and no shell metacharacters")
 		return
 	}
@@ -951,7 +951,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if strings.TrimSpace(req.From) == "" {
-		writeError(w, http.StatusBadRequest, "from is required")
+		writeErrorReason(w, http.StatusBadRequest, reasonEgressRedirectFromRequired, "from is required")
 		return
 	}
 	ctx := r.Context()
@@ -962,7 +962,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	}
 	red, ok := findEgressRedirect(siteCfg, req.From)
 	if !ok {
-		writeError(w, http.StatusNotFound, "no egress_redirects entry with that from")
+		writeErrorReason(w, http.StatusNotFound, reasonEgressRedirectNotFound, "no egress_redirects entry with that from")
 		return
 	}
 	if s.cfg.Runner == nil {

@@ -1679,6 +1679,11 @@ func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
 		if !strings.Contains(body, "does not mount drives") {
 			t.Errorf("body = %s, want the reason to name the runner as the limitation", body)
 		}
+		// #656 slice 2 review round S4: pin refuseDrive's LITERAL wire
+		// reason, not just the Go constant.
+		if got := errorReason(w); got != "runner_cannot_mount" {
+			t.Errorf("reason = %q, want the literal \"runner_cannot_mount\"; body=%s", got, body)
+		}
 	})
 
 	t.Run("a runner that can mount drives is unaffected", func(t *testing.T) {
@@ -1923,17 +1928,19 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	}
 }
 
-// driveRefusalConstants reads the driveRefusal* string constants straight out of
-// internal/api/user_drives_run.go, so the label-set guard above has a source of
-// truth that is not the list it is checking. Same genre as cmd/wardynd's
-// envdoc_guard_test.go and this package's TestPreflightMirrorsLaunchGates: a
-// hand-maintained inventory is only an inventory if something reads the thing it
-// claims to inventory.
+// driveRefusalConstants reads the driveRefusal* string constants straight out
+// of internal/api/reasons.go — moved there from user_drives_run.go in #656
+// slice 2's review round, so TestReasonDocsMatchReasonsGo (which only reads
+// that one file) can see them too — so the label-set guard above has a
+// source of truth that is not the list it is checking. Same genre as
+// cmd/wardynd's envdoc_guard_test.go and this package's
+// TestPreflightMirrorsLaunchGates: a hand-maintained inventory is only an
+// inventory if something reads the thing it claims to inventory.
 func driveRefusalConstants(t *testing.T) map[string]bool {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), "user_drives_run.go", nil, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(token.NewFileSet(), "reasons.go", nil, parser.SkipObjectResolution)
 	if err != nil {
-		t.Fatalf("parse user_drives_run.go: %v", err)
+		t.Fatalf("parse reasons.go: %v", err)
 	}
 	out := map[string]bool{}
 	for _, d := range f.Decls {
@@ -1959,7 +1966,7 @@ func driveRefusalConstants(t *testing.T) map[string]bool {
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no driveRefusal* constants found in user_drives_run.go — this guard reads them from source; " +
+		t.Fatal("no driveRefusal* constants found in reasons.go — this guard reads them from source; " +
 			"re-point it at the new shape rather than deleting it")
 	}
 	return out

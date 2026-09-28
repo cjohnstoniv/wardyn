@@ -44,7 +44,7 @@ func (s *Server) mountPeopleRoutes(securityOps chi.Router) {
 func (s *Server) personStoreOr501(w http.ResponseWriter) (store.PersonStore, bool) {
 	ps, ok := s.cfg.Store.(store.PersonStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "pre-created people require the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonPeopleStoreUnavailable, "pre-created people require the Postgres store backend")
 	}
 	return ps, ok
 }
@@ -92,13 +92,13 @@ func (s *Server) handleCreatePerson(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	switch {
 	case !validSubject(req.Principal):
-		writeError(w, http.StatusUnprocessableEntity, "principal: the identity provider's subject (sub) exactly, 1-255 printable characters, no spaces")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPersonPrincipalInvalid, "principal: the identity provider's subject (sub) exactly, 1-255 printable characters, no spaces")
 		return
 	case s.isReservedPrincipal(req.Principal):
-		writeError(w, http.StatusUnprocessableEntity, "principal: that subject is reserved for a non-person identity")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPersonPrincipalReserved, "principal: that subject is reserved for a non-person identity")
 		return
 	case email != "" && !validPersonEmail(email):
-		writeError(w, http.StatusUnprocessableEntity, "email: invalid")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPersonEmailInvalid, "email: invalid")
 		return
 	}
 	ctx := r.Context()
@@ -113,12 +113,12 @@ func (s *Server) handleCreatePerson(w http.ResponseWriter, r *http.Request) {
 	}
 	if refusal := personCollision(directory, req.Principal, email); refusal != "" {
 		s.auditOwnerRefusal(r, "person.create", req.Principal, "collision")
-		writeError(w, http.StatusConflict, refusal)
+		writeErrorReason(w, http.StatusConflict, reasonPersonCollision, refusal)
 		return
 	}
 	p, created, err := ps.CreatePerson(ctx, types.Person{Principal: req.Principal, Email: email, CreatedBy: principalFromRequest(r)})
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, personEmailTakenMsg)
+		writeErrorReason(w, http.StatusConflict, reasonPersonEmailTaken, personEmailTakenMsg)
 		return
 	}
 	if err != nil {
@@ -199,11 +199,11 @@ func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 	caller := oidcHumanFromContext(ctx)
 	if caller == "" || s.cfg.OIDC == nil {
-		writeError(w, http.StatusForbidden, personMintNoHumanRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonPersonMintNoHuman, personMintNoHumanRefusal)
 		return
 	}
 	if apiTokenIDFromContext(ctx) != uuid.Nil {
-		writeError(w, http.StatusForbidden, "an API token cannot create another API token — sign in to the console to mint one")
+		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromAPIToken, "an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
 	ps, ok := s.personStoreOr501(w)
@@ -217,7 +217,7 @@ func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request
 	principal := principalParam(r)
 	p, err := ps.GetPerson(ctx, principal)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && s.isReservedPrincipal(p.Principal)) {
-		writeError(w, http.StatusNotFound, "no person is recorded under this subject — create or confirm them with POST /api/v1/people first")
+		writeErrorReason(w, http.StatusNotFound, reasonPersonNotFound, "no person is recorded under this subject — create or confirm them with POST /api/v1/people first")
 		return
 	}
 	if err != nil {
@@ -232,7 +232,7 @@ func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request
 	if status, reason, msg := s.personMintRefusal(ctx, d); status != 0 {
 		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), caller,
 			"person.token.create", p.Principal, "denied", mustJSON(map[string]any{"reason": reason, "role": d.Role})))
-		writeError(w, status, msg)
+		writeErrorReason(w, status, reason, msg)
 		return
 	}
 	if s.apiTokenCapReached(w, r, p.Principal) {
@@ -247,7 +247,7 @@ func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if revoked {
-			writeError(w, http.StatusForbidden, personMintNoHumanRefusal)
+			writeErrorReason(w, http.StatusForbidden, reasonPersonMintNoHuman, personMintNoHumanRefusal)
 			return
 		}
 	}
@@ -273,13 +273,13 @@ func (s *Server) personMintRefusal(ctx context.Context, d oidc.Derivation) (stat
 	elevated := s.isSecurityOperator(roleSnapshotCtx(d.Role))
 	switch {
 	case !d.OK():
-		return http.StatusConflict, "no_sign_in",
+		return http.StatusConflict, reasonPersonMintNoSignIn,
 			"this person's email derives no sign-in on this deployment (" + d.Denial + "), so there is no role to mint a token under"
 	case elevated && slices.ContainsFunc(d.Matches, func(m oidc.Match) bool { return m.Source == oidc.MatchSourceDefaultRole }):
-		return http.StatusConflict, "default_role_unknown_groups",
+		return http.StatusConflict, reasonPersonMintDefaultRoleUnknownGroups,
 			"this person's role would come from the elevated default role, which their groups could narrow once known — they must sign in once first"
 	case elevated && !s.isOperator(ctx):
-		return http.StatusForbidden, "elevated_target",
+		return http.StatusForbidden, reasonPersonMintElevatedTarget,
 			"only a super admin may mint a token for an admin or a security admin"
 	}
 	return 0, "", ""

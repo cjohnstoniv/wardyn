@@ -95,7 +95,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 			slog.ErrorContext(r.Context(), "api: delegated-token lookup failed; this request could not be authenticated",
 				"error", err, "path", r.URL.Path)
 			s.metrics.authStoreErrorInc()
-			writeError(w, http.StatusServiceUnavailable, "delegated token lookup failed")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "delegated token lookup failed")
 			return
 		}
 		// The person's own cutoff (POST /sessions/revoke), against the token's
@@ -106,7 +106,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this delegated token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
 				s.metrics.authStoreErrorInc()
-				writeError(w, http.StatusServiceUnavailable, "delegated token lookup failed")
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "delegated token lookup failed")
 				return
 			}
 			if revoked {
