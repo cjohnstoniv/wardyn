@@ -84,9 +84,16 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--network", "host",
+		// The image's agent user is a fixed uid 1000, but the bind-mounted
+		// awsDir (t.TempDir(), 0700) belongs to whatever uid is running the
+		// test — matching that here is what let the CLI read/write it on a
+		// GitHub-hosted runner (uid 1001), not just on a dev box that happens
+		// to be uid 1000.
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-e", "AWS_ENDPOINT_URL_SSO_OIDC="+s.URL(),
 		"-e", "AWS_ENDPOINT_URL_SSO="+s.URL(),
 		"-e", "AWS_PAGER=",
+		"-e", "HOME=/home/agent",
 		"-v", awsDir+":/home/agent/.aws",
 		DefaultImage,
 		"aws", "sso", "login", "--profile", profileName, "--no-browser", "--use-device-code",
@@ -102,9 +109,20 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 	}
 
 	// Wait for the CLI to hit StartDeviceAuthorization, then approve. Poll
-	// briefly rather than sleeping a fixed guess.
+	// briefly rather than sleeping a fixed guess. Wait() runs in its own
+	// goroutine so a container that exits immediately (e.g. a uid/HOME
+	// mismatch) fails fast with its output instead of spinning for the
+	// full 30s only to time out on StartURLSeen().
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
 	deadline := time.Now().Add(30 * time.Second)
 	for s.StartURLSeen() == "" {
+		select {
+		case waitErr := <-exited:
+			t.Fatalf("aws sso login exited before StartDeviceAuthorization: %v\n--- container output ---\n%s", waitErr, logBuf.Bytes())
+		default:
+		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
 			t.Fatalf("aws sso login never reached StartDeviceAuthorization within 30s")
@@ -113,7 +131,7 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 	}
 	s.Approve()
 
-	waitErr := cmd.Wait()
+	waitErr := <-exited
 	cliLog := logBuf.Bytes()
 	if waitErr != nil {
 		t.Fatalf("aws sso login failed: %v\n--- container output ---\n%s", waitErr, cliLog)
@@ -192,9 +210,13 @@ func RunAWSCommand(t *testing.T, s *Server, homeFiles map[string]string, args ..
 	dockerArgs := append([]string{
 		"run", "--rm",
 		"--network", "host",
+		// See RunDeviceCodeLogin: match the bind-mounted TempDir's owning uid,
+		// not the image's fixed uid 1000.
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-e", "AWS_ENDPOINT_URL_SSO_OIDC=" + s.URL(),
 		"-e", "AWS_ENDPOINT_URL_SSO=" + s.URL(),
 		"-e", "AWS_PAGER=",
+		"-e", "HOME=/home/agent",
 		"-v", home + ":/home/agent",
 		DefaultImage,
 	}, args...)

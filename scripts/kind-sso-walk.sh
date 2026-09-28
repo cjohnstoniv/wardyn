@@ -317,11 +317,32 @@ printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
 # manifest, so re-pushing the SAME tag after a no-op rebuild would leave the
 # node still holding what it pulled last time — warm, silently, with nothing
 # in this script's own output saying so.
+#
+# A fresh TAG alone is not a fresh PULL. `docker tag` + push changes only the
+# manifest; every LAYER underneath is byte-identical to whatever other kind-
+# loaded image already shares AWS_SSO_IMAGE's base, and the node's containerd
+# already holds those layers from the OTHER four images this walk loads —
+# nightly evidence showed a 48ms "pull" of a manifest whose layers were all
+# already local. Build a derived image with one incompressible layer of fresh
+# random bytes on top, so the node must actually download new content, not
+# just resolve a new manifest to old blobs. `--no-cache`, and the tag baked
+# into the instruction text, so a second walk's identical-looking build still
+# produces new bytes rather than replaying Docker's own build cache.
 AWS_SSO_COLD_TAG="cold-$(date +%s)"
 AWS_SSO_NODE_IMAGE="localhost:${REGISTRY_PORT}/agent-aws-sso:${AWS_SSO_COLD_TAG}"
-docker tag "${AWS_SSO_IMAGE}" "${AWS_SSO_NODE_IMAGE}" || die "could not tag ${AWS_SSO_IMAGE} for the registry"
+# 64-128 MiB: the sign-in pane only learns about the pull via its own 2s
+# poll (harness-login-pane.tsx's RUN_POLL_MS), so the download has to
+# outlast at least one of those ticks with real margin — a 16-64 MiB pad
+# measured at ~2-2.4s wall clock (mostly fixed per-pull overhead, not
+# bandwidth) left too much of that window uncovered. Doubling the floor
+# buys margin without turning every walk into a large image build/push.
+COLD_PULL_MIB=$(( 64 + RANDOM % 65 ))
+printf 'FROM %s\nRUN head -c %dm /dev/urandom > /tmp/.wardyn-coldpull-pad # %s\n' \
+    "${AWS_SSO_IMAGE}" "${COLD_PULL_MIB}" "${AWS_SSO_COLD_TAG}" \
+  | docker build --no-cache -t "${AWS_SSO_NODE_IMAGE}" - \
+  || die "could not build a derived cold-pull image from ${AWS_SSO_IMAGE}"
 docker push "${AWS_SSO_NODE_IMAGE}" || die "could not push ${AWS_SSO_NODE_IMAGE} to the local registry"
-echo "aws-sso pod image: ${AWS_SSO_NODE_IMAGE} (content: ${AWS_SSO_IMAGE})"
+echo "aws-sso pod image: ${AWS_SSO_NODE_IMAGE} (content: ${AWS_SSO_IMAGE} + ${COLD_PULL_MIB} MiB random pad)"
 
 # Recorded EVERY run, rebuilt or not. None of these images carries an
 # org.opencontainers.image.revision label, so the honest provenance is the
@@ -824,6 +845,15 @@ for spec in "${specs[@]}"; do
       mkdir -p "${EVIDENCE_DIR}/test-results"
       cp -r "${ROOT}/ui/test-results" "${EVIDENCE_DIR}/test-results/${spec}"
     fi
+  fi
+  # sso-member is the ONE spec that drives the cold aws-sso sign-in
+  # (helpers.ts's openLoginPaneAssertingColdPull) — record the pull's own
+  # duration right after it, into the walk's evidence, for whoever reads a
+  # red run next. Evidence only: it never fails the walk (see
+  # record_cold_pull_duration's own comment for why a wall-clock floor here
+  # would fail real cold pulls too).
+  if [[ "${spec}" == "sso-member" ]]; then
+    record_cold_pull_duration
   fi
 done
 

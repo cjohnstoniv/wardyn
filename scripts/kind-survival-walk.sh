@@ -161,8 +161,18 @@ psql1() {
 # kill.
 create_running_run() {
   local code rid pod up=""
+  # cpu_millis/memory_mib kept small (types.ResourceLimits, internal/types/
+  # policy.go:527): the platform default is 2000m CPU per agent pod plus 500m
+  # for its proxy sidecar (internal/runner/sandbox.go, internal/runner/k8s/
+  # naming.go), which leaves room for only one run at a time on the single
+  # 4-vCPU quickstart node alongside the control plane, Calico, wardynd and
+  # postgres — run B's own pod would stay Pending forever while run A (from
+  # scenario A, above) is still RUNNING. A quarter of a vCPU is still a real,
+  # schedulable request, never zero (an unbounded request is the platform
+  # default, not a smaller one).
   code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:kind-survival","interactive":true,
-    "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","auto_stop_after_sec":-1}}')
+    "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","auto_stop_after_sec":-1,
+    "resources":{"cpu_millis":250,"memory_mib":256}}}')
   [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /runs answered ${code}"; }
   rid="$(jq -r '.id' "${TMPDIR}/resp.json")"
   [[ -n "${rid}" && "${rid}" != "null" ]] || die "create-run response carried no id"
@@ -240,8 +250,17 @@ step "B: launching a second run, then cordoning its node and deleting its pod di
 RUN_B_ID="$(create_running_run)"
 pod_b="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -l "wardyn.run-id=${RUN_B_ID}" \
   -o jsonpath='{.items[0].metadata.name}')"
+[[ -n "${pod_b}" ]] || die "could not resolve run ${RUN_B_ID}'s own pod"
+# create_running_run only waits for the pod OBJECT to exist, not for the
+# scheduler to place it — on the single node this cluster has, a still-RUNNING
+# run A (scenario A, above) can leave no room, and a plain scheduling race
+# (read before bind) gives the same symptom either way. Wait for the
+# scheduler's own verdict, with a deadline, and dump the pod's own events on
+# timeout instead of dying on an empty .spec.nodeName with no diagnosis.
+kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" wait --for=condition=PodScheduled "pod/${pod_b}" --timeout=120s \
+  || { kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" describe pod "${pod_b}" >&2; die "run ${RUN_B_ID}'s pod ${pod_b} never reached PodScheduled within 120s"; }
 node_b="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pod "${pod_b}" -o jsonpath='{.spec.nodeName}')"
-[[ -n "${pod_b}" && -n "${node_b}" ]] || die "could not resolve run ${RUN_B_ID}'s own pod/node"
+[[ -n "${node_b}" ]] || die "run ${RUN_B_ID}'s pod ${pod_b} reports PodScheduled but carries no .spec.nodeName"
 pass "run ${RUN_B_ID} scheduled as pod ${pod_b} on node ${node_b}"
 
 kubectl --context "${CONTEXT}" cordon "${node_b}" || die "cordoning ${node_b} failed"
