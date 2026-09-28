@@ -221,6 +221,20 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Add key" })).toBeInTheDocument();
   });
+
+  // review R2-L1: the packet has no error row for this card, and the
+  // expanded body's own ErrorState already renders "Something went wrong" —
+  // showing it as the collapsed summary too would put the same string on
+  // screen twice at once.
+  it("a failed key list carries no collapsed summary, and the expanded body's own error heading is not repeated", async () => {
+    listKeysMock.mockRejectedValue(new Error("HTTP 500"));
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
+    const card = within(heading.closest("section")!);
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
+    expect(await card.findByText("Something went wrong")).toBeInTheDocument();
+    expect(card.getAllByText("Something went wrong")).toHaveLength(1);
+  });
 });
 
 // #1200 — the Host card mounts the shared TierPicker in display mode: unchanged

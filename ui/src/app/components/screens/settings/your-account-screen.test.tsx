@@ -7,7 +7,7 @@
 // part of the unsplit settings-screen.test.tsx until M-5 split the page in
 // two (issue #636's own "Check": "the settings specs split per view").
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 const getSetupStatusMock = vi.fn();
@@ -136,6 +136,20 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
       "title",
       "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
     );
+  });
+
+  // review R2-L1: the packet has no error row for this card, and the
+  // expanded body's own ErrorState already renders "Something went wrong" —
+  // showing it as the collapsed summary too would put the same string on
+  // screen twice at once.
+  it("a failed key list carries no collapsed summary, and the expanded body's own error heading is not repeated", async () => {
+    listKeysMock.mockRejectedValue(new Error("HTTP 500"));
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    const card = within(heading.closest("section")!);
+    await expandCard("Your SSH keys");
+    expect(await card.findByText("Something went wrong")).toBeInTheDocument();
+    expect(card.getAllByText("Something went wrong")).toHaveLength(1);
   });
 });
 
