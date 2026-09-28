@@ -61,6 +61,27 @@ func TestGroundtruthTokenRejectedOnMintEndpoint(t *testing.T) {
 	}
 }
 
+// TestGroundtruthTokenRejectedOnInjectionEndpoint is T-32 (#692): the same
+// audience-separation boundary as TestGroundtruthTokenRejectedOnMintEndpoint,
+// pinned on the credential-RESOLVE route a run's proxy actually calls
+// (GET /api/v1/internal/injection/{grantID}, internalAuth's internalAudience)
+// rather than the mint route. A groundtruth token grants ONLY
+// wardyn-groundtruth audit-write; it must never resolve an injected
+// credential VALUE.
+//
+// COUNTERFACTUAL: wire GET /api/v1/internal/injection/{grantID} behind
+// internalAuthGroundtruth instead of internalAuth (or widen internalAuth to
+// accept groundtruthAudience) and this goes green for the wrong reason —
+// 401 flips to something else entirely once the audience check is bypassed.
+func TestGroundtruthTokenRejectedOnInjectionEndpoint(t *testing.T) {
+	h, _ := newSecretsHarness(t) // mounts GET /internal/injection/{grantID} (cfg.Secrets != nil)
+	gtTok := h.mintGroundtruthToken(t)
+	w := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.New().String(), gtTok, "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("groundtruth token on injection resolve: code = %d, want 401 (audit-write-only)", w.Code)
+	}
+}
+
 func TestGroundtruthHeartbeatAcceptedNullRun(t *testing.T) {
 	// A heartbeat (run_id NULL) must be accepted with NO Pool wired (GetRun is
 	// only called for non-NULL run ids), and recorded with forced attribution.
