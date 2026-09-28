@@ -77,12 +77,11 @@ ok()  { echo "ok: $*"; }
 # or Docker execution was available to prove them here — see each script's
 # own header). Add all three back to notify-new-lanes' needs (and drop them
 # from here) once each has gone green on a real scheduled run.
-# provider-subscription-docker-pg (#677 T-17): new, never run on a hosted
-# runner — same posture PR #1245 gave daemon-proxy-secret-kind. Add it to
-# notify-new-lanes' needs + release.yml's watched= together (guard 13), and
-# drop it from here, once it has gone green on a real nightly run.
+# provider-subscription-docker-pg (#677 T-17) went green on its first real
+# nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
+# notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk provider-subscription-docker-pg"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"

@@ -336,11 +336,15 @@ jobs:
   # WARDYN_TEST_PG together, so #1129's hermetic Docker+Postgres slice of the
   # per-person Claude subscription lane — TestProviderSubscriptionDocker_
   # PerPersonCaptureAndRunIsolation (internal/api, //go:build docker) — ran
-  # only locally. The test is fully self-contained (builds its own
-  # test/subfake binary and its own wardyn-proxy image from this checkout;
-  # see the test file's own doc comment), so this job only has to give it the
-  # two knobs neither ci.yml (no live daemon under WARDYN_TEST_DOCKER) nor
-  # docker-tagged-live above (no Postgres) provides.
+  # only locally. The test builds its own test/subfake binary and its own
+  # wardyn-proxy image from this checkout (see the test file's own doc
+  # comment), but is NOT fully self-contained: it needs busybox:latest
+  # pre-pulled (below) and a published port a native-Linux dockerd's
+  # host-gateway route can actually reach (provider_subscription_docker_test.go's
+  # own comment on startSubfakeVendor) — both found the hard way, on this
+  # job's first two real runs. Went green on its third (workflow_dispatch,
+  # 2026-09-28, run 36393687863), so it is now in notify-new-lanes.needs +
+  # release.yml's watched= (guard 13) rather than NOTIFY_EXEMPT.
   provider-subscription-docker-pg:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1214,7 +1218,7 @@ jobs:
         run: ./scripts/nightly-migration-merge-check.sh
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1236,7 +1240,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles or daemon-proxy-secret-kind." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind or provider-subscription-docker-pg." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
