@@ -68,3 +68,33 @@ if [[ "${IMAGES_AGREE}" != "1" ]]; then
   echo "WARNING: an image the node runs is NOT the one this daemon holds (see ${EVIDENCE_DIR}/images.txt)." >&2
   echo "         Re-run with WARDYN_KIND_SSO_REBUILD=1, which rebuilds all five (aws-sso is then re-pushed to the registry on this same run, step 1c)." >&2
 fi
+
+# #891: prove the aws-sso pull was actually COLD, not just that a Pulling
+# event exists — a warm pull (shared base layers, the old retag-only image)
+# still emits both a Pulling and a Pulled event, just seconds-to-milliseconds
+# apart instead of the several seconds a genuine download of the random pad
+# layer takes. Diffs the two Events' own (second-granularity) timestamps
+# rather than parsing the kubelet's free-text "in <duration>" message, whose
+# format has changed across k8s versions. Called from kind-sso-walk.sh right
+# after the spec that drives the cold sign-in (sso-member.spec.ts) returns, so
+# a warm node is reported as ITSELF, not as a mystery 90s UI timeout.
+record_cold_pull_duration() {
+  local events pulling_ts pulled_ts dur
+  events="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get events -o json 2>/dev/null)"
+  pulling_ts="$(jq -r --arg img "${AWS_SSO_NODE_IMAGE}" \
+    '[.items[]? | select(.reason=="Pulling" and (.message // "" | contains($img)))] | sort_by(.lastTimestamp) | last | .lastTimestamp // empty' \
+    <<<"${events}")"
+  pulled_ts="$(jq -r --arg img "${AWS_SSO_NODE_IMAGE}" \
+    '[.items[]? | select(.reason=="Pulled" and (.message // "" | contains($img)))] | sort_by(.lastTimestamp) | last | .lastTimestamp // empty' \
+    <<<"${events}")"
+  if [[ -z "${pulling_ts}" || -z "${pulled_ts}" ]]; then
+    echo "aws-sso cold pull duration: UNKNOWN (no Pulling/Pulled event found for ${AWS_SSO_NODE_IMAGE} in ${RUNS_NAMESPACE})" \
+      | tee -a "${EVIDENCE_DIR}/images.txt" >&2
+    return 0
+  fi
+  dur=$(( $(date -d "${pulled_ts}" +%s) - $(date -d "${pulling_ts}" +%s) ))
+  echo "aws-sso cold pull duration: ${dur}s (${pulling_ts} -> ${pulled_ts})" | tee -a "${EVIDENCE_DIR}/images.txt"
+  if [[ "${dur}" -lt 3 ]]; then
+    die "aws-sso pull took only ${dur}s — the node already had this image's layers cached, so this was not a genuine cold pull (scripts/kind-sso-walk.sh's registry step, #891)"
+  fi
+}
