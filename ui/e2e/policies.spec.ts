@@ -7,6 +7,7 @@ import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
+import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Page } from "@playwright/test";
 
 // Run this file's tests SERIALLY. They share one backend and the policy table is
@@ -446,9 +447,31 @@ test("push_rules editor: add a row, an invalid pattern shows its error, fixing i
   await row.fill(".github/workflows/**");
   await expect(dialog.getByRole("alert")).toHaveCount(0);
 
+  // F4 (PR #1271 review): the row-level checks above only prove the EDITOR's
+  // own opinion — assert what actually reaches the server. Capture the real
+  // POST body rather than trusting the dialog closing/the row appearing.
+  const created = page.waitForRequest(
+    (r) => r.url().includes("/api/v1/policies") && r.method() === "POST",
+  );
   await dialog.getByRole("button", { name: "Create policy" }).click();
+  const body = (await created).postDataJSON() as { spec: RunPolicySpec };
+  expect(body.spec.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
+
   await expect(dialog).toBeHidden();
   await expect(policyRow(page, name)).toBeVisible();
+
+  // Round-trip: what the server actually stored (not just what was posted)
+  // carries the same push_rules — opens the just-created policy's raw-JSON
+  // escape hatch and reads it back.
+  await policyRow(page, name).click();
+  const sheet = page.getByRole("dialog").filter({ hasText: name });
+  await sheet.getByText("View raw JSON").click();
+  // The sheet renders the raw spec YAML-ish (unquoted keys), not literal JSON.
+  await expect(sheet).toContainText("push_rules");
+  await expect(sheet).toContainText("deny_paths");
+  await expect(sheet).toContainText(".github/workflows/**");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
 
   await deletePolicyViaUi(page, name);
 });
