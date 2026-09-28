@@ -620,6 +620,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
 	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/kill":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Thawing a paused run keeps its sandbox busy: a write, so not the
+	// security tier's inspect-or-stop.
+	"POST /api/v1/runs/{id}/resume": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	// Revive gives a run egress again: a write, like PATCH above.
 	"POST /api/v1/runs/{id}/revive":             {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/profile":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -666,6 +669,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals/{id}/expire": {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":      {class: classInternal},
 	"POST /api/v1/internal/decisions":             {class: classInternal},
+	"POST /api/v1/internal/activity":              {class: classInternal},
 	"POST /api/v1/internal/groundtruth":           {class: classInternal},
 	"POST /api/v1/internal/token/renew":           {class: classInternal},
 	"PUT /api/v1/internal/recordings/{runID}":     {class: classInternal},
@@ -1302,9 +1306,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// attach/holder, profile/synthesize) ALONGSIDE the dash/bare aliases
 		// they replace — both registrations are still classOwner, so the probe
 		// count grows by exactly the three new patterns (20 -> 23); 24 since
-		// #1197 L2 added PATCH /runs/{id}/title.
-		if probed != 24 {
-			t.Errorf("probed %d classOwner routes, want 24 — a route that left classOwner takes its tier "+
+		// #1197 L2 added PATCH /runs/{id}/title; 25 since #572 added POST
+		// /runs/{id}/resume.
+		if probed != 25 {
+			t.Errorf("probed %d classOwner routes, want 25 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1596,6 +1601,9 @@ func (s *authzStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) 
 }
 func (s *authzStore) SetRunImage(_ context.Context, id uuid.UUID, image string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.Image = image })
+}
+func (s *authzStore) SetRunDiskMiB(_ context.Context, id uuid.UUID, mib int) error {
+	return s.mutateRun(id, func(r *types.AgentRun) { r.DiskMiB = mib })
 }
 func (s *authzStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.AgentExecID = execID })

@@ -34,10 +34,34 @@ func newResourcesHarness(t *testing.T, execFn func(runner.ExecSpec) (*runner.Exe
 	return New(cfg), ast, h
 }
 
+// newResourcesHarnessWithDisk is newResourcesHarness plus a driver
+// EphemeralDiskEnforcement word — RL-13's enforcedDiskWord reads it via
+// Runner.Capabilities.
+func newResourcesHarnessWithDisk(t *testing.T, execFn func(runner.ExecSpec) (*runner.ExecSession, error), enforcement types.StorageEnforcement) (*Server, *authzStore, *harness) {
+	t.Helper()
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Runner = &sshFakeRunner{execFn: execFn, diskEnforcement: enforcement}
+	return New(cfg), ast, h
+}
+
 func seedResourcesRun(ast *authzStore, createdBy string) uuid.UUID {
 	id := uuid.New()
 	ast.mu.Lock()
 	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Unlock()
+	return id
+}
+
+// seedResourcesRunWithDisk is seedResourcesRun plus a resolved disk_mib
+// (RL-13's enforcedDiskWord reads AgentRun.DiskMiB, which the plain helper
+// above leaves at its zero "no cap resolved" value).
+func seedResourcesRunWithDisk(ast *authzStore, createdBy string, diskMiB int) uuid.UUID {
+	id := uuid.New()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, SandboxRef: "sbx-1", DiskMiB: diskMiB}
 	ast.mu.Unlock()
 	return id
 }
@@ -282,5 +306,146 @@ func TestRunResources_StderrDrainedBeforeStdout(t *testing.T) {
 	}
 	if got.DiskWrittenBytes == nil || *got.DiskWrittenBytes != 99 {
 		t.Errorf("DiskWrittenBytes = %v, want 99 (stdout must still parse correctly past the stderr drain)", got.DiskWrittenBytes)
+	}
+}
+
+// getResourcesOK GETs run id's resources as the admin and decodes the 200 body.
+func getResourcesOK(t *testing.T, srv *Server, id uuid.UUID) (runResourcesResponse, string) {
+	t.Helper()
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got runResourcesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+	return got, w.Body.String()
+}
+
+// TestRunResources_DiskReading_PerEnforcement pins RL-13's measurement choice:
+// the enforcement word picks what the script is asked to measure ($1, plus the
+// k8s scratch mount points for `eviction`), and the handler reads only that
+// arm's line. The canned output carries every arm's line at once, so reading
+// the wrong one is visible as the wrong number. The cap appears only beside a
+// cap-counting reading; the root walk (image included) never gets one.
+func TestRunResources_DiskReading_PerEnforcement(t *testing.T) {
+	kv := "disk_wbytes=99\n" +
+		"disk_fs_size_kb=4194304\ndisk_fs_used_kb=100\n" + // df under a 4096 MiB project quota
+		"disk_scratch_used_kb=200\n" +
+		"disk_root_used_kb=300\n"
+	cases := []struct {
+		name        string
+		diskMiB     int
+		enforcement types.StorageEnforcement
+		wantArgs    []string
+		wantUsedKB  int64
+		wantCap     bool
+	}{
+		{"filesystem: df's Used, against the cap", 4096, types.StorageEnforcementFilesystem,
+			[]string{"filesystem"}, 100, true},
+		{"eviction: the scratch mounts' walk, against the cap", 4096, types.StorageEnforcementEviction,
+			[]string{"eviction", runner.ScratchTmpPath, runner.ScratchWorkPath, runner.ScratchCachePath}, 200, true},
+		{"none enforced: the root walk, no cap", 4096, types.StorageEnforcementNone, []string{""}, 300, false},
+		{"no driver word: the root walk, no cap", 4096, "", []string{""}, 300, false},
+		{"enforced but no cap resolved (every legacy run): the root walk, no cap", 0, types.StorageEnforcementFilesystem,
+			[]string{""}, 300, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotArgs []string
+			execFn := func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+				// /bin/sh -c <script> wardyn-resources <args...>
+				gotArgs = spec.Argv[4:]
+				return kvExecSession(kv), nil
+			}
+			srv, ast, _ := newResourcesHarnessWithDisk(t, execFn, tc.enforcement)
+			id := seedResourcesRunWithDisk(ast, "alice", tc.diskMiB)
+
+			got, _ := getResourcesOK(t, srv, id)
+			if strings.Join(gotArgs, "|") != strings.Join(tc.wantArgs, "|") {
+				t.Errorf("script args = %q, want %q", gotArgs, tc.wantArgs)
+			}
+			if got.DiskUsedBytes == nil || *got.DiskUsedBytes != tc.wantUsedKB<<10 {
+				t.Errorf("DiskUsedBytes = %v, want %d", got.DiskUsedBytes, tc.wantUsedKB<<10)
+			}
+			if tc.wantCap {
+				want := int64(tc.diskMiB) << 20
+				if got.DiskCapBytes == nil || *got.DiskCapBytes != want {
+					t.Errorf("DiskCapBytes = %v, want %d", got.DiskCapBytes, want)
+				}
+			} else if got.DiskCapBytes != nil {
+				t.Errorf("DiskCapBytes = %d, want absent", *got.DiskCapBytes)
+			}
+			if got.DiskWrittenBytes == nil || *got.DiskWrittenBytes != 99 {
+				t.Errorf("DiskWrittenBytes = %v, want 99 (the disk lines must not disturb it)", got.DiskWrittenBytes)
+			}
+		})
+	}
+}
+
+// TestRunResources_DiskFilesystem_FreshContainerDoesNotWarn is the review's
+// baseline case. The numbers are a real fresh container under
+// --storage-opt size=1024m on overlay2 over xfs mounted pquota: df -kP / said
+// Size 1048576 and Used 8, while du -skx / in the agent image counts ~717 MiB of
+// image files, 70% of the cap before the agent writes a byte. The reading must
+// be the quota's 8 KB, well under the console's 80% line.
+func TestRunResources_DiskFilesystem_FreshContainerDoesNotWarn(t *testing.T) {
+	kv := "disk_fs_size_kb=1048576\ndisk_fs_used_kb=8\ndisk_root_used_kb=734576\n"
+	srv, ast, _ := newResourcesHarnessWithDisk(t,
+		func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(kv), nil },
+		types.StorageEnforcementFilesystem)
+	id := seedResourcesRunWithDisk(ast, "alice", 1024)
+
+	got, body := getResourcesOK(t, srv, id)
+	if got.DiskUsedBytes == nil || got.DiskCapBytes == nil {
+		t.Fatalf("want both disk fields; body=%s", body)
+	}
+	if *got.DiskUsedBytes != 8<<10 || *got.DiskCapBytes != 1<<30 {
+		t.Errorf("disk = %d / %d, want %d / %d", *got.DiskUsedBytes, *got.DiskCapBytes, 8<<10, 1<<30)
+	}
+	if pct := float64(*got.DiskUsedBytes) / float64(*got.DiskCapBytes) * 100; pct >= 80 {
+		t.Errorf("a fresh container reads %.1f%% of its cap; the console would warn", pct)
+	}
+}
+
+// TestRunResources_DiskFilesystem_SizeNotTheCapIsDropped: a df Size that is not
+// the cap means statfs answered for something other than the run's quota. The
+// numbers are overlay2 over ext4, where statfs reports the whole host
+// filesystem; drawn against a 1024 MiB cap that Used would pin the bar at 100%.
+// Both fields must be absent so the console falls back to disk written.
+func TestRunResources_DiskFilesystem_SizeNotTheCapIsDropped(t *testing.T) {
+	kv := "disk_wbytes=99\ndisk_fs_size_kb=1055762868\ndisk_fs_used_kb=533637780\n"
+	srv, ast, _ := newResourcesHarnessWithDisk(t,
+		func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(kv), nil },
+		types.StorageEnforcementFilesystem)
+	id := seedResourcesRunWithDisk(ast, "alice", 1024)
+
+	_, body := getResourcesOK(t, srv, id)
+	if strings.Contains(body, `"disk_used_bytes"`) || strings.Contains(body, `"disk_cap_bytes"`) {
+		t.Errorf("a df Size that is not the cap was drawn against it; body=%s", body)
+	}
+}
+
+// TestRunResources_DiskUsedBytes_Absent pins the honesty case for every arm: no
+// disk line (a timed-out or partial walk, an image without du, df unreadable)
+// reads as ABSENT, never a fabricated 0, and a cap never appears without a
+// reading beside it.
+func TestRunResources_DiskUsedBytes_Absent(t *testing.T) {
+	for _, word := range []types.StorageEnforcement{types.StorageEnforcementFilesystem, types.StorageEnforcementEviction, ""} {
+		name := string(word)
+		if name == "" {
+			name = "no word"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv, ast, _ := newResourcesHarnessWithDisk(t,
+				func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession("nproc=1\n"), nil }, word)
+			id := seedResourcesRunWithDisk(ast, "alice", 4096)
+
+			_, body := getResourcesOK(t, srv, id)
+			if strings.Contains(body, `"disk_used_bytes"`) || strings.Contains(body, `"disk_cap_bytes"`) {
+				t.Errorf("disk fields present with nothing reported; body=%s", body)
+			}
+		})
 	}
 }

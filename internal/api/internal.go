@@ -58,6 +58,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Store != nil && s.shouldTouch(runID, dl.RuleSource) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
+	// The same decision moves the pause's presence clock (run_pause.go).
+	if agentActivityDecision(dl.RuleSource) {
+		s.noteAgentActive(r.Context(), runID)
+	}
 
 	// A synthetic "bypass" decision is PURELY an LLM-inspection coverage signal
 	// (an opaque CONNECT to a model host that could not be inspected). Emit only

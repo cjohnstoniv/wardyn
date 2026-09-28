@@ -447,7 +447,33 @@ func (d *Driver) proxyRunID(ctx context.Context, ref string) (uuid.UUID, error) 
 // stays ESTABLISHED and ACKed, and its timers fire at thaw. Idempotent: a
 // missing container, or one already paused, is not an error — a retried
 // freeze after a lost response must not surface as a failure.
+//
+// The per-class Capabilities.Freeze check is the caller's, but the driver
+// enforces the same rule on the container itself: a ref whose effective
+// runtime is not runc (runsc, Kata, an operator re-pin since launch) is
+// refused with runner.ErrFreezeUnsupported and never paused.
 func (d *Driver) FreezeSandbox(ctx context.Context, ref string) error {
+	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if isNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("docker: pause: inspect: %w", err)
+	}
+	rt := ""
+	if res.Container.HostConfig != nil {
+		rt = res.Container.HostConfig.Runtime
+	}
+	if rt == "" { // "" is the daemon's default runtime
+		info, err := d.cli.Info(ctx, client.InfoOptions{})
+		if err != nil {
+			return fmt.Errorf("docker: pause: info: %w", err)
+		}
+		rt = info.Info.DefaultRuntime
+	}
+	if rt != "runc" {
+		return runner.ErrFreezeUnsupported
+	}
 	if _, err := d.cli.ContainerPause(ctx, ref, client.ContainerPauseOptions{}); err != nil && !isNotFound(err) && !isAlreadyPaused(err) {
 		return fmt.Errorf("docker: pause: %w", err)
 	}

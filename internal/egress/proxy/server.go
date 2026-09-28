@@ -276,22 +276,33 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	out := &Server{proxy: p, http: srv, sink: sink}
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
-	// fresh for the life of the run. Without it every control-plane call (mints,
-	// approvals, decision logs, subscription re-resolves) starts 401ing once the
-	// startup token's 1h TTL lapses, with no recovery. It starts here — like the
-	// decision sink's own goroutine — so it is running before the first request
-	// and is torn down by Shutdown; the caller's ctx is a STARTUP context, so the
-	// renewer gets its own lifetime instead.
-	if cfg.ControlPlaneURL != "" {
-		rctx, cancel := context.WithCancel(context.Background())
-		out.renewStop = cancel
-		out.renewStopped = make(chan struct{})
-		go func() {
-			defer close(out.renewStopped)
-			runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
-		}()
-	}
+	// fresh for the life of the run and, alongside it, the activity reporter
+	// for the pause presence clock.
+	startRunTokenRenewer(out, p, ts, cfg, client)
 	return out, nil
+}
+
+// startRunTokenRenewer starts the run-token renewer, which keeps this
+// sidecar's short-TTL token fresh for the life of the run. Without it every
+// control-plane call (mints, approvals, decision logs, subscription
+// re-resolves) starts 401ing once the startup token's 1h TTL lapses, with no
+// recovery. It starts here — like the decision sink's own goroutine — so it
+// is running before the first request and is torn down by Shutdown; the
+// caller's ctx (NewServer's) is a STARTUP context, so the renewer gets its
+// own lifetime instead. Alongside it, the activity reporter streams the
+// pause's presence clock (activity.go) for as long as the renewer runs.
+func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client) {
+	if cfg.ControlPlaneURL == "" {
+		return
+	}
+	rctx, cancel := context.WithCancel(context.Background())
+	out.renewStop = cancel
+	out.renewStopped = make(chan struct{})
+	go func() {
+		defer close(out.renewStopped)
+		runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
+	}()
+	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
 }
 
 // ListenAndServe starts serving and blocks until the server stops.
