@@ -22,7 +22,7 @@ import {
   RUNS_SAVED_VIEW_CUSTOM,
   runsSavedViewOption,
 } from "../../wardyn/copy/runs-landing";
-import type { RunsFilterState, RunsGroupBy, RunsStatusFilter, RunsWhoseRuns } from "./runs-filters";
+import { matchesSavedView, type RunsFilterState, type RunsGroupBy, type RunsStatusFilter, type RunsWhoseRuns } from "./runs-filters";
 import type { RunsEndedWithin } from "../../../lib/api/runs";
 import type { SavedRunsView } from "./runs-saved-views";
 
@@ -63,7 +63,11 @@ export function RunsFilterBar({
   const [name, setName] = React.useState(RUNS_SAVE_VIEW_DEFAULT_NAME);
   // Indexed by position, not by its own search string — "Default" is itself
   // the empty query string, and a Radix SelectItem's value may never be "".
-  const selectedIndex = savedViews.findIndex((v) => v.search === currentSearch);
+  // matchesSavedView ignores `owner` in the Admin view: applySavedViewOwner
+  // (runs.tsx) reapplies the CURRENT Everyone/Mine onto a picked view's own
+  // search, so the URL right after a pick carries `owner=me` under Mine even
+  // though no built-in view ever stores that param.
+  const selectedIndex = savedViews.findIndex((v) => matchesSavedView(v.search, currentSearch, adminView));
   const selectedView = selectedIndex >= 0 ? String(selectedIndex) : CUSTOM_VIEW_VALUE;
 
   return (

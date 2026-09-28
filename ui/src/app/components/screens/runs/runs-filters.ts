@@ -125,3 +125,22 @@ export function applySavedViewOwner(
   if (adminView && currentScope === "mine") params.set("owner", "me");
   return params.toString();
 }
+
+function withoutOwner(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("owner");
+  return params.toString();
+}
+
+// The Saved view select's own "which option is this" fact. `applySavedViewOwner`
+// above keeps the CURRENT Everyone/Mine across a pick, so the URL right after
+// picking "Failed this week" under Mine is the view's own search PLUS
+// `owner=me` — comparing that verbatim against the view's stored search
+// (which never carries `owner`) always misses, reading as Custom even though
+// a real view IS selected. In the Admin view, `owner` is compared away on
+// both sides; the User view never carries it, so an exact match there is
+// already the same comparison.
+export function matchesSavedView(viewSearch: string, currentSearch: string, adminView: boolean): boolean {
+  if (!adminView) return viewSearch === currentSearch;
+  return withoutOwner(viewSearch) === withoutOwner(currentSearch);
+}

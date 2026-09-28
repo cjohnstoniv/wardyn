@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   applySavedViewOwner,
   DEFAULT_RUNS_FILTERS,
+  matchesSavedView,
   parseRunsFilters,
   runsFilterToServerOwner,
   runsFilterToServerStatus,
@@ -128,7 +129,7 @@ describe("applySavedViewOwner — Everyone/Mine survives picking a saved view (H
     expect(applySavedViewOwner("status=failed", true, "mine")).toBe("status=failed&owner=me");
   });
 
-  it("Admin view, Mine: a custom view saved under Everyone still comes back as Mine", () => {
+  it("Admin view, Everyone: a custom view saved under Mine comes back as Everyone", () => {
     expect(applySavedViewOwner("status=failed&owner=me", true, "all")).toBe("status=failed");
   });
 
@@ -138,6 +139,27 @@ describe("applySavedViewOwner — Everyone/Mine survives picking a saved view (H
 
   it("User view: owner is always dropped, whatever the current scope reads", () => {
     expect(applySavedViewOwner("status=failed", false, "mine")).toBe("status=failed");
+  });
+});
+
+describe("matchesSavedView — the Saved view select's own 'which option is this' fact (R2-1)", () => {
+  it("Admin view, Mine: the URL right after picking a view (which carries owner=me) still matches it", () => {
+    // Exactly what applySavedViewOwner produces for a built-in view picked
+    // under Mine — matchesSavedView must see through the owner it added.
+    expect(matchesSavedView("status=failed", "status=failed&owner=me", true)).toBe(true);
+  });
+
+  it("Admin view, Everyone: a view with no owner param matches a bare URL", () => {
+    expect(matchesSavedView("", "", true)).toBe(true);
+  });
+
+  it("Admin view: a genuinely different view (different status) does not match", () => {
+    expect(matchesSavedView("status=failed", "status=killed&owner=me", true)).toBe(false);
+  });
+
+  it("User view: owner is never in play, so this is a plain equality check", () => {
+    expect(matchesSavedView("status=failed", "status=failed", false)).toBe(true);
+    expect(matchesSavedView("status=failed", "status=killed", false)).toBe(false);
   });
 });
 

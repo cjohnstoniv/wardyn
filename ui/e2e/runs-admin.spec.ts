@@ -127,18 +127,26 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
       };
     });
     await gotoConsole(page, "admin");
+    const savedView = page.getByRole("combobox", { name: "Saved view" });
+    await expect(savedView).toHaveText("View · Default");
+
     await page.getByRole("combobox", { name: "Whose runs" }).click();
     await page.getByRole("option", { name: "Mine" }).click();
     await expect(page).toHaveURL(/owner=me/);
 
-    // The built-in "Default" view carries no owner param at all — Mine must
-    // survive picking it anyway (H-4 is who's asking, not something a saved
-    // view remembers).
-    await page.getByRole("combobox", { name: "Saved view" }).click();
-    await page.getByRole("option", { name: "View · Default" }).click();
+    // The built-in "Failed this week" view carries no owner param at all —
+    // Mine must survive picking it anyway (H-4 is who's asking, not
+    // something a saved view remembers), AND the picked view must still
+    // read as itself, not fall back to Custom just because the URL also
+    // carries the owner=me this pick reapplied (R2-1: applySavedViewOwner's
+    // own addition must not defeat matchesSavedView's comparison).
+    await savedView.click();
+    await page.getByRole("option", { name: "View · Failed this week" }).click();
 
     await expect(page).toHaveURL(/owner=me/);
+    await expect(page).toHaveURL(/status=failed/);
     await expect(page.getByRole("combobox", { name: "Whose runs" })).toHaveText("Mine");
+    await expect(savedView).toHaveText("View · Failed this week");
     await expect(page.getByText("Someone else's run")).toHaveCount(0);
   });
 
