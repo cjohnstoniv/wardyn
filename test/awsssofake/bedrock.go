@@ -70,6 +70,9 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
+	if ss := s.sessionForSigV4Locked(r.Header.Get("Authorization")); ss != nil {
+		ss.bedrockCallers[peerIP(r)]++
+	}
 	s.bedrockCalls++
 	s.bedrockModel = model
 	// …and the CUMULATIVE set, because bedrockModel is last-write-wins and a
@@ -154,4 +157,20 @@ func (s *Server) writeBedrockFault(w http.ResponseWriter, fault string) bool {
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
 	return true
+}
+
+// sessionForSigV4Locked is the session whose role credentials signed a SigV4
+// Authorization header ("... Credential=<access key id>/<scope>, ..."), or nil.
+func (s *Server) sessionForSigV4Locked(auth string) *session {
+	_, cred, ok := strings.Cut(auth, "Credential=")
+	if !ok {
+		return nil
+	}
+	akid, _, _ := strings.Cut(cred, "/")
+	for _, ss := range s.sessions {
+		if sessionAccessKeyID(ss.n) == akid {
+			return ss
+		}
+	}
+	return nil
 }
