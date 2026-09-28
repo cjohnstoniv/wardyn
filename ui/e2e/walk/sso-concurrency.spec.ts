@@ -10,8 +10,9 @@
  * sso-member-recovery (scripts/kind-sso-walk.sh), after them. It inherits the
  * roster pin and the member's stored capture from wherever those files
  * stopped, which may be mid-flip (a case that moved the pin and never landed
- * its capture), so ensureActionable() flips until the member is actually
- * offered a sign-in and names the walk state when it cannot. Every run
+ * its capture), so A puts the walk's own pin back and makes sure the member is
+ * offered a sign-in under it (actionableUnderWalkPin), and B flips until they
+ * are (ensureActionable); both name the walk state when they cannot. Every run
  * observation is a delta over this file's own runs.
  *
  * What it proves that one principal at a time cannot:
@@ -56,6 +57,8 @@ import {
   ADMIN_TOKEN,
   LOGIN_DONE,
   MEMBER_EMAIL,
+  OTHER_ACCOUNT,
+  OTHER_ROLE,
   SANDBOX_UP,
   SSO_START_URL,
   dexSignIn,
@@ -63,6 +66,7 @@ import {
   modelAccess,
   openLoginPane,
   ownAWSRow,
+  putRoster,
   seen,
   signInThroughPane,
 } from "./helpers";
@@ -171,16 +175,42 @@ const ACTIONABLE = ["not_configured", "expired_signin", "expiring"];
 async function ensureActionable(request: APIRequestContext, page: Page): Promise<void> {
   for (let flip = 1; flip <= 2; flip++) {
     await makeMemberActionable(request);
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      if (ACTIONABLE.includes((await modelAccess(page)).state ?? "")) return;
-      await page.waitForTimeout(1_000);
-    }
+    if (await becomesActionable(page)) return;
   }
   const state = (await modelAccess(page)).state;
   throw new Error(
     `the member still reads '${state}' after two pin flips, so no sign-in is offered: walk state, not this file's subject`,
   );
+}
+
+/** Polls up to 30 s for the member to be offered a sign-in. */
+async function becomesActionable(page: Page): Promise<boolean> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (ACTIONABLE.includes((await modelAccess(page)).state ?? "")) return true;
+    await page.waitForTimeout(1_000);
+  }
+  return false;
+}
+
+/** Leave the roster on the walk's own pin with the member actionable, so A's
+ *  captures are under the pair C's runs can spend: WARDYN_BEDROCK_MODEL is an
+ *  ARN in PIN_ACCOUNT (nightly 36428749715: A's flip landed on the other pair,
+ *  and C's first run minted role credentials for it but never reached
+ *  Bedrock). A member already live under the walk pin is signed in under the
+ *  other pair first, so the walk pin contradicts their capture. */
+async function actionableUnderWalkPin(request: APIRequestContext, page: Page): Promise<void> {
+  await putRoster(request);
+  if (await becomesActionable(page)) return;
+  await putRoster(request, OTHER_ACCOUNT, OTHER_ROLE);
+  if (!(await becomesActionable(page))) {
+    throw new Error(`the member reads '${(await modelAccess(page)).state}' under both pairs: walk state, not this file's subject`);
+  }
+  await signInThroughPane(page, openLoginPane);
+  await putRoster(request);
+  if (!(await becomesActionable(page))) {
+    throw new Error(`the member reads '${(await modelAccess(page)).state}' after re-pinning to the walk pair`);
+  }
 }
 
 let memberPage: Page;
@@ -193,7 +223,7 @@ test("A: two members sign in to AWS at the same moment and each holds their own 
   await endLeftoverRuns(request);
   memberPage = await signedIn(browser, MEMBER_EMAIL);
   member2Page = await signedIn(browser, MEMBER2_EMAIL);
-  await ensureActionable(request, memberPage);
+  await actionableUnderWalkPin(request, memberPage);
   expect(ACTIONABLE, "the second member is offered no sign-in").toContain((await modelAccess(member2Page)).state);
   const before = [(await ownAWSRow(memberPage)).source_run_id ?? "", (await ownAWSRow(member2Page)).source_run_id ?? ""];
 

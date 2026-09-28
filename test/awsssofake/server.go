@@ -194,6 +194,9 @@ type Server struct {
 	// run makes calls for more than one model, so it cannot answer "did the
 	// configured ARN reach the data plane".
 	bedrockModels []string
+	// bedrockUnattributed counts the bedrock calls no session could be traced
+	// to, by authShape.
+	bedrockUnattributed map[string]int
 	// bedrockThrottled counts the 429s a `throttle:N` fault has served, so the
 	// (N+1)th call through succeeds (bedrock.go).
 	bedrockThrottled int
@@ -224,8 +227,10 @@ func NewHandler() (*Server, http.Handler) {
 		clientID:     randHex(8),
 		clientSecret: randHex(16),
 		devices:      map[string]*session{},
-		userCode:     "WXYZ-1234",
-		accounts:     []Account{{AccountID: "111111111111", Roles: []string{"AdministratorAccess"}}},
+
+		bedrockUnattributed: map[string]int{},
+		userCode:            "WXYZ-1234",
+		accounts:            []Account{{AccountID: "111111111111", Roles: []string{"AdministratorAccess"}}},
 		roleCred: RoleCredentials{
 			AccessKeyID:     "ASIAFAKEFAKEFAKEFAKE",
 			SecretAccessKey: "fakeSecretAccessKeyFakeSecretAccessKeyFake",
@@ -648,6 +653,8 @@ func (s *Server) handleSeen(w http.ResponseWriter, r *http.Request) {
 		"bedrock_calls":  s.bedrockCalls,
 		"bedrock_model":  s.bedrockModel,
 		"bedrock_models": append([]string{}, s.bedrockModels...),
+
+		"bedrock_unattributed": maps.Clone(s.bedrockUnattributed),
 	})
 }
 

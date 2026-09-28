@@ -138,3 +138,47 @@ func TestConcurrentSignInsKeepTheirOwnSessions(t *testing.T) {
 		t.Errorf("bedrock callers: A %v, B %v; want the call signed with B's key under B and the one carrying A's bearer under A", a.BedrockCallers, b.BedrockCallers)
 	}
 }
+
+// TestSeenNamesWhatAnUnattributedBedrockCallCarried: a bedrock call no session
+// can be traced to is counted in /_seen by the shape of its credential, never
+// its secret, so a walk that finds nothing attributed can see why.
+func TestSeenNamesWhatAnUnattributedBedrockCallCarried(t *testing.T) {
+	s := New()
+	defer s.Close()
+	for _, h := range []map[string]string{
+		{"Authorization": "AWS4-HMAC-SHA256 Credential=AKIAOTHER/20260928/us-east-1/bedrock/aws4_request, Signature=00"},
+		{"Authorization": "Bearer sk-not-a-session"},
+		{bearerHeader: "not-a-session-token"},
+		{},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, s.URL()+"/model/m/converse", strings.NewReader("{}"))
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	resp, err := http.Get(s.URL() + "/_seen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Unattributed map[string]int `json:"bedrock_unattributed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"sigv4:AKIAOTHER": 1, "auth:Bearer": 1, "bearer": 1, "none": 1}
+	if len(body.Unattributed) != len(want) {
+		t.Fatalf("bedrock_unattributed = %v, want %v", body.Unattributed, want)
+	}
+	for k, n := range want {
+		if body.Unattributed[k] != n {
+			t.Errorf("bedrock_unattributed[%q] = %d, want %d (all: %v)", k, body.Unattributed[k], n, body.Unattributed)
+		}
+	}
+}
