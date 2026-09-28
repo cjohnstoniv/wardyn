@@ -49,11 +49,11 @@ func requirementModelHostFixture(t *testing.T) (*harness, types.Workspace) {
 // launchAsAlice posts a member run against ws and returns it once dispatch has
 // settled, with the grants its create persisted and the injections dispatch
 // handed the proxy.
-func launchAsAlice(t *testing.T, h *harness, ws types.Workspace) (types.AgentRun, []types.CredentialGrant, []string) {
+func launchAsAlice(t *testing.T, h *harness, ws types.Workspace, extra ...string) (types.AgentRun, []types.CredentialGrant, []string) {
 	t.Helper()
 	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", alice,
-		`{"agent":"claude-code","task":"t","workspace_id":"`+ws.ID.String()+`"}`)
+		`{"agent":"claude-code","task":"t","workspace_id":"`+ws.ID.String()+`"`+strings.Join(extra, "")+`}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: %d, want 201: %s", w.Code, w.Body.String())
 	}
@@ -158,4 +158,97 @@ func TestPG_SecretRequirement_ProviderBlock(t *testing.T) {
 	if len(modelInjections) != 1 || !strings.Contains(modelInjections[0], "="+providerSecretPrefix) {
 		t.Fatalf("model-host injections = %v, want exactly the provider arm's", modelInjections)
 	}
+}
+
+// integrationOnProviderHost is the round-2 review's probe shape (#547): a
+// provider block where alice runs on the anthropic provider with her own key,
+// a SECOND provider row serving a model at modelHost, and a stored git_host
+// row — written before integration writes refused it — that presents the
+// OPERATOR's corp-llm-key as a header credential on that host. The workspace
+// requires that row.
+func integrationOnProviderHost(t *testing.T, secondProvider, modelHost string) (*harness, types.Workspace) {
+	t.Helper()
+	h, sec := newRunOwnerPGHarness(t)
+	h.srv.cfg.Runner = &fakeRunner{}
+	h.srv.cfg.Broker = h.broker
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
+	ctx := context.Background()
+	if err := sec.Put(ctx, "corp-llm-key", []byte("sk-OPERATOR-gateway-0000000000")); err != nil {
+		t.Fatalf("seed operator key: %v", err)
+	}
+	w := do(t, h.srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+		`{"providers":[{"id":"anthropic","kind":"anthropic_api_key","harnesses":[{"harness":"claude-code"}]},`+secondProvider+`]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT /model-providers: %d: %s", w.Code, w.Body.String())
+	}
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	w = doSSO(t, h.srv, http.MethodPut, "/api/v1/model-providers/anthropic/credential", alice, `{"value":"sk-ant-alice-own-0000000000"}`)
+	if w.Code != http.StatusNoContent && w.Code != http.StatusOK {
+		t.Fatalf("PUT own credential: %d: %s", w.Code, w.Body.String())
+	}
+	sc, err := h.srv.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetSiteConfig: %v", err)
+	}
+	sc.Integrations = append(sc.Integrations, types.Integration{
+		ID: "git_host:" + modelHost, Name: modelHost, Kind: types.IntegrationKindGitHost,
+		Egress: []string{modelHost},
+		Secrets: []types.IntegrationSecret{{Role: "pat", SecretName: "corp-llm-key",
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}}},
+	})
+	if _, err := h.srv.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
+		t.Fatalf("PutSiteConfig: %v", err)
+	}
+	ws, err := h.srv.cfg.Store.CreateWorkspace(ctx, types.Workspace{
+		ID: uuid.New(), Name: "gateway", Status: types.WorkspaceScanned,
+		Sources:      []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
+		Requirements: map[string]types.WorkspaceRequirement{"integration:git_host:" + modelHost: {Level: "required", Provenance: "operator_set"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	return h, ws
+}
+
+func assertNothingOnHost(t *testing.T, h *harness, run types.AgentRun, grants []types.CredentialGrant, injected []string, host string) {
+	t.Helper()
+	if got := grantSecretOnHost(t, grants, host); len(got) != 0 {
+		t.Fatalf("the run holds an api_key grant on %s naming %v — the operator's key rides a member's run on a model host", host, got)
+	}
+	for _, in := range injected {
+		if strings.HasPrefix(in, host+"=") {
+			t.Fatalf("dispatch handed the proxy an injection on %s: %v", host, injected)
+		}
+	}
+	var skipped bool
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "run.requirement.skip" && ev.RunID != nil && *ev.RunID == run.ID && strings.Contains(string(ev.Data), host) {
+			skipped = true
+		}
+	}
+	if !skipped {
+		t.Errorf("no run.requirement.skip naming %s on the run", host)
+	}
+}
+
+// TestPG_IntegrationRequirement_CustomEndpointProviderHost: a second provider
+// row's custom endpoint is a model-serving host, so the stored row's operator
+// key is neither granted nor injected there.
+func TestPG_IntegrationRequirement_CustomEndpointProviderHost(t *testing.T) {
+	const host = "llm.corp.example"
+	h, ws := integrationOnProviderHost(t,
+		`{"id":"corp-gateway","kind":"custom_endpoint","base_url":"https://`+host+`","harnesses":[{"harness":"claude-code","path":"/anthropic"}]}`, host)
+	run, grants, injected := launchAsAlice(t, h, ws, `,"model_provider":"anthropic"`)
+	assertNothingOnHost(t, h, run, grants, injected, host)
+}
+
+// TestPG_IntegrationRequirement_BedrockProviderRegionHost: a Bedrock provider
+// row's regional runtime host is model-serving too, even with no boot-time
+// Bedrock region configured.
+func TestPG_IntegrationRequirement_BedrockProviderRegionHost(t *testing.T) {
+	const host = "bedrock-runtime.eu-west-1.amazonaws.com"
+	h, ws := integrationOnProviderHost(t,
+		`{"id":"bedrock-eu","kind":"bedrock_bearer","bedrock":{"region":"eu-west-1"},"harnesses":[{"harness":"claude-code","model":"eu.anthropic.claude-sonnet-4-5-20250929-v1:0"}]}`, host)
+	run, grants, injected := launchAsAlice(t, h, ws, `,"model_provider":"anthropic"`)
+	assertNothingOnHost(t, h, run, grants, injected, host)
 }

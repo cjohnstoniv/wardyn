@@ -497,3 +497,29 @@ func putIntegrationRequestDoc(t *testing.T) string {
 	}
 	return strings.Join(lines[start:decl], "\n")
 }
+
+// TestHandlePutIntegration_CredentialOnModelHostIsRefused pins #547's write-time
+// half: an integration whose header credential would be presented on a host
+// that serves a model — a vendor host, or any model provider row's own host —
+// is refused; the same row on a host that serves no model is stored.
+func TestHandlePutIntegration_CredentialOnModelHostIsRefused(t *testing.T) {
+	srv, fake, _ := integrationWriteHarness(t, nil)
+	fake.cfg.ModelProviders = providerBlock(types.ModelProvider{ID: "corp-gateway", Kind: types.ModelProviderCustomEndpoint,
+		BaseURL: "https://llm.corp.example", Harnesses: []types.ProviderHarness{{Harness: "claude-code", Path: "/anthropic"}}})
+	body := func(host string) string {
+		return `{"kind":"git_host","egress":["` + host + `"],"secrets":[{"role":"pat","secret_name":"acme-app-id",` +
+			`"delivery":{"mode":"proxy_header","header":"Authorization","format":"Bearer %s"}}]}`
+	}
+	for _, host := range []string{"llm.corp.example", "api.anthropic.com"} {
+		w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-row", adminToken, body(host))
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "serves a model") {
+			t.Errorf("credential on %s: %d %s, want 400 naming the model host", host, w.Code, w.Body.String())
+		}
+	}
+	if len(fake.cfg.Integrations) != 0 {
+		t.Fatalf("a refused write persisted %+v", fake.cfg.Integrations)
+	}
+	if w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-row", adminToken, body("git.corp.example")); w.Code != http.StatusOK {
+		t.Fatalf("credential on a host that serves no model: %d %s, want 200", w.Code, w.Body.String())
+	}
+}

@@ -256,8 +256,9 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// row would swap an artifact token onto model traffic. isModelProviderRejectHost,
 		// NOT isModelProviderHost: the Bedrock hosts (and WARDYN_BEDROCK_BASE_URL)
 		// carry proxy-side bearer injection too (resolveBedrockAuth), so they are the
-		// SAME collision.
-		if s.isModelProviderRejectHost(host) {
+		// SAME collision, as is every model provider row's own host
+		// (modelServingHosts).
+		if s.modelServingHosts(sc)(host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,

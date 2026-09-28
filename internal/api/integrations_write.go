@@ -171,6 +171,10 @@ var knownIntegrationConfigKeys = map[string]map[string]bool{
 	types.IntegrationKindGitHost:   {},
 }
 
+// integration400ModelHost refuses an integration whose credential would be
+// presented on a host that serves a model (modelServingHosts).
+const integration400ModelHost = "egress: %q serves a model — a model credential comes only from a model provider, so an integration's credential can't be presented there"
+
 // integration400AIKind refuses an AI-kind write: model access is a model
 // provider now, and effectiveIntegrations leaves a stored AI row out of every
 // resolver, so a row written here would grant nothing.

@@ -18,15 +18,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   verify and build sessions no longer mint an `api_key` grant from the operator's
   `anthropic-api-key`; a workspace `secret:<name>` requirement no longer grants the named stored
   secret on the agent's model host, and an integration requirement's credential is never injected
-  on a host that serves a model — each is skipped and audited as `run.requirement.skip` (reason
-  `model_host`, replacing `run.requirement.grant`); and no AI row is derived from the operator's
-  model secrets, subscription or Bedrock config. A write naming an AI kind, or `default_for`, is
-  refused, and so is `llm_cred.integration_ref` on a workspace write; a stored AI row stays in site
+  on a host that serves a model (a vendor host, a configured gateway, the boot Bedrock pair, or any
+  model provider row's own host) — each is skipped and audited as `run.requirement.skip` (reason
+  `model_host`, replacing `run.requirement.grant`), and under a provider block dispatch strips any
+  such injection its provider did not author; and no AI row is derived from the operator's model
+  secrets, subscription or Bedrock config. A write naming an AI kind, or `default_for`, is
+  refused, and so is `llm_cred.integration_ref` on a workspace write and an integration whose
+  credential would be presented on a host that serves a model; a stored AI row stays in site
   config for the conversion to model providers but grants nothing. The `integration` capability
   kind (and its `capability_integration` refusal) and the `run.workspace_cred.resolve` audit action
   are retired, and `GET /me/capabilities` reports `kinds_version` 4. Model access is a model
   provider, on the person's own credential. On a deployment with no model providers, a run that
-  relied on one of these paths now launches without model access.
+  relied on one of these paths now launches without model access. **Upgrade note:** until #549
+  retires them, Getting started's "LLM access" row, `llm_ready` and the Settings model card can
+  still read green or "configured" from a stored `anthropic-api-key`/`openai-api-key` secret while
+  no run receives that key; set up a model provider (Settings → Model providers) for model access.
 - **`WARDYN_TLS_KEY` now gets the same secret-file mode rule as every other secret file
   (#1297).** The console's TLS private key was read by `ListenAndServeTLS` with no file-mode
   check, so a group- or world-readable key was accepted silently. Loading it now goes through

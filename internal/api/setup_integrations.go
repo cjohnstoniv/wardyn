@@ -365,6 +365,17 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get site config", err)
 		return
 	}
+	// A credential never rides an integration onto a host that serves a model:
+	// a model credential comes only from a model provider, on its owner's own
+	// key. The requirement fold skips such a host at launch too
+	// (applyIntegrationRequirement); refusing it here says so up front.
+	if hasProxyHeaderSecret(in) {
+		serving := s.modelServingHosts(sc)
+		if i := slices.IndexFunc(in.Egress, serving); i >= 0 {
+			writeError(w, http.StatusBadRequest, "invalid integration: "+fmt.Sprintf(integration400ModelHost, in.Egress[i]))
+			return
+		}
+	}
 	now := s.cfg.Now().UTC()
 	rows := slices.Clone(sc.Integrations)
 	if idx := slices.IndexFunc(rows, func(x types.Integration) bool { return x.ID == id }); idx >= 0 {

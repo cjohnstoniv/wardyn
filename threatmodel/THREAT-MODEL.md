@@ -477,9 +477,14 @@ grant on a host that serves a model — a `secret:<name>` requirement (whose
 grant was always the agent's model host) and an integration requirement's
 header credential on such a host are skipped and audited
 (`run.requirement.skip`, reason `model_host`; `skipRequiredSecret`,
-`applyIntegrationRequirement`). Under a provider block, dispatch also strips
-every model-host injection its arm did not author (`dropLegacyModelInjections`)
-before the arm adds its own, so no other grant can sit beside it. Until #549
+`applyIntegrationRequirement`), and an integration write that would put a
+credential there is refused. "Serves a model" is one set, `modelServingHosts`:
+the vendor hosts, configured gateways and boot Bedrock pair, plus every model
+provider row's own host (a custom endpoint or route-through base URL, a
+Bedrock row's regional runtime and control hosts), chosen by the run or not.
+Under a provider block, dispatch also strips every injection on that set its
+arm did not author (`dropLegacyModelInjections`) before the arm adds its own,
+so no other grant can sit beside it. Until #549
 retires them, the operator-credential lanes that remain are the managed and
 host-mounted subscription, operator Bedrock config, and an `api_key` grant a
 run's own policy carries.

@@ -76,9 +76,12 @@ its hosts join the run's egress allowlist unconditionally, even under
 the exact-host entry has to be there regardless), and a header-delivering
 integration authors one `api_key` grant per host through the ordinary proxy-side
 injection path — except on a host that serves a model (a model vendor's API, a
-configured gateway, the Bedrock hosts), where the credential is skipped and
-audited (`run.requirement.skip`, reason `model_host`): a model credential comes
-only from the run's model provider (0.8, #547). A `secret:<name>` requirement is
+configured gateway, the boot Bedrock hosts, or any model provider row's own
+host: a custom endpoint, a route-through gateway, a Bedrock row's regional
+hosts — `modelServingHosts`, `internal/api/llmcred.go`), where the credential is
+skipped and audited (`run.requirement.skip`, reason `model_host`): a model
+credential comes only from the run's model provider (0.8, #547). An integration
+write that would present its credential on such a host is refused. A `secret:<name>` requirement is
 skipped the same way, always — its grant was the agent's model host — so it
 grants nothing (`skipRequiredSecret`, `internal/api/runs_create_requirements.go`).
 An operator with fifty integrations configured and a workspace that names none of

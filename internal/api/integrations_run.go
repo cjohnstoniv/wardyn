@@ -72,7 +72,14 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	// A host that serves a model never takes an integration's credential: a
 	// model credential comes only from the run's model provider. The host
 	// still opens; the credential is skipped, audited on its own row.
-	modelHosts := slices.DeleteFunc(slices.Clone(integ.Egress), func(h string) bool { return !s.isModelProviderRejectHost(h) })
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+			sc = got
+		}
+	}
+	serving := s.modelServingHosts(sc)
+	modelHosts := slices.DeleteFunc(slices.Clone(integ.Egress), func(h string) bool { return !serving(h) })
 	var events []requirementAuditEntry
 	disabledCap := make(map[string]bool, len(integ.DisabledCapabilities))
 	for _, capID := range integ.DisabledCapabilities {

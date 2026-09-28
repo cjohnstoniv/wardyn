@@ -204,42 +204,56 @@ func (s *Server) bedrockLaneHosts() []string {
 	return nil
 }
 
-// isModelProviderRejectHost is the REJECT-lane model-provider predicate: every
-// host isModelProviderHost names, PLUS the Bedrock lane (bedrockLaneHosts).
+// modelServingHosts is the ONE answer to "does this host serve a model on this
+// deployment", for every reject and skip decision that needs it: the vendor
+// hosts and configured gateways (isModelProviderHost), the daemon-wide Bedrock
+// pair (bedrockLaneHosts), and EVERY model provider row in sc — its own host
+// (providerHost: a custom endpoint or route-through gateway's base URL, else
+// the vendor's) and, for a Bedrock row, its runtime and control hosts for its
+// region — whether or not the row is on or chosen by the run.
 //
 // It is a SECOND predicate rather than a widening of isModelProviderHost on
 // purpose. isModelProviderHost also gates an ACCEPT: inline_policy.go's 6c
 // own-key arm admits a member's OWN api_key secret with no operator eligible-grant
-// pairing whenever the paired host is a model-provider host. Teaching that
-// predicate about bedrock-runtime.<region> would hand the Bedrock lane a new
-// unpaired-grant accept as a side effect of fixing a deny guard. The reject
-// direction is where the Bedrock lane belongs: resolveBedrockAuth's PREFERRED
-// bearer mode TLS-MITMs bedrock-runtime and injects the Authorization header
-// proxy-side (runs_bedrock.go), which is exactly the "proxy-side credential
-// injection refuses a denied host" failure denyAlwaysReject exists to prevent —
-// and promoteSkipHosts (record.go) already had to patch the same predicate gap
-// on the promotion lane.
+// pairing whenever the paired host is a model-provider host. Widening that
+// predicate would hand every host here a new unpaired-grant accept as a side
+// effect of fixing a deny guard. The reject direction is where these hosts
+// belong: each carries proxy-side credential injection, which is exactly the
+// "proxy-side credential injection refuses a denied host" failure
+// denyAlwaysReject exists to prevent.
 //
-// Both REJECT-direction callers of the concept use THIS one, and the sentence is
-// meant to be grep-checkable: denyAlwaysReject (approvals_writeback.go) and
-// planArtifactRedirect's To-host veto (artifact_redirect.go). The two remaining
-// callers of the narrow isModelProviderHost are not reject tests — inline_policy.go's
-// 6c own-key ACCEPT arm, and modelProviderEgress, which only filters entries the
-// operator already wrote into their own ceiling.
-func (s *Server) isModelProviderRejectHost(h string) bool {
-	if s.isModelProviderHost(h) {
-		return true
-	}
-	hl := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
-	if hl == "" {
-		return false
-	}
-	for _, b := range s.bedrockLaneHosts() {
-		if strings.ToLower(strings.TrimSuffix(strings.TrimSpace(b), ".")) == hl {
-			return true
+// Its callers, grep-checkable: denyAlwaysReject (approvals_writeback.go),
+// planArtifactRedirect's To-host veto (artifact_redirect.go), the integration
+// requirement's credential skip (applyIntegrationRequirement), the provider
+// path's strip (dropLegacyModelInjections) and the integration write's refusal
+// (handlePutIntegration).
+func (s *Server) modelServingHosts(sc types.SiteConfig) func(string) bool {
+	hosts := s.bedrockLaneHosts()
+	for _, p := range modelProviderRows(sc) {
+		hosts = append(hosts, providerHost(p))
+		if b := providerBedrockSettings(p); p.Kind.IsBedrock() && b.Region != "" {
+			hosts = append(hosts, providerBedrockRuntimeHost(p), bedrockControlHost(b.Region))
 		}
 	}
-	return false
+	return func(h string) bool {
+		if strings.TrimSpace(h) == "" {
+			return false
+		}
+		return s.isModelProviderHost(h) || slices.ContainsFunc(hosts, func(x string) bool { return x != "" && hostEqual(x, h) })
+	}
+}
+
+// isModelProviderRejectHost is modelServingHosts over the stored site config,
+// for a caller that holds none. A config that cannot be read contributes no
+// provider rows; the static half still answers.
+func (s *Server) isModelProviderRejectHost(ctx context.Context, h string) bool {
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+			sc = got
+		}
+	}
+	return s.modelServingHosts(sc)(h)
 }
 
 // ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude
