@@ -4,7 +4,7 @@
  */
 
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, navToRoute } from "./fixtures";
 import { MODEL_LEDE, MODEL_PROVIDERS as M } from "../src/app/lib/model-providers-copy";
 
 // Settings → Model providers (#536, packet MP-A). GET /model-providers and GET
@@ -36,7 +36,8 @@ test.describe("Settings — Model providers list", () => {
   test("A1: nothing set up is the empty state, and Add model provider opens the editor", async ({ page }) => {
     await stub(page, {});
     await gotoSettings(page);
-    await expect(list(page).getByRole("heading", { name: M.TITLE, exact: true })).toBeVisible();
+    await expect(list(page).getByRole("heading", { name: new RegExp(`^${M.TITLE}( |$)`) })).toBeVisible();
+    await expandCard(page, M.TITLE);
     await expect(list(page).getByText(MODEL_LEDE)).toBeVisible();
     await expect(list(page).getByText(M.EMPTY_TITLE)).toBeVisible();
     await expect(list(page).getByText(M.EMPTY_BODY)).toBeVisible();
@@ -58,6 +59,7 @@ test.describe("Settings — Model providers list", () => {
       { agents: [{ id: "claude-code", default_provider: "bedrock-prod" }] },
     );
     await gotoSettings(page);
+    await expandCard(page, M.TITLE);
 
     const bedrock = page.getByTestId("model-provider-bedrock-prod");
     await expect(bedrock.getByText("Bedrock (prod)")).toBeVisible();
@@ -79,6 +81,7 @@ test.describe("Settings — Model providers list", () => {
   test("a failed read offers Retry, and Retry reads again", async ({ page }) => {
     await stub(page, { error: "boom" }, {}, 500);
     await gotoSettings(page);
+    await expandCard(page, M.TITLE);
     await expect(list(page).getByText(M.FETCH_FAILED_TITLE)).toBeVisible();
 
     await page.unroute("**/api/v1/model-providers");

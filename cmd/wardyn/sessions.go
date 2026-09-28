@@ -155,7 +155,7 @@ func listAllAPITokens(ctx context.Context, c *sdk.Client) ([]types.APIToken, err
 		// a hostile or oversized one must not be read in full.
 		const maxSessionsErrBody = 2048
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxSessionsErrBody))
-		return nil, &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
+		return nil, sdk.NewAPIError(resp.StatusCode, body)
 	}
 	var toks []types.APIToken
 	if err := json.NewDecoder(resp.Body).Decode(&toks); err != nil {

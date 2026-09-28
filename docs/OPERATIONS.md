@@ -820,7 +820,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
-| `GET /admin/runs/proxy-window` and `POST /admin/runs/restart` — listing the runs whose proxy was started by a release older than wardynd N−1, and giving named runs a new proxy on the current release under each OWNER's current profile denies ("Restart with current limits"). Proxy-only: a run lost to a reboot is reported, never started; its owner revives it. Not the security tier: a restart replaces proxies on runs the caller does not own. The runs are restarted one at a time, each audited as `run.revive`, so when a response is cut off part-way those rows say which were | ⛔ admin only |
+| `GET /admin/runs/proxy-window` and `POST /admin/runs/restart` — listing the runs whose proxy was started by a release older than wardynd N−1, and giving named runs a new proxy on the current release under each OWNER's current profile denies ("Restart with current limits"). Proxy-only: a run lost to a reboot is reported, never started; its owner revives it. Not the security tier: a restart replaces proxies on runs the caller does not own. The runs are restarted one at a time, each audited as `run.revive`, so when a response is cut off part-way those rows say which were. On Kubernetes every run is refused, nothing changed, with `reason` `revive_unsupported` (`runner.ErrReviveUnsupported`): stop it and start a new run | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the model-provider rows below | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
@@ -3211,9 +3211,14 @@ it.
   sealed config, and brokered sidecar uploads go through the proxy) and the
   ingest. A proxy dispatched before 0.7.12 still dials `http://wardynd:8080`
   and gets `404` on every call after an upgrade (on the chart it has no route
-  back at all: the runs namespace is never granted the `http` port); restart
-  such runs with `POST /api/v1/admin/runs/restart`, which hands the proxy the
-  current URL and CA, or stop them before upgrading. The proxy authenticates
+  back at all: the runs namespace is never granted the `http` port). On Docker,
+  restart such runs with `POST /api/v1/admin/runs/restart`, which hands the
+  proxy the current URL and CA, or stop them before upgrading. On Kubernetes
+  such runs cannot be restarted: the substrate implements no
+  `runner.ProxyReviver` (the agent pod pins the proxy pod's IP), so the restart
+  refuses each one with `runner.ErrReviveUnsupported` and reason
+  `revive_unsupported`. Stop them (before upgrading, or after with
+  `POST /api/v1/runs/{id}/kill`) and start a new run instead. The proxy authenticates
   to `wardynd` with its run token (bearer, not mTLS —
   `threatmodel/THREAT-MODEL.md` B6).
 

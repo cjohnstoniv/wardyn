@@ -64,7 +64,7 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
+import { CONSOLE_VIEW, USER_PREVIEW, VIEW_TO_USER } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
 import { LOGIN_SANDBOX_UNREADABLE, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
@@ -318,6 +318,28 @@ test.afterEach(() => {
   } catch {
     /* not tainted — the ordinary case */
   }
+});
+
+// Case H's interactive run never ends by itself, and the walk's single 4-vCPU
+// node holds one agent run at a time: left running, it takes the CPU the NEXT
+// case's sign-in sandbox needs, whose proxy pod then never schedules and never
+// gets an IP. Ended here, pass or fail, and waited out until its pods are gone.
+let runToEnd = "";
+test.afterEach(async ({ page }) => {
+  if (!runToEnd) return;
+  const id = runToEnd;
+  runToEnd = "";
+  await page.evaluate(async (rid: string) => {
+    const r = await fetch(`/api/v1/runs/${rid}/kill`, { method: "POST", credentials: "include" });
+    // 409: the run already ended on its own, which is what this wants.
+    if (!r.ok && r.status !== 409) throw new Error(`POST /runs/${rid}/kill: ${r.status}`);
+  }, id);
+  if (process.env.WARDYN_TEST_K8S !== "1") return;
+  await expect
+    .poll(() => kubectlOrEmpty("-n", KUBE_NAMESPACE, "get", "pods", "-o", "name").split("\n").filter((n) => n.includes(id)), {
+      timeout: 180_000,
+    })
+    .toEqual([]);
 });
 
 // ── B — the member's own card, while they are still signed in ───────────────
@@ -799,6 +821,7 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   // the trust dialog is blind to exactly the thing this case measures, and
   // would have read empty on the BROKEN image too.
   const runID = runIDFromURL(page);
+  runToEnd = runID;
   expect(
     await approvalsFor(page, runID),
     "the CLI's first REPL start parked an approval nobody asked for",
@@ -1026,6 +1049,16 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
     "no warn/fail row on this install may be blocking, or this case proves nothing",
   ).toEqual([]);
 
+  // #639: an admin's New Run lives in the USER view. In the Admin view
+  // /runs/new renders VIEW_TO_USER's switch page instead of the form, so switch
+  // through that page's own button first; the gate question below is the same,
+  // asked where New Run now is.
+  await page.goto("/runs/new");
+  await page.getByRole("button", { name: VIEW_TO_USER.GO }).click();
+  await expect(
+    page.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name: CONSOLE_VIEW.USER }),
+  ).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
   // /setup/status read. The rail's provider line renders off that same read,
   // so once it is on screen the answer that used to bounce us has landed — and
@@ -1080,6 +1113,12 @@ test("F (member-preview): an admin previews the state a member is in before they
   // error, which renders in its role="alert" region.
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
   await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
+  // The refused sign-in's dialog is modal and stays open on its error, which
+  // hides the page behind it (and the banner's Exit button) from the
+  // accessibility tree. Close it the way a person would before exiting.
+  const signInDialog = page.getByRole("dialog");
+  await signInDialog.getByRole("button", { name: "Close" }).click();
+  await expect(signInDialog).toBeHidden({ timeout: 30_000 });
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.

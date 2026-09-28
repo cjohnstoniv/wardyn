@@ -30,6 +30,7 @@ import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { MODEL_LEDE } from "../../../lib/model-providers-copy";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 
 // Canon strings, reviewed against the settings mock. Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
@@ -58,13 +59,29 @@ function Card({
   title,
   lede,
   footer,
+  // #1200 compact cards — Settings' and Your account's ModelProviderCard only.
+  // Getting started's Secrets step mounts the SAME card and must stay fully
+  // open, so the collapse is an opt-in, never this shell's own new default.
+  compact = false,
+  summary,
   children,
 }: {
   title: string;
   lede: string;
   footer?: string;
+  compact?: boolean;
+  summary?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  if (compact) {
+    return (
+      <CollapsibleCard title={title} summary={summary} testId="model-provider-card">
+        <p className="text-body leading-snug text-muted-foreground">{lede}</p>
+        <div className="mt-3 space-y-2">{children}</div>
+        {footer && <p className="mt-3 text-meta leading-snug text-muted-foreground">{footer}</p>}
+      </CollapsibleCard>
+    );
+  }
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <h3 className="text-sm font-medium text-foreground">{title}</h3>
@@ -317,9 +334,15 @@ export function HostSummary({ host }: { host: string }) {
 
 // Model provider.
 
-export function ModelProviderCard() {
+export function ModelProviderCard({
+  // #1200 compact cards — Settings' and Your account's opt-in; Getting
+  // started's Secrets step omits it and stays fully open (Card's own comment).
+  compact = false,
+}: {
+  compact?: boolean;
+}) {
   return (
-    <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE}>
+    <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} compact={compact}>
       <p className="text-body text-muted-foreground">{S.MODEL_MOVED}</p>
     </Card>
   );

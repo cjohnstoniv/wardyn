@@ -37,13 +37,17 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 	// scan run's OWN token, and the run must be a governed source scan run (nil
 	// SourceID or a non-scan Task has no business uploading scan facts).
 	claims, scanRun, ok := s.authSandboxRunUpload(w, r,
-		"run not found for scan upload", "run is not a governed scan run", "run is not a scan run",
+		sandboxUploadRefusal{"run not found for scan upload", reasonScanUploadRunNotFound},
+		sandboxUploadRefusal{"run is not a governed scan run", reasonScanUploadNotGoverned},
+		sandboxUploadRefusal{"run is not a scan run", reasonScanUploadWrongTask},
 		"source scan")
 	if !ok {
 		return
 	}
 	if scanRun.SourceID == nil {
-		writeError(w, http.StatusForbidden, "run is not a governed scan run")
+		// The SAME cause authSandboxRunUpload's own notGoverned arm answers —
+		// this is its defense-in-depth re-check, not a second cause.
+		writeErrorReason(w, http.StatusForbidden, reasonScanUploadNotGoverned, "run is not a governed scan run")
 		return
 	}
 	s.uploadSourceScanResult(w, r, claims, *scanRun.SourceID)
@@ -71,7 +75,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 	if err := json.Unmarshal(raw, &facts); err != nil {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "parse: " + err.Error()})))
-		writeError(w, http.StatusBadRequest, "invalid scan facts: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonScanFactsInvalid, "invalid scan facts: "+err.Error())
 		return
 	}
 	profile := workspacescan.DeriveProfile(facts)
@@ -84,7 +88,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 	if errors.Is(err, store.ErrNotFound) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "superseded scan upload (fence mismatch)"})))
-		writeError(w, http.StatusConflict, "scan upload superseded: another scan owns this source")
+		writeErrorReason(w, http.StatusConflict, reasonScanUploadSuperseded, "scan upload superseded: another scan owns this source")
 		return
 	}
 	if err != nil {

@@ -131,12 +131,12 @@ func (s *Server) mountModelProviderCredentialRoutes(r chi.Router) {
 // OIDC the admin token is a mechanism, not a person, and holds none.
 func (s *Server) credentialOwner(w http.ResponseWriter, r *http.Request) string {
 	if s.cfg.Secrets == nil {
-		writeError(w, http.StatusServiceUnavailable, mpcNoStore)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonModelProviderCredentialNoStore, mpcNoStore)
 		return ""
 	}
 	owner := runIdentitySubject(r.Context(), principalFromRequest(r))
 	if owner == "" || (s.cfg.OIDC != nil && owner == adminTokenPrincipal) {
-		writeError(w, http.StatusUnprocessableEntity, mpcNoPerson)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderCredentialNoPerson, mpcNoPerson)
 		return ""
 	}
 	return owner
@@ -161,11 +161,11 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, g
 		ok = slices.ContainsFunc(s.setupModelProviders(r.Context(), sc), func(v SetupModelProvider) bool { return v.ID == id })
 	}
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf(mpcNotFound, id))
+		writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, fmt.Sprintf(mpcNotFound, id))
 		return types.ModelProvider{}, false
 	}
 	if !providerTypedKinds[p.Kind] {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpcSignIn, id))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderCredentialIsSignIn, fmt.Sprintf(mpcSignIn, id))
 		return types.ModelProvider{}, false
 	}
 	return p, true
@@ -182,18 +182,18 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	}
 	var body putSecretRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, mpcBody)
+		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialBodyInvalid, mpcBody)
 		return
 	}
 	value := strings.TrimSpace(body.Value)
 	if value == "" {
-		writeError(w, http.StatusBadRequest, mpcBody)
+		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialBodyInvalid, mpcBody)
 		return
 	}
 	// The generic secrets API's reason: masking and scanning ignore anything
 	// shorter, and accepting it would imply they cover it.
 	if len(value) < secretmask.MinLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpcTooShort, secretmask.MinLen))
+		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialTooShort, fmt.Sprintf(mpcTooShort, secretmask.MinLen))
 		return
 	}
 	s.siteConfigMu.Lock()
@@ -213,7 +213,7 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 			// loggedMsg keeps the daemon's own record of a sealed/unreachable
 			// store on save (review finding F7) — writeServerError's log line,
 			// minus its generic 500, since this is its own named 503.
-			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), keyDoorSaveUnavailable, err))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonModelProviderCredentialStoreUnavailable, loggedMsg(r.Context(), keyDoorSaveUnavailable, err))
 			return
 		}
 		writeServerError(w, r, "store model provider credential", err)

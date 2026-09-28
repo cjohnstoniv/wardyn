@@ -29,7 +29,7 @@
 // own Claude-subscription test already stubs for.
 import type { Page } from "@playwright/test";
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, navToRoute, sql } from "./fixtures";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -37,6 +37,7 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 async function gotoSettings(page: Page): Promise<void> {
   await gotoConsole(page);
   await navToRoute(page, "/admin/settings");
+  await expandCard(page, M.TITLE);
   await expect(page.getByTestId("model-providers-list").getByText(MODEL_LEDE)).toBeVisible();
 }
 

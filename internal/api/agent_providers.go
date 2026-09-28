@@ -277,7 +277,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	}
 	block := normalizeAgentProviders(&body)
 	if err := validateAgentProviders(block, s.cfg.AgentImages); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent providers: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid agent providers: "+err.Error())
 		return
 	}
 	// SEAM-1: serializes this read-modify-write against the site config's other
@@ -294,11 +294,11 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedAgentProviders(existing))) {
-		writeError(w, http.StatusPreconditionFailed, agent412Stale)
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonSiteConfigStale, agent412Stale)
 		return
 	}
 	if err := validateDefaultProviders(block, existing.ModelProviders); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent providers: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid agent providers: "+err.Error())
 		return
 	}
 	candidate := existing

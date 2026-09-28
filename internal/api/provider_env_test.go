@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -156,8 +157,10 @@ func assertOneRunCreateFailure(t *testing.T, h *harness, want map[string]any) {
 
 // TestProviderEnvSecret_DoorsEveryArm: create and Review answer the same 422 —
 // provider and kind when a provider was chosen, the sentence naming the grant
-// and the variable, and no reason, since no sign-in repairs it — and admit an
-// ordinary env_secret; with no block, the same grant is refused too.
+// and the variable, and the generic model_provider_unavailable reason (#656
+// slice 3), never llmRefusalAuditReason since no sign-in repairs THIS cause —
+// and admit an ordinary env_secret; with no block, the same grant is refused
+// too.
 func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 	happy, noProvider := joinScenarios()[0], joinScenarios()[6]
 	inline := func(k joinKind, sc joinScenario, grants ...types.GrantSpec) string {
@@ -176,7 +179,7 @@ func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 					w := joinCreate(t, k, sc, path, inline(k, sc, envSecretGrant(name, "operator-model-key")))
 					var got errorBody
 					_ = json.Unmarshal(w.Body.Bytes(), &got)
-					want := errorBody{Error: fmt.Sprintf(mpRunModelEnvSecret, "operator-model-key", name)}
+					want := errorBody{Error: fmt.Sprintf(mpRunModelEnvSecret, "operator-model-key", name), Reason: string(authz.ReasonModelProviderUnavailable)}
 					if sc.chosen {
 						want.Provider, want.Kind = k.p.ID, string(k.p.Kind)
 					}
@@ -221,7 +224,7 @@ func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 			w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, "sub-admit-admin"), string(b))
 			var got errorBody
 			_ = json.Unmarshal(w.Body.Bytes(), &got)
-			if want := (errorBody{Error: fmt.Sprintf(mpRunModelEnvSecret, "operator-aws-key", "AWS_ACCESS_KEY_ID")}); w.Code != http.StatusUnprocessableEntity || got != want {
+			if want := (errorBody{Error: fmt.Sprintf(mpRunModelEnvSecret, "operator-aws-key", "AWS_ACCESS_KEY_ID"), Reason: string(authz.ReasonModelProviderUnavailable)}); w.Code != http.StatusUnprocessableEntity || got != want {
 				t.Errorf("%s with no block = %d %s, want 422 %+v", path, w.Code, w.Body.String(), want)
 			}
 		}

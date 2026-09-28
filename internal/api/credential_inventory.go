@@ -153,12 +153,12 @@ func (s *Server) handleCredentialInventory(w http.ResponseWriter, r *http.Reques
 	if len(providerOf) > 0 {
 		m, ok := s.cfg.Secrets.(secretstore.MetaStore)
 		if !ok {
-			writeError(w, http.StatusServiceUnavailable, credInventoryNoMeta)
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialInventoryNoMeta, credInventoryNoMeta)
 			return
 		}
 		metas, err := m.MetadataEverywhere(ctx, sortedKeys(providerOf))
 		if errors.Is(err, secretstore.ErrNoMetadata) {
-			writeError(w, http.StatusServiceUnavailable, credInventoryNoMeta)
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialInventoryNoMeta, credInventoryNoMeta)
 			return
 		}
 		if err != nil {

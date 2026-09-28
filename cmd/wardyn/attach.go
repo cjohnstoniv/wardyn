@@ -197,7 +197,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		// bare exit 1.
 		if resp != nil {
 			body, _ := io.ReadAll(resp.Body)
-			return &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
+			return sdk.NewAPIError(resp.StatusCode, body)
 		}
 		return fmt.Errorf("dial %s: %w", wsURL, err)
 	}
@@ -534,7 +534,7 @@ func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string,
 		if !json.Valid(body) {
 			return "", nil // not the server's own envelope: inconclusive, fall back
 		}
-		return "", &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
+		return "", sdk.NewAPIError(resp.StatusCode, body)
 	}
 
 	var out struct {

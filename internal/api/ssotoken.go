@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -64,7 +65,7 @@ const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer si
 // here is harnessLoginTask + awsSSOAgent instead of a non-nil WorkspaceID.
 func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Secrets == nil {
-		writeError(w, http.StatusServiceUnavailable, "no secret store configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonSSOTokenNoSecretStore, "no secret store configured")
 		return
 	}
 	claims, ok := claimsForRunUpload(w, r)
@@ -77,12 +78,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// claims.RunID comes from the presented run token, not a path parameter,
 		// so a run this store cannot find is that token's own authority gone.
 		// This branch does not split out store.ErrNotFound, so any other store
-		// failure currently answers the same 403.
-		writeError(w, http.StatusForbidden, "run not found for sso-token upload")
+		// failure currently answers the same 403. The SAME registered reason
+		// refuseTerminalRun's own arm writes (#656 slice 3).
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run not found for sso-token upload")
 		return
 	}
 	if run.Task != harnessLoginTask || run.Agent != awsSSOAgent {
-		writeError(w, http.StatusForbidden, "run is not an aws sso container-login run")
+		writeErrorReason(w, http.StatusForbidden, reasonSSOTokenWrongRunKind, "run is not an aws sso container-login run")
 		return
 	}
 	// A KILLED run may still reach this route, and that is the belt the supersede
@@ -100,7 +102,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// deliberately ended, and refusing those would be a new rule about a state
 	// this lane has never produced.
 	if run.State == types.RunKilled {
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonRunKilled, ssoTokenRunKilledRefusal, nil)
+		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureRunKilled, ssoTokenRunKilledRefusal, nil)
 		return
 	}
 
@@ -110,7 +112,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	var blob awsSSOBlob
 	if jerr := json.Unmarshal(raw, &blob); jerr != nil {
-		s.refuseCapture(w, r, claims, http.StatusBadRequest, refuseReasonBlobShape,
+		s.refuseCapture(w, r, claims, http.StatusBadRequest, reasonCaptureBlobShape,
 			"invalid sso token: "+jerr.Error(), nil)
 		return
 	}
@@ -120,7 +122,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// than re-resolved from the live roster — see loginRunStamp.
 	stamp, aerr := s.loginRunStamp(r.Context(), claims.RunID)
 	if aerr != nil {
-		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStampUnreadable,
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, reasonCaptureStampUnreadable,
 			loggedMsg(r.Context(), "verify sso token against login run", aerr), nil)
 		return
 	}
@@ -140,7 +142,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		if stamp.ModelProviderUID != "" {
 			msg = mpsCaptureNotOwner
 		}
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, msg, nil)
+		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureUnstampedScope, msg, nil)
 		return
 	}
 	if msg, reason := s.bindSSOBlob(blob, stamp); msg != "" {
@@ -160,7 +162,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// taken: nothing is stored, and the person signs in again.
 	releaseLoginLock, lerr := s.lockLoginSupersede(r.Context(), run.CreatedBy, claims.RunID)
 	if lerr != nil {
-		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, refuseReasonSignInBusy, signInBusyRefusal, &scope)
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal, &scope)
 		return
 	}
 	defer releaseLoginLock()
@@ -191,11 +193,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// as it liked — the exact overwrite this guard exists to refuse, reopened by
 	// reading the wrong namespace.
 	if prev, found, rerr := s.readAWSSSOBlob(secretstore.WithPurpose(r.Context(), secretstore.PurposeStatus), scope); rerr != nil {
-		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, reasonStoreError,
 			loggedMsg(r.Context(), "read existing aws sso credential", rerr), &scope)
 		return
 	} else if found && prev.SourceRunID == claims.RunID.String() {
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonAlreadyCaptured,
+		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureAlreadyCaptured,
 			"this login run has already captured an aws sso credential", &scope)
 		return
 	}
@@ -219,11 +221,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// capture nobody can say is still wanted, and the sandbox's remedy (sign in
 	// again) is the same either way.
 	if live, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr != nil {
-		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, reasonStoreError,
 			loggedMsg(r.Context(), "re-read login run before storing aws sso credential", rerr), &scope)
 		return
 	} else if live.State == types.RunKilled {
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonRunKilled, ssoTokenRunKilledRefusal, &scope)
+		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureRunKilled, ssoTokenRunKilledRefusal, &scope)
 		return
 	}
 
@@ -234,14 +236,14 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// A provider sign-in lands only while that provider is still the one it
 	// was launched for (storeProviderSignIn).
 	if changed, err := s.storeProviderSignIn(r.Context(), stamp, scope, blob); changed {
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonProviderChanged, mpsCaptureChanged, &scope)
+		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureProviderChanged, mpsCaptureChanged, &scope)
 		return
 	} else if err != nil {
 		// Audited like every other refusal on this route: the provenance is
 		// already stamped but NOTHING is persisted, so "the capture did not
 		// land" is the honest reading, and a failed persist is exactly the
 		// event an operator wants beside the rest rather than only in a 500.
-		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, reasonStoreError,
 			loggedMsg(r.Context(), "store aws sso credential", err), &scope)
 		return
 	}
@@ -386,7 +388,7 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// the server stamps its own provenance, so a client can never satisfy this
 	// by omission.
 	if missing := blob.missingFields(); len(missing) > 0 {
-		return "sso token blob is missing required fields (" + strings.Join(missing, ", ") + ")", refuseReasonBlobShape
+		return "sso token blob is missing required fields (" + strings.Join(missing, ", ") + ")", reasonCaptureBlobShape
 	}
 	// Defense in depth: this blob is persisted once and then baked
 	// VERBATIM, unescaped, into every later Bedrock run's ~/.aws/config INI
@@ -400,13 +402,13 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// [sso-session] block, so an injected duplicate sso_start_url via Region
 	// would win under last-key-wins parsing and defeat the StartURL guard.
 	if verr := validateSSOStartURL(blob.StartURL); verr != nil {
-		return "invalid sso token: " + verr.Error(), refuseReasonFieldUnsafe
+		return "invalid sso token: " + verr.Error(), reasonCaptureFieldUnsafe
 	}
 	for field, value := range map[string]string{
 		"account_id": blob.AccountID, "role_name": blob.RoleName, "region": blob.Region,
 	} {
 		if !repoFieldSafe(value) {
-			return "invalid sso token: " + field + " contains control characters or whitespace", refuseReasonFieldUnsafe
+			return "invalid sso token: " + field + " contains control characters or whitespace", reasonCaptureFieldUnsafe
 		}
 	}
 	// Shape, not merely safety. The PROVIDER-SAVE door holds the admin's pin
@@ -416,20 +418,20 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// stored and baked into every later run's ~/.aws/config, to be discovered as
 	// somebody's 403. One rule, both doors — the file's own argument.
 	if !awsAccountID.MatchString(blob.AccountID) {
-		return ssoTokenAccountShapeRefusal, refuseReasonFieldShape
+		return ssoTokenAccountShapeRefusal, reasonCaptureFieldShape
 	}
 	if !iamRoleName.MatchString(blob.RoleName) {
-		return ssoTokenRoleShapeRefusal, refuseReasonFieldShape
+		return ssoTokenRoleShapeRefusal, reasonCaptureFieldShape
 	}
 	// The values the server already HOLDS, so the binding needs no new trust
 	// source: the provider's region, start URL and model as they read at launch,
 	// off THIS run's own harness.login.start row. An empty one refuses.
 	region, model := stamp.SSORegion, stamp.Model
 	if blob.Region != region {
-		return "sso token region does not match the AWS SSO region this login run was launched with", refuseReasonRegionMismatch
+		return "sso token region does not match the AWS SSO region this login run was launched with", reasonCaptureRegionMismatch
 	}
 	if blob.StartURL != stamp.SSOStartURL {
-		return "sso token start_url does not match the AWS access portal URL this login run was launched with", refuseReasonStartURLMismatch
+		return "sso token start_url does not match the AWS access portal URL this login run was launched with", reasonCaptureStartURLMismatch
 	}
 	// Which account and role, not merely which portal.
 	return bindCaptureToPin(blob, stamp, model)

@@ -705,7 +705,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.builds.drop(id)
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
 	if err != nil {
@@ -779,22 +779,22 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	// with the observed-egress panel that produces what gets promoted here.
 	deadHosts := s.deadApprovedEgressHosts()
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
-		func(req body) ([]string, string) {
+		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
-				return nil, "too many domains (max 64)"
+				return nil, reasonWorkspaceApprovedEgressInvalid, "too many domains (max 64)"
 			}
 			set := map[string]struct{}{}
 			for _, d := range req.Domains {
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !hostrules.ValidApprovedHost(d) {
-					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+					return nil, reasonWorkspaceApprovedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
 				if _, dead := deadHosts[d]; dead {
-					return nil, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
+					return nil, reasonWorkspaceApprovedEgressDeadHost, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
 				}
 				set[d] = struct{}{}
 			}
-			return sortedKeys(set), ""
+			return sortedKeys(set), "", ""
 		},
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
@@ -832,19 +832,19 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 		Domains []string `json:"domains"`
 	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.deny",
-		func(req body) ([]string, string) {
+		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
-				return nil, "too many domains (max 64)"
+				return nil, reasonWorkspaceDeniedEgressInvalid, "too many domains (max 64)"
 			}
 			set := map[string]struct{}{}
 			for _, d := range req.Domains {
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !hostrules.ValidApprovedHost(d) {
-					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+					return nil, reasonWorkspaceDeniedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
 				set[d] = struct{}{}
 			}
-			return sortedKeys(set), ""
+			return sortedKeys(set), "", ""
 		},
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
@@ -861,14 +861,14 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 // clears it. Names/refs only — the secret itself lives in the store.
 func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Request) {
 	scopedWorkspaceWrite(s, w, r, "workspace.llm_cred.set",
-		func(req types.WorkspaceLLMCred) (*types.WorkspaceLLMCred, string) {
+		func(req types.WorkspaceLLMCred) (*types.WorkspaceLLMCred, string, string) {
 			if msg := validateWorkspaceLLMCred(&req); msg != "" {
-				return nil, msg
+				return nil, reasonWorkspaceLLMCredInvalid, msg
 			}
 			if !llmCredBinds(&req) {
-				return nil, "" // nil clears the binding
+				return nil, "", "" // nil clears the binding
 			}
-			return &req, ""
+			return &req, "", ""
 		},
 		func(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error) {
 			return s.cfg.Store.SetWorkspaceLLMCred(ctx, id, cred)
@@ -916,7 +916,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	staleImage := ws.ImageRef
 	err := s.cfg.Store.DeleteWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
 	if err != nil {

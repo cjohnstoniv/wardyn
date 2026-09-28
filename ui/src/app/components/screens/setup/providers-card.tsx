@@ -38,14 +38,20 @@ import type { SetupHarnessTool } from "../../../lib/types";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 
 export function ProvidersCard({
   /** The harness roster off SetupStatus — the SAME read both homes already made.
    *  Undefined is UNKNOWN (an older daemon omits it, or status hasn't landed):
    *  the summary then names git providers alone rather than a false "0 agents". */
   harnesses,
+  /** #1200 compact cards — Settings' only. Getting started's `providers` step
+   *  renders this same component and must stay fully open, so the collapse
+   *  is an opt-in, never this component's own new default. */
+  compact = false,
 }: {
   harnesses?: SetupHarnessTool[];
+  compact?: boolean;
 } = {}) {
   const operator = useOperator();
   const navigate = useNavigate();
@@ -77,6 +83,21 @@ export function ProvidersCard({
   // shape §2.6's state list forbids. ProvidersScreen answers the same refusal
   // the same way (its forbidden arm). Still zero teal, and still no fetch.
   if (!operator) {
+    if (compact) {
+      return (
+        <CollapsibleCard
+          title={
+            <span className="inline-flex items-center gap-1">
+              {PROVIDERS.TITLE}
+              <OperatorOnlyHint />
+            </span>
+          }
+          testId="providers-card"
+        >
+          <p className="text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
+        </CollapsibleCard>
+      );
+    }
     return (
       <section className="rounded-xl border border-border bg-card p-4" data-testid="providers-card">
         <h3 className="flex items-center text-sm font-medium text-foreground">
@@ -112,21 +133,37 @@ export function ProvidersCard({
           ? PROVIDERS.CARD_EMPTY
           : PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(count), PROVIDERS.CARD_AGENTS(agents));
 
+  // #1200 compact cards: compact mode already states `summary` in the
+  // collapsed header, so the open-button's own copy of it would duplicate
+  // the same text node twice once expanded — suppressed there, unchanged
+  // (still the two-line button) in Getting started.
+  const openButton = (
+    <button
+      type="button"
+      onClick={() => navigate("/admin/providers")}
+      className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
+    >
+      <span>
+        <span className="block text-body font-medium text-foreground">{PROVIDERS.CARD_OPEN}</span>
+        {summary && !compact && <span className="block text-meta text-muted-foreground">{summary}</span>}
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+    </button>
+  );
+
+  if (compact) {
+    return (
+      <CollapsibleCard title={PROVIDERS.TITLE} summary={summary || undefined} testId="providers-card">
+        <p className="text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
+        {openButton}
+      </CollapsibleCard>
+    );
+  }
   return (
     <section className="rounded-xl border border-border bg-card p-4" data-testid="providers-card">
       <h3 className="text-sm font-medium text-foreground">{PROVIDERS.TITLE}</h3>
       <p className="mt-0.5 text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
-      <button
-        type="button"
-        onClick={() => navigate("/admin/providers")}
-        className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
-      >
-        <span>
-          <span className="block text-body font-medium text-foreground">{PROVIDERS.CARD_OPEN}</span>
-          {summary && <span className="block text-meta text-muted-foreground">{summary}</span>}
-        </span>
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-      </button>
+      {openButton}
     </section>
   );
 }

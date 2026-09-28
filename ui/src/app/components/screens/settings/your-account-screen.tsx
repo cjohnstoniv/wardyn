@@ -19,6 +19,12 @@
 //
 // /ssh-keys is gone (deleted with no alias); SshKeysPane is mounted here
 // instead, exactly as it always rendered on this route.
+//
+// #1200 compact cards (owner-approved mock): every card here collapses to a
+// one-line summary and expands on click, none
+// open by default — admin-settings-screen.tsx's own header comment has the
+// full reasoning. ModelProviderCard also renders in Getting started, which
+// must stay fully open, so it takes the collapse as an opt-in `compact` prop.
 import * as React from "react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
@@ -53,7 +59,7 @@ export function YourAccountScreen() {
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
-        <div className="space-y-4">
+        <div className="space-y-2">
           {/* #541 (§5.4, packet MP-D): every person's own model-provider
               credentials, User view only — an admin reaches it by switching
               to Member view. Renders nothing with no provider block. */}
@@ -62,7 +68,7 @@ export function YourAccountScreen() {
               Settings mounts for the org's shared credential; the card's own
               per-caller branches (operator vs. a per_user bearer/SSO row)
               already tell the two apart. */}
-          <ModelProviderCard />
+          <ModelProviderCard compact />
           {/* #386, Q9: a personal connection. Renders nothing with no Azure
               DevOps row configured. */}
           <AdoConnectionCard status={status} onChanged={load} />

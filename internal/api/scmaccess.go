@@ -351,8 +351,9 @@ type gitCredentialErrorBody struct {
 
 // gitCredentialRefusalReason is the 422 `reason` the New Run rail recognises
 // (the issue's one new value on the 0.7.7 relaunch path, §1: "This round adds
-// one `reason` value, `git_credential`, and reuses the path").
-const gitCredentialRefusalReason = "git_credential"
+// one `reason` value, `git_credential`, and reuses the path"). Declared in
+// reasons_routes.go, not here (#656 review round: the docs guard only reads
+// the two reasons files).
 
 // gitCredentialNotConnectedRefusal is §7.1's composed sentence, BYTE-EXACT
 // (pinned by TestGitCredentialRefusalMatchesCanon, which parses the canon

@@ -24,8 +24,9 @@ import (
 // CLASS, and the console decides whether to offer a door from the same
 // model-access grading every other surface reads — a refusal whose renewal
 // merely did not complete ("launch again in a moment") grades live and gets no
-// button, correctly, without this key knowing anything about it.
-const llmRefusalAuditReason = "model_credential"
+// button, correctly, without this key knowing anything about it. Declared in
+// reasons_routes.go, not here (#656 review round: the docs guard only reads
+// the two reasons files).
 
 // createDoorIsModelRun answers isModelRun's own question for a create-door
 // REQUEST rather than a resolved run: workspace id AND source id are nil by

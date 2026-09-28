@@ -298,10 +298,11 @@ fi
 # other failure here must not be silently ignored.
 connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)" \
   || { [[ "${connect_err}" == *"already exists in network"* ]] || die "docker network connect ${REGISTRY_NAME} ${KIND_NETWORK} failed: ${connect_err}"; }
-# Node -> registry, by the registry's CONTAINER name on the shared kind network
-# (never localhost: the node is a different network namespace). Idempotent:
-# the file's content is identical every walk.
-#
+# Node -> registry through a rate-limited nginx, by CONTAINER name on the kind
+# network (never localhost: the node is another network namespace). Why the
+# limit: scripts/lib/kind-sso-walk-cold-pull.sh. Idempotent per walk.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/kind-sso-walk-cold-pull.sh"
+serve_cold_pull_throttle
 # Requires containerd >= 2.2 on the node: that's the version certs.d's
 # `/etc/containerd/certs.d:/etc/docker/certs.d` default config_path shipped in
 # (containerd's cri/images plugin.go); kind's own v0.33.0 node image ships
@@ -310,7 +311,7 @@ connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)
 # loopback instead, which fails closed (ImagePullBackOff), not silently.
 docker exec "${KIND_NODE}" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}" \
   || die "could not create containerd certs.d on ${KIND_NODE}"
-printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
+printf '[host."http://%s:5000"]\n' "${COLD_PULL_THROTTLE_NAME}" \
   | docker exec -i "${KIND_NODE}" cp /dev/stdin "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" \
   || die "could not write ${KIND_NODE}'s registry mirror config"
 
@@ -331,12 +332,8 @@ printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
 # produces new bytes rather than replaying Docker's own build cache.
 AWS_SSO_COLD_TAG="cold-$(date +%s)"
 AWS_SSO_NODE_IMAGE="localhost:${REGISTRY_PORT}/agent-aws-sso:${AWS_SSO_COLD_TAG}"
-# 64-128 MiB: the sign-in pane only learns about the pull via its own 2s
-# poll (harness-login-pane.tsx's RUN_POLL_MS), so the download has to
-# outlast at least one of those ticks with real margin — a 16-64 MiB pad
-# measured at ~2-2.4s wall clock (mostly fixed per-pull overhead, not
-# bandwidth) left too much of that window uncovered. Doubling the floor
-# buys margin without turning every walk into a large image build/push.
+# 64-128 MiB of fresh bytes. The SIZE does not set the pull's duration (a local
+# registry serves any of it in under a second); the rate limit above does.
 COLD_PULL_MIB=$(( 64 + RANDOM % 65 ))
 printf 'FROM %s\nRUN head -c %dm /dev/urandom > /tmp/.wardyn-coldpull-pad # %s\n' \
     "${AWS_SSO_IMAGE}" "${COLD_PULL_MIB}" "${AWS_SSO_COLD_TAG}" \
@@ -740,15 +737,16 @@ seen_pf_pid=""
 pod_watch_pid=""
 # ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
-# a leftover one causes on the NEXT walk). ALSO the registry (step 1c): removed
-# here rather than left running, so a fresh, empty one is created next walk
-# instead of one more cold-<epoch> tag piling up in it forever.
+# a leftover one causes on the NEXT walk). ALSO the registry, its rate-limited
+# front and the derived cold image (step 1c): removed here, so a fresh, empty
+# registry is created next walk and no cold-<epoch> image piles up on the host.
 cleanup_walk() {
   [[ -n "${SSO_ONLY_APPLIED:-}" ]] && set_render sso
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
-  docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1
+  docker rm -f "${REGISTRY_NAME}" "${COLD_PULL_THROTTLE_NAME:-}" >/dev/null 2>&1
+  [[ -n "${AWS_SSO_NODE_IMAGE:-}" ]] && docker rmi "${AWS_SSO_NODE_IMAGE}" >/dev/null 2>&1
   return 0
 }
 trap cleanup_walk EXIT

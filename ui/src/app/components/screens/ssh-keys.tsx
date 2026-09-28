@@ -42,10 +42,14 @@ import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { CollapsibleCard } from "../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../lib/format";
 import { capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import { useOperator } from "../wardyn/operator-context";
+
+const SSH_KEYS_DESCRIPTION =
+  "Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's.";
 
 export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
@@ -70,26 +74,32 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   }, []);
   React.useEffect(load, [load]);
 
-  return (
-    <div>
-      <PageHeader
-        as={heading}
-        title="Your SSH keys"
-        description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's."
-        actions={
-          <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
-            <Plus className="size-4" /> Add key
-          </Button>
-        }
-      />
+  // #1200 compact cards — one line, absent while unloaded. "0 keys", not the
+  // EmptyState's own "No keys yet." — both render at once once expanded, and
+  // a query for that canon string must still resolve to a single node. The
+  // error case is absent too (review R2-L1): the packet has no error summary
+  // for this card, and ErrorState's own heading (states.tsx's STATES.
+  // ERROR_TITLE) already renders once the card is expanded — showing it here
+  // too would repeat the same string twice on screen at once.
+  const summary =
+    status === "loading" || status === "error" ? undefined : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
 
+  // review L2 — nested inside CollapsibleCard on Your account (h3), this
+  // table wrapper must not repeat the card's own border+bg-card (CONSOLE-
+  // RULES §9 "never nest a card in a card"); admin-ssh-keys-card.tsx's own
+  // table wrapper sets the same precedent. The standalone page (h1, no live
+  // route) keeps the full card treatment, since nothing wraps it.
+  const tableWrapperClass =
+    heading === "h3" ? "overflow-hidden rounded-lg border border-border" : "overflow-hidden rounded-xl border border-border bg-card";
+
+  const table = (
+    <>
       {addBlocked && (
         <p role="status" className="mb-3 text-sm text-muted-foreground">
           {DENIED.SSH_KEY_FEATURE}
         </p>
       )}
-
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className={tableWrapperClass}>
         {status === "loading" ? (
           <TableSkeleton rows={3} cols={4} />
         ) : status === "error" ? (
@@ -176,9 +186,50 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
           </Table>
         )}
       </div>
+    </>
+  );
 
+  const dialogs = (
+    <>
       <AddSSHKeyDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
       <RemoveSSHKeyDialog keyToDelete={toDelete} onOpenChange={(o) => !o && setToDelete(null)} onRemoved={load} />
+    </>
+  );
+
+  // #1200 compact cards — Your account's card form. The bare page (heading
+  // "h1") has no live route any more (M-5 deleted /ssh-keys with no alias)
+  // but stays exactly as it rendered before: nothing collapses a page.
+  if (heading === "h3") {
+    return (
+      <>
+        <CollapsibleCard title="Your SSH keys" summary={summary} testId="ssh-keys-pane">
+          <p className="text-body leading-snug text-muted-foreground">{SSH_KEYS_DESCRIPTION}</p>
+          <div className="mt-3">
+            <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={addBlocked}>
+              <Plus className="size-4" /> Add key
+            </Button>
+          </div>
+          <div className="mt-3">{table}</div>
+        </CollapsibleCard>
+        {dialogs}
+      </>
+    );
+  }
+
+  return (
+    <div>
+      <PageHeader
+        as={heading}
+        title="Your SSH keys"
+        description={SSH_KEYS_DESCRIPTION}
+        actions={
+          <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
+            <Plus className="size-4" /> Add key
+          </Button>
+        }
+      />
+      {table}
+      {dialogs}
     </div>
   );
 }

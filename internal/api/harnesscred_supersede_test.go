@@ -633,8 +633,8 @@ func TestUploadSSOToken_KilledRunIsRefused(t *testing.T) {
 		if err := json.Unmarshal(refused.Data, &data); err != nil {
 			t.Fatalf("decode refusal data: %v", err)
 		}
-		if data["reason"] != refuseReasonRunKilled {
-			t.Errorf("refusal reason = %v, want %q", data["reason"], refuseReasonRunKilled)
+		if data["reason"] != reasonCaptureRunKilled {
+			t.Errorf("refusal reason = %v, want %q", data["reason"], reasonCaptureRunKilled)
 		}
 	})
 }
@@ -741,9 +741,9 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 		t.Fatal("no harness.credential.refuse row for a refused capture")
 	}
 	data := killData(t, *refused)
-	if data["reason"] != refuseReasonRunKilled {
+	if data["reason"] != reasonCaptureRunKilled {
 		t.Errorf("refusal reason = %v, want %q — the same reason the top-of-route check answers, "+
-			"so the two arms group as one thing in an incident review", data["reason"], refuseReasonRunKilled)
+			"so the two arms group as one thing in an incident review", data["reason"], reasonCaptureRunKilled)
 	}
 	// The scope IS decided by the time this arm fires, so the row carries the
 	// pair that makes a per_user estate's refusal stream groupable by person.

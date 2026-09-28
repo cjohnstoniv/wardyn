@@ -20,6 +20,13 @@
 // UserDrivesCard/BrandingCard/ModelProvidersList are unchanged, shared
 // components.
 //
+// #1200 compact cards (owner-approved mock): every card here collapses to a
+// one-line summary and expands on click, none
+// open by default — see collapsible-card.tsx for why that default is
+// load-bearing. ModelProviderCard/ProvidersCard/UserDrivesCard also render in
+// Getting started, which must stay fully open, so they take the collapse as
+// an opt-in `compact` prop rather than a new always-on default.
+//
 // ponytail: the Corporate proxy & egress disclosure SUMMARIZES and links to the
 // funnel's Corporate network step rather than re-mounting HostProxyTab here.
 // That tab needs the step's whole mutate/saving/probe plumbing; duplicating it
@@ -37,7 +44,9 @@ import { ErrorState, TableSkeleton } from "../../wardyn/states";
 import { Mono } from "../../wardyn/code-block";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { TierPicker } from "../../wardyn/tier-picker";
+import { CC_META } from "../../wardyn/cc-meta";
 import { K8sEnvironmentRows, NoRunnerCard, runnerAvailability } from "../setup/environment-step";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { ModelProviderCard } from "./connection-cards";
@@ -112,11 +121,17 @@ function HostCard({
   const configUnknown = siteConfig === "error";
   const cfg: SiteConfig | null = configUnknown ? null : siteConfig;
   const proxied = !configUnknown && isProxyConfigured(cfg);
+  // #1200 compact cards — the one line this card states while collapsed. The
+  // tier is the headline fact ("what every run inherits by default", the
+  // lede below); noRunner is stated as its own fact rather than naming a
+  // tier that cannot actually launch anything.
+  const hostSummary = noRunner
+    ? "No barrier installed — runs can't launch"
+    : `Runs default to ${CC_META[selected].label}`;
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4">
-      <h3 className="text-sm font-medium text-foreground">Host</h3>
-      <p className="mt-0.5 text-body leading-snug text-muted-foreground">
+    <CollapsibleCard title="Host" summary={hostSummary} testId="host-card">
+      <p className="text-body leading-snug text-muted-foreground">
         The barriers this machine can build, and what every run inherits by
         default.
       </p>
@@ -223,7 +238,7 @@ function HostCard({
       >
         Re-check this host
       </button>
-    </section>
+    </CollapsibleCard>
   );
 }
 
@@ -302,7 +317,9 @@ export function AdminSettingsScreen() {
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
-        <div className="space-y-4">
+        // space-y-2, not -4: seven collapsed cards plus this page's own
+        // header must fit 744px (the approved mock's §4).
+        <div className="space-y-2">
           <HostCard
             status={status}
             siteConfig={configFailed ? "error" : siteConfig}
@@ -324,19 +341,19 @@ export function AdminSettingsScreen() {
           {/* The shared credential lanes, as built — until MP-18 replaces this
               card (design §4.3). S-4 (#636): Your account mounts the SAME
               component for a person's own connection; this is the org one. */}
-          <ModelProviderCard />
+          <ModelProviderCard compact />
           {/* The Providers card replaces Git host: the git credential
               lanes moved into a provider row on /providers, and this card is
               the same shared component the funnel's `providers` step body
               renders (setup/providers-card.tsx). */}
-          <ProvidersCard harnesses={status?.harnesses} />
+          <ProvidersCard harnesses={status?.harnesses} compact />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,
               summarising and linking exactly as the Corporate proxy disclosure
               above does. SUPER-only; it renders nothing for anyone else, which
               is why the position is pinned in the suite rather than left to
               read off the source. */}
-          <UserDrivesCard />
+          <UserDrivesCard compact />
           {/* M-5 (#636, packet S-1): the sixth and last card — where an admin
               adds an SSH key that reaches other people's runs, now that Your
               account is the only door left for a personal one. */}

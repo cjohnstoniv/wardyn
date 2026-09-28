@@ -372,7 +372,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	if hasProxyHeaderSecret(in) {
 		serving := s.modelServingHosts(sc)
 		if i := slices.IndexFunc(in.Egress, serving); i >= 0 {
-			writeError(w, http.StatusBadRequest, "invalid integration: "+fmt.Sprintf(integration400ModelHost, in.Egress[i]))
+			writeErrorReason(w, http.StatusBadRequest, reasonIntegrationInvalid, "invalid integration: "+fmt.Sprintf(integration400ModelHost, in.Egress[i]))
 			return
 		}
 	}

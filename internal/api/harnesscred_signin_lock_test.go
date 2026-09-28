@@ -157,7 +157,7 @@ func TestUploadSSOToken_ALockWaitThatExpiresStoresNothing(t *testing.T) {
 	if refused == nil {
 		t.Fatal("no harness.credential.refuse row for a refused capture")
 	}
-	if data := killData(t, *refused); data["reason"] != refuseReasonSignInBusy {
-		t.Errorf("refusal reason = %v, want %q", data["reason"], refuseReasonSignInBusy)
+	if data := killData(t, *refused); data["reason"] != reasonCaptureSignInBusy {
+		t.Errorf("refusal reason = %v, want %q", data["reason"], reasonCaptureSignInBusy)
 	}
 }

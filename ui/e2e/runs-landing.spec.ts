@@ -75,11 +75,19 @@ async function mockRunsList(page: Page, handler: RunsListHandler): Promise<void>
 }
 
 async function mockHasRuns(page: Page, hasRuns: boolean): Promise<void> {
+  // CACHE-AND-SERVE (fixtures.ts's mockMemberSetupStatus): the landing
+  // redirect, the shell's poll and this screen's own mount all hit this
+  // endpoint, and a real round trip PER match races Playwright disposing an
+  // in-flight route's response ("apiResponse.json: Response has been
+  // disposed"). One real fetch, then every match is fulfilled from the
+  // cached body.
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.has_runs = hasRuns;
-    await route.fulfill({ response, json });
+    if (!cached) {
+      cached = (await (await route.fetch()).json()) as Record<string, unknown>;
+      cached.has_runs = hasRuns;
+    }
+    await route.fulfill({ json: cached });
   });
 }
 

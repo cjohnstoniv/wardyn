@@ -200,6 +200,22 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
   }, path);
 }
 
+// #1200 compact cards: every CollapsibleCard on Admin Settings/Your account
+// (collapsible-card.tsx) starts collapsed, so a spec that reads a card's
+// content directly must open it first — the e2e counterpart of the unit
+// suites' own `expandCard` (lib/test-dom.ts's `startsWith`). A prefix regex,
+// not a plain substring: a bare "Model provider" also matches "Model
+// providers"' own heading/button, and vice versa. Idempotent (checks
+// aria-expanded first) so a spec can call it even on a card a deep link
+// already force-opened (ado-connection.tsx's `#azure-devops` effect) without
+// accidentally re-collapsing it.
+export async function expandCard(page: Page, title: string): Promise<void> {
+  const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
+}
+
 // Uses the browser's actual stored credential, including token-field sign-ins.
 // Returning only the response keeps bearer values out of assertion diagnostics.
 export async function consoleAPI(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> {

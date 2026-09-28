@@ -169,8 +169,8 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toHaveCount(0);
-  // …and on /account the strip keeps its sentence; the connections card there
-  // claims the door, so only the card's own button is offered.
+  // …and on /account the strip keeps its sentence (the connections card there
+  // claims the door only while it is expanded).
   await page.goto("/account");
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await dexSignOut(page);

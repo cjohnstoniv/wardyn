@@ -261,6 +261,21 @@ func TestSetRunEnd_Refusals(t *testing.T) {
 	}
 }
 
+// TestSetRunEnd_MustBeFutureReasonIsPinned covers the same "an end in the
+// past" case TestSetRunEnd_Refusals already exercises, with the wire reason
+// asserted as a LITERAL, not the Go const, so a rename of
+// reasonRunEndMustBeFuture without updating docs/sdk.md fails here too.
+func TestSetRunEnd_MustBeFutureReasonIsPinned(t *testing.T) {
+	f := newEndWaitFixture(t, types.RunLimits{UserChangesLimits: true, AllowNoEnd: true})
+	w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSession(t), endsAtBody(f.now.Add(-time.Minute)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "run_end_must_be_future" {
+		t.Errorf("reason = %q, want the literal %q", got, "run_end_must_be_future")
+	}
+}
+
 // TestPatchRunEnds_ExtendsALostRun is F1's fix (long-holds design rev 4
 // §2.3): a run lost to a reboot or a control-plane outage, even past its own
 // end, is still extendable — that is how it becomes revivable again (§4.1).

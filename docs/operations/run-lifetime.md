@@ -115,7 +115,13 @@ immediate, non-resumable teardown rather than a grace window. Its proxy
 config reaches the sidecar through a per-run Secret staged into an in-memory
 volume (#688), not stdin; since the run is never kept, that Secret lives exactly
 as long as the run and is never re-created from the stored row. The row is still
-written for a k8s run (and deleted with it), unused until k8s can revive. See
+written for a k8s run (and deleted with it), unused until k8s can revive. So
+`POST /runs/{id}/revive` is refused with 409, and `POST /admin/runs/restart`
+("Restart with current limits") answers 200 with each run `ok: false`; both
+carry reason `revive_unsupported` (`runner.ErrReviveUnsupported`), and nothing
+changes. That includes a run
+dispatched before 0.7.12 whose proxy cannot reach the upgraded control plane:
+on Kubernetes stop it and start a new run instead. See
 [Kubernetes: known gaps](kubernetes-known-gaps.md).
 
 **What's not here: pause.** The run-limits schema already carries a

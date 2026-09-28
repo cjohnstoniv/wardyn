@@ -751,7 +751,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := s.cfg.Store.DeleteRoleMapping(r.Context(), id); err != nil {
-		if notFoundIf(w, err, "role mapping") {
+		if notFoundIf(w, err, "role mapping", reasonRoleMappingNotFound) {
 			return
 		}
 		writeServerError(w, r, "delete role mapping", err)
