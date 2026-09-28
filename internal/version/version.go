@@ -13,7 +13,7 @@ import "runtime/debug"
 // Version is the shipped release. cmd/wardyn/version_test.go pins it to the
 // newest CHANGELOG.md section and to the other shipped version strings
 // (deploy/helm/wardyn/Chart.yaml, ui/package.json) — bump them together.
-const Version = "0.7.12"
+const Version = "0.7.13"
 
 // releaseBuild is stamped "true" by -ldflags -X, ONLY by the two places
 // Wardyn's own tooling builds a release artifact: release.yml's `binaries`
