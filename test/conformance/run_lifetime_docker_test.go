@@ -68,9 +68,10 @@ func TestRunLifetimeDocker(t *testing.T) {
 		// See TestConformanceDocker's identical comment: busybox stands in for
 		// the real wardyn-proxy image so this gate needs no proxy binary. It
 		// echoes the config it is handed on stdin (#1176: its only way in) to
-		// its log, which is how the revive case reads what each proxy got.
+		// its log, which is how the revive case reads what each proxy got (the
+		// echo ends the line: the log driver holds a partial one back).
 		ProxyImage: "busybox:latest",
-		ProxyCmd:   []string{"sh", "-c", "cat; exec sleep infinity"},
+		ProxyCmd:   []string{"sh", "-c", "cat; echo; exec sleep infinity"},
 	})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
@@ -117,6 +118,12 @@ func TestRunLifetimeDocker(t *testing.T) {
 			t.Errorf("%s: running=%v paused=%v, want running=%v paused=%v", name, running, paused, wantRunning, wantPaused)
 		}
 	}
+	requireGone := func(t *testing.T, name string) {
+		t.Helper()
+		if _, _, ok := inspect(t, name); ok {
+			t.Errorf("%s still exists; want it removed", name)
+		}
+	}
 	// newSandbox creates a fresh agent+proxy pair, both running, and registers
 	// teardown. proxyRef is the deterministic name naming.go's proxyContainerName
 	// computes ("wardyn-proxy-"+runID) — unexported, so reproduced here from the
@@ -144,8 +151,8 @@ func TestRunLifetimeDocker(t *testing.T) {
 	// EndKeepsAgentAndCutsEgress: RL-9/run_lease.go's lease end (endSandbox).
 	// The agent container is KEPT (never removed — its writable layer is the
 	// checkout/transcript a kept run is kept FOR) but its process is stopped,
-	// same as the proxy: neither is running, so the sandbox's only egress path
-	// (the proxy) is cut.
+	// and the proxy is removed (a revive rebuilds it from the control plane's
+	// stored config, #1176), so the sandbox's only egress path is cut.
 	t.Run("EndKeepsAgentAndCutsEgress", func(t *testing.T) {
 		agentRef, proxyRef := newSandbox(t)
 
@@ -158,7 +165,7 @@ func TestRunLifetimeDocker(t *testing.T) {
 		}
 
 		requireState(t, agentRef, false, false) // kept, not removed — but stopped
-		requireState(t, proxyRef, false, false) // cut off, also kept for a later revive
+		requireGone(t, proxyRef)
 	})
 
 	// LostProxyCutsEgress: RL-9/run_lost.go's outage-inside-the-lease branch
@@ -176,7 +183,7 @@ func TestRunLifetimeDocker(t *testing.T) {
 		}
 
 		requireState(t, agentRef, true, false) // an outage inside the lease keeps the agent running
-		requireState(t, proxyRef, false, false)
+		requireGone(t, proxyRef)
 	})
 
 	// ReviveReusesAddressAndCA: RL-9's proxy-only revive (runner.ProxyReviver).
@@ -219,11 +226,12 @@ func TestRunLifetimeDocker(t *testing.T) {
 		if !ok {
 			t.Fatal("orchestrator does not implement runner.ProxyStopper")
 		}
+		oldCfg := receivedProxyConfig(t, cli, proxyRef)
 		if err := stopper.StopProxy(context.Background(), agentRef); err != nil {
 			t.Fatalf("StopProxy: %v", err)
 		}
+		requireGone(t, proxyRef)
 
-		oldCfg := receivedProxyConfig(t, cli, proxyRef)
 		var old struct {
 			RunToken      string `json:"run_token"`
 			MITMCACertPEM string `json:"mitm_ca_cert_pem"`
@@ -246,6 +254,9 @@ func TestRunLifetimeDocker(t *testing.T) {
 			t.Fatalf("ReplaceProxy: %v", err)
 		}
 
+		// The engine hands a freed address back to the next unpinned endpoint,
+		// so this proves a real engine accepts the pinned create (#1133), not
+		// that the pin is asked for: TestReplaceProxy_ALostRunsProxyComesBackAtItsAddress does.
 		if got := proxyIP(t); got != oldIP {
 			t.Errorf("revived proxy address = %s, want the SAME address the agent's hosts entry pins (%s)", got, oldIP)
 		}
