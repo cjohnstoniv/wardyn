@@ -7,8 +7,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
+import type { RecordResult, SetupModelProvider, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 const getWorkspaceMock = vi.fn();
@@ -42,11 +43,16 @@ const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 const getAvailabilityMock = vi.fn();
+const getMyCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
   return {
     ...actual,
-    permissions: { ...actual.permissions, getAvailability: (...a: unknown[]) => getAvailabilityMock(...a) },
+    permissions: {
+      ...actual.permissions,
+      getAvailability: (...a: unknown[]) => getAvailabilityMock(...a),
+      getMyCapabilities: (...a: unknown[]) => getMyCapabilitiesMock(...a),
+    },
   };
 });
 
@@ -92,8 +98,19 @@ function RunsRouteProbe() {
   return <div>runs screen{state?.openNewRun ? " (openNewRun)" : ""}</div>;
 }
 
-function renderDetail(id = "ws-1", operator = true, securityOperator = operator) {
-  return render(
+// modelProviders is undefined by default — no <ModelAccessProvider> mounted
+// at all, the exact shape every case but #922's model-provider-arm ones
+// renders (and behaviorally identical to a mounted Provider whose own status
+// carries no model_providers key: both mean "no answer", resolvedModelProviders's
+// own fail-open). Pass an array (including `[]`, a REAL loaded answer) to
+// mount one, matching workspaces.test.tsx's own idiom.
+function renderDetail(
+  id = "ws-1",
+  operator = true,
+  securityOperator = operator,
+  modelProviders?: SetupModelProvider[],
+) {
+  const screen = (
     <MemoryRouter initialEntries={[`/workspaces/${id}`]}>
       {/* 0.7 §B: the Sessions pane and both host cards moved to
           useSecurityOperator, so this fixture's viewer must be a MEMBER on
@@ -110,7 +127,13 @@ function renderDetail(id = "ws-1", operator = true, securityOperator = operator)
           <Route path="/runs/:id" element={<div>run detail screen</div>} />
         </Routes>
       </OperatorProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
+  );
+  if (modelProviders === undefined) return render(screen);
+  return render(
+    <ModelAccessProvider status={setupStatus({ model_providers: modelProviders })} onRefresh={() => {}}>
+      {screen}
+    </ModelAccessProvider>,
   );
 }
 
@@ -120,6 +143,11 @@ beforeEach(() => {
   // Never settles by default, so the Availability card stays empty in every
   // test that isn't about it.
   getAvailabilityMock.mockReturnValue(new Promise(() => {}));
+  // Same idiom, same reason (#922): a test that isn't about "Start a run"'s
+  // own availability must render byte-identical to before this hook existed —
+  // caps stays null forever, and capabilityAllowed's own fail-open default
+  // (null caps => allowed) is what that renders as.
+  getMyCapabilitiesMock.mockReturnValue(new Promise(() => {}));
 });
 
 // The F031 case below queues two mockResolvedValueOnce answers on
@@ -152,6 +180,93 @@ describe("WorkspaceDetailScreen — header: name, source line, and Start a run",
     expect(screen.getByText("repo · acme/payments · main")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^start a run$/i }));
     expect(await screen.findByText("runs screen (openNewRun)")).toBeInTheDocument();
+  });
+});
+
+// #922 (UT-7c), the person side: "Start a run" only NAVIGATES (it launches
+// nothing itself), so this is the one place on this page a member-facing
+// launch consequence belongs. Both reasons fold into the SAME generic
+// sentence — see DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment
+// (permissions-copy.ts) for why neither ever names the resource.
+describe("WorkspaceDetailScreen — Start a run, unavailable to this person (#922)", () => {
+  it("disables Start a run and names the consequence when this workspace carries no allow for a non-operator caller", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getMyCapabilitiesMock.mockResolvedValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderDetail("ws-1", false);
+    expect(await screen.findByRole("heading", { name: "payments" })).toBeInTheDocument();
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled for the same caller once an allow names them", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getMyCapabilitiesMock.mockResolvedValue({
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user_type",
+          subject: "standard",
+          capability: "workspace",
+          value: "ws-1",
+          effect: "allow",
+          created_at: "",
+        },
+      ],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderDetail("ws-1", false);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("stays enabled for an operator regardless — never asks /me/capabilities", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    expect(button).toBeEnabled();
+    expect(getMyCapabilitiesMock).not.toHaveBeenCalled();
+  });
+});
+
+// review round 3 (R3-1, R3-5): the model-provider arm had no coverage on
+// this page at all. R3-6: this page has no run-type of its own — "Start a
+// run" only NAVIGATES to New Run, it never picks Shell vs Agent itself — so,
+// unlike the picker card and New Run's own Launch button, there is no
+// isAgent to gate this arm on here; it applies unconditionally.
+describe("WorkspaceDetailScreen — Start a run, the model-provider arm (#922)", () => {
+  it("disables and names the consequence when a provider block exists but the pin isn't in it", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "bloomberg-gateway" } }));
+    renderDetail("ws-1", true, true, []);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled when the pin IS in the caller's own filtered list", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "corp-gateway" } }));
+    renderDetail("ws-1", true, true, [
+      { id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" },
+    ]);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("stays enabled for a pinned workspace when there is no provider block at all", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "bloomberg-gateway" } }));
+    renderDetail("ws-1", true, true, undefined);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
   });
 });
 

@@ -9,6 +9,7 @@ import {
   initialWizardState,
   isValidDomain,
   primaryWorkspaceId,
+  resolvedModelProviders,
   resolvedMountReadOnly,
   gitPatConfigured,
   impliedEgressHosts,
@@ -304,5 +305,33 @@ describe("titleFromTask", () => {
 
   it("collapses an interior carriage return the same way", () => {
     expect(titleFromTask("Fix\rthe build")).toBe("Fix the build");
+  });
+});
+
+// review round 3, R3-1/R3-5: this is the ONE place the wire's own
+// omitzero/absent distinction (setup.go) is turned into this module's own
+// undefined/[] contract — pinned directly, once, rather than only through
+// each page's own component wiring.
+describe("resolvedModelProviders", () => {
+  it("no status at all (not fetched yet) stays undefined", () => {
+    expect(resolvedModelProviders(null)).toBeUndefined();
+    expect(resolvedModelProviders(undefined)).toBeUndefined();
+  });
+
+  it("an unreachable status stays undefined, even carrying a model_providers array", () => {
+    expect(resolvedModelProviders({ unreachable: true, model_providers: [] })).toBeUndefined();
+  });
+
+  it("a reachable status with no model_providers key stays undefined (no provider block at all)", () => {
+    expect(resolvedModelProviders({})).toBeUndefined();
+  });
+
+  it("a reachable status with model_providers: [] passes it through (a block exists, granted nothing)", () => {
+    expect(resolvedModelProviders({ model_providers: [] })).toEqual([]);
+  });
+
+  it("a reachable status with a real list passes it through unchanged", () => {
+    const rows = [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }];
+    expect(resolvedModelProviders({ model_providers: rows })).toBe(rows);
   });
 });

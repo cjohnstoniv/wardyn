@@ -8,7 +8,13 @@ import { useNavigate } from "react-router-dom";
 import { FolderGit2, FolderOpen, Hourglass, MoreHorizontal, Plus, RotateCw, Trash2 } from "lucide-react";
 import { workspaces as api } from "../../lib/api/workspaces";
 import { LIST_LIMIT } from "../../lib/api/core";
-import { compositionSummary, hasSourceNotAdmitted } from "./new-run/wizard-types";
+import {
+  compositionSummary,
+  hasSourceNotAdmitted,
+  resolvedModelProviders,
+  workspaceModelProviderUnavailable,
+} from "./new-run/wizard-types";
+import { capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
@@ -34,7 +40,8 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
-import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { DENIED, MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { useCanMutate, useOperator, useRole } from "../wardyn/operator-context";
 
@@ -105,6 +112,18 @@ export function WorkspacesScreen() {
   const operator = useOperator();
   const role = useRole();
   const navigate = useNavigate();
+  // #922: the shared shell status (already fetched for the app shell's own
+  // model-access reads), read here only for its filtered model_providers —
+  // see workspaceModelProviderUnavailable's own doc comment. resolvedModelProviders
+  // (review F3) tells a loaded-but-empty list apart from an unresolved context.
+  const { status: shellStatus } = useShellSetupStatus();
+  const modelProviders = resolvedModelProviders(shellStatus);
+  // review F5: the list showed only the provider-pin reason; a plain
+  // ungranted workspace (no allow at all) got no line here, unlike the
+  // workspace's own detail page and New Run. useMyCapabilities(!operator) is
+  // the same enabled-gate every other consumer of this hook uses (an admin is
+  // exempt server-side, so asking would answer a question nothing will act on).
+  const caps = useMyCapabilities(!operator);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -235,6 +254,13 @@ export function WorkspacesScreen() {
                 // precedent's shape. No base URL, no row id: the server
                 // already withholds both from PROVIDERS.CARD_NOT_ADMITTED.
                 const notAdmitted = hasSourceNotAdmitted(w);
+                // review F5: the SECOND person-side "isn't available to you"
+                // reason (a plain ungranted workspace, no provider pin
+                // involved) — the list previously showed only the provider
+                // arm below, leaving this one unannotated here while the
+                // workspace's own detail page and New Run both already named it.
+                const workspaceUngranted = !operator && !capabilityAllowed(caps, "workspace", w.id);
+                const providerUnavailable = workspaceModelProviderUnavailable(w, modelProviders);
                 return (
                   <TableRow
                     key={w.id}
@@ -262,6 +288,11 @@ export function WorkspacesScreen() {
                         </span>
                         <span className="text-foreground">{w.name}</span>
                       </span>
+                      {workspaceUngranted && (
+                        <p className="mt-1 max-w-[220px] text-meta text-muted-foreground">
+                          {DENIED.WORKSPACE_NOT_AVAILABLE}
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Mono
@@ -288,6 +319,11 @@ export function WorkspacesScreen() {
                         </Chip>
                       ) : (
                         <span className="text-muted-foreground">—</span>
+                      )}
+                      {providerUnavailable && (
+                        <p className="mt-1 max-w-[220px] text-meta text-muted-foreground">
+                          {DENIED.WORKSPACE_NOT_AVAILABLE}
+                        </p>
                       )}
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>

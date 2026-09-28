@@ -144,9 +144,16 @@ type SetupStatus struct {
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
 	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
 	// member-safe shape (SetupModelProvider) — the same for every tier, so the
-	// member redaction has nothing to strip. Absent with no provider block,
-	// which is today.
-	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
+	// member redaction has nothing to strip. `omitzero`, not `omitempty`:
+	// setupModelProviders returns nil when there is no provider block at all
+	// (the field is then absent, exactly as before), and a non-nil, possibly
+	// empty slice whenever a block exists — including one this caller is
+	// granted nothing from, or one capVisible's own filter-error path
+	// answered with rows[:0:0] — so the field is then present as `[]`. A
+	// console reading this field can tell "no block" from "granted none"
+	// only because of that distinction; `omitempty` could not make it (it
+	// drops both nil and an empty-but-present slice alike).
+	ModelProviders []SetupModelProvider `json:"model_providers,omitzero"`
 	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
 	// ModelProviders (MP-12) — one row per provider, generalising the single
 	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup

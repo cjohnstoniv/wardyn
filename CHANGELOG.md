@@ -23,6 +23,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The person side of "Available to" disables Launch, in the console, before the server ever has to
+  refuse (#922).** New Run's own Launch button is now disabled with
+  `This workspace isn't available to you.` when the chosen workspace itself carries no allow for
+  the caller (the kind-wide "workspace" enforcement switch), or is pinned to a model provider the
+  caller's own filtered `/setup/status.model_providers` doesn't carry — checked only for an agent
+  run, since a Shell command asks the server for neither. `GET /setup/status`'s `model_providers`
+  field now carries `[]` for a caller granted no provider under an existing block, distinct from the
+  field being absent entirely for a deployment with no provider block at all — previously both read
+  as an absent key, which the console could not tell apart. The sentence never names the resource,
+  since the console has no member-safe way to learn a restricted value's own name. The same two
+  reasons now show consistently everywhere: the workspace picker's own advisory line, a workspace's
+  own page ("Start a run"), and the Workspaces list (both the Workspace and Model columns) — each
+  reason renders in exactly one place, never twice on the same screen.
+  **Known gap, disclosed rather than silently shipped:** a workspace's own PER-VALUE "Available to:
+  Only these" restriction (set from its own admin editor) is invisible to a member's console —
+  `GET /me/capabilities` carries the caller's own allow rows but no per-value restricted bit, so a
+  workspace restricted that way (with the kind-wide switch left off, the common case) reads as
+  available here and Launch stays enabled; the server still refuses it at launch. Tracked in #1267
+  (a per-value signal the caller's own console can safely read).
+  The git-provider-pinned case (`Uses Azure DevOps (contoso), which isn't available to you.`) is not
+  built either — `GET /me/scm-access` only covers per-user Azure DevOps rows, so absence there is
+  ambiguous for a shared-PAT row or a GitHub App; tracked in #1250.
+  A repo-kind workspace's own server-side handling (it drops the repo silently and proceeds, rather
+  than refusing the way this console now blocks Launch) is tracked separately in #1259.
+
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
   group); the portal then trades the person's own live identity-provider token for a ten-minute,
