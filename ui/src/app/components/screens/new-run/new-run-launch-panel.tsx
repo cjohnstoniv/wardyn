@@ -25,8 +25,7 @@ import type {
   SetupProviderAccess,
   Workspace,
 } from "../../../lib/types";
-import { RUN } from "../../wardyn/copy";
-import { RAIL_PROVIDER } from "../../wardyn/copy";
+import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
 import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";

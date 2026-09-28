@@ -4,27 +4,18 @@
  */
 
 // New run — ONE page, two columns, with a live rail that answers "what can this
-// run actually do?" while you build it.
+// run actually do?" while you build it. Replaces a five-step modal wizard whose
+// Review screen was the first place the consequences of your choices appeared.
 //
-// Derived from the deleted Figma Make design snapshot's NewRunScreen. It
-// replaces a five-step modal wizard whose Review screen
-// was the first place the consequences of your choices appeared — by which
-// point you had made all of them blind.
+// A RE-LAYOUT, not a re-model: buildSpec()/impliedEgressHosts() are reused
+// verbatim, so the launch payload is exactly what the wizard produced.
 //
-// It is a RE-LAYOUT, not a re-model. WizardState already carries every field
-// this screen edits, and buildSpec()/impliedEgressHosts() are reused verbatim,
-// so the launch payload and the policy it produces are exactly what the wizard
-// produced. That is deliberate: the governance contract is the tested part, and
-// this change is about when the operator SEES it, not what it is.
-//
-// The Confinement and Network cards are GONE. `inline_policy` on POST /runs is
-// the identical Go struct a saved policy stores, validated by the same
-// validator — so this screen and /policies now author it through ONE component
-// (wardyn/policy-panel.tsx) instead of a bespoke form that could only ever
-// assemble a subset of what the server already accepts. What the JSON cannot
-// know — the Workspace card's mounts/repos, the grant lanes' grants and the
-// egress hosts those grants require — is unioned back in by mergeRunSelections
-// and NAMED on screen, never merged behind the operator's back.
+// The Confinement and Network cards are GONE — `inline_policy` on POST /runs is
+// the identical struct a saved policy stores, so this screen and /policies now
+// author it through ONE component (wardyn/policy-panel.tsx). What the JSON
+// cannot know (the Workspace card's mounts/repos, the grant lanes' grants and
+// hosts) is unioned back in by mergeRunSelections and NAMED on screen, never
+// merged behind the operator's back.
 import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
@@ -89,9 +80,8 @@ export function NewRunScreen() {
   const navigate = useNavigate();
   const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
   // Visibility is not capability: the workspace list is NOT narrowed by the
-  // `workspace` grant (the launch gate refuses, and a hidden workspace makes
-  // that refusal unexplainable and the grant undiscoverable). Ungranted rows
-  // are annotated instead.
+  // `workspace` grant (a hidden workspace makes the launch gate's refusal
+  // unexplainable). Ungranted rows are annotated instead.
   const operator = useOperator();
   const securityOperator = useSecurityOperator(), operatorResolved = useOperatorResolved(), caps = useMyCapabilities(!operator);
   // B4b — "Start a run like this one". The run cockpit hands the prefill over
@@ -103,9 +93,7 @@ export function NewRunScreen() {
   // cockpit rendered at all.
   const prefill = (useLocation().state as { prefill?: RunPrefill } | null)?.prefill;
   // Seed with CC1 — a harmless placeholder the /setup/status effect below
-  // replaces within a tick with the server's own default (the strongest
-  // installed class), the moment it resolves. There is no per-browser
-  // default left to seed this from (see default-confinement.ts).
+  // replaces with the server's own strongest-installed-class default.
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState("CC1", prefill?.state),
   );
@@ -159,9 +147,8 @@ export function NewRunScreen() {
   // pinned-provider-availability check.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
-  // Existing run titles, offered as a native <datalist> under the Title input.
-  // Grouping is by EXACT string, so without this the operator has to retype a
-  // title character-perfect for a run to ever join its family.
+  // Existing run titles, offered as a native <datalist> — grouping is by
+  // EXACT string, so a family needs a character-perfect retype without it.
   const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
   // #1197 L2: Title tracks the task's first line (titleFromTask) until the
   // operator edits it themselves — a clone's carried-over title, or clearing
@@ -181,14 +168,9 @@ export function NewRunScreen() {
   // on docker, a Kata RuntimeClass on k8s), so T-9 names the SAME honest
   // reason environment-step.tsx computes instead of a generic "not installed".
   const [vaultReason, setVaultReason] = React.useState<string | undefined>(undefined);
-  // The Workspace card's drive block: this caller's allocation (nil-means-none)
-  // and the door beside it ("" means open), read off the shell's ONE GET /me
-  // rather than a second one of this screen's own — app-shell's useMeta already
-  // holds that body and hands it down (operator-context.tsx's
-  // MeIdentity.userDrive, the same seam member_local_dir_root rides). With no
-  // provider above, on an older daemon, or after a failed read it is null/""
-  // — which renders as today's card, the same honest answer the server's own
-  // resolver gives.
+  // The Workspace card's drive block: this caller's allocation and door, read
+  // off the shell's ONE GET /me (operator-context.tsx's useUserDrive) rather
+  // than a second read of this screen's own.
   const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
 
   React.useEffect(() => {
@@ -205,19 +187,15 @@ export function NewRunScreen() {
   }, []);
 
   // #1197 L2: the title default tracks the task's first line until the
-  // operator writes their own. Keyed on state.task alone — patch() below is a
-  // stable useCallback, so this never fires on an unrelated field's change.
+  // operator writes their own. patch() below is a stable useCallback.
   React.useEffect(() => {
     if (titleUserEdited) return;
     setState((s) => ({ ...s, title: titleFromTask(s.task) }));
   }, [state.task, titleUserEdited]);
 
   // ONE /setup/status read for everything this screen needs: model-access
-  // readiness, the harness catalog, and which barriers this host can
-  // build — runner.confinement_classes, the same field every other surface
-  // reads, never a separately-polled mirror. `unreachable` already
-  // distinguishes "couldn't check" from a real empty list, so there is no
-  // retry-on-empty heuristic to reimplement.
+  // readiness, the harness catalog, and which barriers this host can build.
+  // `unreachable` distinguishes "couldn't check" from a real empty list.
   React.useEffect(() => {
     let alive = true;
     setupApi
@@ -287,12 +265,9 @@ export function NewRunScreen() {
       });
   }, []);
 
-  // useWorkspaceList does NOT fetch on mount — every caller loads it itself
-  // (setup-screen.tsx does the same in its own mount effect). Without this the
-  // Workspace select only ever offers "Ephemeral scratch", so a workspace
-  // onboarded anywhere else — Getting started, the Workspaces screen — could
-  // not be attached to a run at all; the only way into the list was to add one
-  // from this page in this session.
+  // useWorkspaceList does NOT fetch on mount — every caller loads it itself.
+  // Without this, a workspace onboarded elsewhere (Getting started, the
+  // Workspaces screen) could never be attached to a run from this page.
   React.useEffect(() => {
     reloadWorkspaces();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
@@ -464,27 +439,20 @@ export function NewRunScreen() {
         <h1 className="text-foreground">New run</h1>
       </div>
 
-      {/* B4b — a clone says what it carried and, in the same breath, what it
-          could not. A prefilled form that looks hand-typed is the failure mode:
-          the operator would have no way to know the tool-approval posture came
-          across but the credentials deliberately did not. */}
-      {/* Review F4: a composer launch (runs/runs-composer.tsx) has no source
-          run to be "prefilled from" — its own RunPrefill carries
-          source:"composer", which skips this banner entirely. */}
+      {/* B4b — a clone says what it carried and what it could not (the
+          tool-approval posture, never the credentials). Review F4: a composer
+          launch's RunPrefill carries source:"composer", skipping this banner. */}
       {prefill && prefill.source !== "composer" && (
         <div
           role="status"
           className="mb-6 space-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground"
         >
           <p>{RUN.CLONE_NOTE}</p>
-          {/* …and that carrying a setting over is not the same as being allowed
-              it. Create re-clamps against the caller's governance ceiling, so a
-              member cloning an admin's run is narrowed at launch — said here,
-              before Launch, rather than as a warning after it. */}
+          {/* Create re-clamps against the caller's governance ceiling, so a
+              member cloning an admin's run is narrowed at launch. */}
           <p>{RUN.CLONE_CEILING_NOTE}</p>
-          {/* The one named ceiling: an inline policy is never stored, so there
-              is nothing to prefill and the barrier below is this wizard's
-              default rather than the original run's document. */}
+          {/* An inline policy is never stored, so the barrier below is this
+              wizard's default, not the original run's document. */}
           {prefill.inlinePolicy && <p className="text-warning">{RUN.CLONE_INLINE_POLICY_CEILING}</p>}
         </div>
       )}
@@ -500,19 +468,15 @@ export function NewRunScreen() {
               <Field label="Title" htmlFor="nr-title">
                 <Input
                   id="nr-title"
-                  // Rulebook §8: default focus lands on the primary field, not
-                  // on the back-out button or the first select.
+                  // Rulebook §8: default focus lands on the primary field.
                   autoFocus
-                  // NO Enter-to-launch here. Rulebook §8 allows it from a
-                  // single-line input, but this is the input carrying the
-                  // datalist below: choosing a suggestion with Enter dispatches
-                  // keydown Enter on the input (Chrome), so picking a known
-                  // title off the list would LAUNCH the run. Completion and
-                  // commit cannot share a key. Launch is the rail's button.
+                  // NO Enter-to-launch: this input carries the datalist below,
+                  // and Chrome dispatches keydown Enter when a suggestion is
+                  // picked, which would LAUNCH the run. Launch is the rail's
+                  // button only.
                   maxLength={200}
-                  // Native datalist: existing titles are offered as you type, so
-                  // joining a family is a pick rather than an exact retype. No
-                  // combobox library, and typing something new still just works.
+                  // Native datalist: existing titles are offered as you type,
+                  // so joining a family is a pick, not an exact retype.
                   list="nr-known-titles"
                   placeholder="Refactor the payments module"
                   value={state.title}
@@ -575,22 +539,15 @@ export function NewRunScreen() {
               own section: it decides whether a run is confined at all, and
               it was the hardest thing on the screen to find. */}
           <SectionCard title="Barrier">
-            {/* #1200 — the shared TierPicker: only what THIS run can
-                actually use (installed ∧ at-or-above the active floor, which
-                folds in the governance ceiling ONLY where the server would
-                clamp to it — see govFloorApplies). A tier the floor forbids
-                or the host can't build is DROPPED, never shown disabled (the
-                global rule every user-facing picker now follows); the ONE
-                qualifying case collapses to TierPicker's own decided row, and
-                NONE qualifying shows the T-9 requirement card instead of a
-                fully-disabled Seg (its own REQUIREMENT_TITLE fallback is what
-                names "No sandbox runner" for the host-level #214 case below —
-                requirementNote here still overrides it only for the
-                governance-floor shape). Review P2-1/P2-3: decidedLine/
-                pickOneNote override TierPicker's defaults, which both assume
-                a governance floor and a browser-persisted pick — neither
-                true of this screen's non-governance decided case or its
-                per-run choice. */}
+            {/* #1200 — the shared TierPicker: only what THIS run can actually
+                use (installed ∧ at-or-above the active floor, folding in the
+                governance ceiling only where the server would clamp to it —
+                govFloorApplies). A tier the floor forbids is DROPPED, never
+                shown disabled (the global picker rule); ONE qualifying tier
+                collapses to the decided row, NONE shows the T-9 requirement
+                card. Review P2-1/P2-3: decidedLine/pickOneNote override
+                TierPicker's defaults, which assume a governance floor and a
+                browser-persisted pick — neither true here. */}
             <TierPicker
               // P2-7: an UNKNOWN probe (qualifying: null) must not offer
               // a tier the active floor already forbids — it falls back
@@ -653,11 +610,8 @@ export function NewRunScreen() {
                         </SelectContent>
                       </Select>
                       {/* Rulebook §9: an empty picker carries the action that
-                          fills it. With no stored policies this lane was a
-                          dropdown with nothing in it and no way out. */}
-                      {/* M-1b: Policies is Admin view only (/admin/policies),
-                          so the door renders only for the tier that authors
-                          them. */}
+                          fills it. M-1b: Policies is Admin view only, so the
+                          door renders only for the tier that authors them. */}
                       {savedPolicies.length === 0 && (
                         <p className="text-xs text-muted-foreground">
                           No saved policies yet
@@ -681,14 +635,11 @@ export function NewRunScreen() {
                 <p className="text-xs text-warning">{AGENTS.FLOOR_UNPARSEABLE(policy.unparseableFloor)}</p>
               )}
 
-              {/* What buildSpec unions in AFTER the parse, named out loud. A
-                  policy the operator did not write is one they cannot be held
-                  to — and these are exactly the entries the document itself
-                  cannot know: the Workspace card's attachments, the grant
-                  lanes' grants, and the hosts those grants must reach (an
-                  api_key grant whose host is not on the allowlist authenticates
-                  nothing, allow_all_egress included). Saved-policy runs launch
-                  by REFERENCE, so nothing is merged into a stored spec. */}
+              {/* What buildSpec unions in AFTER the parse, named out loud: the
+                  Workspace card's attachments, the grant lanes' grants, and the
+                  hosts those grants must reach — entries the document itself
+                  cannot know. Saved-policy runs launch by REFERENCE, so nothing
+                  is merged into a stored spec. */}
               {!useSaved && hasAdditions && added && (
                 <div
                   className="rounded-lg border border-border bg-surface-2 p-3"
