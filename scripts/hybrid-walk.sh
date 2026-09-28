@@ -407,9 +407,11 @@ DEVICE_ID="$(org_api GET "/api/v1/admin/devices" >/dev/null; jq -r --arg n "${DE
 pass "enrolled — device_id=${DEVICE_ID}"
 
 # lag -> the laptop's own wardyn_org_federation_lag reading, or empty on any
-# failure to reach it (the caller decides what that means).
+# failure to reach it (the caller decides what that means). /metrics is
+# operator-gated (routes.go), so the scrape carries the laptop's admin token.
 lag() {
-  curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/metrics" 2>/dev/null | awk '/^wardyn_org_federation_lag /{print $2}'
+  curl -sf --max-time "${CURL_MAX_TIME}" -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/metrics" 2>/dev/null \
+    | awk '/^wardyn_org_federation_lag /{print $2}'
 }
 
 # accrue_local_rows N -> create and immediately kill N throwaway runs on the
