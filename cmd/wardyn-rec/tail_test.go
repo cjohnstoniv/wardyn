@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -320,5 +321,216 @@ func TestTailUploader_OverCapLineWaitsBeforeRetry(t *testing.T) {
 	}
 	if !tu.retryAt.After(time.Now()) {
 		t.Fatalf("no retry wait after an over-cap line: retryAt %v", tu.retryAt)
+	}
+}
+
+// TestTailUploader_SizeTriggerFiresAtExactlyAPartsWorth pins the size boundary:
+// one byte short of a part's worth (header included) waits, and the byte that
+// completes it sends a part of exactly partMaxBytes.
+func TestTailUploader_SizeTriggerFiresAtExactlyAPartsWorth(t *testing.T) {
+	ev := `[0.5,"o","event"]` + "\n"
+	shrinkParts(t, int64(len(tailHeader)+3*len(ev)))
+	ps := newPartServer(t)
+	cast := filepath.Join(t.TempDir(), "r.cast")
+	writeCast(t, cast, tailHeader+ev+ev+ev[:len(ev)-1])
+	tu := &tailUploader{cast: cast, url: ps.srv.URL + "/rec", part: 1, due: time.Now().Add(time.Hour)}
+	if err := tu.flush(false); err != nil || len(ps.uploads()) != 0 {
+		t.Fatalf("one byte short of a part's worth: err=%v parts=%d, want nothing sent", err, len(ps.uploads()))
+	}
+	writeCast(t, cast, "\n")
+	if err := tu.flush(false); err != nil {
+		t.Fatal(err)
+	}
+	if ups := ps.uploads(); len(ups) != 1 || int64(len(ups[0].body)) != partMaxBytes || ups[0].body != tailHeader+ev+ev+ev {
+		t.Fatalf("at exactly a part's worth: %+v, want one part of %d bytes", ups, partMaxBytes)
+	}
+}
+
+// TestTailUploader_EveryPartReprefixesTheHeader walks both triggers at their
+// real values' boundaries: the 24 h interval (twice), the size cap and the exit
+// flush each send a part that is the cast's header line plus the next bytes,
+// on its own address, and the parts join back to the cast file exactly.
+func TestTailUploader_EveryPartReprefixesTheHeader(t *testing.T) {
+	if partInterval != 24*time.Hour || partMaxBytes != (64<<20)/2 {
+		t.Fatalf("partInterval %v, partMaxBytes %d; want 24h and half the control plane's 64 MiB upload cap",
+			partInterval, partMaxBytes)
+	}
+	ev := func(s string) string { return `[1.5,"o","` + s + `"]` + "\n" }
+	shrinkParts(t, int64(len(tailHeader)+len(ev("c1"))+len(ev("c2"))))
+	ps := newPartServer(t)
+	cast := filepath.Join(t.TempDir(), "r.cast")
+	tu := &tailUploader{cast: cast, url: ps.srv.URL + "/rec", part: 1, due: time.Now().Add(time.Hour)}
+	step := func(add string, dueNow, final bool) {
+		t.Helper()
+		writeCast(t, cast, add)
+		if dueNow {
+			tu.due = time.Now()
+		}
+		if err := tu.flush(final); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step(tailHeader+ev("a"), true, false)      // 24 h due: part 1
+	step(ev("b"), true, false)                 // 24 h due again: part 2
+	step(ev("c1")+ev("c2"), false, false)      // a part's worth: part 3
+	step(`[9.5,"o","no newline"`, false, true) // exit: part 4
+
+	want := []upload{
+		{"/rec", tailHeader + ev("a")},
+		{"/rec/parts/2", tailHeader + ev("b")},
+		{"/rec/parts/3", tailHeader + ev("c1") + ev("c2")},
+		{"/rec/parts/4", tailHeader + `[9.5,"o","no newline"`},
+	}
+	ups := ps.uploads()
+	if len(ups) != len(want) {
+		t.Fatalf("parts = %+v, want %+v", ups, want)
+	}
+	for i := range want {
+		if ups[i] != want[i] {
+			t.Errorf("part %d = %+v, want %+v", i+1, ups[i], want[i])
+		}
+	}
+	file, _ := os.ReadFile(cast)
+	if got := joinParts(t, ups); got != string(file) {
+		t.Fatalf("joined parts =\n%q\nwant the cast file\n%q", got, file)
+	}
+}
+
+// faultServer stores parts by path, replacing on a repeat like the control
+// plane's upsert, and fails the FIRST attempt at each path in cut: "body"
+// drops the connection halfway through the body (nothing stored), "reply"
+// stores the part and then drops the connection before answering.
+type faultServer struct {
+	mu       sync.Mutex
+	stored   map[string]string
+	attempts map[string]int
+	cut      map[string]string
+	srv      *httptest.Server
+}
+
+func newFaultServer(t *testing.T, cut map[string]string) *faultServer {
+	fs := &faultServer{stored: map[string]string{}, attempts: map[string]int{}, cut: cut}
+	fs.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fs.mu.Lock()
+		fs.attempts[r.URL.Path]++
+		mode := ""
+		if fs.attempts[r.URL.Path] == 1 {
+			mode = fs.cut[r.URL.Path]
+		}
+		fs.mu.Unlock()
+		if mode == "body" {
+			_, _ = io.ReadFull(r.Body, make([]byte, r.ContentLength/2))
+			dropConn(t, w)
+			return
+		}
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			return
+		}
+		fs.mu.Lock()
+		fs.stored[r.URL.Path] = string(b)
+		fs.mu.Unlock()
+		if mode == "reply" {
+			dropConn(t, w)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(fs.srv.Close)
+	return fs
+}
+
+func dropConn(t *testing.T, w http.ResponseWriter) {
+	conn, _, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		t.Errorf("hijack: %v", err)
+		return
+	}
+	_ = conn.Close()
+}
+
+// joinStored is joinParts over what the server holds: part 1, then part n for
+// as long as there is one.
+func (fs *faultServer) joinStored(t *testing.T) string {
+	t.Helper()
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	ups := []upload{{"/rec", fs.stored["/rec"]}}
+	for n := 2; ; n++ {
+		p := "/rec/parts/" + strconv.Itoa(n)
+		b, ok := fs.stored[p]
+		if !ok {
+			break
+		}
+		ups = append(ups, upload{p, b})
+	}
+	return joinParts(t, ups)
+}
+
+// TestTailUploader_AnUploadCutMidwayIsResentWithoutLossOrDuplication: a part
+// whose connection drops mid-body, and one the server stored but whose answer
+// never came back, are each sent again under the same part number, from the
+// same cast offset, once the retry wait is over, and the cast grows meanwhile.
+// The stored parts join back to the cast file exactly: no event lost, none twice.
+func TestTailUploader_AnUploadCutMidwayIsResentWithoutLossOrDuplication(t *testing.T) {
+	ev := func(i int) string { return `[` + strconv.Itoa(i) + `.5,"o","line ` + strconv.Itoa(i) + `"]` + "\n" }
+	shrinkParts(t, int64(len(tailHeader)+2*len(ev(0))))
+	fs := newFaultServer(t, map[string]string{"/rec/parts/2": "body", "/rec/parts/3": "reply"})
+	cast := filepath.Join(t.TempDir(), "r.cast")
+	tu := &tailUploader{cast: cast, url: fs.srv.URL + "/rec", part: 1, due: time.Now().Add(time.Hour)}
+	i := 0
+	grow := func(n int) {
+		var b strings.Builder
+		for range n {
+			b.WriteString(ev(i))
+			i++
+		}
+		writeCast(t, cast, b.String())
+	}
+	writeCast(t, cast, tailHeader)
+	grow(6)
+	if err := tu.flush(false); err == nil || tu.part != 2 {
+		t.Fatalf("a part cut mid-body: err=%v next part %d, want an error and part 2 still next", err, tu.part)
+	}
+	for range 2 {
+		grow(2)
+		tu.retryAt = time.Time{}
+		_ = tu.flush(false)
+	}
+	grow(1)
+	if err := tu.flush(true); err != nil {
+		t.Fatal(err)
+	}
+
+	fs.mu.Lock()
+	a2, a3 := fs.attempts["/rec/parts/2"], fs.attempts["/rec/parts/3"]
+	fs.mu.Unlock()
+	if a2 != 2 || a3 != 2 {
+		t.Errorf("attempts: part 2 = %d, part 3 = %d; want each sent twice", a2, a3)
+	}
+	file, _ := os.ReadFile(cast)
+	if got := fs.joinStored(t); got != string(file) {
+		t.Fatalf("stored parts join to\n%q\nwant the cast file\n%q", got, file)
+	}
+}
+
+// TestTailUploader_IntervalPartStopsAtTheLastWholeLine: a part the 24 h
+// interval sends ends at the last whole line; a line still being written
+// waits for the next part, so no event is split between two masked uploads.
+func TestTailUploader_IntervalPartStopsAtTheLastWholeLine(t *testing.T) {
+	ps := newPartServer(t)
+	cast := filepath.Join(t.TempDir(), "r.cast")
+	writeCast(t, cast, tailHeader+eventLines(2)+`[7.5,"o","half a li`)
+	tu := &tailUploader{cast: cast, url: ps.srv.URL + "/rec", part: 1, due: time.Now()}
+	if err := tu.flush(false); err != nil {
+		t.Fatal(err)
+	}
+	writeCast(t, cast, `ne"]`+"\n")
+	if err := tu.flush(true); err != nil {
+		t.Fatal(err)
+	}
+	want := []upload{{"/rec", tailHeader + eventLines(2)}, {"/rec/parts/2", tailHeader + `[7.5,"o","half a line"]` + "\n"}}
+	if ups := ps.uploads(); len(ups) != 2 || ups[0] != want[0] || ups[1] != want[1] {
+		t.Fatalf("parts = %+v, want %+v", ups, want)
 	}
 }

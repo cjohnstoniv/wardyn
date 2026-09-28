@@ -80,7 +80,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 
 // handleUploadRecordingPart accepts PUT
 // /api/v1/internal/recordings/{runID}/parts/{part}: part n >= 2 of a long run's
-// cast, which wardyn-rec uploads every 24 h or 64 MiB (RL-12). Each part is
+// cast, which wardyn-rec uploads every 24 h or 32 MiB (RL-12). Each part is
 // masked, capped and audited exactly like part 1, and stored under its own key;
 // replay joins them (recording.OpenJoined). Part 1 has one address, the bare
 // route, so a number that is not canonical decimal >= 2 is a 404.

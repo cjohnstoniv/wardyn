@@ -5,6 +5,7 @@ package recording_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -124,11 +125,11 @@ func TestStatJoined_SumsPartsAndTailsTheLast(t *testing.T) {
 }
 
 // TestPGStore_JoinsParts: the join holds on the default store too, where every
-// part is its own row.
+// part is its own row, and two parts join to one valid asciicast v2 document.
 func TestPGStore_JoinsParts(t *testing.T) {
 	s := recording.NewPGStore(pgPool(t))
 	runID := "run-pg-" + uuid.NewString()
-	p1, p2 := partHeader+partEv1, partHeader+partEv2
+	p1, p2 := partHeader+partEv1+partEv2, partHeader+partEv3
 	saveParts(t, s, runID, p1, p2)
 
 	rc, err := recording.OpenJoined(context.Background(), s, runID)
@@ -136,10 +137,38 @@ func TestPGStore_JoinsParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rc.Close()
-	if got, _ := io.ReadAll(rc); string(got) != partHeader+partEv1+partEv2 {
+	got, _ := io.ReadAll(rc)
+	if string(got) != partHeader+partEv1+partEv2+partEv3 {
 		t.Fatalf("joined cast = %q", got)
 	}
+	requireValidCast(t, got)
 	if size, _, err := recording.StatJoined(context.Background(), s, runID, 64); err != nil || size != int64(len(p1)+len(p2)) {
 		t.Fatalf("StatJoined = %d, %v", size, err)
+	}
+}
+
+// requireValidCast fails unless b is one asciicast v2 document: a version-2
+// header object, then only [time, code, data] event lines, time never going
+// backwards.
+func requireValidCast(t *testing.T, b []byte) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	var h struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &h); err != nil || h.Version != 2 {
+		t.Fatalf("header %q: %v, version %d; want an asciicast v2 header", lines[0], err, h.Version)
+	}
+	last := 0.0
+	for i, l := range lines[1:] {
+		var ev []any
+		if err := json.Unmarshal([]byte(l), &ev); err != nil || len(ev) != 3 {
+			t.Fatalf("line %d %q is not an event: %v", i+2, l, err)
+		}
+		at, ok := ev[0].(float64)
+		if !ok || at < last {
+			t.Fatalf("line %d %q: time %v after %v", i+2, l, ev[0], last)
+		}
+		last = at
 	}
 }
