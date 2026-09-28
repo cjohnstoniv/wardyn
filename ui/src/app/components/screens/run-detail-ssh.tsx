@@ -11,7 +11,7 @@
 // operator would otherwise see a live terminal in the browser with nothing
 // anywhere saying a real terminal could reach the same session.
 //
-// `wardyn attach <run-id>` needs no gateway and no operator configuration: it
+// `wardyn run attach <run-id>` needs no gateway and no operator configuration: it
 // dials the same WebSocket this page's terminal uses, lands in the SAME tmux
 // session, and works on every deployment. Verified against a live run — a file
 // written from one attach was read back by a second, and by the browser
@@ -196,7 +196,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // translate. Omitted when it matches the CLI's own default.
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const cliEnv = origin && origin !== "http://localhost:8080" ? `WARDYN_URL=${origin} ` : "";
-  const cliCommand = `${cliEnv}wardyn attach ${run.id}`;
+  const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
 
   return (
     <SectionCard title="Attach from your terminal" Icon={KeyRound}>
@@ -254,7 +254,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       <div className={cn("mt-2", !hasKeys && "opacity-50")}>
         <CodeBlock text={command} />
         <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
-          Or skip retyping it: <Mono className="text-foreground">wardyn ssh {run.id}</Mono>
+          Or skip retyping it: <Mono className="text-foreground">wardyn run ssh {run.id}</Mono>
         </p>
 
         <details className="mt-2.5">

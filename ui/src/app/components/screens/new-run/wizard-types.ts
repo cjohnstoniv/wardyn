@@ -745,7 +745,7 @@ export function resolveWorkspaceMounts(
       mounts.push({
         source: src.path,
         // Mount at the agent's working dir (~/work = /home/agent/work) by
-        // convention — that's where `claude` and the `wardyn attach` shell
+        // convention — that's where `claude` and the `wardyn run attach` shell
         // start. A source's own target, or a per-run override, takes
         // precedence.
         target: override || src.target?.trim() || "/home/agent/work",

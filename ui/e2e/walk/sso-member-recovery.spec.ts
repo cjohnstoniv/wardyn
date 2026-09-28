@@ -514,7 +514,7 @@ test("C (login-sandbox-selfrun): the sign-in sandbox runs the pair itself and th
   // Before 0.7.5 the console typed the chained command into the pane
   // and a Runs-list attach got a bare prompt; now the IMAGE creates the `wardyn`
   // tmux session on signin-pane.sh and runs the pair once, and every attach path
-  // — this pane, the Runs list, `wardyn attach`, ssh — joins that one session
+  // — this pane, the Runs list, `wardyn run attach`, ssh — joins that one session
   // (attaching is `tmux new-session -A`). If this case ever needs a keystroke to
   // pass, the feature is not there.
   await dexSignIn(page, MEMBER_EMAIL);

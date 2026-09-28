@@ -20,7 +20,7 @@ export const RUN_MODE: Record<RunMode, { label: string; blurb: string }> = {
     label: "Interactive",
     // An interactive run execs NO agent at all (internal/types/types.go:
     // "no agent task is exec'd and no completion watcher is started — the
-    // human drives via wardyn attach") — the blurb must not describe
+    // human drives via `wardyn run attach`") — the blurb must not describe
     // per-action approval, an autonomous-shaped behavior this mode doesn't
     // have. Matches compose-form.tsx's own Field hint for the same toggle.
     blurb: "Comes up idle — you attach and drive it over a terminal.",

@@ -167,7 +167,7 @@ RUNNER="$(printf '%s' "${HEALTHZ}" | jq -r '.runner // empty')"
 [[ "$(printf '%s' "${HEALTHZ}" | jq -r '.ssh.enabled // false')" == "true" ]] || \
   die "the k8s install's SSH gateway is off (/healthz .ssh.enabled=false) — the chart needs ssh.enabled=true (deploy/kind/quickstart.sh sets it)"
 # The address the daemon itself advertises, not one this script assumes: it is
-# what `wardyn ssh` and the console card hand an operator, so it is what must
+# what `wardyn run ssh` and the console card hand an operator, so it is what must
 # actually work.
 ADVERTISE="$(printf '%s' "${HEALTHZ}" | jq -r '.ssh.advertise_addr // empty')"
 SSH_HOST="${ADVERTISE%:*}"
