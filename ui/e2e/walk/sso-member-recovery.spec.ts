@@ -1173,6 +1173,12 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
   await page.getByRole("button", { name: "Start login" }).click();
   await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
+  // The refused sign-in's dialog is modal and stays open on its error, which
+  // hides the page behind it (and the banner's Exit button) from the
+  // accessibility tree. Close it the way a person would before exiting.
+  const signInDialog = page.getByRole("dialog");
+  await signInDialog.getByRole("button", { name: "Close" }).click();
+  await expect(signInDialog).toBeHidden({ timeout: 30_000 });
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.
