@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -136,7 +137,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
 	// reboot stopped is then marked lost (reboot), which says its agent needs
 	// starting again, before the same downtime marks it lost (outage).
-	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.sweepLapsedRunTokens(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.sweepLapsedRunTokens(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx), s.purgeTerminalRunProxyConfigs(ctx))
 }
 
 // auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol.fail",
@@ -524,6 +525,9 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 					if err := s.sweepOrphanedSandboxes(ctx); err != nil {
 						slog.WarnContext(ctx, "wardynd: orphaned sandbox sweep", slog.Any("err", err))
 					}
+					if err := s.purgeTerminalRunProxyConfigs(ctx); err != nil {
+						slog.WarnContext(ctx, "wardynd: terminal run proxy config purge", slog.Any("err", err))
+					}
 				}
 				if err := s.sweepRunWatchers(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
@@ -625,6 +629,17 @@ const reconcileProbeErrorCeiling = 30 * time.Minute
 // reconcileProbeMaxBackoff caps the error backoff interval.
 const reconcileProbeMaxBackoff = 60 * time.Second
 
+// reconcileWatchIntervalNS is reconcileWatch's base probe interval, 5s. An
+// atomic of nanoseconds (not a const) purely so a test can shrink it instead
+// of waiting out the real tick, without racing a detached watcher goroutine
+// that reads it while a later test restores it (the sshHandshakeTimeoutNS
+// pattern). TestReconcileWatchInterval_ProductionValueUnchanged pins it.
+var reconcileWatchIntervalNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(5 * time.Second))
+	return &v
+}()
+
 // reconcileWatch polls a re-adopted sandbox's agent liveness until it exits, then
 // finalizes the run and runs the revoke cascade. Panic-safe (a panic here must
 // not crash the control plane).
@@ -640,7 +655,7 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	// here or on another replica, adopts the run).
 	stopLease := s.holdRunWatcherLease(ctx, runID)
 	defer stopLease()
-	const baseInterval = 5 * time.Second
+	baseInterval := time.Duration(reconcileWatchIntervalNS.Load())
 	tick := time.NewTicker(baseInterval)
 	defer tick.Stop()
 	backoff := baseInterval

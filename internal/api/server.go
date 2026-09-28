@@ -438,6 +438,9 @@ type Config struct {
 	// a model provider's bedrock.base_url be plain http:// (validateProviderBedrock).
 	AllowTestEndpoints bool
 
+	HarnessLoginCPUMillis int // WARDYN_HARNESS_LOGIN_CPU_MILLIS; see harnessLoginResources (harnesscred.go)
+	HarnessLoginMemoryMiB int // WARDYN_HARNESS_LOGIN_MEMORY_MIB; ditto — still governance-ceiling capped
+
 	// AWSSSOProxyInject is the kill switch for proxy-side SSO token injection
 	// (WARDYN_AWS_SSO_PROXY_INJECT,
 	// resolved by ResolveAWSSSOProxyInject at boot): when true a captured-AWS-SSO
@@ -528,6 +531,7 @@ type Config struct {
 	// the bounds that keep a burst from collapsing into one row. The same
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
+	HostCapacityConfig
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
@@ -627,6 +631,9 @@ type Config struct {
 	// oidc.Config.SecureCookies. Feeds tls_cookie_posture alongside
 	// OIDCRedirectURL. Computed at boot in cmd/wardynd.
 	OIDCSecureCookies bool
+	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix Handler
+	// mounts every console route under (base_path.go).
+	BasePath string
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
 	// the profile is low-confidence or left unrecognized samples (ShouldAdvise),
@@ -695,10 +702,17 @@ type Config struct {
 	// built without going through cmd/wardynd's flags gets the shipped posture
 	// rather than a zero TTL that would refuse every session.
 	UISessionTTL time.Duration
+	// UICookiePolicy is WARDYN_UI_SANDBOX_STRIP_COOKIES: which inbound cookies,
+	// beyond the always-stripped wardyn_* namespace, the relay forwards to a
+	// sandbox app. The zero value forwards every other cookie.
+	UICookiePolicy UICookiePolicy
 	// UISessionKey signs the wardyn_ui_sess relay cookie (HMAC-SHA256, >= 32
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// RunConfigKey seals each run's stored proxy config (32 bytes, the
+	// wardyn-run-config-key boot key; run_proxy_config.go). Nil: none is kept.
+	RunConfigKey []byte
 	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
 	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
 	// gateway: https://, no userinfo, no query/fragment). It re-points the
@@ -711,20 +725,6 @@ type Config struct {
 	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
-}
-
-// ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
-// facts only: Selected is ALWAYS the actual running implementation. The
-// recommended-vs-shipped split is prose and lives in docs/PLUGGABILITY.md +
-// ROADMAP.md. Source is "default" or "configured".
-type ComponentInfo struct {
-	Selected string `json:"selected"`
-	// Available lists every implementation self-registered in this build's seam
-	// registry (so /healthz truthfully shows what THIS binary can run — e.g. a
-	// tagless build advertises sandbox.available=[]). Empty for seams without a
-	// registry (policy_engine today).
-	Available []string `json:"available,omitempty"`
-	Source    string   `json:"source,omitempty"`
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -807,6 +807,8 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
+	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
+	creates inflightCreates
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
 	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
@@ -938,9 +940,6 @@ const (
 	auditSpoolDrainBatch    = 200
 )
 
-// Handler returns the configured http.Handler (the chi router).
-func (s *Server) Handler() http.Handler { return s.router }
-
 // handleLogout terminates the human session. FIX #6: it is mounted as
 // POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing
 // POST actually kills the session (the old code only had a root GET /auth/logout,
@@ -973,6 +972,7 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = s.cfg.Now().UTC()
 	}
+	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the

@@ -111,6 +111,11 @@ declare -A ALLOWLIST=(
   # fixed deadline is genuinely display/passthrough data, never compared
   # against the clock (connectionRowCopy does no expiry math of its own).
   ["ui/src/app/lib/model-connections.test.ts"]=1
+  # credentials.test.tsx's aliceRow fixture (added_at/last_used_at): passthrough
+  # display data only, rendered through relativeTime/absoluteTime — no
+  # assertion compares the rendered string against the clock, so the literal
+  # dates themselves never go stale.
+  ["ui/src/app/components/screens/credentials.test.tsx"]=2
 )
 
 fail=0

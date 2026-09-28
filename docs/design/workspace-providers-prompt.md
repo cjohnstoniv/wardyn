@@ -2,8 +2,8 @@
 
 This is the mock round for the Workspace Providers surfaces of 0.7.2 — the design gate before any
 console code (owner law: the mock is UI source of truth; canon strings are app strings). The model
-is decided in `~/.claude/plans/crispy-wondering-raven.md` (v17, FINAL; §3 D1–D11, §4, §5, §5c, §6,
-§9) and nothing here is open for re-design, only for drawing. **Every string in §7.2–§7.7 is a
+is decided by the design plan (v17, FINAL; §3 D1–D11, §4, §5, §5c, §6, §9) and nothing here is
+open for re-design, only for drawing. **Every string in §7.2–§7.7 is a
 DRAFT the owner freezes at this gate**; seven drawing-level calls are Q1–Q7 in §9 (the plan's), with
 the ones this round surfaced after them, and an Adjudication section at the end for owner answers.
 
@@ -714,7 +714,7 @@ member meets these on the launch path; the console renders them verbatim under i
 |---|---|
 | `ADMIT_MEMBER` | this repository's host is not an enabled git provider — ask an admin |
 | `AGENT_NOT_ENABLED(id)` | agent: "{id}" is not an enabled agent on this deployment — ask an admin |
-| `LLM_MECHANISM_DEAD(mechanism, ts)` | this run's model access is configured as {mechanism}, and that credential expired at {ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider. |
+| `LLM_MECHANISM_DEAD(mechanism, ts)` | This run's model access is configured as {mechanism}, and that credential expired at {ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider. |
 
 `ADMIT_MEMBER` is the 403 / 422 body a member meets at every admission site (the capability door
 audits `authz.denied`; the admission miss is a 422 with no audit) — it names the kind and NEVER a
@@ -873,7 +873,6 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `EFFECTIVE_LEAD` | What launch narrowed, one line each. Your policy is what you wrote; this is what ran. |
 | `EFFECTIVE_NONE` | No adjustments. |
 | `LAUNCH_WARNING_TITLE` | Run launched with a warning |
-| `OPEN_RUN_CTA` | Open run |
 | `AGENT_ROW_DISABLED_CHIP` | Off |
 
 The seven lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
@@ -892,9 +891,10 @@ sub-line (the plan's fragment, sentence-cased). `FLOOR_UNPARSEABLE` renders unde
 field only when a parse succeeds and `min_confinement_class` names no class; precedence is unchanged.
 `AGENTS_TITLE` / `AGENTS_LEAD` head the tab; the row's switch reuses `PROVIDERS.FIELD_ENABLED` (one word, one key), and `AGENT_ROW_DISABLED_CHIP` is the off row's neutral chip — its own key, not `AGENT_ROW_DISABLED_HINT` sliced at the colon. `EFFECTIVE_*` head the run-detail widget; its lines are the server's clamp warnings (§7.1) and its
 empty arm is `EFFECTIVE_NONE`, which the New Run rail's preflight block renders too — one spelling, both sites.
-`LAUNCH_WARNING_TITLE` heads the 201's advisory `warnings[]` inline in that rail, and `OPEN_RUN_CTA` is the
-primary button the screen becomes while they are on screen: a run that launched WITH a warning is never
-navigated away from on a timer — the member opens it when they have read them.
+`LAUNCH_WARNING_TITLE` heads the 201's advisory `warnings[]` — a launch that answers 2xx now navigates
+straight to the run in the same tick (#125), so this title is reused verbatim on the run page's own
+advisory block (`docs/design/launch-navigates-canon.md`) rather than rendered inline in this rail;
+`OPEN_RUN_CTA` and the held screen it belonged to are retired with it.
 `SSO_START_URL_MANAGED` replaces the login pane's start-URL FIELD whenever the sign-in runs under a
 `per_user` row (the member's Getting Started button, and the admin's own sign-in on the Agents tab):
 the server signs in against the row's stored `sso_start_url` and ignores a typed one, so the field

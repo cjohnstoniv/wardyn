@@ -54,6 +54,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import type {
   ModelCredential,
   PreflightResult,
+  PushRulesSpec,
   SCMAccess,
   SetupHarnessTool,
   SetupModelAccess,
@@ -134,6 +135,9 @@ function railTree(props: {
    *  different agent (a codex launch, say) passes both here — the one shape
    *  the default cannot produce. */
   harnesses?: SetupHarnessTool[];
+  /** #181 — undefined (the default) renders no Push rules section at all. */
+  pushRules?: PushRulesSpec;
+  unattended?: boolean;
 }) {
   const rail = (
     <RunRail
@@ -143,6 +147,8 @@ function railTree(props: {
       startup="It starts."
       showHoldNote={props.showHoldNote ?? false}
       toolRules={null}
+      pushRules={props.pushRules}
+      unattended={props.unattended ?? false}
       launch={{
         onLaunch: props.onLaunch ?? (() => {}),
         disabled: false,
@@ -152,8 +158,6 @@ function railTree(props: {
         error: props.launchError ?? null,
         errorSeq: props.launchErrorSeq ?? 0,
         credentialRefused: props.credentialRefused ?? false,
-        warnings: [],
-        onOpenRun: null,
       }}
       preflight={{
         error: props.preflightError ?? null,

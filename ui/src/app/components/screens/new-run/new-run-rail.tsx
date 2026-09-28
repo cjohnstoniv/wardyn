@@ -21,12 +21,14 @@ import { Loader2, TriangleAlert } from "lucide-react";
 import type {
   ConfinementClass,
   PreflightResult,
+  PushRulesSpec,
   RunPolicySpec,
   SCMAccess,
   SetupHarnessTool,
   SetupModelProvider,
   SetupProviderAccess,
 } from "../../../lib/types";
+import { PUSH } from "../../wardyn/copy/push";
 import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -70,6 +72,12 @@ interface RunRailProps {
   showHoldNote: boolean;
   /** The run's tool_rules in one line, or null when it has none. */
   toolRules: string | null;
+  /** The run's push_rules, from the SAME spec toolRules reads — the section
+   *  renders only when pushRulesIsSet(pushRules) (#181). */
+  pushRules?: PushRulesSpec;
+  /** True for a batch/non-interactive run — nobody is here to answer a held
+   *  push, so PUSH.RAIL_UNATTENDED joins the section when it renders at all. */
+  unattended: boolean;
   launch: {
     /** Resolves to the server's refusal when the screen was gone before the
      *  answer came (use-launch.ts) — the strip shows it then (B9, #146). */
@@ -93,14 +101,6 @@ interface RunRailProps {
      *  one that opens (#543). Optional so a caller with no provider block
      *  passes nothing. */
     refusedProvider?: string;
-    /** The 201's advisory `warnings[]`, once Launch has actually fired
-     *  (§5c.8) — rendered here, inline, instead of a toast. */
-    warnings: string[];
-    /** Set once a run launched with warnings: the screen stays put and this
-     *  replaces Launch, so the member opens the run when they have read them.
-     *  Null on every other state. A timed redirect races every other
-     *  navigation off the screen, so this must replace Launch instead. */
-    onOpenRun: (() => void) | null;
   };
   preflight: {
     error: string | null;
@@ -296,6 +296,21 @@ function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
   );
 }
 
+// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
+// EXACTLY: what "the policy has push rules" means everywhere it's asked,
+// which is NOT a bare truthiness check on the field. An all-zero-but-present
+// {} (a literal `push_rules: {}`) carries no actual rule and must read like
+// an absent field, same as the Go reader — a policy stored before this field
+// existed, and one that sets it to nothing, look identical.
+//
+// Lives here, not in lib/types/policy.ts, because RunRail below is this
+// function's only caller: policy.ts is eager (other exports there reach the
+// runs board) and this screen is lazy — bundle-split fix, #181, same pattern
+// push-content-card.tsx's isPushContentRequest documents.
+export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
+  return !!s && ((s.deny_paths?.length ?? 0) > 0 || (s.require_review_paths?.length ?? 0) > 0 || (s.max_inspect_pack_mib ?? 0) > 0);
+}
+
 export function RunRail({
   governanceProfile,
   savedPolicy,
@@ -304,6 +319,8 @@ export function RunRail({
   startup,
   showHoldNote,
   toolRules,
+  pushRules,
+  unattended,
   launch,
   preflight,
   agentRow,
@@ -409,6 +426,15 @@ export function RunRail({
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
   const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
+  // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
+  // require_review_paths at all): there is nothing to say about PATHS in
+  // that case, and "0 paths denied · 0 paths held for review" reads as a
+  // real (empty) rule set rather than "no path rule". The section stays
+  // hidden entirely rather than rendering that sentence.
+  const pushDeniedCount = pushRules?.deny_paths?.length ?? 0;
+  const pushReviewCount = pushRules?.require_review_paths?.length ?? 0;
+  const showPushRules = pushRulesIsSet(pushRules) && (pushDeniedCount > 0 || pushReviewCount > 0);
   return (
     // A sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
@@ -565,6 +591,25 @@ export function RunRail({
           </RailSection>
         )}
 
+        {/* #181 — push_rules counts, the same "policy has this section or it
+            doesn't" shape Tool rules above uses. showPushRules mirrors the Go
+            PushRulesSpec.IsSet() reader AND requires at least one actual
+            path rule (review finding 6) — a stored `{}`, or a spec that sets
+            only max_inspect_pack_mib, reads as no section rather than "0
+            paths denied · 0 paths held for review". The unattended note is
+            gated on require_review_paths alone: an unattended run refuses a
+            REVIEW match outright (push_rules.go), but a deny_paths match is
+            refused identically whether the run is attended or not, so the
+            note would be true of a section with no review rule in it. */}
+        {showPushRules && (
+          <RailSection title={PUSH.RAIL_TITLE}>
+            <p className="text-xs text-muted-foreground">{PUSH.RAIL_BODY(pushDeniedCount, pushReviewCount)}</p>
+            {unattended && pushReviewCount > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>
+            )}
+          </RailSection>
+        )}
+
         {/* A stock Helm install leaves persistence.enabled=false, so this
             promise was false out of the box — and wrong in both dangerous
             directions at once. The shared hook is the same /healthz read the
@@ -601,49 +646,31 @@ export function RunRail({
         </p>
       )}
 
-      {/* §5c.8: the 201's advisory warnings, inline — the toast this replaced
-          was gone the instant the run navigated away. */}
-      {launch.warnings.length > 0 && (
-        <div className="mt-3 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-warning">
-          <p className="font-medium text-foreground">{AGENTS.LAUNCH_WARNING_TITLE}</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {launch.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
           Launch, because "what would be clamped" is the last thing read before
-          committing. */}
+          committing. #125: a 2xx launch (warnings or not) navigates straight to
+          the run in the same tick, so there is no longer a held state for this
+          button to become — any advisory warnings render on the run page
+          instead (run-detail/launch-warnings-note.tsx). */}
       <div className="mt-4 flex gap-2">
-        {launch.onOpenRun ? (
-          // The run is launched — Launch has nothing left to do, and the one
-          // teal here becomes the way on. Nothing navigates until it is clicked.
-          <Button type="button" className="flex-1" onClick={launch.onOpenRun}>
-            {AGENTS.OPEN_RUN_CTA}
-          </Button>
-        ) : (
-          <Button
-            ref={launchRef}
-            type="button"
-            className="flex-1"
-            disabled={launch.disabled || !!launch.problem}
-            onClick={() => {
-              autoOpened.current = false;
-              void launch.onLaunch();
-            }}
-          >
-            {/* The icon slot always renders (never just on launching) so the
-                has-[>svg] padding rule and the icon+gap width never change —
-                toggling `invisible` cannot shift "Launch run" sideways the way
-                mounting/unmounting the icon would. */}
-            <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
-            Launch run
-          </Button>
-        )}
+        <Button
+          ref={launchRef}
+          type="button"
+          className="flex-1"
+          disabled={launch.disabled || !!launch.problem}
+          onClick={() => {
+            autoOpened.current = false;
+            void launch.onLaunch();
+          }}
+        >
+          {/* The icon slot always renders (never just on launching) so the
+              has-[>svg] padding rule and the icon+gap width never change —
+              toggling `invisible` cannot shift "Launch run" sideways the way
+              mounting/unmounting the icon would. */}
+          <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
+          Launch run
+        </Button>
       </div>
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's

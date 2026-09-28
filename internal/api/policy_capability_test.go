@@ -42,6 +42,24 @@ func TestCapabilityPolicyKind(t *testing.T) {
 		create = doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body).Code
 		return create, preflight, auditReasons(t, srv, "authz.denied"), msg
 	}
+	// bothToken is both, launching through a named wdn_ token instead of a
+	// cookie: an SSO session of an admin tier is in the Admin view and cannot
+	// launch (refuseAdminViewLaunch), so the two admin-tier cases below use the
+	// lane that still does.
+	bothToken := func(t *testing.T, cs *capStore, sub, role, body string) (create, preflight int, reasons []string, msg string) {
+		t.Helper()
+		cs.userTypes = utKnown
+		srv, st, _ := govEscapeFixture(t, cs)
+		st.policies[stored.ID] = stored
+		complete := false
+		st.tokenRaw = apiTokenPrefix + "policy-cap-" + sub
+		st.token = &types.APIToken{ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: role, GroupsTruncated: &complete}
+		w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", st.tokenRaw, body)
+		preflight = w.Code
+		msg = w.Body.String()
+		create = do(t, srv, http.MethodPost, "/api/v1/runs", st.tokenRaw, body).Code
+		return create, preflight, auditReasons(t, srv, "authz.denied"), msg
+	}
 	wantRefused := func(t *testing.T, create, preflight int, reasons []string, msg string) {
 		t.Helper()
 		if create != http.StatusForbidden || preflight != http.StatusForbidden {
@@ -111,16 +129,14 @@ func TestCapabilityPolicyKind(t *testing.T) {
 	})
 
 	t.Run("a security admin is bounded like anyone", func(t *testing.T) {
-		sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
-		c, p, r, m := both(t, &capStore{enf: enforced()}, sec, withPolicy(stored.ID))
+		c, p, r, m := bothToken(t, &capStore{enf: enforced()}, secAdminSub, oidc.RoleSecurityAdmin, withPolicy(stored.ID))
 		wantRefused(t, c, p, r, m)
 	})
 
 	t.Run("a super admin is exempt", func(t *testing.T) {
-		admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-		c, p, r, m := both(t, &capStore{enf: enforced(), grants: []types.CapabilityGrant{
+		c, p, r, m := bothToken(t, &capStore{enf: enforced(), grants: []types.CapabilityGrant{
 			grant(types.CapabilitySubjectAll, "", capPolicy, capWildcard, deny),
-		}}, admin, withPolicy(stored.ID))
+		}}, "sub-admin", oidc.RoleAdmin, withPolicy(stored.ID))
 		wantAllowed(t, c, p, r, m)
 	})
 }

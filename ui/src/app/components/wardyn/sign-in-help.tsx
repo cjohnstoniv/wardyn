@@ -14,7 +14,7 @@
 // an http(s) address: the server already refuses anything else on write and
 // drops it on read, and this page is the last place that could turn a bad
 // stored value into a script URL.
-import { SIGNIN_HELP_LINK_LABEL } from "../../lib/people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "../../lib/sign-in-copy";
 
 const HTTP_URL = /^https?:\/\//i;
 

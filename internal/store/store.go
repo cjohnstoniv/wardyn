@@ -113,7 +113,7 @@ func (s PG) Ping(ctx context.Context) error {
 // column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
 		RETURNING ` + runCols
 
 // CreateRun inserts a new run and returns the persisted row.
@@ -139,6 +139,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
+		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia,
 	)
 	return scanRun(row)
 }
@@ -194,8 +195,9 @@ func (s PG) CountActiveRunsBy(ctx context.Context, createdBy string) (int, error
 // treats this as "someone else won the transition" and does nothing.
 func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2 AND state=$3`,
-		string(toState), id, string(fromState),
+		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN now() ELSE ended_at END
+		 WHERE id=$2 AND state=$3`,
+		string(toState), id, string(fromState), toState.IsTerminal(),
 	)
 	if err != nil {
 		return false, fmt.Errorf("store: conditional update run state: %w", err)
@@ -235,9 +237,9 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // such a request — and the run parked on it — stays open until decided.
 func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now()
+		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
 		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND lost_at IS NULL AND NOT (`+openHoldSQL+`)`,
-		string(toState), id, string(fromState), notAfter,
+		string(toState), id, string(fromState), notAfter, toState.IsTerminal(),
 	)
 	if err != nil {
 		return false, fmt.Errorf("store: conditional idle update run state: %w", err)
@@ -366,8 +368,8 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // (SetRunFailureHint) rather than by CreateRun is visible as exactly that, and
 // a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type`
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason`
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
 // agent_runs column list. A new column is APPENDED to runInsertCols (or to
@@ -379,13 +381,15 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state, autonomyLevel, lostReason string
 	var limitsRaw []byte
+	var containmentErr *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
-		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason,
+		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia,
+		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -397,6 +401,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.State = types.RunState(state)
 	r.AutonomyLevel = types.AutonomyLevel(autonomyLevel)
 	r.LostReason = types.LostReason(lostReason)
+	if containmentErr != nil {
+		r.ContainmentError = *containmentErr
+	}
 	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)
 	}

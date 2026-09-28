@@ -13,8 +13,6 @@ import (
 	"testing"
 )
 
-// TestWorkspaceOwnershipPinsBothDirections is F315.
-//
 // The authz matrix DELEGATES the {id}-bearing workspace routes: TestAuthzMatrix's
 // classMember probe fires a random uuid, which 404s at the store before
 // authorization runs, so the matrix cannot see who is admitted and requirement

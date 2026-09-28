@@ -37,7 +37,7 @@ type gitBrokerUpstream struct {
 	gitBody   []byte // body the forge received (proves byte-for-byte forwarding)
 	gitHits   int
 	// gitHeaders is the FULL header set the forge saw. gitAuth alone could not
-	// see F104: the lane stripped Authorization and forwarded every other
+	// see the leak: the lane stripped Authorization and forwarded every other
 	// sandbox-set credential header (Private-Token, X-Api-Key, …) beside the
 	// brokered Basic auth.
 	gitHeaders http.Header
@@ -418,6 +418,85 @@ func TestBranchNSEnforcedEnv(t *testing.T) {
 			t.Setenv(envEnforceBranchNS, tc.val)
 			if got := BranchNSEnforced(); got != tc.want {
 				t.Fatalf("BranchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBranchNSScopes pins branchNSScopes' {app,pat} grammar directly — both
+// lanes together, not just the App lane TestBranchNSEnforcedEnv covers —
+// including every fail-CLOSED edge the doc comment promises: a bare garbage
+// word, a bare value mixed with a scoped part, an unrecognized scope name,
+// an empty word or scope, a non-comma separator, and the same scope named
+// twice with disagreeing words. Every fail-closed case wants (true, true):
+// a garbage value must never leave EITHER lane weaker than its default.
+//
+// This is the guard review round PR #1248 found unpinned (finding F2):
+// mutating either fail-closed exit — the bare-garbage arm at branchNSScopes'
+// `!ok` check, or the duplicate-disagreement check in its scoped-parsing
+// loop — left the whole existing suite green. Both mutations are called out
+// below so a future revert of either one is caught here first.
+func TestBranchNSScopes(t *testing.T) {
+	for _, tc := range []struct {
+		val          string
+		wantApp      bool
+		wantPat      bool
+		failsClosed  bool // documents the case as one of the "anything else" arms
+		mutantCaught string
+	}{
+		{val: "", wantApp: true, wantPat: false},
+		{val: "   ", wantApp: true, wantPat: false}, // whitespace-only is still "unset"
+		{val: "on", wantApp: true, wantPat: false},  // bare word: App lane ONLY
+		{val: "off", wantApp: false, wantPat: false},
+		{val: "pat:on", wantApp: true, wantPat: true}, // App keeps its default; PAT set explicitly
+		{val: "pat:off", wantApp: true, wantPat: false},
+		{val: "app:off,pat:on", wantApp: false, wantPat: true},
+		{val: "app:on,pat:off", wantApp: true, wantPat: false},
+		{val: "pat:on,pat:on", wantApp: true, wantPat: true}, // duplicate AGREEING: not a failure
+		{val: " APP : OFF , PAT : ON ", wantApp: false, wantPat: true},
+
+		// Bare garbage: branchNSScopes' `!ok` exit on the bare-value path.
+		// M3 (reviewer's mutation): replacing that path's
+		// `return branchNSFailClosed(raw)` with `return true, pat` makes
+		// this case read (true, false) instead of (true, true) — caught below.
+		{val: "maybe", wantApp: true, wantPat: true, failsClosed: true, mutantCaught: "M3"},
+
+		// A bare value mixed with a scoped part: "off" alone would be bare,
+		// but the presence of "pat:on" routes the WHOLE value through the
+		// scoped parser, where "off" (no ":") fails `!cut`.
+		{val: "off,pat:on", wantApp: true, wantPat: true, failsClosed: true},
+
+		// An empty word after the scope's colon.
+		{val: "app:", wantApp: true, wantPat: true, failsClosed: true},
+		{val: "app:off,", wantApp: true, wantPat: true, failsClosed: true}, // trailing empty part
+		// An unrecognized scope name.
+		{val: "git:off", wantApp: true, wantPat: true, failsClosed: true},
+		// A space instead of a comma between two scope:word pairs — read as
+		// ONE part, so the word half becomes "off pat:on", unrecognized.
+		{val: "app:off pat:on", wantApp: true, wantPat: true, failsClosed: true},
+
+		// Duplicate DISAGREEING: the one case that exercises the dup-check
+		// specifically (every other failsClosed case above never reaches it).
+		// M4 (reviewer's mutation): disabling branchNSScopes' duplicate-scope
+		// disagreement check (`if prev, dup := set[scope]; dup && prev != v`)
+		// makes this last-wins ("pat:off" overwrites "pat:on" in the map),
+		// reading (true, false) instead of the fail-closed (true, true) —
+		// caught below.
+		{val: "pat:on,pat:off", wantApp: true, wantPat: true, failsClosed: true, mutantCaught: "M4"},
+	} {
+		t.Run("val="+tc.val, func(t *testing.T) {
+			t.Setenv(envEnforceBranchNS, tc.val)
+			gotApp, gotPat := branchNSScopes()
+			if gotApp != tc.wantApp || gotPat != tc.wantPat {
+				extra := ""
+				if tc.mutantCaught != "" {
+					extra = " (this case is " + tc.mutantCaught + "'s pin)"
+				}
+				t.Fatalf("branchNSScopes(%q) = (%v, %v), want (%v, %v)%s",
+					tc.val, gotApp, gotPat, tc.wantApp, tc.wantPat, extra)
+			}
+			if tc.failsClosed && !(gotApp && gotPat) {
+				t.Fatalf("branchNSScopes(%q) is documented as a fail-closed case but did not enforce both lanes: (%v, %v)", tc.val, gotApp, gotPat)
 			}
 		})
 	}

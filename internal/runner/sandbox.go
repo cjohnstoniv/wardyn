@@ -16,16 +16,10 @@ import (
 )
 
 // Sandbox-launch primitives shared by every substrate (SECURITY-RELEVANT where
-// noted).
-//
-// This file holds the parts of the docker substrate that carry NO docker-
-// specific behavior — pure data/string transforms a future non-Docker
-// substrate (e.g. Kubernetes, build tag `k8s`) needs byte-identical, so a
-// second substrate never re-derives (and risks drifting) the agent contract.
-// Hoisted verbatim from internal/runner/docker; the docker package now calls
-// these instead of carrying its own copies. Follows mount.go's precedent: a
-// TAGLESS file in this package, importable by any build-tag-gated substrate
-// without pulling that substrate's dependencies along.
+// noted): pure data/string transforms a future non-Docker substrate needs
+// byte-identical, hoisted verbatim out of internal/runner/docker into this
+// TAGLESS file so no substrate re-derives (and risks drifting) the agent
+// contract.
 
 // ProxyListenPort is the port wardyn-proxy listens on inside the per-run
 // internal network/namespace. The agent's ONLY reachable address.
@@ -43,34 +37,19 @@ const (
 	DefaultPidsLimit int64 = 512  // max processes/threads (fork-bomb guard)
 )
 
-// AgentIdleScript is the agent sandbox's main (idle) process for NON-
-// interactive runs: it installs the per-run TLS-MITM CA (when delivered) and
-// then idles while the task Exec does the real work. (Interactive runs use
-// `agent-run --idle` as their main process instead — each substrate's
-// CreateSandbox wires this — which performs this same CA install plus
-// workspace prep; the human then drives claude in the attach shell.) The CA
-// install is REQUIRED either way: without it, NODE_EXTRA_CA_CERTS points at a
-// CA file that was never written, so claude cannot trust the proxy's TLS
-// termination of api.anthropic.com (breaking subscription proxy-side
-// injection). It writes the EXACT paths internal/api pins (/tmp/wardyn — any-
-// uid-writable, so it works regardless of the image's USER/HOME; this Cmd may
-// run as root while agent-run later re-runs as the image user, hence the
-// sticky-bit dir and the ||true rewrites: within one run the content is
-// identical, so a failed rewrite over a correct file is harmless). It also
-// assembles the COMBINED bundle (system roots + per-run CA) that
-// SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE point at — those vars
-// REPLACE the client trust store, so the bare CA there would break non-MITM'd
-// CONNECT-tunneled hosts. Keep in lockstep with install_mitm_ca in
-// deploy/images/common/agent-run-lib.sh. No-op when the run did not opt into
-// TLS-MITM (WARDYN_MITM_CA_PEM unset). The idle loop below (rather than `exec
-// sleep infinity`) is TERM-aware: as PID 1, `sleep` ignores SIGTERM, so a stop
-// always waited out the full kill timeout (k8s pod grace period + teardown
-// slack, docker's stop timeout) instead of exiting promptly. `trap ... TERM
-// INT; while :; do sleep 3600 & wait $!; done` is POSIX sh (busybox/dash
-// compatible): the shell (PID 1) receives the signal, `wait` returns at once
-// and the trap runs. Exits 143/130 (the usual SIGTERM/SIGINT codes), not 0:
-// an out-of-band container/pod stop (daemon restart, host shutdown, a manual
-// `docker stop`) must still read as a signal kill downstream, not success.
+// AgentIdleScript is the agent sandbox's main (idle) process for
+// non-interactive runs: installs the per-run TLS-MITM CA (when delivered),
+// required so claude trusts the proxy's TLS termination of api.anthropic.com,
+// then idles while the task Exec does the real work. Writes the exact paths
+// internal/api pins (/tmp/wardyn, any-uid-writable) and assembles the
+// COMBINED bundle (system roots + per-run CA) that
+// SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE point at, since those vars
+// REPLACE the client trust store. Keep in lockstep with install_mitm_ca in
+// deploy/images/common/agent-run-lib.sh. No-op when WARDYN_MITM_CA_PEM is
+// unset. The idle loop (not `exec sleep infinity`) is TERM-aware: as PID 1,
+// `sleep` ignores SIGTERM, so a bare sleep would wait out the full kill
+// timeout instead of exiting promptly; exits 143/130, not 0, so an
+// out-of-band stop still reads as a signal kill downstream.
 const AgentIdleScript = `d=/tmp/wardyn
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
@@ -117,45 +96,30 @@ func IsKnownNonVaultRuntime(name string) bool {
 	return false
 }
 
-// RecorderArgv builds the argv an agent sandbox runs when session recording is
-// enabled. It delegates to wardyn-rec (a thin binary inside the agent image)
-// so the GPL recorder (asciinema) is exec'd as a subprocess, never linked into
-// Wardyn (license hygiene).
+// RecorderArgv builds the argv an agent sandbox runs when session recording
+// is enabled. It delegates to wardyn-rec (a thin binary in the agent image)
+// so the GPL recorder (asciinema) is exec'd as a subprocess, never linked
+// into Wardyn.
 //
 // Layout:
 //
 //	wardyn-rec -cast-dir <dir> [-out-dir <mount>] [-upload-url <proxy route>] -run <id> -- <agent argv...>
 //
-// wardyn-rec decides at runtime whether asciinema is present; the caller does
-// not need to know. uploadURL is the DEFAULT delivery path: the proxy's
-// brokered recording route (PUT /wardyn/v1/recordings/{run}), which injects
-// the run token and lets the control plane MASK secrets before persisting the
-// cast (secret masking lives control-plane-side; the registry of secret
-// values is never in the sandbox). outDir is the optional shared-mount
-// fallback and carries TWO documented limitations: (1) every agent sandbox
-// sharing the mount runs under the same identity, so it has NO cross-run
-// isolation; and (2) it bypasses the control plane, so the cast it writes is
-// UNMASKED — secret masking is structurally impossible here (wardyn-rec holds
-// no secret values, by design). Use the brokered upload path where recordings
-// are viewer-exposed.
+// uploadURL is the DEFAULT delivery path (the proxy's brokered recording
+// route), which lets the control plane MASK secrets before persisting the
+// cast. outDir is the shared-mount fallback: no cross-run isolation, and its
+// cast is UNMASKED since wardyn-rec holds no secret values. The two are
+// MUTUALLY EXCLUSIVE — when uploadURL is set, -out-dir is dropped entirely so
+// an unmasked cast can never reach the API-served replay store.
 //
-// HIGH-finding hardening: the masked upload path and the unmasked shared-mount
-// -out-dir are MUTUALLY EXCLUSIVE. When an uploadURL is configured we drop the
-// shared-mount -out-dir entirely so wardyn-rec can NEVER also drop an UNMASKED
-// <runID>.cast into the API-served replay store (cross-run-writable, viewer-
-// exposed). The shared mount is only ever used as the reduced-isolation
-// FALLBACK when no control-plane upload path exists.
-//
-// Callers should only invoke this when recording is enabled — there is no
-// passthrough case; an unwrapped argv is simply argv itself.
+// Callers should only invoke this when recording is enabled.
 func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv []string) []string {
 	out := []string{
 		"wardyn-rec",
 		"-cast-dir", castDir,
 	}
-	// Prefer the masked control-plane upload over the unmasked shared mount: if
-	// both are offered, suppress -out-dir so no unmasked cast reaches a path the
-	// API serves. -out-dir is only emitted as the fallback (uploadURL == "").
+	// Prefer the masked upload over the unmasked shared mount when both are
+	// offered; -out-dir is only emitted as the fallback.
 	if uploadURL != "" {
 		out = append(out, "-upload-url", uploadURL)
 	} else if outDir != "" {
@@ -165,22 +129,17 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 	return append(out, agentArgv...)
 }
 
-// ProxySidecarEnvKnobNames is the single source of truth for
-// ProxySidecarEnvKnobs' key list — exported (R-02) so a consumer that needs
-// the NAMES without a live env (cmd/wardynd/envdoc_guard_test.go's compose
-// forward guard, chiefly) reads the same list ProxySidecarEnvKnobs iterates,
-// instead of a hand-copied second list that can silently drift from it: a
-// length-only comparison (`len(knobs) == len(names)`) would not catch a
-// name added here and forgotten there.
+// proxySidecarEnvKnobNames is the single source of truth for
+// ProxySidecarEnvKnobs' key list, so a consumer needing the NAMES without a
+// live env (cmd/wardynd/envdoc_guard_test.go) reads the same list rather than
+// a hand-copied one that can drift.
 var proxySidecarEnvKnobNames = []string{
 	"WARDYN_LLM_SCAN",
+	// #203 folds the former WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into this
+	// one name's {app,pat} scope — one knob to forward, not two.
 	"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
-	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
-	// The mid-run credential re-auth hold's budget. It MUST be here and not
-	// merely read by the sidecar: a managed docker or Kubernetes proxy inherits
-	// no arbitrary daemon environment, so a knob missing from this list is not
-	// "default", it is UNREACHABLE — the operator sets it, nothing refuses it,
-	// and the control silently never applies on that substrate.
+	// The mid-run credential re-auth hold's budget. A knob missing from this
+	// list is not "default", it is UNREACHABLE on a managed substrate.
 	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 }
 
@@ -189,21 +148,14 @@ var proxySidecarEnvKnobNames = []string{
 // what reaches every proxy sidecar.
 func ProxySidecarEnvKnobNames() []string { return slices.Clone(proxySidecarEnvKnobNames) }
 
-// ProxySidecarEnvKnobs returns the operator knobs the wardyn-proxy sidecar reads
-// from ITS OWN environment — as name/value pairs, and only for the ones wardynd
-// actually has set — for a substrate to copy into the sidecar it creates.
+// ProxySidecarEnvKnobs returns the operator knobs the wardyn-proxy sidecar
+// reads from ITS OWN environment — as name/value pairs, only for the ones
+// wardynd has set — for a substrate to copy into the sidecar it creates.
 //
-// The sidecar does not inherit wardynd's environment on ANY substrate: the
-// docker driver builds an Env slice, the k8s driver an Env array on the pod
-// spec. So a knob a substrate forgets is not "off", it is UNREACHABLE — the
-// operator sets it, nothing refuses it, and the control it names silently never
-// applies on that substrate — which is why the LIST lives here, beside
-// BuildProxyConfig, rather than once per driver: one list, every substrate.
-//
-// Values are passed through verbatim; each knob's own reader does the parsing
-// and the fail-closed decision (BranchNSEnforced, PATBranchNSEnforced, the
-// WARDYN_LLM_SCAN switch in cmd/wardyn-proxy). Host-run and custom-image proxies
-// read their own env directly and need none of this.
+// The sidecar does not inherit wardynd's environment on any substrate, so a
+// knob a substrate forgets is UNREACHABLE rather than merely "off" — hence one
+// list here, beside BuildProxyConfig, for every substrate. Values pass through
+// verbatim; each knob's own reader does the parsing and fail-closed decision.
 func ProxySidecarEnvKnobs() [][2]string {
 	var out [][2]string
 	for _, k := range proxySidecarEnvKnobNames {
@@ -216,12 +168,10 @@ func ProxySidecarEnvKnobs() [][2]string {
 
 // BuildProxyConfig marshals a run's ProxyConfig (egress policy, MITM CA,
 // injection rules, run token, ...) into the JSON payload every substrate
-// delivers to its wardyn-proxy sidecar as WARDYN_PROXY_CONFIG_JSON — the proxy
-// fails closed without it (no policy => no working egress). Pure data
-// transform (field mapping + json.Marshal); hoisted out of the docker driver
-// so a k8s substrate builds byte-identical sidecar config without duplicating
-// the mapping. port is the sidecar's listen port (ProxyListenPort in
-// production; parameterized for tests).
+// delivers to its wardyn-proxy sidecar (on stdin on Docker, as a staged file on
+// Kubernetes; never in its environment) — the proxy fails closed without it.
+// port is the sidecar's listen port (ProxyListenPort in production;
+// parameterized for tests).
 func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error) {
 	inj := make([]proxy.InjectionConfig, 0, len(pc.Injection))
 	for _, g := range pc.Injection {

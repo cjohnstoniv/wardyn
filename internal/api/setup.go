@@ -59,6 +59,11 @@ type SetupStatus struct {
 	Secrets SetupSecrets `json:"secrets"`
 	// AgeKey reports whether the at-rest secret store survives a restart.
 	AgeKey SetupAgeKey `json:"age_key"`
+	// CredentialStorage names the KIND of store credentials live in — never a
+	// host, path or vault name (design F-3): local/key_service/vault/key_vault.
+	// Unlike Checks (the same fact as admin-only detail), this is KEPT through
+	// redactSetupStatusForUser — every person reads it, not just an admin.
+	CredentialStorage string `json:"credential_storage,omitempty"`
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// OnboardingComplete reports whether an operator has finished (or
@@ -492,7 +497,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// winning signal (not a change to llmProvenance's own priority order) so a
 	// Bedrock-only operator still sees "LLM access: ok" without touching the
 	// existing CLI/secret-name signals or their tests.
-	bedrock := s.setupBedrock(ctx, present, ssoScope)
+	bedrock := s.setupBedrock(ctx, present, siteCfg, ssoScope)
 	if llmDetail == "" && bedrock.Ready {
 		llmDetail = fmt.Sprintf(
 			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",
@@ -605,26 +610,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	checks = append(checks, platformChecks(plat)...)
 
-	// has_runs: an EXISTENCE check, so it reads exactly one row. ListRuns builds
-	// an unbounded `SELECT <every column> FROM agent_runs ORDER BY created_at
-	// DESC` — every run this install ever launched, decoded in full, on an
-	// endpoint the console polls every 5s — only to test len(runs) > 0. Use the
-	// same Pager idiom firstBrokeredRepoFromRuns already uses
-	// (setup_checks.go); ListRuns stays the fallback, which only test doubles
-	// lacking Pager ever take (every real deployment is PG). A dedicated
-	// COUNT(*)/EXISTS is the remaining upgrade, but LIMIT 1 already makes the
-	// cost independent of run history.
-	hasRuns := false
-	if s.cfg.Store != nil {
-		var runs []types.AgentRun
-		var err error
-		if pg, ok := s.cfg.Store.(store.Pager); ok {
-			runs, err = pg.ListRunsPage(ctx, store.Page{Limit: 1})
-		} else {
-			runs, err = s.cfg.Store.ListRuns(ctx)
-		}
-		hasRuns = err == nil && len(runs) > 0
-	}
+	hasRuns := s.setupHasRuns(ctx)
 
 	// ready: CONSERVATIVE — false when the runner is nil / has no live class, so
 	// the wizard opens rather than hiding a half-configured bootstrap.
@@ -643,6 +629,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Providers:          providers,
 		Secrets:            sec,
 		AgeKey:             SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
+		CredentialStorage:  credentialStorageMode(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService),
 		HasRuns:            hasRuns,
 		OnboardingComplete: onboardingComplete,
 		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
@@ -674,6 +661,23 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		resp = redactSetupStatusForUser(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// setupHasRuns is the has_runs EXISTENCE check (LIMIT 1, the Pager idiom
+// firstBrokeredRepoFromRuns already uses — never the whole run table). Split
+// out of handleSetupStatus (funlen ratchet), like oidcDefaultRoleIsAdmin.
+func (s *Server) setupHasRuns(ctx context.Context) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
+	var runs []types.AgentRun
+	var err error
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		runs, err = pg.ListRunsPage(ctx, store.Page{Limit: 1})
+	} else {
+		runs, err = s.cfg.Store.ListRuns(ctx)
+	}
+	return err == nil && len(runs) > 0
 }
 
 // consoleRoleMappingsPresent reports whether any console role-mapping rows
@@ -732,12 +736,22 @@ func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
 // ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
 // false under a per_user bedrock_sso row (which has no bearer lane of its
 // own to read). It decides one field too — see Bedrock.
+//
+// Secrets.Present keeps demoSecretNames' presence bits (#850): those are the
+// console demo catalog's own seed-secret names
+// (demo-catalog-secrets.ts's needsSecret values, e.g. "wardyn-demo-key"),
+// already public in the shipped client bundle — knowing one is stored says
+// nothing about the deployment's real credential posture, unlike a real
+// provider secret name. Without this, walkableDemos/stepOrder
+// (setup/steps.ts) never offer a demo whose secret an admin has in fact
+// stored, because their only signal is this same, otherwise fully redacted,
+// list.
 func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
-	st.Secrets = SetupSecrets{Present: []string{}}
+	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
 	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
 	// Rebuilt from an explicit field list, exactly like Runner two
 	// lines up — SetupBedrock passed through WHOLE, two fields after SCM/
@@ -810,6 +824,30 @@ func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) Setu
 		st.Harness = reduced
 	}
 	return st
+}
+
+// demoSecretNames are ui/src/app/components/screens/demos/demo-catalog-secrets.ts's
+// needsSecret values verbatim — the console demo catalog's own seed-secret
+// names, kept here as the one server-side spelling so a renamed or added demo
+// secret is a single-line diff in both places, not a drift risk.
+var demoSecretNames = map[string]bool{
+	"wardyn-demo-key":       true,
+	"wardyn-demo-api-token": true,
+	"wardyn-demo-pat":       true,
+	"wardyn-demo-ssh-key":   true,
+}
+
+// demoSecretPresence narrows a secret-name list to the ones demoSecretNames
+// lists — see redactSetupStatusForUser's own comment for why this subset
+// alone survives redaction.
+func demoSecretPresence(present []string) []string {
+	out := make([]string, 0, len(present))
+	for _, n := range present {
+		if demoSecretNames[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // setupProviders detects the resident coding-agent CLIs and returns them plus

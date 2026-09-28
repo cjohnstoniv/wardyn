@@ -23,9 +23,12 @@
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
-//   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, SetSecret, DeleteSecret
+//   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
+//     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
+//   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
+//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -40,7 +43,6 @@
 // families 0.7 added were missing from BOTH halves, so docs/sdk.md's "the exact
 // list of what it wraps and what it does not" was exact about neither.
 //
-//   - /api/v1/governance     — governance profiles and assignments (0.7)
 //   - /api/v1/user-types     — the org's user types (0.8)
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
@@ -69,8 +71,10 @@
 //     reason the SSO leg above is — it is a browser redirect dance whose whole
 //     point is a human at a keyboard consenting, and it binds to a browser
 //     session an SDK caller does not have.
-//   - the attach lane under /api/v1/runs/{id} — attach, attach-ticket,
-//     attach-holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
+//     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
+//     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - the console SPA at /   — static assets
 //
@@ -321,6 +325,15 @@ type CreateRunRequest struct {
 	// their own identity, so this flag can only ever ask for the storage the
 	// caller was already granted.
 	Drive *DriveSelection `json:"drive,omitempty"`
+	// Preset launches the named launch preset (see Preset): the server
+	// expands it into the equivalent explicit request and runs the unchanged
+	// create path under the caller's own ceiling. Alongside it only Title,
+	// Task and PresetVersion may be set; any other field is refused.
+	Preset string `json:"preset,omitempty"`
+	// PresetVersion, with Preset, pins the version the caller expects: a
+	// preset changed since is refused (409) rather than launched. 0 launches
+	// the current version. The created run records the version it used.
+	PresetVersion int `json:"preset_version,omitempty"`
 }
 
 // DriveSelection is the per-run user-drive option set. See
@@ -683,6 +696,29 @@ func (c *Client) ListSecrets(ctx context.Context, opts ...ListOpts) ([]string, e
 	return names, err
 }
 
+// ListSecretsScopedPage is ListSecretsPage plus the server's `mine` (the
+// caller's own namespace): for an operator the two are identical; for a
+// member `names` narrows to the operator-owned names an eligible grant
+// pairs with, while `mine` is always the caller's own rows. GET
+// /api/v1/secrets, which responds {"names":[...],"mine":[...]}.
+func (c *Client) ListSecretsScopedPage(ctx context.Context, opts ...ListOpts) (names, mine []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+		Mine  []string `json:"mine"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/secrets", opts), nil, &out, &hdr); err != nil {
+		return nil, nil, false, err
+	}
+	return out.Names, out.Mine, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// ListSecretsScoped is ListSecretsScopedPage without the truncation signal.
+func (c *Client) ListSecretsScoped(ctx context.Context, opts ...ListOpts) (names, mine []string, err error) {
+	names, mine, _, err = c.ListSecretsScopedPage(ctx, opts...)
+	return names, mine, err
+}
+
 // SetSecret stores (or overwrites) a named secret. The value is write-only — no
 // API path ever returns it. PUT /api/v1/secrets/{name} with body {"value":...}.
 // Returns 400 on an invalid name, 403 for a reserved platform-internal name.
@@ -698,7 +734,7 @@ func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
-// ProfileResult is the decoded POST /api/v1/runs/{id}/profile reply (Recording
+// ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
 // Mode): the synthesized least-privilege sandbox profile plus the observations
 // it was built from. Only the fields callers render/save are modeled — the full
 // server response (profileResponse) additionally carries a per-item risk
@@ -722,10 +758,12 @@ type ProfileResult struct {
 // captured audit / egress / ground-truth events the server proposes a tightened,
 // reusable RunPolicy ("sandbox profile"). ADVISORY and READ-ONLY — it mints
 // nothing and persists no policy (save the proposal via CreatePolicy).
-// POST /api/v1/runs/{id}/profile. Returns 404 when the run does not exist.
+// POST /api/v1/runs/{id}/profile/synthesize (renamed from /profile in 0.8 —
+// docs/sdk.md "Renamed in 0.8" — the old path still answers, as a chi alias,
+// for one minor). Returns 404 when the run does not exist.
 func (c *Client) SynthesizeProfile(ctx context.Context, runID uuid.UUID) (ProfileResult, error) {
 	var out ProfileResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile", nil, &out)
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile/synthesize", nil, &out)
 	return out, err
 }
 

@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBrokeredLLMRouteKeepsSSRFGuardOnPublicVendorHost pins F087: the RELAXED
+// TestBrokeredLLMRouteKeepsSSRFGuardOnPublicVendorHost: the RELAXED
 // per-request vet (gatewayTarget -> vetTrustedHost, which admits RFC1918/ULA/
 // CGNAT by design) belongs to a CONTROL-PLANE-authored gateway host and to
 // nothing else. Applied to every host the brokered route dials, it stripped the
@@ -61,7 +61,7 @@ func TestBrokeredLLMRouteKeepsSSRFGuardOnPublicVendorHost(t *testing.T) {
 }
 
 // TestBrokeredLLMRouteStillUsesTheRelaxedVetForAConfiguredGateway is the
-// other half of F087's fix: an operator-configured internal gateway on RFC1918
+// other half of the fix's fix: an operator-configured internal gateway on RFC1918
 // space is exactly what vetTrustedHost exists to admit, and narrowing the vet
 // to gateway hosts must not break it.
 func TestBrokeredLLMRouteStillUsesTheRelaxedVetForAConfiguredGateway(t *testing.T) {

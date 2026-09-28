@@ -23,7 +23,7 @@ import (
 // the list is shared (runner.ProxySidecarEnvKnobs) so a knob added later cannot
 // land on one substrate only.
 func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
-	t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", "on")
+	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "pat:on")
 	t.Setenv("WARDYN_LLM_SCAN", "off")
 	// The re-auth hold's budget: the ONE number that decides how long a sandbox's
 	// AWS SSO credential exchange is parked while its owner signs in again. A
@@ -31,7 +31,7 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 	// not, on either substrate, until it rode this list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
 
-	env, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
+	env, _, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
 	if err != nil {
 		t.Fatalf("proxyEnv: %v", err)
 	}
@@ -42,9 +42,9 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": "on",
-		"WARDYN_LLM_SCAN":                         "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":        "45s",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "pat:on",
+		"WARDYN_LLM_SCAN":                     "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy container env %s = %q, want %q", name, got[name], want)
@@ -65,7 +65,7 @@ func TestProxyEnv_CarriesNoUnsetKnob(t *testing.T) {
 			t.Fatalf("unset %s: %v", k, err)
 		}
 	}
-	env, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
+	env, _, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
 	if err != nil {
 		t.Fatalf("proxyEnv: %v", err)
 	}

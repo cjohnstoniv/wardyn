@@ -294,9 +294,9 @@ func agentHasHoldLane(agent string) bool {
 // is a BYOA run — an image and no harness — and "" reads as a missing word.
 func autonomyAgentLabel(agent string) string {
 	if agent == "" {
-		return "this run's image"
+		return "This run's image"
 	}
-	return "agent " + agent
+	return "Agent " + agent
 }
 
 // autonomyPostureSpec returns the spec the posture is graded on: the FOLDED

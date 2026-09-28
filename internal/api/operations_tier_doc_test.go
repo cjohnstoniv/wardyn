@@ -40,7 +40,7 @@ var docTierGate = map[routeClass]string{
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
-	// R1 F316's four operator-topology reads: re-tiered to admin this wave and
+	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming
 	// them. Now that it has, they move here keyed on the row's own token.
 	{"GET /api/v1/site-config", "the operator-topology READS"},
@@ -90,8 +90,13 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/permissions/enforcement", "the `/permissions` routes below"},
 	{"GET /api/v1/permissions/availability/{kind}/*", "the `/permissions` routes below"},
 	{"PUT /api/v1/permissions/availability/{kind}/*", "the `/permissions` routes below"},
+	{"GET /api/v1/permissions/explain", "the `/permissions` routes below"},
 	{"GET /api/v1/tokens", "`GET`/`DELETE /tokens`"},
 	{"POST /api/v1/sessions/revoke", "`POST /sessions/revoke`"},
+	{"DELETE /api/v1/people/{principal}/ssh-keys", "`DELETE /people/{principal}/ssh-keys`"},
+	{"POST /api/v1/people", "`POST /people`, `POST /people/{principal}/tokens`"},
+	{"POST /api/v1/people/{principal}/tokens", "`POST /people/{principal}/tokens`"},
+	{"GET /api/v1/people/{principal}/tokens", "`GET /people/{principal}/tokens`"},
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
 	{"POST /api/v1/governance/profiles", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
@@ -103,7 +108,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/drives/grants/{id}", "`DELETE /drives/grants/{id}`"},
 	{"POST /api/v1/drives/preview", "`POST /drives/preview`"},
 
-	// the rest of the gated surface (R1 F316)
+	// the rest of the gated surface (R1)
 	//
 	// Through 0.7 this list was 22 hand-picked representatives out of 59 gated
 	// routes, and nothing bounded it: the guard checked that the rows we had
@@ -122,12 +127,22 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/drives", "`mountUserDriveRoutes`"},
 	{"PUT /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
+	// The destroy verb gets its OWN token rather than riding the family's:
+	// it is not registered by mountUserDriveRoutes (its mount lives beside
+	// it in user_drives_reclaim.go), and an operator reading the tier table
+	// to find out who can delete a person's storage must find a row that
+	// says so rather than a family name that happens to cover it.
+	{"POST /api/v1/drives/{id}/reclaim", "`POST /drives/{id}/reclaim`"},
 	{"DELETE /api/v1/access/mappings/{id}", "`/access` role-mapping routes"},
 	{"GET /api/v1/access", "`/access` role-mapping routes"},
 	{"POST /api/v1/access/preview", "`/access` role-mapping routes"},
 	{"POST /api/v1/policies", "policy create/update/delete"},
 	{"PUT /api/v1/policies/{id}", "policy create/update/delete"},
 	{"DELETE /api/v1/policies/{id}", "policy create/update/delete"},
+	{"PUT /api/v1/presets/{name}", "`PUT`/`DELETE /presets/{name}`"},
+	{"DELETE /api/v1/presets/{name}", "`PUT`/`DELETE /presets/{name}`"},
+	{"PUT /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
+	{"DELETE /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	// POST /setup/harness-login is NOT here: 0.7.2 moved the container LOGIN
 	// launch off the gated tier (classMember with an in-handler predicate), and
 	// this list covers gated routes only. The tier table names it in its own
@@ -169,7 +184,12 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	// #1142's portal registry.
+	{"POST /api/v1/admin/delegates", "`POST /admin/delegates`"},
+	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
+	{"DELETE /api/v1/admin/delegates/{id}", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
+	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
@@ -229,7 +249,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 	}
 
 	// The reverse direction, which is what makes this a guard rather than a
-	// spot-check (R1 F316). Everything above asks "are the rows we listed
+	// spot-check (R1). Everything above asks "are the rows we listed
 	// right"; this asks "is every gated route listed", which is what the
 	// section claims to be. Without it the list was 22 of 59 and a re-tiering
 	// could land in routeMatrix with no doc row and nothing to say so — exactly

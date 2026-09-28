@@ -49,11 +49,11 @@ const (
 
 // DRAFT (M2 canon pending)
 const (
-	adoSignInRaisedNote = "this run's Azure DevOps sign-in can no longer be renewed — the request is held while its " +
+	adoSignInRaisedNote = "This run's Azure DevOps sign-in can no longer be renewed — the request is held while its " +
 		"owner signs in to Azure DevOps again, and resumes when the sign-in lands; nothing is substituted"
-	adoSignInClosedRefusal   = "this run's Azure DevOps sign-in request is closed: %s"
-	adoSignInTooManyRefusal  = "this run has already asked for an Azure DevOps sign-in too many times; no further sign-in will be requested for it"
-	adoSignInRaiseFailedBody = "could not raise the Azure DevOps sign-in request"
+	adoSignInClosedRefusal   = "This run's Azure DevOps sign-in request is closed: %s"
+	adoSignInTooManyRefusal  = "This run has already asked for an Azure DevOps sign-in too many times; no further sign-in will be requested for it"
+	adoSignInRaiseFailedBody = "Could not raise the Azure DevOps sign-in request"
 )
 
 // adoSignInScopeBody is the requested_scope of a sign-in request (kind

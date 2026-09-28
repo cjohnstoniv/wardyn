@@ -126,6 +126,13 @@ export const RUN_COCKPIT = {
   loadError: "Couldn't load right now.",
   filesTruncated: "Showing a partial list — more files changed than are shown here.",
 
+  // --- Rename (#1197 L2) ---
+  // Canon strings, design.md §2.1's "Rename (run page)" row — byte-exact,
+  // including the toast: it says only the TITLE changed, since the agent's
+  // task is the fact a rename could otherwise be misread as touching.
+  rename: "Rename",
+  renamed: "Renamed. Only the title changed; the agent's task is the same.",
+
   // --- Command bar ---
   // The pending-approval chip. Two forms, because they are two different facts:
   // an approval merely queued vs. one that is HOLDING the sandbox right now
@@ -187,5 +194,20 @@ export const RUN_COCKPIT = {
   // separator they already had.
   shortcutDock: "dock",
   shortcutExitFocus: "exit focus",
+} as const;
+
+// #125 — the run page's own launch-advisory block. A launch that answers 2xx
+// always navigates here in the same tick (use-launch.ts), carrying any
+// advisory `warnings[]` as router state; this is where they land, in the New
+// Run rail's own advisory-block shape. LAUNCH_WARNING_TITLE is deliberately
+// NOT re-declared here — it is AGENTS.LAUNCH_WARNING_TITLE
+// (workspace-providers-copy.ts), reused verbatim so the two surfaces can never
+// spell "launched with a warning" two different ways.
+export const RUN_DETAIL = {
+  // Router state dies on reload — this says so, rather than letting the note
+  // simply vanish with no explanation. The durable record stays the
+  // run.create audit row's own clamp warnings (see the Audit tab).
+  LAUNCH_WARNING_EPHEMERAL: "This note goes when you reload. The run's audit trail keeps it.",
+  LAUNCH_WARNING_DISMISS: "Dismiss",
 } as const;
 

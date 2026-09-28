@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// pgReviveRunner holds one run's rendered proxy config and can replace it.
+// pgReviveRunner can replace a run's proxy; cfg is the last config handed in.
 type pgReviveRunner struct {
 	*fakeRunner
 	mu       sync.Mutex
@@ -28,11 +28,7 @@ type pgReviveRunner struct {
 	replaced int
 }
 
-func (r *pgReviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.cfg, nil
-}
+func (r *pgReviveRunner) CanReplaceProxy(context.Context, string) error { return nil }
 
 func (r *pgReviveRunner) EnsureProxyImage(context.Context) error { return nil }
 
@@ -90,7 +86,11 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rn := &pgReviveRunner{fakeRunner: &fakeRunner{}, cfg: cfg}
+	h.srv.cfg.RunConfigKey = make([]byte, 32)
+	if err := h.srv.storeRunProxyConfig(ctx, run.ID, cfg); err != nil {
+		t.Fatalf("store the run's proxy config: %v", err)
+	}
+	rn := &pgReviveRunner{fakeRunner: &fakeRunner{}}
 	h.srv.cfg.Runner = rn
 	h.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
 
@@ -150,7 +150,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	end := now.Add(24 * time.Hour)
-	if ok, err := st.(store.RunLeaser).SetRunEndAndWait(ctx, run.ID, nil, 0, &end, 0); err != nil || !ok {
+	if ok, err := st.(store.RunLeaser).SetRunEndAndWait(ctx, run.ID, nil, 0, &end, 0, nil); err != nil || !ok {
 		t.Fatalf("SetRunEndAndWait: %v %v", ok, err)
 	}
 	if _, err := st.PutCapabilityEnforcement(ctx, map[string]bool{capAgent: true}); err != nil {

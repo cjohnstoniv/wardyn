@@ -90,7 +90,7 @@ func demoVideoServedCSP(t *testing.T, base string) string {
 	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	csp := w.Header().Get("Content-Security-Policy")
 	if csp == "" {
 		t.Fatalf("no Content-Security-Policy on the response at all")

@@ -58,7 +58,7 @@
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.12.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "30.0.1",
     "tailwindcss": "4.3.3",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.70.1",
@@ -72,11 +72,19 @@
       "@types/react-dom": "18.3.1",
       "brace-expansion@^2": "2.1.4",
       "brace-expansion@^5": "5.0.9",
-      "undici": "7.29.0",
+      "undici": "8.10.2",
+      "whatwg-url@^17": "17.1.1",
       "postcss": "8.5.23",
       "mermaid": "11.16.1",
       "dompurify": "3.4.13",
-      "browserslist": "4.28.9"
+      "browserslist": "4.28.9",
+      "@asamuzakjp/css-color": "6.0.7",
+      "@asamuzakjp/dom-selector": "8.3.2",
+      "@csstools/css-calc": "3.4.0",
+      "@csstools/css-tokenizer": "4.0.1",
+      "@csstools/css-color-parser": "4.2.3",
+      "@csstools/css-parser-algorithms": "4.0.0",
+      "@csstools/color-helpers": "6.1.1"
     }
   }
 }

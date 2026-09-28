@@ -5,7 +5,6 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  ADO_HOLD_WINDOW_MS,
   canDecideApproval,
   decisionArgs,
   isHeld,
@@ -13,16 +12,24 @@ import {
   type ApprovalRequest,
 } from "./approvals";
 import { aheadByHours } from "../test-clock";
+import { heldFieldsFor, TEST_HOLD_WINDOWS } from "../test-hold-fixture";
 
-const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
-  id: "a1",
-  run_id: "run-1",
-  kind: "tool_call",
-  requested_scope: {},
-  state: "PENDING",
-  requested_at: new Date().toISOString(),
-  ...over,
-});
+// #1197: held/held_until are now server fields (internal/approval.Hold's
+// projection), so this fixture computes them the same way the server would —
+// heldFieldsFor mirrors Hold's own arms — letting every existing case below
+// keep constructing rows by kind/requested_at/state exactly as it always has.
+const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => {
+  const base = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "tool_call" as ApprovalKind,
+    requested_scope: {},
+    state: "PENDING" as const,
+    requested_at: new Date().toISOString(),
+    ...over,
+  };
+  return { ...base, ...heldFieldsFor(base) };
+};
 
 // canDecideApproval is the ONE predicate both approvals.tsx and run-detail.tsx
 // gate their decide buttons on — it must mirror internal/api/approvals.go's
@@ -32,15 +39,16 @@ const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
 // clamped tool_call would self-authorize under the operator's own ceiling).
 describe("canDecideApproval", () => {
   it("an operator/admin may decide every kind", () => {
-    for (const kind of ["credential", "egress_domain", "tool_call"] as ApprovalKind[]) {
+    for (const kind of ["credential", "egress_domain", "tool_call", "push_content"] as ApprovalKind[]) {
       expect(canDecideApproval(true, kind)).toBe(true);
     }
   });
 
-  it("a member may decide egress_domain only", () => {
+  it("a member may decide egress_domain only — push_content stays admin-only, same as credential/tool_call", () => {
     expect(canDecideApproval(false, "egress_domain")).toBe(true);
     expect(canDecideApproval(false, "credential")).toBe(false);
     expect(canDecideApproval(false, "tool_call")).toBe(false);
+    expect(canDecideApproval(false, "push_content")).toBe(false);
   });
 });
 
@@ -132,40 +140,70 @@ describe("isHeld — a hold stays live until the server's own state says otherwi
   });
 });
 
-// #725/F1 — an Azure DevOps capability escalation IS a tool_call row
-// (isAdoCapabilityRequest: grant_id set, requested_scope.lane
-// "azure_devops"), but the proxy releases its hold after ADO_HOLD_WINDOW_MS
-// (4 minutes), unlike a plain tool_call, held for as long as it is PENDING
-// (#509). Before this arm, isHeld kept reporting "held" while the ADO card itself
-// (ado-capability-card.tsx's own stillHeld, the same 4-minute window) had
-// already flipped to "no longer waiting" — the board and the card disagreed.
-const adoApproval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest =>
-  approval({
-    kind: "tool_call",
-    grant_id: "grant-1",
-    requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
-    ...over,
+// SD-6 — an Azure DevOps capability escalation is a tool_call the proxy parks
+// for at most ADO_HOLD_WINDOW_MS (credhold.go's maxCapabilityHoldTimeout);
+// past it the row stays PENDING but nothing is held, matching its own card.
+describe("isHeld — an Azure DevOps capability escalation is a bounded hold", () => {
+  const ado = (over: Partial<ApprovalRequest> = {}) =>
+    approval({
+      kind: "tool_call",
+      grant_id: "g1",
+      requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o", grant_id: "g1", capability: "pr_create", repo: "r", tool: "t", cmd: "c" },
+      ...over,
+    });
+
+  it("a fresh PENDING ADO escalation is held", () => {
+    expect(isHeld(ado())).toBe(true);
   });
 
-describe("isHeld — an Azure DevOps capability escalation's own 4-minute window (#725/F1)", () => {
-  it("a fresh ADO tool_call is held", () => {
-    expect(isHeld(adoApproval())).toBe(true);
+  it("a PENDING ADO escalation 5 minutes old is past the 240s window: not held", () => {
+    expect(TEST_HOLD_WINDOWS.ado).toBe(240_000);
+    expect(isHeld(ado({ requested_at: new Date(Date.now() - 5 * 60_000).toISOString() }))).toBe(false);
   });
 
-  it("an ADO tool_call row at 5 minutes is no longer held", () => {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
-    expect(isHeld(adoApproval({ requested_at: fiveMinutesAgo }))).toBe(false);
+  it("a plain tool_call of the same age stays held", () => {
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(isHeld(approval({ kind: "tool_call", requested_at: old }))).toBe(true);
   });
 
-  it("right at ADO_HOLD_WINDOW_MS, isHeld matches the exported constant, not a hand-copied number", () => {
-    const justUnder = new Date(Date.now() - (ADO_HOLD_WINDOW_MS - 1000)).toISOString();
-    const justOver = new Date(Date.now() - (ADO_HOLD_WINDOW_MS + 1000)).toISOString();
-    expect(isHeld(adoApproval({ requested_at: justUnder }))).toBe(true);
-    expect(isHeld(adoApproval({ requested_at: justOver }))).toBe(false);
+  it("a decided ADO escalation is not held; an unparseable requested_at fails toward the hold", () => {
+    expect(isHeld(ado({ state: "APPROVED" }))).toBe(false);
+    expect(isHeld(ado({ requested_at: "not-a-date" }))).toBe(true);
+  });
+});
+
+// isPushContentRequest's own tests moved to push-content-card.test.tsx (#181
+// bundle-split fix): the guard now lives in push-content-card.tsx, not here —
+// see that function's own doc for why.
+
+// #181 (review finding 1) — push_content is a SHORT proxy hold, unlike
+// tool_call/credential_reauth's unconditional PENDING-is-live: the proxy
+// refuses with a timeout after push_rules.hold_seconds (at most 600s,
+// maxHoldTimeout), and the row then stays a PASSIVE pending — a retry of the
+// same push rejoins the row and re-enters the hold, but the sandbox is not
+// parked on it in between.
+describe("isHeld — push_content is a bounded proxy hold, not an unconditional one", () => {
+  it("a fresh PENDING push_content is held (600s ceiling)", () => {
+    expect(isHeld(approval({ kind: "push_content" }))).toBe(true);
   });
 
-  it("a plain tool_call with no grant_id/azure_devops scope is still held at 5 minutes (#509)", () => {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
-    expect(isHeld(approval({ kind: "tool_call", requested_at: fiveMinutesAgo }))).toBe(true);
+  it("a PENDING push_content past the 600s ceiling is a passive pending, not held", () => {
+    const past = new Date(Date.now() - 601_000).toISOString();
+    expect(isHeld(approval({ kind: "push_content", requested_at: past }))).toBe(false);
+  });
+
+  it("a PENDING push_content well inside the 600s ceiling is still held", () => {
+    const recent = new Date(Date.now() - 300_000).toISOString();
+    expect(isHeld(approval({ kind: "push_content", requested_at: recent }))).toBe(true);
+  });
+
+  it("a decided or EXPIRED push_content row is never held, regardless of age", () => {
+    for (const state of ["APPROVED", "DENIED", "CANCELLED", "EXPIRED"] as const) {
+      expect(isHeld(approval({ kind: "push_content", state }))).toBe(false);
+    }
+  });
+
+  it("an unparseable requested_at fails TOWARD showing the hold", () => {
+    expect(isHeld(approval({ kind: "push_content", requested_at: "not-a-date" }))).toBe(true);
   });
 });

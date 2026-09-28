@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package setup provides host-environment detection for the first-run setup
-// surface (GET /api/v1/setup/status): which resident coding-agent CLIs are
-// present, and the OS/WSL posture the environment-step copy keys off. It is a
-// leaf package (stdlib only) so the API handler and tests can depend on it
-// without pulling in the rest of the control plane.
+// surface: resident coding-agent CLIs, and the OS/WSL posture the
+// environment-step copy keys off. Leaf package (stdlib only).
 package setup
 
 import (
@@ -16,10 +14,9 @@ import (
 	"strings"
 )
 
-// CLIProvider is a resident coding-agent CLI detected on the wardynd host.
-// LoggedIn is a HEURISTIC (a home-dir credential-file check), not a live probe.
-// BinPath is the resolved PATH location when Installed (empty otherwise) — the
-// setup surface uses it to warn "logged in but the CLI is off PATH".
+// CLIProvider is a resident coding-agent CLI. LoggedIn is a HEURISTIC
+// (credential-file check), not a live probe; BinPath (set when Installed)
+// lets the setup surface warn "logged in but the CLI is off PATH".
 type CLIProvider struct {
 	Tool      string
 	Installed bool
@@ -28,11 +25,9 @@ type CLIProvider struct {
 	LoginVia  string
 }
 
-// Platform is the wardynd host's OS, whether it is running under WSL, whether
-// it exposes KVM virtualization (/dev/kvm) — the hardware fact that separates
-// "Vault is incompatible here" from "Vault just needs setup" — and whether
-// wardynd itself is running containerized, which changes what a missing
-// /dev/kvm actually means (mount the device vs. no hardware at all).
+// Platform is the wardynd host's OS, WSL/KVM/containerized posture. KVM
+// separates "Vault incompatible" from "just needs setup"; Containerized
+// changes what a missing /dev/kvm means (mount the device vs no hardware).
 type Platform struct {
 	OS            string
 	WSL           bool
@@ -41,22 +36,13 @@ type Platform struct {
 }
 
 // DetectCLIProviders reports the resident coding-agent CLIs (claude, codex):
-// whether each is on PATH (Installed) and an advisory login signal (LoggedIn +
-// the LoginVia path that produced it).
-//
-// LoggedIn is advisory — a stale/expired session whose credential
-// file still exists reads as logged-in. The honest upgrade is shelling out to
-// `claude whoami` (or the codex equivalent) and parsing it; the first-run check
-// deliberately avoids the subprocess.
+// Installed (on PATH) and an advisory LoggedIn+LoginVia signal — heuristic,
+// since a stale credential file still reads as logged-in (no shelling out).
 func DetectCLIProviders() []CLIProvider {
 	home, _ := os.UserHomeDir()
 	claude := detectProvider("claude", home, []string{filepath.Join(".claude", ".credentials.json")})
-	// macOS: Claude Code stores the OAuth credential in the login Keychain (service
-	// "Claude Code-credentials"), so ~/.claude/.credentials.json usually does NOT
-	// exist — the file check above false-negatives a logged-in Mac and the UI wrongly
-	// reads "not logged in". Fall back to a Keychain presence probe. Note: host-mode
-	// subscription staging still needs the on-disk file, so this only fixes the login
-	// signal, not the composed-run mount (see stage-claude-creds.sh).
+	// macOS stores the OAuth credential in Keychain, not on disk — fall back
+	// to a Keychain probe (fixes only the login signal, not host-mode staging).
 	if !claude.LoggedIn {
 		if via := detectMacKeychainClaude(); via != "" {
 			claude.LoggedIn = true
@@ -69,11 +55,8 @@ func DetectCLIProviders() []CLIProvider {
 	}
 }
 
-// detectMacKeychainClaude reports the Keychain-backed Claude login on macOS as a
-// LoginVia string, or "" if absent/not-macOS. It queries only the item's presence
-// (`find-generic-password` WITHOUT -w), so the secret is never read into this
-// process and no "allow access" ACL prompt is triggered — this is a metadata probe,
-// not a credential read.
+// detectMacKeychainClaude reports the Keychain-backed Claude login on macOS,
+// or "" if absent/not-macOS — presence-only probe (no -w), no ACL prompt.
 func detectMacKeychainClaude() string {
 	if runtime.GOOS != "darwin" {
 		return ""
@@ -106,26 +89,20 @@ func detectProvider(tool, home string, loginPaths []string) CLIProvider {
 	return p
 }
 
-// DetectPlatform reports the host OS (runtime.GOOS), whether it is WSL,
-// whether /dev/kvm is exposed, and whether wardynd is running containerized.
+// DetectPlatform reports the host OS, WSL, /dev/kvm, and containerized status.
 func DetectPlatform() Platform {
 	return Platform{OS: runtime.GOOS, WSL: detectWSL(), KVM: detectKVM(), Containerized: detectContainerized()}
 }
 
-// VaultKVMDetail is the operator-facing explanation for the Vault (Kata) tier's
-// availability, given this host's KVM + containerization posture. It exists so
-// the missing-KVM copy never asserts a bare "hardware limit no install can fix"
-// when wardynd is merely containerized without /dev/kvm bind-mounted — the
-// compose topology this repo ships as its primary quick-start, where the real
-// fix is mounting the device, not new hardware.
+// VaultKVMDetail is the operator-facing Vault (Kata) availability explanation
+// — a containerized host missing /dev/kvm gets "mount the device", not "no hardware".
 func VaultKVMDetail() string {
 	p := DetectPlatform()
 	return vaultKVMDetail(p.KVM, p.Containerized)
 }
 
-// vaultKVMDetail is the pure (KVM, containerized) -> copy mapping behind
-// VaultKVMDetail, split out so both branches are testable without a real
-// /dev/kvm or container.
+// vaultKVMDetail is the pure (KVM, containerized) -> copy mapping, testable
+// without real hardware.
 func vaultKVMDetail(kvm, containerized bool) string {
 	if kvm {
 		return "no Vault (Kata microVM) runtime registered on this host yet — fixable, run `wardyn setup vault`. See Getting Started."
@@ -149,24 +126,16 @@ func detectWSL() bool {
 	return isWSLProcVersion(string(b))
 }
 
-// detectKVM reports whether the host exposes /dev/kvm. Accurate in host mode;
-// a CONTAINERIZED wardynd without /dev/kvm mounted reads false even on KVM
-// hardware — a false negative that only softens "incompatible" copy for a
-// tier the runner already reports honestly when it is actually live.
+// detectKVM reports whether the host exposes /dev/kvm. A CONTAINERIZED
+// wardynd without /dev/kvm mounted reads false even on KVM hardware.
 func detectKVM() bool {
 	_, err := os.Stat("/dev/kvm")
 	return err == nil
 }
 
-// detectContainerized reports whether wardynd is running inside a container.
-// It checks the runtime-dropped marker files (Docker's /.dockerenv, Podman's
-// /run/.containerenv) and, failing those, the cgroup-1 engine hint in
-// /proc/1/cgroup.
-//
-// heuristic, not authoritative — on cgroup v2 the init cgroup path is
-// a bare "0::/" with no engine token, so a container that drops neither marker
-// file reads false. The marker-file check covers Docker and Podman (the shipped
-// paths); tighten to a namespace/mountinfo probe only if a runtime slips past.
+// detectContainerized reports whether wardynd runs in a container: marker
+// files (Docker's /.dockerenv, Podman's /run/.containerenv), else the
+// cgroup-1 hint in /proc/1/cgroup (false on cgroup v2's bare "0::/").
 func detectContainerized() bool {
 	for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
 		if _, err := os.Stat(p); err == nil {
@@ -179,8 +148,7 @@ func detectContainerized() bool {
 	return false
 }
 
-// containerizedCgroup is the pure /proc/1/cgroup -> containerized predicate
-// (kept separate so it is testable without a real /proc).
+// containerizedCgroup is the pure /proc/1/cgroup -> containerized predicate.
 func containerizedCgroup(cgroup string) bool {
 	for _, token := range []string{"docker", "containerd", "kubepods", "libpod"} {
 		if strings.Contains(cgroup, token) {
@@ -190,24 +158,18 @@ func containerizedCgroup(cgroup string) bool {
 	return false
 }
 
-// isWSLProcVersion is the pure /proc/version -> WSL predicate (kept separate so
-// it is testable without a real /proc/version).
+// isWSLProcVersion is the pure /proc/version -> WSL predicate.
 func isWSLProcVersion(procVersion string) bool {
 	return strings.Contains(strings.ToLower(procVersion), "microsoft")
 }
 
-// SCMPosture is a presence-only snapshot of the host's existing git-credential
-// habits, read to recommend a safer rung of the credential ladder — never to
-// import anything. No file under $HOME is ever read for values; the
-// credential.helper NAME comes from `git config`, never the credentials it
-// manages. Best-effort like the CLI probe: a CONTAINERIZED wardynd cannot see
-// the operator's $HOME, so every field false-negatives there.
+// SCMPosture is a presence-only snapshot of the host's git-credential habits,
+// used to recommend a safer credential-ladder rung — never to import
+// anything. Best-effort: a CONTAINERIZED wardynd can't see $HOME.
 type SCMPosture struct {
-	// GhCLI: ~/.config/gh/hosts.yml exists — a gh CLI login, i.e. a broad
-	// whole-account oauth session (ladder rung 4).
+	// GhCLI: a gh CLI login, i.e. a broad whole-account oauth session (ladder rung 4).
 	GhCLI bool `json:"gh_cli"`
-	// CredentialHelper is the global git credential.helper name ("" if unset).
-	// "store"/"cache" prefixes mean loose plaintext-ish credentials on disk.
+	// CredentialHelper is the git credential.helper name ("" if unset); "store"/"cache" mean plaintext-ish creds on disk.
 	CredentialHelper string `json:"credential_helper"`
 	// GitCredentialsFile: ~/.git-credentials exists (plaintext credentials).
 	GitCredentialsFile bool `json:"git_credentials_file"`

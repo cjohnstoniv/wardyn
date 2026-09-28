@@ -9,9 +9,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -73,8 +75,23 @@ type fakeDocker struct {
 	images map[string]bool // ref -> present
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
+	// subnets is each network's IPv4 subnet: the one its create asked for, or
+	// else the first free 10.N.0.0/16 from N=88, as the daemon picks one. A
+	// create asking for a subnet another network holds fails on the overlap.
+	subnets map[string]netip.Prefix
+	// onNetworkCreate, when set, runs INSIDE NetworkCreate before the network
+	// is recorded, so a test can have another network take a subnet first.
+	// Called without f.mu held.
+	onNetworkCreate func(name string, opts client.NetworkCreateOptions)
 
 	containers map[string]*createdContainer // id (== name) -> record
+
+	// stdin is what was written to each container's stdin through
+	// ContainerAttach (the proxy's config, #1176), by container id; attached
+	// lists every attach in order, with started showing whether the container
+	// had already been started when it was made.
+	stdin    map[string][]byte
+	attached []fakeAttach
 
 	// startedNames records every ContainerStart in order, and SURVIVES rollback
 	// (unlike containers, which a rollback removes). Lets a test prove a container
@@ -167,6 +184,16 @@ type fakeDocker struct {
 	volumeInspectMissesExisting bool
 	// failVolumeCreate makes VolumeCreate fail (quota, driver refusal).
 	failVolumeCreate bool
+	// volumeRemoves records every VolumeRemove call, so a test can prove a
+	// REFUSED reclaim issued none at all — the assertion that matters most,
+	// since the call it is refusing is irreversible.
+	volumeRemoves []string
+	// lastVolumeRemoveForce pins that the driver never sets Force: a forced
+	// remove would pull a member's storage out from under a live agent.
+	lastVolumeRemoveForce bool
+	// volumeInUse names the one volume whose removal answers CONFLICT, the way
+	// a real daemon refuses a volume a container still mounts.
+	volumeInUse string
 
 	// listItems is what ContainerList answers — a test seeds it to model the
 	// daemon's view for SweepOrphanedSandboxes. lastListFilters/lastListAll
@@ -225,9 +252,54 @@ func newFakeDocker() *fakeDocker {
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
 		networks:   map[string]client.NetworkCreateOptions{},
+		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
 		volumes:    map[string]client.VolumeCreateOptions{},
+		stdin:      map[string][]byte{},
 	}
+}
+
+// fakeAttach records one ContainerAttach.
+type fakeAttach struct {
+	id      string
+	started bool
+}
+
+// ContainerAttach hands back a connection whose writes land in f.stdin[id].
+func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.containers[id]
+	if c == nil || c.removed {
+		return client.ContainerAttachResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	f.attached = append(f.attached, fakeAttach{id: id, started: c.state != nil && c.state.Running})
+	return client.ContainerAttachResult{
+		HijackedResponse: client.NewHijackedResponse(&fakeStdinConn{f: f, id: id}, "application/vnd.docker.raw-stream"),
+	}, nil
+}
+
+// fakeStdinConn is an attach connection that records what is written to it.
+type fakeStdinConn struct {
+	fakeConn
+	f  *fakeDocker
+	id string
+}
+
+func (c *fakeStdinConn) Write(b []byte) (int, error) {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	c.f.stdin[c.id] = append(c.f.stdin[c.id], b...)
+	return len(b), nil
+}
+
+func (c *fakeStdinConn) CloseWrite() error { return nil }
+
+// stdinOf is what was written to container id's stdin.
+func (f *fakeDocker) stdinOf(id string) []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stdin[id]
 }
 
 func (f *fakeDocker) Info(ctx context.Context, _ client.InfoOptions) (client.SystemInfoResult, error) {
@@ -281,9 +353,61 @@ func (f *fakeDocker) ImageRemove(ctx context.Context, imageID string, _ client.I
 
 func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
 	f.mu.Lock()
+	hook := f.onNetworkCreate
+	f.mu.Unlock()
+	if hook != nil {
+		hook(name, opts)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
+	var subnet netip.Prefix
+	if opts.IPAM != nil && len(opts.IPAM.Config) > 0 {
+		subnet = opts.IPAM.Config[0].Subnet
+		for other, held := range f.subnets {
+			if held == subnet {
+				return client.NetworkCreateResult{}, fmt.Errorf("invalid pool request: Pool overlaps with other one on this address space (%s)", other)
+			}
+		}
+	} else {
+		for n := 88; !subnet.IsValid() || slices.Contains(slices.Collect(maps.Values(f.subnets)), subnet); n++ {
+			subnet = netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(n), 0, 0}), 16)
+		}
+	}
 	f.networks[name] = opts
+	f.subnets[name] = subnet
 	return client.NetworkCreateResult{ID: name}, nil
+}
+
+func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.networks[networkID]; !ok {
+		return client.NetworkInspectResult{}, fakeNotFound{msg: "no such network: " + networkID}
+	}
+	var res client.NetworkInspectResult
+	res.Network.Name = networkID
+	res.Network.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[networkID]}}
+	return res, nil
+}
+
+// refusePinWithoutSubnet reproduces Docker Engine 28's create-time rule
+// (moby daemon/container_operations.go validateEndpointIPAddress): an endpoint
+// pinned to an IPv4 address is refused on a network whose create named no
+// subnet. Engine 29 accepts it, which is why a real Docker Desktop cannot show it.
+func (f *fakeDocker) refusePinWithoutSubnet(nc *network.NetworkingConfig) error {
+	if nc == nil {
+		return nil
+	}
+	for name, ep := range nc.EndpointsConfig {
+		opts, known := f.networks[name]
+		if !known || ep == nil || ep.IPAMConfig == nil || !ep.IPAMConfig.IPv4Address.IsValid() {
+			continue
+		}
+		if opts.IPAM == nil || len(opts.IPAM.Config) == 0 {
+			return errors.New("invalid endpoint settings:\nuser specified IP address is supported only when connecting to networks with user configured subnets")
+		}
+	}
+	return nil
 }
 
 func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
@@ -304,6 +428,7 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ clie
 		return client.NetworkRemoveResult{}, fakeNotFound{msg: "no such network: " + networkID}
 	}
 	delete(f.networks, networkID)
+	delete(f.subnets, networkID)
 	return client.NetworkRemoveResult{}, nil
 }
 
@@ -351,10 +476,14 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := opts.Name
+	delete(f.stdin, name) // a new container under the name has an empty stdin
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
 	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
+		return client.ContainerCreateResult{}, err
+	}
+	if err := f.refusePinWithoutSubnet(opts.NetworkingConfig); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
 	cfg := opts.Config
@@ -743,6 +872,34 @@ func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateO
 	f.volumes[opts.Name] = opts
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
 }
+
+// VolumeRemove is ReclaimDrive's destroy call and nothing else's. It answers
+// the two errors the real daemon answers and that the driver branches on: a
+// not-found for a name this fake does not hold, and a CONFLICT (the errdefs
+// shape a live daemon returns for "volume is in use") when volumeInUse names
+// it — the refusal that becomes runner.ErrDriveInUse.
+func (f *fakeDocker) VolumeRemove(_ context.Context, volumeID string, opts client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeRemoves = append(f.volumeRemoves, volumeID)
+	f.lastVolumeRemoveForce = opts.Force
+	if _, ok := f.volumes[volumeID]; !ok {
+		return client.VolumeRemoveResult{}, fakeNotFound{msg: "no such volume: " + volumeID}
+	}
+	if f.volumeInUse == volumeID {
+		return client.VolumeRemoveResult{}, fakeConflict{msg: "remove " + volumeID + ": volume is in use"}
+	}
+	delete(f.volumes, volumeID)
+	return client.VolumeRemoveResult{}, nil
+}
+
+// fakeConflict is the errdefs-shaped 409 a real daemon answers when a volume
+// is still mounted by a container — the one error ReclaimDrive must NOT read
+// as a failure to remove, but as "a run still holds this".
+type fakeConflict struct{ msg string }
+
+func (e fakeConflict) Error() string { return e.msg }
+func (e fakeConflict) Conflict()     {}
 
 // fakeConn is a net.Conn whose reads return EOF immediately, so the Exec
 // drain goroutine completes promptly.

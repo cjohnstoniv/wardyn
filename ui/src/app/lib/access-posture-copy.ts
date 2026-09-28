@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { SIGNIN_HELP_LINK_LABEL } from "./people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "./sign-in-copy";
 
 // #484's frozen strings for the everyone-is-an-admin banner, byte-for-byte
 // from docs/design/admin-access-canon.md (approved mock packet 3). Not in
@@ -29,9 +29,10 @@ export const ADMIN_ACCESS_PEOPLE_STEP = "/admin/setup?step=people";
 
 // #484 — the People step's "When someone can't sign in" card
 // (setup/sign-in-help-card.tsx), frozen byte-for-byte from the same canon doc.
-// Here rather than in people-access-copy.ts, which the sign-in page pulls into
-// the entry chunk (bundle-split.test.ts's budget); only the link label and the
-// refusal set the sign-in page itself needs live there.
+// Here rather than in people-access-copy.ts (this whole table is lazy,
+// reached only through the People step) or sign-in-copy.ts (eager,
+// bundle-split.test.ts's budget); only the link label and the refusal set
+// the sign-in page itself needs live in the latter.
 export const SIGNIN_HELP = {
   TITLE: "When someone can't sign in",
   LEAD: "Wardyn says what happened. You say what to do about it.",

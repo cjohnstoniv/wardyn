@@ -160,10 +160,9 @@ export const T = {
   VIEWER_HINT: "Admin role required",
   TY_KEY: "Drives Claude Code, direct API calls, and Wardyn's features. Never resident.",
   TY_OPENAI: "Drives Codex CLI, direct API calls, and Wardyn's features.",
-  // "Agent in the box" Getting-Started step (v0.5 local/design-prompts-v0.5/
-  // prompt-v1-demo-step.md) — not a mock-export transcription like the rest of
-  // this file (no mockup round covers this step yet); copy is verbatim from
-  // that design prompt.
+  // "Agent in the box" Getting-Started step (v0.5 design prompt) — not a
+  // mock-export transcription like the rest of this file (no mockup round
+  // covers this step yet); copy is verbatim from that design prompt.
   // Claude Code only: the catalog's task/policy are Anthropic-specific, and
   // the codex-cli agent image carries no claude binary — an OpenAI-only
   // deployment stays locked, honestly, with a reason.

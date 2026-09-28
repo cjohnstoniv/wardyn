@@ -18,7 +18,7 @@ import (
 // gtMinter is the slice of the identity provider the rotator needs (satisfied by
 // *embedded.Provider / any identity.Provider).
 type gtMinter interface {
-	MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string) (identity.RunIdentity, error)
+	MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error)
 }
 
 // runGroundtruthTokenRotator keeps `path` populated with a FRESH host-sensor token
@@ -33,7 +33,7 @@ func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {
 	for {
 		next := 30 * time.Minute
 		mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		ri, err := m.MintRunIdentity(mctx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience)
+		ri, err := m.MintRunIdentity(mctx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
 		cancel()
 		switch {
 		case err != nil:

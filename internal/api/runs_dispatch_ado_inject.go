@@ -435,13 +435,13 @@ func (s *Server) adoEntraGradeHolds(ctx context.Context, run types.AgentRun, g a
 	}
 	if g.rowID == "" {
 		return s.refuseADOEntraDispatch(ctx, run, "autonomy_grade_drift",
-			"this run was not launched: its autonomy level was graded WITHOUT an Azure DevOps credential, and the "+
+			"This run was not launched: its autonomy level was graded WITHOUT an Azure DevOps credential, and the "+
 				"provider configuration changed between then and now so that dispatch would attach one. Re-launch the "+
 				"run so it is graded against the configuration it will actually get.")
 	}
 	if g.rowID != ado.rowID || g.org != ado.org {
 		return s.refuseADOEntraDispatch(ctx, run, "autonomy_grade_drift",
-			fmt.Sprintf("this run was not launched: its autonomy level was graded for Azure DevOps organisation %q on "+
+			fmt.Sprintf("This run was not launched: its autonomy level was graded for Azure DevOps organisation %q on "+
 				"provider row %q, and dispatch resolved organisation %q on row %q. An Entra access token carries no "+
 				"organisation claim, so the pin is the only thing scoping this credential and it may not be "+
 				"re-decided after the run was graded. Re-launch the run.", g.org, g.rowID, ado.org, ado.rowID))
@@ -500,23 +500,23 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 ) ([]runner.InjectionGrant, []string, bool) {
 	if ado.tokenMode != types.ADOTokenModeBearer {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "token_mode",
-			fmt.Sprintf("this run's Azure DevOps provider row asks for token_mode %q, which Wardyn cannot issue: "+
+			fmt.Sprintf("This run's Azure DevOps provider row asks for token_mode %q, which Wardyn cannot issue: "+
 				"minting a personal access token is refused for every delegated token by Azure DevOps itself. "+
 				"Set the row to bearer, or launch without the Azure DevOps lane.", ado.tokenMode))
 	}
 	if _, err := adoscope.ScopesFor(ado.caps); err != nil {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_not_grantable",
-			"this run's Azure DevOps provider row grants a capability Wardyn will not mint a credential for: "+err.Error())
+			"This run's Azure DevOps provider row grants a capability Wardyn will not mint a credential for: "+err.Error())
 	}
 	// Empty is NOT within anything: a run granted nothing has no business
 	// holding a credential.
 	if len(ado.caps) == 0 || !subsetOf(ado.caps, ado.ceiling) {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling",
-			"this run's Azure DevOps default profile names a capability outside the provider row's own ceiling")
+			"This run's Azure DevOps default profile names a capability outside the provider row's own ceiling")
 	}
 	if caCertPEM == "" || caKeyPEM == "" {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "no_run_certificate_authority",
-			"this run was not launched: its Azure DevOps credential needs a per-run certificate authority to be "+
+			"This run was not launched: its Azure DevOps credential needs a per-run certificate authority to be "+
 				"attached on the wire, and none was provisioned. Without one the proxy tunnels these hosts blind, "+
 				"so the credential, the capability check and the organisation pin would all be skipped.")
 	}

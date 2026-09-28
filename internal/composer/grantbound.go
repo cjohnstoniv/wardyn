@@ -1,26 +1,17 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The comparator for "which ceiling grant bounds this proposed grant".
-//
-// It lives here, in composer, because this package holds the RUNTIME clamp
-// (clampGrants) and internal/api — which holds the WRITE-TIME comparator
-// (governanceGrantWithinCeiling) — imports composer rather than the other way
-// round. One definition, two callers: the write-time comparator refuses a
-// profile grant no ceiling grant dominates, the runtime clamp narrows a run's
-// grant to the bound of the ceiling grant that covers it, and both ask THIS file
-// which ceiling grant that is.
+// The comparator for "which ceiling grant bounds this proposed grant". It
+// lives here because composer holds the RUNTIME clamp and internal/api (the
+// WRITE-TIME comparator) imports composer, not the reverse — one definition,
+// two callers.
 //
 // Both callers must ask it the same way: some single ceiling grant must
-// dominate the proposal on every axis. A per-kind map (e.g.
-// `map[GrantKind]GrantSpec`) must never supply the bound instead — the LAST
-// same-kind ceiling grant would win, so a ceiling listing two ssh_key grants
-// (the normal shape for two forges, and equally normal for api_key and
-// git_pat) could clamp a proposal naming the STRICT forge's pairing to the
-// PERMISSIVE forge's approval posture and TTL, and answer differently for the
-// same ceiling SET depending on slice order. A stripped requires_approval
-// auto-mints the injection at proxy boot with no human in the loop — exactly
-// the widening the write-time comparator exists to refuse.
+// dominate the proposal on every axis. A per-kind map must never supply the
+// bound instead — the LAST same-kind ceiling grant would win, so a ceiling
+// listing two ssh_key grants (normal for two forges) could clamp a proposal
+// naming the STRICT forge's pairing to the PERMISSIVE forge's approval
+// posture and TTL, answering differently depending on slice order.
 package composer
 
 import (
@@ -30,42 +21,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// grantPairing is the identity a ceiling entry is matched on, as opposed to the
-// BOUNDS (approval, TTL, github scope) that are clamped once a match is found.
+// grantPairing is the identity a ceiling entry is matched on, as opposed to
+// the BOUNDS (approval, TTL, github scope) that are clamped once a match is
+// found.
 //
-// require_tls rides the same rule for the same reason (see the
-// field below).
-//
-// Header/format are part of that IDENTITY for api_key, not a bound.
-// Matching only on (host, secret, known_hosts) would let a member or profile
-// grant that keeps the operator's blessed (host, secret) pairing but names a
-// DIFFERENT header — or a different format — match the ceiling regardless.
-// The proxy writes the authored header verbatim onto the forwarded request
-// (internal/egress/proxy/inject.go; the brokered LLM lane strips the four known
-// credential headers and then sets the authored one) and relays the upstream
-// response to the sandbox verbatim, so re-homing the operator's blessed secret
-// under a header the vendor echoes reads the key back. Re-homing is a DIFFERENT
-// grant, so it must not match a ceiling entry that never authorized it.
+// Header/format/requireTLS are part of that IDENTITY for api_key, not a
+// bound: matching only on (host, secret) would let a member or profile grant
+// keep the operator's blessed (host, secret) pairing while re-homing it onto
+// a DIFFERENT header/format the vendor echoes back (reading the key), or
+// while DROPPING require_tls onto a cleartext transport the operator
+// refused. Each is exact-match, so a dropped declaration matches nothing.
 type grantPairing struct {
-	host          string // the destination host; for env_secret, the env var NAME (see below)
+	host          string // the destination host; for env_secret, the env var NAME
 	secretRef     string
-	knownHostsRef string // ssh_key only; empty (and compared as such) for every other kind
-	// header/format: api_key only (empty, and compared as such, for every other
-	// kind). Normalized exactly the way internal/api's injectionRuleFromScope
-	// defaults them — absent header == "Authorization", absent format ==
-	// "Bearer %s" — so the two decoders of one wire shape cannot disagree about
-	// which grants are the same grant.
-	header string
-	format string
-	// requireTLS: api_key only (false, and compared as such, for every other
-	// kind). It is IDENTITY for the same reason header/format are: it is the
-	// operator's transport declaration, and a member grant that keeps the
-	// blessed (host, secret, header, format) pairing while DROPPING require_tls
-	// is asking for the same credential on a transport the operator refused —
-	// the proxy would then inject it over cleartext (internal/egress/proxy's
-	// plain lane reads the rule it is handed, not the ceiling's). Exact match, so
-	// a dropped declaration simply matches nothing and the grant falls out.
-	requireTLS bool
+	knownHostsRef string // ssh_key only; empty for every other kind
+
+	header string // api_key only; empty for every other kind
+	format string // api_key only; empty for every other kind
+
+	requireTLS bool // api_key only; false for every other kind
 }
 
 // apiKeyHeader/apiKeyFormat mirror injectionRuleFromScope's defaults
@@ -87,24 +61,12 @@ func apiKeyFormat(f string) string {
 }
 
 // GrantPairing returns the pairing a grant names and whether its kind names a
-// stored secret at all.
-//
-// covered=false is the honest answer for github_token and cloud_sts: they name
-// no stored secret (github_token mints an App installation token, cloud_sts is
-// refused by the embedded IdP), so same-kind membership IS their identity test
-// and the github repo/permission subset is checked separately.
-//
-// ok=false means the scope did not decode into a usable pairing. It is
-// deliberately NOT an error return: this file answers "does this ceiling entry
-// cover this grant", and an unreadable scope simply cannot be said to cover
-// anything — so it never MATCHES, which is the fail-closed direction. Whether an
-// unreadable scope is a REQUEST error is a different question, answered where a
-// grant is validated for delivery (internal/api's storedSecretGrantPairing,
-// which fails such a grant closed).
-//
-// env_secret puts the env var NAME in the host slot, so the ceiling comparison
-// is an exact (name, secret) pairing rather than a secret a member could re-home
-// to a variable the operator never wrote.
+// stored secret at all. covered=false is the honest answer for github_token
+// and cloud_sts, which name no stored secret. ok=false means the scope did
+// not decode into a usable pairing — deliberately NOT an error return, since
+// an unreadable scope simply cannot be said to cover anything (fail-closed:
+// it never MATCHES). env_secret puts the env var NAME in the host slot, so
+// the comparison is an exact (name, secret) pairing.
 func GrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, covered, ok bool) {
 	p, covered, ok := grantPairingOf(g)
 	return p.host, p.secretRef, p.knownHostsRef, covered, ok
@@ -112,8 +74,7 @@ func GrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, cov
 
 func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 	// One decode struct for every kind: the four stored-secret scopes differ
-	// only in which field names carry the host and the secret, and enumerating
-	// them here keeps the pairing rule readable as the single table it is.
+	// only in which field names carry the host and the secret.
 	var sc struct {
 		Host                string `json:"host"`
 		Name                string `json:"name"`
@@ -129,7 +90,6 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.SecretName == "" {
 			return grantPairing{}, true, false
 		}
-		// header/format ride the identity — see grantPairing.
 		return grantPairing{
 			host: sc.Host, secretRef: sc.SecretName,
 			header: apiKeyHeader(sc.Header), format: apiKeyFormat(sc.Format),
@@ -151,39 +111,30 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 		}
 		return grantPairing{host: sc.Name, secretRef: sc.SecretName}, true, true
 	default:
-		// github_token, cloud_sts, and any kind added later. Reporting
-		// covered=false for an UNKNOWN kind is safe here in a way it is not at a
-		// delivery gate: not-covered means "matched on kind alone", so a new
-		// stored-secret kind is bounded by its kind's ceiling entry until
-		// someone adds it above — never unbounded.
+		// github_token, cloud_sts, and any kind added later: covered=false
+		// means "matched on kind alone", so a new stored-secret kind is bounded
+		// by its kind's ceiling entry until someone adds it above — never
+		// unbounded.
 		return grantPairing{}, false, true
 	}
 }
 
-// samePairing compares two pairings the way the deployment means them: the host
-// case-insensitively and ignoring a trailing dot (the same normalization
-// internal/api's hostEqual applies, because "corp.example." and "corp.example"
-// are the same host and a ceiling written either way must bind), the secret
-// refs byte-exactly (a secret NAME is a store key, not a hostname).
+// samePairing compares two pairings the way the deployment means them: the
+// host case-insensitively and ignoring a trailing dot (matching
+// internal/api's hostEqual), the secret refs byte-exactly.
 func samePairing(a, b grantPairing) bool {
 	norm := func(h string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), ".")) }
 	return a.secretRef == b.secretRef && norm(a.host) == norm(b.host) && a.knownHostsRef == b.knownHostsRef &&
 		a.header == b.header && a.format == b.format && a.requireTLS == b.requireTLS
 }
 
-// PairingInCeiling reports whether some ceiling grant of the SAME kind names the
-// same stored-secret pairing. This is the identity axis of the one comparator —
-// internal/api's storedSecretPairingInCeiling forwards to it, so the member
-// grant filter, the governance profile bound and the runtime clamp cannot drift
-// into three answers for one question.
-//
-// It takes the whole proposed grant rather than a destructured pairing so the
-// pairing rule lives in exactly ONE decoder (grantPairingOf) — a destructured
-// (kind, host, secretRef, knownHostsRef) signature cannot carry an api_key
-// axis added to the pairing later (header/format).
-// A grant whose kind names no stored secret, or whose scope does not decode,
-// is in no pairing (fail closed); its kind-level ceiling membership is the
-// caller's question (CeilingGrantsCovering).
+// PairingInCeiling reports whether some ceiling grant of the SAME kind names
+// the same stored-secret pairing — the identity axis of the one comparator
+// (internal/api's storedSecretPairingInCeiling forwards to it). It takes the
+// whole proposed grant, not a destructured pairing, so the pairing rule lives
+// in exactly ONE decoder (grantPairingOf). A grant whose kind names no
+// stored secret, or whose scope does not decode, is in no pairing (fail
+// closed).
 func PairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) bool {
 	want, covered, ok := grantPairingOf(g)
 	if !covered || !ok {
@@ -205,25 +156,18 @@ func PairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) bool {
 }
 
 // ceilingGrantsBounding returns the ceiling grants whose BOUNDS apply to g.
-//
-// Two shapes, and the split is the whole rule:
+// Two shapes:
 //
 //   - PAIRED. The kind names a stored secret and some ceiling grant names the
-//     same pairing ⇒ that ONE grant, and its bounds alone. This is exactly the
-//     write-time comparator's "some single ceiling grant dominates on every
-//     axis": the approval posture and TTL a proposal is held to are the ones the
-//     operator wrote NEXT TO THAT PAIRING, never another pairing's.
+//     same pairing ⇒ that ONE grant, and its bounds alone — the approval
+//     posture and TTL a proposal is held to are the ones written NEXT TO
+//     THAT PAIRING, never another pairing's.
 //
-//   - UNPAIRED. The kind names no stored secret (github_token, cloud_sts), or it
-//     does and no ceiling entry pairs it ⇒ EVERY same-kind grant, whose bounds
-//     are met (strictest wins) by the caller.
-//
-// The meet is the safe fallback, not a second rule: it is order-independent and
-// can only narrow, so a proposal that reaches it is never handed a bound the
-// operator did not write somewhere. It is also not the widening the write-time
-// comparator forbids — that one is about ACCEPTING a proposal by taking one
-// ceiling grant's approval posture with another's TTL, and a meet takes the
-// strictest of both.
+//   - UNPAIRED. No stored secret (github_token, cloud_sts), or no ceiling
+//     entry pairs it ⇒ EVERY same-kind grant, whose bounds are met
+//     (strictest wins) by the caller — order-independent and can only
+//     narrow, so this is a safe fallback, not the widening the write-time
+//     comparator forbids.
 //
 // Empty result = the kind is outside the ceiling entirely; the caller drops g.
 func ceilingGrantsBounding(g types.GrantSpec, ceiling []types.GrantSpec) []types.GrantSpec {

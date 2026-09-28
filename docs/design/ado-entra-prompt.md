@@ -2,9 +2,9 @@
 
 This is the mock round for the Azure DevOps surfaces of 0.7.10 — the design gate before any console
 code (owner law: the mock is UI source of truth; canon strings are app strings). The model is decided
-in `~/.claude/plans/bubbly-stargazing-duckling.md` (workstream A, §§1–10) and corrected by live
-measurement against a real Microsoft Entra tenant (`FINDINGS.md`, F-LIVE-1 to F-LIVE-4). Nothing here
-is open for re-design, only for drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
+by the workstream A design plan (§§1–10) and corrected by live measurement against a real Microsoft
+Entra tenant (each measurement is cited inline as F-LIVE-n). Nothing here is open for re-design, only for
+drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
 drawing-level calls Q1–Q11 are resolved in §9, with the owner's answers in Adjudication.
 
 One round covers five surfaces:
@@ -448,9 +448,9 @@ the Go constants block.
 | Tenant shape (400) | `validateProviderEntra` | entra: tenant_id must be a GUID |
 | `per_user` without the lane (400) | `validateProviderEntra` | credential_source: per_user needs the entra lane on this row |
 | An always-denied capability on the ceiling (400) | `validateProviderEntra` | entra: "{capability}" can't be put on capability_ceiling — creating and revoking Azure DevOps tokens is refused on every row |
-| Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | git_credential: you are not connected to Azure DevOps — connect and start the run again |
-| Connection ended, at run create (422, `reason: git_credential`) | `runs_create_validate.go` | git_credential: your Azure DevOps connection ended — connect and start the run again |
-| Connection doesn't cover the run's baseline, at run create (422, `reason: git_credential`) | `scmaccess.go` | git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again |
+| Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | you are not connected to Azure DevOps — connect and start the run again |
+| Connection ended, at run create (422, `reason: git_credential`) | `runs_create_validate.go` | your Azure DevOps connection ended — connect and start the run again |
+| Connection doesn't cover the run's baseline, at run create (422, `reason: git_credential`) | `scmaccess.go` | your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again |
 | Repository outside the row's org (403, proxy) | `ADO_REFUSE.*`, `proxy/ado_gate.go` | this run may only reach {org} on Azure DevOps |
 | Token creation attempted (403, proxy) | `proxy/ado_gate.go` | creating or revoking Azure DevOps tokens is refused for every run |
 | Capability refused after a decision (403, proxy) | `proxy/ado_gate.go` | {capability} was denied for this run |

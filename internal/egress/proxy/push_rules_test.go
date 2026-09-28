@@ -514,7 +514,7 @@ func TestPushRulesKeepPathsOutOfTheDecisionLog(t *testing.T) {
 // and do not wait on one.
 func TestPushRulesOnTheTokenLane(t *testing.T) {
 	if PATBranchNSEnforced() {
-		t.Fatal("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS is set in this environment; " +
+		t.Fatal("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's pat scope is set in this environment; " +
 			"this test's premise is that the lane's WHERE switch is OFF")
 	}
 	up := newPATBrokerUpstream(t, "pat-token", "oauth2")

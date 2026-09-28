@@ -180,7 +180,7 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 		t.Fatalf("member: policy.inline.apply min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
 
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
@@ -362,7 +362,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
@@ -409,29 +409,29 @@ func TestValidateInlineSecretRefs_Matrix(t *testing.T) {
 	}
 
 	// present => ok (no error, code 0).
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("anthropic-api-key")); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", apiKeyGrant("anthropic-api-key")); err != nil || code != 0 {
 		t.Fatalf("present secret: code=%d err=%v, want (0,nil)", code, err)
 	}
 
 	// no api_key grants => ok regardless of store.
 	noKeys := types.RunPolicySpec{MinConfinementClass: types.CC2}
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", noKeys); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", noKeys); err != nil || code != 0 {
 		t.Fatalf("no api_key grants: code=%d err=%v, want (0,nil)", code, err)
 	}
 
 	// missing secret => 422.
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("does-not-exist")); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", apiKeyGrant("does-not-exist")); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing secret: code=%d err=%v, want (422,err)", code, err)
 	}
 
 	// reserved name => 422 (never even consults the store value).
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("wardyn-signing-key")); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", apiKeyGrant("wardyn-signing-key")); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("reserved secret: code=%d err=%v, want (422,err)", code, err)
 	}
 
 	// no store configured => 422.
 	noStore := newHarness(t) // default harness has no Secrets store
-	if code, err := noStore.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("anthropic-api-key")); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := noStore.srv.validateInlineSecretRefs(ctx, "", "", apiKeyGrant("anthropic-api-key")); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("no store: code=%d err=%v, want (422,err)", code, err)
 	}
 
@@ -440,12 +440,12 @@ func TestValidateInlineSecretRefs_Matrix(t *testing.T) {
 	// WITH a provider it validates without needing the name in the store (the
 	// saved-workspace-replay fix).
 	sentinel := apiKeyGrant(types.SubscriptionOAuthSecret)
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinel); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinel); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("sentinel w/o provider: code=%d err=%v, want (422,err)", code, err)
 	}
 	h.srv.cfg.SubscriptionToken = fakeSubToken{}
 	defer func() { h.srv.cfg.SubscriptionToken = nil }()
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinel); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinel); err != nil || code != 0 {
 		t.Fatalf("sentinel w/ provider: code=%d err=%v, want (0,nil)", code, err)
 	}
 }
@@ -869,12 +869,12 @@ func TestValidateInlineSecretRefs_OwnName_201(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"my-anthropic-key": {}}}}
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "my-anthropic-key")}}
-	if code, err := h.srv.validateInlineSecretRefs(context.Background(), "bob", spec); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(context.Background(), "bob", "bob", spec); err != nil || code != 0 {
 		t.Fatalf("own name, operator lacks it: code=%d err=%v, want (0, nil)", code, err)
 	}
 	// Negative control: an operator-only name the member doesn't own still 422s.
 	spec2 := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "operator-only-key")}}
-	if code, err := h.srv.validateInlineSecretRefs(context.Background(), "bob", spec2); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(context.Background(), "bob", "bob", spec2); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("operator-only name, not owned: code=%d err=%v, want (422, error)", code, err)
 	}
 }

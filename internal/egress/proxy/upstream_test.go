@@ -101,7 +101,7 @@ func newUpstreamProxy(t *testing.T, up *upstreamProxy) *Proxy {
 // test can say which layer it is actually exercising. A guard test for a
 // BUILTIN denial has to run under allow_all_egress: under a default-deny
 // allowlist every host it names is refused by policy whether the guard exists
-// or not (F004).
+// or not.
 func newUpstreamProxyPolicy(t *testing.T, up *upstreamProxy, spec types.RunPolicySpec) *Proxy {
 	t.Helper()
 	buf := &bytes.Buffer{}
@@ -243,7 +243,7 @@ func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 }
 
 // TestUpstreamNeverHandsANonCanonicalLiteralToTheCorpProxy is the END of the
-// F143 gap: the table above proves the DECISION, this proves the WIRE.
+// literal-IP gap: the table above proves the DECISION, this proves the WIRE.
 //
 // The upstream lane is the one place the exposure is real — evaluate hands the
 // destination to the operator's proxy BY NAME, unresolved, so whatever the corp
@@ -554,5 +554,51 @@ func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
 func TestUpstreamConnectTimeout_ProductionValueUnchanged(t *testing.T) {
 	if upstreamConnectTimeout != 15*time.Second {
 		t.Fatalf("upstreamConnectTimeout = %v, want the production 15s default", upstreamConnectTimeout)
+	}
+}
+
+// TestPrefixConnReadServesPrefixThenDelegates pins prefixConn.Read's two
+// branches directly (#174): it is not a one-line forward, it replays the
+// buffered CONNECT-response prefix bytes first, THEN falls through to the
+// underlying conn once the prefix is drained.
+func TestPrefixConnReadServesPrefixThenDelegates(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	pc := &prefixConn{Conn: server, prefix: []byte("hi")}
+
+	// Nothing has been written to the pipe yet, so a Read that (wrongly) fell
+	// through to the underlying conn instead of serving the buffered prefix
+	// would block forever — run it in a goroutine and time it out rather than
+	// hang the suite.
+	buf := make([]byte, 8)
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := pc.Read(buf)
+		ch <- result{n, err}
+	}()
+	var got result
+	select {
+	case got = <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Read blocked: fell through to the underlying conn instead of serving the buffered prefix")
+	}
+	if got.err != nil || got.n != 2 || string(buf[:got.n]) != "hi" {
+		t.Fatalf("Read = %d, %v, buf=%q; want 2, nil, \"hi\"", got.n, got.err, buf[:got.n])
+	}
+	if len(pc.prefix) != 0 {
+		t.Fatalf("prefix not drained after being fully read: %q", pc.prefix)
+	}
+
+	// Prefix exhausted: the next Read must now delegate to the underlying conn.
+	go func() { _, _ = client.Write([]byte("bye")) }()
+	n, err := pc.Read(buf)
+	if err != nil || string(buf[:n]) != "bye" {
+		t.Fatalf("delegated Read = %d, %v, buf=%q; want 3, nil, \"bye\"", n, err, buf[:n])
 	}
 }

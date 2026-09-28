@@ -92,7 +92,7 @@ func TestInternalAPI_ServesTheN1Proxy(t *testing.T) {
 	ast.mu.Lock()
 	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: "owner@example.com", State: types.RunRunning, Agent: "claude-code"}
 	ast.mu.Unlock()
-	id, err := srv.cfg.Identity.MintRunIdentity(context.Background(), runID, "owner@example.com", "", internalAudience)
+	id, err := srv.cfg.Identity.MintRunIdentity(context.Background(), runID, "owner@example.com", "", internalAudience, false)
 	if err != nil {
 		t.Fatal(err)
 	}

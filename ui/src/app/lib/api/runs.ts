@@ -20,7 +20,18 @@ import type {
   RunPolicySpec,
   RunResources,
 } from "../types";
-import { asJson, ccRank, errText, HttpError, LAUNCH_DEADLINE_MS, str, unwrapList, wfetch, withLimit } from "./core";
+import {
+  asJson,
+  ccRank,
+  errText,
+  HttpError,
+  LAUNCH_DEADLINE_MS,
+  LIST_LIMIT,
+  str,
+  unwrapList,
+  wfetch,
+  withLimit,
+} from "./core";
 
 // Map a backend credential-grant eligibility record (the GET /runs/{id}/grants
 // shape: { id, run_id, created_at, spec: { kind, scope, ttl_seconds,
@@ -179,6 +190,63 @@ async function listRuns(
   return paging ? { runs: rows, truncated: res.headers.get("X-Wardyn-Truncated") === "true" } : rows;
 }
 
+// The Runs landing page's own query surface (#1197 L3), riding L1's opt-in
+// GET /runs params (internal/api/runs_list_filter.go's parseRunsListParams):
+// view/owner/status/ended_within/include_killed/workspace/q, plus the two
+// hidden-count response headers the ageing note reads. A separate function
+// from listRuns above rather than a third overload — that one's callers (the
+// wizard's preflight reads, the Recordings pager, the CLI/SDK) want the plain
+// full-page shape, and folding a five-header-reading return type onto it
+// would touch every one of them for a page only this screen renders.
+export type RunsListStatus = "active" | "ended" | "failed" | "killed" | "needs";
+export type RunsEndedWithin = "24h" | "7d" | "30d" | "all";
+
+export interface RunsListFilter {
+  view: "user" | "admin";
+  // Omitted lets the server resolve its own default (H-4: "me" for a member
+  // or view=user; "all" for an operator's Admin view) — never send "me"/"all"
+  // speculatively, since that would short-circuit the server's own fail-closed
+  // owner force (runs_list_filter.go's parseRunsListParams).
+  owner?: "me" | "all";
+  status?: RunsListStatus;
+  endedWithin?: RunsEndedWithin;
+  includeKilled?: boolean;
+  workspace?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface RunsListFilteredResult {
+  runs: AgentRun[];
+  truncated: boolean;
+  // The ageing note's own counts (design.md §2.1 AGED) — 0 on the status=needs
+  // branch by construction (server-side; that branch never hides anything).
+  hiddenOlder: number;
+  hiddenKilled: number;
+}
+
+async function listRunsFiltered(filter: RunsListFilter): Promise<RunsListFilteredResult> {
+  const q = new URLSearchParams();
+  q.set("view", filter.view);
+  if (filter.owner) q.set("owner", filter.owner);
+  if (filter.status) q.set("status", filter.status);
+  if (filter.endedWithin) q.set("ended_within", filter.endedWithin);
+  if (filter.includeKilled) q.set("include_killed", "1");
+  if (filter.workspace) q.set("workspace", filter.workspace);
+  if (filter.q) q.set("q", filter.q);
+  q.set("limit", String(filter.limit ?? LIST_LIMIT));
+  q.set("offset", String(filter.offset ?? 0));
+  const res = await wfetch(`/runs?${q.toString()}`, { method: "GET" });
+  const rows = unwrapList<AgentRun>(await asJson<unknown>(res));
+  return {
+    runs: rows,
+    truncated: res.headers.get("X-Wardyn-Truncated") === "true",
+    hiddenOlder: Number(res.headers.get("X-Wardyn-Hidden-Older") ?? "0") || 0,
+    hiddenKilled: Number(res.headers.get("X-Wardyn-Hidden-Killed") ?? "0") || 0,
+  };
+}
+
 export const runs = {
   // GET /api/v1/runs
   //
@@ -194,6 +262,10 @@ export const runs = {
   // overload above.
   listRuns,
 
+  // GET /api/v1/runs — the Runs landing page's own filtered read (#1197 L3).
+  // See RunsListFilter's own doc.
+  listRunsFiltered,
+
   // GET /api/v1/runs/{id} — the ONE endpoint that sends ui_apps (RunDetail).
   async getRun(id: string): Promise<RunDetail | undefined> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "GET" });
@@ -201,12 +273,14 @@ export const runs = {
     return asJson<RunDetail>(res);
   },
 
-  // POST /api/v1/runs/{id}/attach-ticket — mint a single-use, short-TTL ticket
-  // the attach WebSocket accepts as ?ticket= (browsers cannot put the admin
-  // bearer on a WS handshake). Minted through this NORMAL authenticated call;
-  // consumed on first WS connect, so each (re)connect mints a fresh one.
+  // POST /api/v1/runs/{id}/attach/ticket (renamed from attach-ticket in 0.8 —
+  // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
+  // for one minor) — mint a single-use, short-TTL ticket the attach WebSocket
+  // accepts as ?ticket= (browsers cannot put the admin bearer on a WS
+  // handshake). Minted through this NORMAL authenticated call; consumed on
+  // first WS connect, so each (re)connect mints a fresh one.
   async attachTicket(runId: string): Promise<string> {
-    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach-ticket`, {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/ticket`, {
       method: "POST",
     });
     const body = await asJson<{ ticket: string }>(res);
@@ -225,14 +299,14 @@ export const runs = {
   // active run) — the run still launched; callers surface warnings without
   // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
   // callbacks keep working.
+  //
+  // #125/#121: the default deadline, not LAUNCH_DEADLINE_MS — POST /runs is
+  // async now (dispatch happens after this call answers), so this no longer
+  // blocks through CreateSandbox server-side the way the constant's own note
+  // describes. preflightRun below still runs that resolution synchronously and
+  // keeps the longer deadline.
   async createRun(input: RunWireInput): Promise<CreateRunResult> {
-    // LAUNCH_DEADLINE_MS, not the default: this call blocks through
-    // CreateSandbox server-side (see the constant's own note).
-    const res = await wfetch(
-      "/runs",
-      { method: "POST", body: JSON.stringify(runWireBody(input)) },
-      LAUNCH_DEADLINE_MS,
-    );
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
     return asJson<CreateRunResult>(res);
   },
 
@@ -244,9 +318,12 @@ export const runs = {
   // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
   // error as a quiet "preflight unavailable" and never block Review.
   async preflightRun(input: RunWireInput): Promise<PreflightResult> {
-    // Same deadline as createRun: preflight runs the same resolution (mounts,
-    // grants, the blast-radius raise) against the same store, so a deployment
-    // slow enough to need it on the launch needs it on the dry run too.
+    // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
+    // (mounts, grants, the blast-radius raise) against the same store that
+    // createRun's own dispatch does — createRun itself dropped this deadline
+    // once POST /runs became async (#125/#121), but preflight's own work here
+    // is still synchronous, so a deployment slow enough to need the longer
+    // bound on a real launch needs it on the dry run too.
     const res = await wfetch(
       "/runs/preflight",
       { method: "POST", body: JSON.stringify(runWireBody(input)) },
@@ -268,13 +345,29 @@ export const runs = {
     return asJson<PolicyGrade>(res);
   },
 
-  // POST /api/v1/runs/{id}/profile — Recording-Mode profile synthesis (ADVISORY,
-  // read-only). Replays the run's observed behaviour into a PROPOSED least-
-  // privilege run + inline_policy plus the raw observations + Wardyn's
-  // deterministic risk assessment. Never creates a run or mints a credential.
+  // POST /api/v1/runs/{id}/profile/synthesize (renamed from /profile in 0.8 —
+  // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
+  // for one minor) — Recording-Mode profile synthesis (ADVISORY, read-only).
+  // Replays the run's observed behaviour into a PROPOSED least-privilege run
+  // + inline_policy plus the raw observations + Wardyn's deterministic risk
+  // assessment. Never creates a run or mints a credential.
   async profileRun(id: string): Promise<ProfileProposal> {
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}/profile`, { method: "POST" });
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/profile/synthesize`, { method: "POST" });
     return asJson<ProfileProposal>(res);
+  },
+
+  // PATCH /api/v1/runs/{id}/title — OWNER ONLY, no admin bypass, any run
+  // state (#1197 L2). Deliberately its own call rather than folded into
+  // setEndAndWait: the two PATCH doors have different authorization tiers
+  // (this one owner only, that one owner-or-SUPER) and different state rules
+  // (this one works on a terminal run, that one refuses).
+  async setTitle(id: string, title: string): Promise<{ id: string; title: string }> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/title`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<{ id: string; title: string }>(res);
   },
 
   // POST /api/v1/runs/{id}/kill  -> 202 Accepted
@@ -319,12 +412,14 @@ export const runs = {
     return asJson<RunResources>(res);
   },
 
-  // GET /api/v1/runs/{id}/attach-holder — who currently holds the run's shared
-  // tmux PTY. `held:false` means "nobody is attached through THIS daemon";
-  // the registry is in-process (see internal/api/attach_holder.go), so the UI
-  // must not phrase it as a stronger claim than that.
+  // GET /api/v1/runs/{id}/attach/holder (renamed from attach-holder in 0.8 —
+  // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
+  // for one minor) — who currently holds the run's shared tmux PTY.
+  // `held:false` means "nobody is attached through THIS daemon"; the registry
+  // is in-process (see internal/api/attach_holder.go), so the UI must not
+  // phrase it as a stronger claim than that.
   async getAttachHolder(runId: string): Promise<AttachHolder> {
-    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach-holder`, { method: "GET" });
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/holder`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AttachHolder>(res);
   },

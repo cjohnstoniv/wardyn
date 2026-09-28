@@ -350,6 +350,29 @@ func (s *approvalService) ListApprovalsPageByRun(ctx context.Context, runID uuid
 
 var _ store.ApprovalsByRunPager = (*approvalService)(nil)
 
+// ListPendingApprovalsForRuns is #1197's attention-projection read: the api
+// handler type-asserts for it on s.cfg.Approvals (not s.cfg.Store — see that
+// lane's own finding on where this capability belongs), the same
+// optional-capability pattern as the two pagers above. Pure delegation,
+// promoted from the embedded store.PG.
+func (s *approvalService) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	return s.st.ListPendingApprovalsForRuns(ctx, runIDs)
+}
+
+// CountPendingApprovals / CountPendingApprovalsByRunCreator back
+// GET /me/attention's pending_approvals count in each view — counted in the
+// database rather than listed, the same fix CountApprovalsForRun's own doc
+// argues for. Pure delegation, promoted from the embedded store.PG.
+func (s *approvalService) CountPendingApprovals(ctx context.Context) (int, error) {
+	return s.st.CountPendingApprovals(ctx)
+}
+
+func (s *approvalService) CountPendingApprovalsByRunCreator(ctx context.Context, createdBy string) (int, error) {
+	return s.st.CountPendingApprovalsByRunCreator(ctx, createdBy)
+}
+
+var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
+
 // Audit fanout
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts

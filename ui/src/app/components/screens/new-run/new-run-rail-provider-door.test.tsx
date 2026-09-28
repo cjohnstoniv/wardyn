@@ -48,6 +48,7 @@ function renderRail(opts: { refusedProvider?: string; credentialRefused?: boolea
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
+        unattended={false}
         launch={{
           onLaunch: opts.onLaunch ?? (() => {}),
           disabled: false,
@@ -58,8 +59,6 @@ function renderRail(opts: { refusedProvider?: string; credentialRefused?: boolea
           errorSeq: 1,
           credentialRefused: opts.credentialRefused ?? true,
           refusedProvider: opts.refusedProvider,
-          warnings: [],
-          onOpenRun: null,
         }}
         preflight={{ error: null, errorSeq: 0, result: null }}
         adoDialog={{

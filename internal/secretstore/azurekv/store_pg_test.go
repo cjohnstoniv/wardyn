@@ -93,6 +93,25 @@ func TestAzureKV_Conformance(t *testing.T) {
 	secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return storeMode(t, pool, ext, nil) })
 }
 
+// A value removed at Key Vault behind a pointer row is a refusal, never
+// not-found, for the operator's row and a person's alike.
+func TestAzureKV_TamperConformance(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	ext := newFakeStore(t, f)
+	secretstoretest.RunTamperConformance(t, func(t *testing.T) secretstore.Store { return storeMode(t, pool, ext, nil) },
+		func(t *testing.T, owner, name string) {
+			ref := kekID(t, pool, owner, name)
+			sn := secretstore.RefObject(ref[strings.LastIndexByte(ref, '/')+1:])
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.secrets[sn] == nil {
+				t.Fatalf("no secret %s to remove (row ref %s)", sn, ref)
+			}
+			delete(f.secrets, sn)
+		})
+}
+
 // The row is a pointer: kek_id "azurekv:<vault-host>/<stem>-g<gen>#<n>", no
 // ciphertext; a replace is a new version of the same name, counted.
 func TestStoreMode_RowIsAPointerAndAReplaceIsAVersion(t *testing.T) {
@@ -793,4 +812,22 @@ func TestStoreMode_DeleteRacesPutWithoutOrphan(t *testing.T) {
 			}
 		})
 	}
+}
+
+// drift is what -reconcile finds wrong: values no row points to, and rows
+// whose value is gone.
+func drift(t *testing.T, s *secretstorepg.Store) int {
+	t.Helper()
+	rep, err := s.Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return len(rep.Orphans) + len(rep.Dangling)
+}
+
+// T-18: rule 8's purge by provider UID and CS-5's erase by owner remove the
+// value from Key Vault, not just the row.
+func TestAzureKV_PurgeConformance(t *testing.T) {
+	s := storeMode(t, throwawayDB(t), newFakeStore(t, newFakeKV(t)), nil)
+	secretstoretest.RunPurgeConformance(t, func(*testing.T) secretstore.Store { return s }, func(t *testing.T) int { return drift(t, s) })
 }

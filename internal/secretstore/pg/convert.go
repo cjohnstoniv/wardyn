@@ -18,16 +18,9 @@ import (
 
 // ConvertV0 re-seals every legacy (enc_version 0, age-encrypted) row as an
 // envelope v1 row under the KEK of its purpose, and returns the rows it
-// converted — each one a read of a stored value, which the caller records.
-// wardynd runs it at boot BEFORE the boot keys are read (they share the
-// table), so there is no v0 read path anywhere else.
-//
-// Single-writer: the transaction first takes db.SecretConvertLockKey, so a
-// second booting replica waits, then selects nothing. All-or-nothing: one
-// transaction, and a v0 row that does not decrypt under legacy aborts it,
-// naming the row — never skipped, since a skipped row is a credential silently
-// lost. That makes it idempotent (a converted store has no v0 rows) and
-// resumable (an abort committed nothing; fix the row or the key and boot again).
+// converted. Single-writer (db.SecretConvertLockKey) and all-or-nothing: a v0
+// row that fails to decrypt aborts the whole transaction, naming the row,
+// rather than silently skipping a credential — idempotent and resumable.
 func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretstore.Row, error) {
 	if s.kek == nil {
 		return nil, fmt.Errorf("pg secretstore: convert: no local key is configured")
@@ -90,8 +83,7 @@ func (s *Store) convertRow(ctx context.Context, tx pgx.Tx, legacy age.Identity, 
 }
 
 // LocalRows counts rows only a local KEK (or the age key itself, for v0) can
-// open. wardynd refuses to boot on an ephemeral age key while any exist:
-// minting a fresh key over them would strand every one.
+// open. wardynd refuses to boot on an ephemeral age key while any exist.
 func (s *Store) LocalRows(ctx context.Context) (int, error) {
 	var n int
 	if err := s.pool.QueryRow(ctx,

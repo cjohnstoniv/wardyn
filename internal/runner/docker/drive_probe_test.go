@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -117,6 +118,20 @@ func TestProbeDrive_ManagedBackendAnswersUnknown(t *testing.T) {
 	}
 	if len(f.containers) != 0 {
 		t.Errorf("a docker_volume probe must not spin up a container, got %d", len(f.containers))
+	}
+}
+
+// TestDefaultDriveProbeImageIsDigestPinned (#721): the probe image runs with a
+// host directory bind-mounted into it, so the default must name one immutable
+// image. A tag (`busybox:latest`) is resolved at pull time and is one registry
+// push away from running something other than busybox against that mount.
+func TestDefaultDriveProbeImageIsDigestPinned(t *testing.T) {
+	if !regexp.MustCompile(`^[a-z0-9._/-]+@sha256:[0-9a-f]{64}$`).MatchString(defaultDriveProbeImage) {
+		t.Errorf("defaultDriveProbeImage = %q, want repo@sha256:<64 hex> — a floating tag lets the registry "+
+			"choose what runs against a member's home directory", defaultDriveProbeImage)
+	}
+	if got := newTestDriver(newFakeDocker()).driveProbeImage(); got != defaultDriveProbeImage {
+		t.Errorf("an unset DriveProbeImage resolved to %q, want the pinned default %q", got, defaultDriveProbeImage)
 	}
 }
 

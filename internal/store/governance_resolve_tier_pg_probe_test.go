@@ -20,7 +20,6 @@
 // Run (needs Postgres; the DSN is whatever the coordinator's test-pg uses):
 //
 //	cd <repo root> && \
-//	cp local/review-0.7/deep/F2-sso-to-ceiling/governance_resolve_tier_pg_probe_test.go internal/store/ && \
 //	WARDYN_TEST_PG='postgres://<user>:<pass>@127.0.0.1:55432/<db>?sslmode=disable' \
 //	nice -n 10 GOMAXPROCS=8 go test ./internal/store/ -run 'TestPG_ResolveGovernanceProfile_Tier' -count=1 -p 4 -v ; \
 //	rm -f internal/store/governance_resolve_tier_pg_probe_test.go

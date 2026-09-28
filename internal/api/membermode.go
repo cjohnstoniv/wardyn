@@ -23,6 +23,14 @@ package api
 // also not proof that a USER would be refused — a real second identity is that
 // proof (docs/OPERATIONS.md names both, and the view's three ceilings).
 
+import (
+	"net/http"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+)
+
 // DRAFT (M2 canon pending)
 const (
 	// userViewNoHumanRefusal is the 400 for the no-per-human-role lane: the
@@ -43,3 +51,35 @@ const (
 	// migration 0070).
 	userViewMintRefusal = "Exit the user view to mint a token."
 )
+
+// The S1 launch refusal (M-8): a run is a user act, so a browser session in
+// the Admin view does not start one. Shares its reason, authz.ReasonAdminView,
+// with userViewGate's own launch answer for a deleted user-view type
+// (user_view.go); that one route through authz.Deny is what
+// TestNoAdHocAuthz (G4) requires of a registered reason.
+const adminViewLaunchRefusal = "Runs start in the user view. Use User view at the top of the console to start one."
+
+// refuseAdminViewLaunch answers POST /runs and POST /runs/preflight with a 409
+// when the caller is an SSO browser session in the Admin view, and reports
+// whether it did. The User view needs no test of its own: contextWithPrincipal
+// clamps its role to member, so isSecurityOperator is already false there.
+//
+// The CLI, CI and every bearer are untouched: the admin token and local mode
+// publish no OIDC human, and a wdn_ token carries its token id. A request that
+// carries both a session cookie and a bearer takes the cookie lane
+// (humanOrAdminAuth) and is refused here, the fail-closed direction.
+//
+// Written directly rather than through s.refuse: like userViewGate's own
+// launch answer, ReasonAdminView is registered with no Audit (its cause,
+// when there is one, is audited under its own reason), and the body's
+// `reason` is part of the pinned wire contract (assertAdminViewRefusal),
+// which s.refuse does not put on the wire.
+func (s *Server) refuseAdminViewLaunch(w http.ResponseWriter, r *http.Request) bool {
+	ctx := r.Context()
+	if oidcHumanFromContext(ctx) == "" || apiTokenIDFromContext(ctx) != uuid.Nil || !s.isSecurityOperator(ctx) {
+		return false
+	}
+	d := authz.Deny(authz.ReasonAdminView, r.URL.Path, adminViewLaunchRefusal)
+	writeJSON(w, d.Status, errorBody{Error: d.Sentence, Reason: string(d.Reason)})
+	return true
+}

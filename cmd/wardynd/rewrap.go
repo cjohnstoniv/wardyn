@@ -101,11 +101,18 @@ func rewrapMode(f *bootFlags) error {
 // the rewrap under d's keys, its secret.rewrap event, and what to do next.
 func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) error {
 	res, err := secretstorepg.RewrapKeys(ctx, d)
+	separate := d.PlatformIdentity != nil
 	if err != nil {
+		// An abort is audited like secret.migrate's, even when ctx is what
+		// ended the run: under Transit it has already made decrypt calls that
+		// Vault's audit device records. The error names a row, so it goes to
+		// the operator only.
+		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rewrapAbortAuditTimeout)
+		defer cancel()
+		emitRewrapAudit(actx, rec, res, separate, true)
 		return err
 	}
-	separate := d.PlatformIdentity != nil
-	emitRewrapAudit(ctx, rec, res, separate)
+	emitRewrapAudit(ctx, rec, res, separate, false)
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion > 0 {
@@ -123,16 +130,26 @@ func optionalIdentity(id *age.X25519Identity) age.Identity {
 	return id
 }
 
+// rewrapAbortAuditTimeout bounds the aborted run's audit write, which no
+// longer inherits the run's (possibly canceled) context.
+const rewrapAbortAuditTimeout = 5 * time.Second
+
 // emitRewrapAudit writes the secret.rewrap event: the row count, whether the
 // boot keys now sit under a separate platform key, and, when a key service
 // wraps every write, its kek_id and the key version every row is now under.
-// Like secret.rekey it names no secret.
-func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool) {
+// An aborted run's event is outcome failure, reason aborted: its count is
+// what was committed (0 — the rewrap is one transaction), and it carries no
+// key_version, since no row moved to it. Like secret.rekey it names no secret.
+func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate, aborted bool) {
 	fields := map[string]any{"secrets": res.Rewrapped, "platform_key_separate": separate}
 	if res.KeyService != "" {
 		fields["key_service"] = res.KeyService
 	}
-	if res.KeyVersion > 0 {
+	outcome := "success"
+	switch {
+	case aborted:
+		outcome, fields["reason"] = "failure", "aborted"
+	case res.KeyVersion > 0:
 		fields["key_version"] = res.KeyVersion
 	}
 	data, _ := json.Marshal(fields)
@@ -143,7 +160,7 @@ func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.
 		Actor:     rewrapActor,
 		Action:    "secret.rewrap",
 		Target:    "pg",
-		Outcome:   "success",
+		Outcome:   outcome,
 		Data:      json.RawMessage(data),
 	}
 	if err := rec.Record(ctx, ev); err != nil {

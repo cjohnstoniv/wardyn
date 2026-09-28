@@ -59,20 +59,12 @@ type Policy struct {
 	// ONLY that host+port. A bare host/suffix entry above matches ANY port. Keyed
 	// "host:port" (see hostPortKey) for exact, {suffix,port} for wildcard.
 	allowedExactPort map[string]struct{}
-	// allowedExactAnyPort is the host-keyed INDEX of allowedExactPort: every host
-	// the operator named exactly, mapped to the set of ports they qualified it
-	// with. It answers the HOST question AllowedExactHost asks (credential
-	// injection) and nothing else — evalHost never consults it, so a port-qualified
-	// entry still grants egress on that port only.
-	//
-	// It keeps the PORTS rather than stripping them because the allow side and the
-	// deny side must stay symmetric: CompilePolicy routes a port-qualified deny to
-	// deniedExactPort alone, which the port-less deny checks cannot read, so a
-	// stripped shadow would let "allow m.corp:443 + deny m.corp:443" build an
-	// injector that the port-less-on-both-sides code failed closed on. With the
-	// ports here, AllowedExactHost can ask the question that is actually
-	// meaningful: did the operator author a port for this host that they did not
-	// also deny?
+	// allowedExactAnyPort is the host-keyed INDEX of allowedExactPort, answering
+	// the HOST question AllowedExactHost asks (credential injection) — evalHost
+	// never consults it, so a port-qualified entry still grants egress on that
+	// port only. Keeps the PORTS (rather than stripping) so the allow and deny
+	// sides stay symmetric: a stripped shadow would let "allow m.corp:443 + deny
+	// m.corp:443" build an injector the port-less code failed closed on.
 	allowedExactAnyPort map[string]map[int]struct{}
 	allowedWildPort     []wildPort
 	deniedExactPort     map[string]struct{}
@@ -80,26 +72,22 @@ type Policy struct {
 	allowedMeth         map[string]struct{} // empty == all methods allowed
 	firstUse            types.FirstUseMode
 	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
-	// Nil/empty means "no rules", which is today's behaviour: every gated call
-	// raises an approval. The "*" key is the default for unmatched tools.
+	// Nil/empty means "no rules": every gated call raises an approval. "*" is
+	// the default for unmatched tools.
 	toolRules map[string]types.ToolEffect
-	// allowAll switches evalHost from default-deny (allowlist only) to "allow
-	// all (deny-list only)": a non-denied host resolves to hostAllow even when
-	// it is not in allowedExact/allowedWild. Deny still beats allow, the
-	// unconditional VetHost/isBlockedIP private-IP guard is unaffected, and
-	// AllowedExactHost (credential injection) is unchanged — injection still
-	// requires an explicit exact allowlist entry even under allow-all.
+	// allowAll switches evalHost from default-deny to "allow all (deny-list
+	// only)": a non-denied host resolves to hostAllow even outside the
+	// allowlist. Deny still beats allow, the unconditional private-IP guard is
+	// unaffected, and AllowedExactHost (credential injection) still requires an
+	// explicit exact allowlist entry.
 	allowAll bool
 	// gitPushAnyBranch mirrors RunPolicySpec.GitPushAnyBranch: this run's
-	// brokered pushes skip branch-namespace confinement (handleGitBroker). The
-	// per-run counterpart of the deployment-wide BranchNSEnforced() switch.
+	// brokered pushes skip branch-namespace confinement (handleGitBroker).
 	gitPushAnyBranch bool
-	// pushRules is RunPolicySpec.PushRules compiled for per-request matching,
-	// or nil when the run carries no content rule at all
-	// (types.PushRulesSpec.IsSet, so a literal push_rules:{} reads as absent).
-	// Compiled here rather than per request because a push may be matched
-	// against every entry of a deny list the control-plane body cap alone
-	// bounds (push_rules.go).
+	// pushRules is RunPolicySpec.PushRules compiled for per-request matching, or
+	// nil when the run carries no content rule at all. Compiled here rather
+	// than per request since a push may be matched against every entry of a
+	// list the control-plane body cap alone bounds (push_rules.go).
 	pushRules *pushRuleSet
 }
 
@@ -119,8 +107,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		pushRules:           compilePushRules(spec.PushRules),
 	}
 	// Compiled into a map rather than scanned: validatePolicySpec already refuses
-	// duplicates, so the map cannot lose a rule, and an exact-match lookup is the
-	// whole matching semantics.
+	// duplicates, so an exact-match lookup is the whole matching semantics.
 	if len(spec.ToolRules) > 0 {
 		p.toolRules = make(map[string]types.ToolEffect, len(spec.ToolRules))
 		for _, r := range spec.ToolRules {
@@ -167,13 +154,11 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 }
 
 // GitPushAnyBranch reports whether this run's policy opts its brokered pushes
-// out of branch-namespace confinement. Nil-safe like ToolEffectFor: a proxy
-// built without a compiled policy keeps confinement ON.
+// out of branch-namespace confinement. Nil-safe like ToolEffectFor.
 func (p *Policy) GitPushAnyBranch() bool { return p != nil && p.gitPushAnyBranch }
 
 // PushRulesSet reports whether this run's policy carries git push CONTENT
-// rules. Nil-safe like GitPushAnyBranch: a proxy built without a compiled
-// policy has none, which keeps today's advertisement untouched.
+// rules. Nil-safe like GitPushAnyBranch.
 func (p *Policy) PushRulesSet() bool { return p.contentRules() != nil }
 
 // contentRules returns the compiled push content rules, or nil when the run
@@ -192,13 +177,11 @@ func (p *Policy) FirstUseMode() types.FirstUseMode { return p.firstUse }
 // ToolEffectFor reports what a run's policy says about one tool call, and
 // whether a rule matched at all.
 //
-// Match order: the exact tool name, then the "*" default. There is no pattern
-// matching — see ToolRule's doc for why a glob over tool names is the wrong
-// shape here.
+// Match order: the exact tool name, then the "*" default. No pattern matching
+// — see ToolRule's doc for why a glob over tool names is the wrong shape.
 //
-// A run with NO rules returns ok=false, and the caller must fall back to today's
-// behaviour (raise an approval). That fallback is what makes this field additive:
-// a policy authored before it behaves exactly as it did.
+// A run with NO rules returns ok=false, and the caller must fall back to
+// today's behaviour (raise an approval) — what makes this field additive.
 func (p *Policy) ToolEffectFor(tool string) (types.ToolEffect, bool) {
 	if p == nil || len(p.toolRules) == 0 {
 		return "", false
@@ -256,30 +239,24 @@ func hostPortKey(host string, port int) string {
 // and at lookup: lower-cased, trailing dot trimmed, and — when the string is an
 // IP LITERAL — the canonical net.IP.String() form of it.
 //
-// The literal half is the part that was missing, and its absence was a deny
-// bypass, not a cosmetic inconsistency. evalHost keyed on the raw request
-// string while AllowsLiteralIP (the trusted-literal path, egress_target.go)
-// keyed on ip.String(), so one policy answered two ways: a run that denies the
-// literal 93.184.216.34 still allowed "::ffff:93.184.216.34" — which
-// vetHostLift's literal fast path then parses back to that same address and
-// dials — and under allow_all_egress (deny-list-only mode) that is the whole
-// barrier gone. Literal-IP deny entries are a first-class shape here, not a
-// misuse: ValidDomainEntry exempts IPv6 literals from the ":port" check, and
-// literalIPDenialDetail composes an operator message about them.
+// The literal half closes a real deny bypass, not a cosmetic inconsistency:
+// evalHost keyed on the raw request string while AllowsLiteralIP keyed on
+// ip.String(), so a run that denies 93.184.216.34 still allowed
+// "::ffff:93.184.216.34" — which vetHostLift's literal fast path parses back
+// to the same address and dials, the whole barrier gone under allow_all_egress.
+// Literal-IP deny entries are first-class here: ValidDomainEntry exempts IPv6
+// literals from the ":port" check, and literalIPDenialDetail composes an
+// operator message about them.
 //
-// The same normalization on the ENTRY side (classifyDomain) is the other half:
-// an operator who typed a non-canonical spelling into denied_domains had a dead
-// entry that silently protected nothing, which is exactly what ValidDomainEntry
-// exists to prevent. Both sides now land in the same space, so the two can no
-// longer disagree.
+// The same normalization on the ENTRY side (classifyDomain) closes the other
+// half: a non-canonical spelling in denied_domains was a dead entry protecting
+// nothing. Both sides now land in the same space and can no longer disagree.
 //
-// It does NOT widen an allow to a different destination: the deny lookups are
-// canonicalized in the same call and still run first, and an allow that now
-// matches a second spelling matches the SAME address the operator listed.
-// Non-literal hosts are untouched (a hostname never parses as an IP), and a
-// spelling net.ParseIP cannot read — "127.1", "0x7f000001", a zone-suffixed
-// "fe80::1%eth0" — is left verbatim, which is the fail-closed answer here: it
-// matches no allow entry, and the unconditional IP guard still binds the dial.
+// It does NOT widen an allow to a different destination: deny lookups are
+// canonicalized in the same call and still run first, and a spelling
+// net.ParseIP cannot read ("127.1", a zone-suffixed "fe80::1%eth0") is left
+// verbatim — it matches no allow entry, and the unconditional IP guard still
+// binds the dial.
 func canonHost(h string) string {
 	h = strings.TrimSuffix(strings.ToLower(h), ".")
 	if ip := net.ParseIP(h); ip != nil {
@@ -295,21 +272,18 @@ func canonHost(h string) string {
 // returns port==0 and matches ANY port.
 func classifyDomain(d string) (exact, wild string, port int) {
 	d = strings.ToLower(strings.TrimSpace(d))
-	// TrimRight, not TrimSuffix (B10-F7): the REQUEST side normalises every
-	// FQDN-root spelling with TrimRight (splitHostPort), so an entry that trimmed
-	// only one dot compiled to a key no request host can equal —
-	// `denied_domains: ["example.com..."]` became "example.com." and protected
-	// nothing. Entry and request must land in the same space or the policy lies.
-	// Root cause for allow and deny at once, since both compile through here.
+	// TrimRight, not TrimSuffix: the REQUEST side normalises every FQDN-root
+	// spelling with TrimRight (splitHostPort), so an entry trimming only one
+	// dot compiled to a key no request host equals. Root cause for allow and
+	// deny at once, since both compile through here.
 	d = strings.TrimRight(d, ".")
 	if d == "" {
 		return "", "", 0
 	}
 	// Optional :port qualifier. Only a VALID port (1..65535) is honored; a
-	// non-numeric or out-of-range suffix ("host:0", "host:-1", "host:abc") is
-	// left attached, so the entry stays an exact host that never matches a real
-	// request host (a malformed entry that simply never matches — it must NOT
-	// silently degrade to a bare any-port match, which would widen egress).
+	// non-numeric or out-of-range suffix is left attached, so the entry stays
+	// an exact host that never matches a real request — it must NOT silently
+	// degrade to a bare any-port match, which would widen egress.
 	if h, ps, err := net.SplitHostPort(d); err == nil {
 		if n, perr := strconv.Atoi(ps); perr == nil && n >= 1 && n <= 65535 {
 			d = h
@@ -320,20 +294,18 @@ func classifyDomain(d string) (exact, wild string, port int) {
 		// ".example.com" — suffix-match on the label boundary.
 		return "", d[1:], port
 	}
-	// canonHost, not the raw string: an entry spelled "::ffff:93.184.216.34" or
-	// "2001:0db8:0000::1" must compile to the same key the request side derives
-	// for that address, or the entry is dead. There is no wildcard IP form, so
-	// only this branch can carry a literal.
+	// canonHost, not the raw string: an entry spelled as an alternate IPv6
+	// form must compile to the same key the request side derives, or the
+	// entry is dead. No wildcard IP form, so only this branch carries a literal.
 	return canonHost(d), "", port
 }
 
 // ValidDomainEntry reports whether d is an allowlist/denylist entry the matcher
-// above can ever match, and is the ONE shape check every operator-supplied
-// policy ingest point runs (validatePolicySpec, internal/api). classifyDomain
-// accepts anything — a mid-label pattern like "oidc.*.amazonaws.com" compiles
-// to an exact hostname no real request can equal, so it silently protects
-// nothing. Operator input fails closed instead: reject the dead entry at write
-// time rather than ship a policy the operator believes is guarding them.
+// above can ever match — the ONE shape check every operator-supplied policy
+// ingest point runs (validatePolicySpec). classifyDomain accepts anything (a
+// mid-label pattern like "oidc.*.amazonaws.com" compiles to a hostname no real
+// request can equal), so operator input fails closed instead of shipping a
+// policy the operator believes is guarding them.
 //
 // Valid: a bare exact host ("api.anthropic.com"), a leading-"*." wildcard
 // ("*.example.com"), and either with a valid ":port" qualifier.
@@ -350,21 +322,18 @@ func ValidDomainEntry(d string) error {
 		return bad(`a "*" is only supported as a leading "*."`)
 	case strings.ContainsAny(exact, "/ \t"), strings.ContainsAny(wild, "/ \t"):
 		return bad("must be a bare host, not a URL")
-	// classifyDomain leaves a malformed ":port" attached to the host (so it
-	// cannot silently widen to any-port) — which makes it a dead entry.
-	// An IPv6 literal legitimately contains ':', so exempt it.
+	// classifyDomain leaves a malformed ":port" attached (so it can't silently
+	// widen to any-port), which makes it a dead entry. IPv6 legitimately
+	// contains ':', so exempt it.
 	case strings.Contains(exact, ":") && net.ParseIP(exact) == nil:
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
-	// Same check on the wildcard branch, which is otherwise unguarded: a valid
-	// ":port" is stripped into the port by classifyDomain, and there is no IPv6
-	// wildcard form, so ANY residual ':' here is a malformed qualifier. Without
-	// this, "*.example.com:0" compiles to the suffix ".example.com:0" — which no
-	// request host can end with, since evalHost is handed host and port
-	// separately. That is precisely the "policy that lies" this function exists
-	// to reject, and it was slipping through the branch the exact case guards.
+	// Same check on the wildcard branch: a valid ":port" is stripped by
+	// classifyDomain and there's no IPv6 wildcard form, so any residual ':'
+	// here is malformed. Without this, "*.example.com:0" compiles to a suffix
+	// no request host can end with.
 	case strings.Contains(wild, ":"):
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
-	// Charset (B10-F7). See domain_charset.go.
+	// Charset. See domain_charset.go.
 	case deadCharsetEntry(exact, wild):
 		return bad(charsetWhy)
 	}
@@ -419,25 +388,20 @@ func (p *Policy) evalHost(host string, port int) hostDecision {
 	if matchWild(host, p.allowedWild) || matchWildPort(host, port, p.allowedWildPort) {
 		return hostAllow
 	}
-	// Allow-all (deny-list only) mode: any host that survived the deny checks
-	// above is allowed. This runs AFTER the deny checks so denied_domains still
-	// wins. The unconditional VetHost/isBlockedIP private-IP guard (applied
-	// later in the pipeline, in egressTarget) is unaffected, so allow-all reaches
-	// PUBLIC hosts only — with TWO residuals, stated here because a reader who
-	// takes "public only" as absolute would be wrong about them: under a
-	// configured corporate upstream the corp proxy resolves and dials, so (1) a
-	// name THIS proxy cannot resolve at all is forwarded to it unvetted
-	// (egressTarget's upstream branch excuses guard.Unresolved, and only that; a
-	// name that does resolve into blocked space is still denied), and (2) the
-	// guard binds the name at CHECK time only — the corp proxy resolves again for
-	// the dial, so a name that answers differently to the two resolvers
-	// (short-TTL rebinding, or a split-horizon zone only the corp proxy can see)
-	// is not bound at dial time. So under allow_all_egress plus an upstream,
-	// "public only" is what this proxy can verify, not what it can prove — the
-	// rest is the corp proxy's own egress controls. See egressTarget,
-	// THREAT-MODEL.md §4.2 and docs/OPERATIONS.md's upstream section.
-	// AllowedExactHost (credential injection) deliberately does NOT honor
-	// allowAll — injection still requires an explicit exact allowlist entry.
+	// Allow-all (deny-list only) mode: any host surviving the deny checks
+	// above is allowed. Runs AFTER the deny checks so denied_domains still
+	// wins; the unconditional private-IP guard (applied later, in
+	// egressTarget) is unaffected, so allow-all reaches PUBLIC hosts only —
+	// with TWO residuals under a configured corporate upstream: (1) a name
+	// THIS proxy cannot resolve at all is forwarded to it unvetted
+	// (egressTarget excuses guard.Unresolved only; a name that DOES resolve
+	// into blocked space is still denied), and (2) the guard binds the name
+	// at CHECK time only — the corp proxy resolves again for the dial, so a
+	// name answering differently to the two resolvers (rebinding, split-horizon)
+	// is not bound at dial time. So "public only" here is what this proxy can
+	// verify, not prove — the rest is the corp proxy's own controls. See
+	// egressTarget, THREAT-MODEL.md §4.2. AllowedExactHost (credential
+	// injection) deliberately does NOT honor allowAll.
 	if p.allowAll {
 		return hostAllow
 	}
@@ -459,16 +423,12 @@ func (p *Policy) methodAllowed(method string) bool {
 // lowercased with any trailing dot trimmed) is explicitly present in this
 // policy's EXACT allowlist for port — either a bare entry (matches any port)
 // or a port-qualified one. Only an exact, operator-authored entry counts
-// (never a wildcard): a literal IP the operator typed into AllowedDomains
-// directly (e.g. an egress-redirect "To" target or corp registry that lives
-// on RFC1918 space, per SiteConfig.EgressRedirects) carries none of the
-// DNS-rebinding risk the unconditional private-IP guard exists to catch —
-// there is no hostname to rebind — so evaluate() treats it as trusted
-// instead of hard-denying it. Deny still beats allow.
+// (never a wildcard): a literal IP the operator typed directly carries none
+// of the DNS-rebinding risk the unconditional private-IP guard exists to
+// catch (there's no hostname to rebind), so evaluate() trusts it instead of
+// hard-denying. Deny still beats allow.
 func (p *Policy) AllowsLiteralIP(host string, port int) bool {
-	// Its callers already pass ip.String(); canonHost is idempotent on that and
-	// keeps all four policy lookups reading the same normalizer rather than
-	// three of them plus one convention.
+	// Callers already pass ip.String(); canonHost is idempotent on that.
 	host = canonHost(host)
 	if _, ok := p.deniedExact[host]; ok {
 		return false
@@ -487,14 +447,13 @@ func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 // allowlist entry covering host:port — "vendor.example:8443", or the wildcard
 // form "*.example.com:8443".
 //
-// It is the closest thing the compiled policy has to declared TRANSPORT INTENT:
-// a BARE entry matches any port, so it says nothing about which port
-// the operator meant; a port-qualified one is the operator naming the port in
-// writing. Credential injection over CLEARTEXT reads it that way — see
-// Proxy.injectableTransport, which asks this only AFTER its unconditional
-// clamp on port 443, so an authored `host:443` can never re-admit a cleartext
-// credential to the TLS port. Deny still beats allow, on the same two lookups
-// AllowsLiteralIP uses.
+// The closest thing the compiled policy has to declared TRANSPORT INTENT: a
+// BARE entry says nothing about which port was meant; a port-qualified one is
+// the operator naming it in writing. Credential injection over CLEARTEXT
+// reads it that way (Proxy.injectableTransport), asked only AFTER its
+// unconditional clamp on port 443, so an authored `host:443` can never
+// re-admit a cleartext credential to the TLS port. Deny still beats allow, on
+// the same two lookups AllowsLiteralIP uses.
 func (p *Policy) AuthoredPortFor(host string, port int) bool {
 	if p == nil {
 		return false
@@ -518,31 +477,24 @@ func (p *Policy) AuthoredPortFor(host string, port int) bool {
 // egressHeaderDetail carries the CAUSE behind an address-range refusal, beside
 // the static rule_source egressHeaderReason already carries.
 //
-// It exists because "builtin:private-ip" names the RULE and never the reason it
-// fired, and those are two different questions with two different fixes: a
-// literal IP that no allowlist entry names is fixed in the policy (or by the
-// egress redirect that would add it); a HOSTNAME that resolves into private
-// space is fixed in site config, by declaring it under internal_hosts. An
-// operator who cannot tell those apart reads a correct private-endpoint
-// configuration as broken — the exact misdirection the private-endpoint work
-// exists to remove. The value is composed from a canonical net.IP string and
-// fixed sentences; it never echoes the requested hostname (X-Wardyn-Host
-// already carries that).
+// "builtin:private-ip" names the RULE but never the reason it fired, and those
+// have different fixes: a literal IP no allowlist names is fixed in the
+// policy; a HOSTNAME resolving into private space is fixed in site config
+// under internal_hosts. Composed from a canonical net.IP string and fixed
+// sentences; it never echoes the requested hostname (X-Wardyn-Host already
+// carries that).
 const egressHeaderDetail = "X-Wardyn-Egress-Detail"
 
 // egressHeaderRetry / egressRetryNever tell the sandbox a refusal is TERMINAL
-// for this run, so a client with a retry loop of its own (the agent CLI has one;
-// the proxy has none) can stop instead of spending ten attempts on an answer
-// that cannot change.
+// for this run, so a client with its own retry loop can stop instead of
+// spending ten attempts on an answer that cannot change.
 //
-// Set on the builtin:private-ip arm below and on NOTHING else. That is the one
-// refusal whose remedy is out of reach mid-run: the internal_hosts lift is
-// compiled into this sidecar's config at dispatch and read once at startup, so
-// the guard cannot change its mind about this host while the run lasts — which
-// is what egressDenialSuffix says in the body. A builtin:resolve-failed is a
-// resolver outage that may clear on the next attempt, and an approval-pending
-// refusal is waiting for a human to answer; telling either of those "never"
-// would turn a transient fault into a dead run.
+// Set on the builtin:private-ip arm below and on NOTHING else: the
+// internal_hosts lift is compiled into this sidecar's config at dispatch and
+// read once at startup, so the guard cannot change its mind mid-run. A
+// builtin:resolve-failed may clear on the next attempt, and an
+// approval-pending refusal is waiting for a human — "never" on either would
+// turn a transient fault into a dead run.
 const (
 	egressHeaderRetry = "X-Wardyn-Egress-Retry"
 	egressRetryNever  = "never"
@@ -564,49 +516,30 @@ const (
 	// egressPrivateRangeCause is today's sentence, unchanged.
 	egressPrivateRangeCause = "this host resolves into a private/reserved address range, " +
 		"which the built-in guard denies regardless of policy"
-	// egressInternalHostsRemedy is B7's remedy: it tells the operator to leave
-	// cidrs empty unless they know the ranges the SANDBOX resolves into, because
-	// the ranges visible from an operator's own machine are a corporate
-	// resolver's, not the sandbox's — a cidrs list drawn from the wrong side
-	// excludes the address the guard actually refuses (the field report cost two
-	// runs on exactly this). Empty cidrs is the full liftable set, still
-	// suffix-scoped (types.InternalHost).
+	// egressInternalHostsRemedy: leave cidrs empty unless the ranges are the
+	// SANDBOX's, not an operator's own machine's corporate-resolver view — a
+	// list drawn from the wrong side excludes the address the guard actually
+	// refuses. Empty cidrs is the full liftable set, still suffix-scoped.
 	egressInternalHostsRemedy = "declare it in site config under internal_hosts " +
 		"(host_suffix; leave cidrs empty unless you know the ranges the SANDBOX resolves into) " +
 		"to lift the guard for it"
-	// siteInternalHostsCIDRHint is SITE.INTERNAL_HOSTS_CIDR_HINT: B7's hint, for
-	// the operator who is about to write the entry. It says the same thing as the
-	// remedy's parenthetical a SECOND time, deliberately and knowingly — the two
-	// land on different readers and the owner's sitting may keep either one
-	// alone. Dropping one is a one-line change at the join site below.
+	// siteInternalHostsCIDRHint restates the remedy's parenthetical a SECOND
+	// time, deliberately: the two land on different readers, and the owner's
+	// canon may keep either alone.
 	siteInternalHostsCIDRHint = "Leave `cidrs` empty unless you know the addresses the sandbox resolves. " +
 		"What your own machine sees for a private endpoint is usually not what the cluster sees."
-	// egressDenialSuffix is EGRESS.DENIAL_SUFFIX: B2's lifetime clause. The
-	// internal_hosts lift the remedy names is compiled into this sidecar's config
-	// at dispatch and read once at startup (LoadConfigBytes), so a site-config
-	// change cannot reach the run reading this sentence. It is the one denial an
-	// operator acts on, and the field report is of an operator acting on it and
-	// then watching nine more retries fail with the identical message.
+	// egressDenialSuffix: the internal_hosts lift is compiled into this
+	// sidecar's config at dispatch and read once at startup, so a site-config
+	// change cannot reach the current run.
 	egressDenialSuffix = "Site config is read at run start, so change it and start a new run — " +
 		"this one will keep being refused."
-	// egressNeverLiftableRemedy is the ANTI-remedy: the sentence a refusal gets
-	// when the guard class that fired is one no site-config entry can lift.
-	//
-	// It exists because the four sentences above were told to EVERY
-	// post-resolution guard refusal, not just the liftable one. Only blockPrivate
-	// (RFC1918/ULA/CGNAT) is liftable — vetHostLift offers the lift predicate to
-	// that kind alone, and trustsExactLiteralIP additionally refuses the proxy's
-	// own subnet and control-plane host. A host resolving to loopback, to
-	// link-local/169.254.169.254, to a NAT64- or ::/96-embedded blocked v4, or to
-	// any other reserved range got "declare it under internal_hosts", plus B2's
-	// "start a new run", plus X-Wardyn-Egress-Retry: never — i.e. the operator was
-	// INSTRUCTED into a kill-and-redispatch cycle that cannot succeed, and into
-	// widening an SSRF control that would not have helped if it could be widened.
-	//
-	// NO site-config remedy and NO lifetime clause on purpose: there is nothing to
-	// change and nothing a new run would change. The retry header stays `never` on
-	// both variants — both are truly final, which is the one thing the old text
-	// got right.
+	// egressNeverLiftableRemedy is the ANTI-remedy: only blockPrivate
+	// (RFC1918/ULA/CGNAT) is liftable (vetHostLift offers the lift predicate to
+	// that kind alone); every other class — loopback, link-local/metadata,
+	// NAT64/::/96-embedded, and other reserved ranges — got the same four
+	// sentences before this existed, instructing the operator into a
+	// kill-and-redispatch cycle that could never succeed. NO site-config
+	// remedy and NO lifetime clause on purpose: there's nothing to change.
 	egressNeverLiftableRemedy = "which the proxy denies unconditionally — loopback, link-local " +
 		"(including the 169.254.169.254 metadata address), multicast, NAT64- and " +
 		"IPv4-compatible-embedded and the other reserved ranges are never reachable from a sandbox, " +
@@ -617,7 +550,7 @@ const (
 // detail above. blockPrivate and blockNone are absent deliberately: blockPrivate
 // is the LIFTABLE kind (it gets the four-sentence remedy instead) and blockNone
 // never refuses, so a lookup miss falls back to the liftable wording — today's
-// behaviour, which is the safe direction for an unknown caller.
+// behaviour, the safe direction for an unknown caller.
 var neverLiftableClass = map[blockKind]string{
 	blockLocal:         "a loopback, link-local/metadata, multicast or unspecified address",
 	blockReservedOther: "a reserved address",
@@ -638,19 +571,14 @@ func neverLiftableDetail(subject string, kind blockKind) string {
 
 // literalIPDenialDetail is egressHeaderDetail's value for a builtin:private-ip
 // refusal of host: which of the three causes fired, and the one place to fix
-// it. Returns "" when host is neither a literal IP nor a hostname (i.e. there
-// is nothing specific to say), so callers can skip the header.
+// it. Returns "" when host is neither a literal IP nor a hostname.
 //
-// kind is the GUARD CLASS that refused, carried out of the vet (hostBlockedError
-// -> the per-run memo -> writeEgressDeny) rather than re-derived here, because
-// re-deriving it for a hostname means resolving the name a second time — which
-// is the very work B6's memo exists to avoid. It decides WHICH detail is told:
-// blockPrivate (the only liftable class) gets the four-sentence internal_hosts
-// remedy verbatim; every other class gets neverLiftableDetail, with no
-// site-config remedy and no "start a new run". An unknown/zero kind falls back
-// to the liftable wording, i.e. exactly the text every caller got before.
-// A LITERAL host needs no carried kind at all — the address is right there — so
-// the literal arm re-derives it and ignores the parameter.
+// kind is the GUARD CLASS that refused, carried out of the vet rather than
+// re-derived (re-deriving for a hostname means resolving it a second time,
+// the work B6's memo exists to avoid). blockPrivate (the only liftable class)
+// gets the four-sentence remedy verbatim; every other class gets
+// neverLiftableDetail. A LITERAL host needs no carried kind — it re-derives
+// and ignores the parameter.
 func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) string {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" {
@@ -661,10 +589,9 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
 		}
-		// The join site for the four DRAFT sentences above: cause, remedy, hint,
-		// lifetime. The owner's ruling on any of them — reword one, drop the
-		// hint, drop the remedy's parenthetical — is an edit to this one
-		// expression and to the constant it names, nowhere else.
+		// The join site for the four DRAFT sentences above: cause, remedy,
+		// hint, lifetime. Any owner ruling is an edit to this expression and
+		// the constant it names, nowhere else.
 		return egressPrivateRangeCause + "; " + egressInternalHostsRemedy + ". " +
 			siteInternalHostsCIDRHint + " " + egressDenialSuffix
 	}
@@ -676,11 +603,10 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 			return "literal IP " + ip.String() + " is on denied_domains for this port, and a deny always beats an allow"
 		}
 	}
-	// The literal arm carried the SAME lie: only blockPrivate is reachable by an
-	// EXACT allowed_domains entry (trustsExactLiteralIP gates on blockPrivate),
-	// so telling a 127.0.0.1 / 169.254.169.254 / NAT64 literal to list itself
-	// under allowed_domains or an egress_redirects "to" describes a fix that
-	// cannot work. Re-derived here, not carried: the address is the host.
+	// Only blockPrivate is reachable by an EXACT allowed_domains entry, so
+	// telling a 127.0.0.1 / 169.254.169.254 / NAT64 literal to list itself
+	// there describes a fix that cannot work. Re-derived here: the address is
+	// the host.
 	litKind, _ := isBlockedIP(ip)
 	if never := neverLiftableDetail("literal IP "+ip.String(), litKind); never != "" {
 		return never
@@ -690,15 +616,14 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 }
 
 // resolveFailedDetail is egressHeaderDetail's value for a builtin:resolve-failed
-// refusal: the proxy never learned an address for the name, so nothing was
-// vetted and nothing about the policy or the address-range guard explains the
-// deny. It is a FIXED sentence like the ones above and never echoes the host —
-// X-Wardyn-Host already carries that.
+// refusal: the proxy never learned an address, so nothing was vetted and
+// nothing about policy or the address-range guard explains the deny. A FIXED
+// sentence like the ones above, never echoing the host.
 //
-// It exists so a resolver outage is never labelled builtin:private-ip with
-// literalIPDenialDetail's "declare it under internal_hosts" advice attached.
-// That advice cannot fix a resolver outage, and it points at loosening
-// an SSRF control for a fault that is neither.
+// Exists so a resolver outage is never labelled builtin:private-ip with
+// literalIPDenialDetail's "declare it under internal_hosts" advice attached —
+// advice that can't fix a resolver outage and points at loosening an SSRF
+// control for a fault that is neither.
 const resolveFailedDetail = "this host did not resolve (DNS failure, no such name, or no address records), so no address " +
 	"could be vetted; this is a name-resolution fault, not the private-address guard — check the sandbox's resolver, " +
 	"not the allowlist"
@@ -706,34 +631,26 @@ const resolveFailedDetail = "this host did not resolve (DNS failure, no such nam
 // writeEgressDeny writes the 403 both forward paths (handlePlain,
 // handleConnect) give a DENIED request: the static refusal headers, plus — for
 // the one refusal an operator reliably misreads — the cause and where to fix
-// it. Every other refusal reason already says all there is to say, so its body
-// and headers stay byte-identical.
+// it. Every other refusal reason already says all there is to say.
 //
-// It lives here rather than in proxy.go beside its two callers so it sits with
-// the rule it explains (and so proxy.go stays under the 1000-line split gate).
+// Lives here rather than in proxy.go beside its two callers so it sits with
+// the rule it explains (and keeps proxy.go under the 1000-line split gate).
 //
 // memoed is the CALLER's declaration that this refusal can have come out of the
 // per-run private-IP memo — true at the two sites that hand on an evaluate()
-// verdict (which is the only thing that answers from the memo), false at a lane
-// that built the deny log itself. See the memo arm below for why it is a
-// parameter and not a lookup on its own.
+// verdict, false at a lane that built the deny log itself.
 func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog, memoed bool) {
 	body := "egress denied by policy"
 	reason := decisionReason(log)
 	// An evaluate() DENY carrying no decision log is B6's memoed private-ip
-	// refusal: evaluate() answered an identical repeat out of the per-run memo —
-	// no re-resolve, and no second row for a verdict already recorded — so the 403
-	// has to be rebuilt here to stay byte-identical to the first one, retry
-	// header included.
+	// refusal: evaluate() answered an identical repeat out of the per-run
+	// memo, so the 403 has to be rebuilt here to stay byte-identical to the
+	// first one, retry header included.
 	//
-	// TWO facts, both required, neither inferred from the other (this closes the
-	// residual the first version of this arm stated): the CALLER says the verdict
-	// could have come from the memo (memoed), and the MEMO says it did for this
-	// host:port. A nil log alone proves nothing — a future deny path that returns
-	// none for an unrelated reason passes memoed=false and gets the plain "denied
-	// by policy" body even for a host that IS memoed, and a caller that does hand
-	// on an evaluate() verdict still gets the plain body when the memo has never
-	// refused this host. policy_test.go pins both negatives and the positive.
+	// TWO facts, both required, neither inferred from the other: the CALLER
+	// says the verdict could have come from the memo (memoed), and the MEMO
+	// says it did for this host:port. policy_test.go pins both negatives and
+	// the positive.
 	if memoed && reason == "" && p.privateIPMemoed(host, port) {
 		reason = "builtin:private-ip"
 	}
@@ -760,28 +677,23 @@ type IPGuardResult struct {
 	Denied bool
 	// Reason explains a denial (for the decision log rule_source).
 	Reason string
-	// kind is WHICH guard class refused — unexported because it is a proxy-internal
-	// classification, and carried because only blockPrivate is ever liftable and
-	// the 403's detail sentence must say so honestly. Zero (blockNone) on every
-	// non-range denial (empty host, resolve failure, no addresses) and on every
-	// admission.
+	// kind is WHICH guard class refused — unexported, a proxy-internal
+	// classification, carried because only blockPrivate is ever liftable and
+	// the 403's detail must say so honestly. Zero (blockNone) on every
+	// non-range denial and on every admission.
 	kind blockKind
-	// Lifted is true when an address that isBlockedIP would otherwise deny was
+	// Lifted is true when an address isBlockedIP would otherwise deny was
 	// admitted only because the caller's lift predicate (vetHostLift) accepted
-	// it — i.e. an operator-declared internal host (SiteConfig.InternalHosts).
-	// Never true for VetHost (which always calls vetHostLift with a nil lift).
+	// it — an operator-declared internal host. Never true for VetHost.
 	Lifted bool
-	// Unresolved distinguishes a denial that means "this proxy could not learn
-	// the addresses at all" (local DNS failed, or answered with nothing) from
-	// one that means "an address is blocked". egressTarget's corp-upstream
-	// branch reads it to EXCUSE the case: under an operator upstream the sandbox
-	// host frequently CANNOT resolve external names, which is the whole reason
-	// that branch exists, so a resolve failure there must not become a denial —
-	// while a name that DOES resolve into blocked space must be, which it was
-	// not before. egressTarget's direct-dial branch reads it to ATTRIBUTE the
-	// case (errHostUnresolved -> builtin:resolve-failed): there it still denies,
-	// but it is a DNS fault and not the address-range guard, and the two have
-	// opposite fixes. Every other caller treats Denied as Denied.
+	// Unresolved distinguishes "this proxy could not learn the addresses at
+	// all" from "an address is blocked". egressTarget's corp-upstream branch
+	// reads it to EXCUSE the case (a sandbox host frequently cannot resolve
+	// external names under an operator upstream); its direct-dial branch
+	// reads it to ATTRIBUTE the case (errHostUnresolved ->
+	// builtin:resolve-failed) — still denied, but a DNS fault, not the
+	// address-range guard, with the opposite fix. Every other caller treats
+	// Denied as Denied.
 	Unresolved bool
 }
 
@@ -815,9 +727,8 @@ func VetHost(host string, res resolver) IPGuardResult {
 // because it is private/reserved (blockKind == blockPrivate — RFC1918/ULA/CGNAT,
 // never loopback/link-local/metadata/unspecified/multicast/NAT64, which stay
 // unconditionally denied), lift optionally admits it. lift == nil behaves
-// exactly like VetHost. Reason strings and the fail-closed shape (empty host /
-// resolve failure / no addresses / any blocked answer denies the whole host)
-// are unchanged from VetHost.
+// exactly like VetHost. Reason strings and the fail-closed shape are unchanged
+// from VetHost.
 func vetHostLift(host string, res resolver, lift func(net.IP) bool) IPGuardResult {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	if host == "" {
@@ -885,10 +796,10 @@ const (
 // §2.5.5.1): "::127.0.0.1" and "::169.254.169.254" carry a real IPv4 in their
 // low 32 bits, exactly as a NAT64 prefix does.
 //
-// It is NOT in ipguard.ReservedV6 (which denies wholesale) on purpose: the
-// prefix also contains :: and ::1, which the stdlib predicates already name
-// precisely, and denying all of ::/96 would refuse an address whose embedded
-// v4 is public. Only the embedded address decides — see isBlockedIP.
+// NOT in ipguard.ReservedV6 (which denies wholesale) on purpose: the prefix
+// also contains :: and ::1, already named precisely elsewhere, and denying
+// all of ::/96 would refuse an address whose embedded v4 is public. Only the
+// embedded address decides — see isBlockedIP.
 var v4CompatiblePrefix = netip.MustParsePrefix("::/96")
 
 // v4CompatibleEmbeddedV4 returns the IPv4 embedded in the low 32 bits of an
@@ -915,21 +826,15 @@ func v4CompatibleEmbeddedV4(ip net.IP) (net.IP, bool) {
 // isBlockedIP reports whether ip is in an unconditionally-denied range:
 // loopback, link-local (incl. the 169.254.169.254 metadata address), multicast,
 // the unspecified address, RFC1918/ULA private space and the reserved ranges in
-// internal/ipguard. Denied regardless of policy: the proxy denies
-// loopback/link-local ALWAYS — no operator setting lifts those, and
-// SiteConfig.InternalHosts (the one override that exists) cannot reach them,
-// because its CIDRs must lie inside ipguard.Liftable and that set never
-// intersects loopback, link-local or the metadata address. This is exactly what
-// the net.IP
-// predicates below give (they cover 127.0.0.0/8, ::1, 169.254.0.0/16, fe80::/10
-// and 0.0.0.0 / :: precisely, so no proxy-local CIDR table is needed on top).
-// IPv4-mapped IPv6 addresses are unwrapped so a "::ffff:127.0.0.1" cannot
-// smuggle a loopback target past the guard.
+// internal/ipguard. Denied regardless of policy: SiteConfig.InternalHosts (the
+// one override that exists) cannot reach loopback/link-local/metadata, because
+// its CIDRs must lie inside ipguard.Liftable, which never intersects them.
+// IPv4-mapped IPv6 addresses are unwrapped so "::ffff:127.0.0.1" cannot smuggle
+// a loopback target past the guard.
 //
 // The returned blockKind is finer than a bool ONLY so vetHostLift can tell
-// apart the one liftable case (blockPrivate — RFC1918/ULA/CGNAT,
-// ipguard.Liftable) from every other denial, which stays unconditional. Reason
-// strings are unchanged from before blockKind existed.
+// apart the one liftable case (blockPrivate) from every other, unconditional
+// denial. Reason strings are unchanged from before blockKind existed.
 func isBlockedIP(ip net.IP) (blockKind, string) {
 	if ip == nil {
 		return blockLocal, "nil ip"
@@ -946,40 +851,29 @@ func isBlockedIP(ip net.IP) (blockKind, string) {
 	}
 	// NAT64-embedded IPv4 smuggling: inside a NAT64 prefix the low 32 bits ARE a
 	// real IPv4, so 64:ff9b::a9fe:a9fe reaches 169.254.169.254 while To4()==nil.
-	// Block the prefix wholesale (fail closed) and re-run the embedded v4 through
-	// the v4 block check so the reason names the real target.
-	// Honest residual: only well-known + local-use NAT64 prefixes are covered; a
-	// network-specific RFC 6052 prefix is unknowable here without config. The
-	// embedded check is scoped to NAT64 prefixes on purpose — running it on every
-	// IPv6 would false-positive legit addresses whose low 32 bits happen to fall
-	// in a reserved v4 range (e.g. any address ending ::1 -> 0.0.0.1 in 0/8).
+	// Block the prefix wholesale and re-run the embedded v4 through the v4
+	// block check so the reason names the real target. Honest residual: only
+	// well-known + local-use NAT64 prefixes are covered; scoped to NAT64
+	// prefixes on purpose to avoid false-positiving legit addresses whose low
+	// 32 bits happen to fall in a reserved v4 range.
 	//
-	// 6to4 (2002::/16) is the OTHER embedded-v4 shape — 2002:7f00:0001::1 carries
-	// 127.0.0.1 — and it is NOT handled here: its IPv4 sits at bits 16..48, which
-	// this extraction cannot read. It is denied a step earlier instead, wholesale
-	// via ipguard.ReservedV6 (deprecated and unroutable per RFC 7526), so it
-	// reaches this branch as blockReservedOther and never as blockNAT64.
+	// 6to4 (2002::/16) is the OTHER embedded-v4 shape and is NOT handled here
+	// (its IPv4 sits at bits 16..48, unreadable by this extraction) — it is
+	// denied a step earlier, wholesale via ipguard.ReservedV6, reaching this
+	// branch as blockReservedOther and never as blockNAT64.
 	if embedded, ok := ipguard.NAT64EmbeddedV4(ip); ok {
 		if kind, why := isBlockedIP(embedded); kind != blockNone {
 			return blockNAT64, "nat64-embedded " + why
 		}
 		return blockNAT64, "nat64 prefix (RFC 6052/8215)"
 	}
-	// The IPv4-COMPATIBLE ::/96 form is the THIRD embedded-v4 shape, and the one
-	// the predicates above cannot see: "::127.0.0.1" and "::169.254.169.254"
-	// carry a real IPv4 in their low 32 bits, and net.ParseIP PARSES them — so
-	// unlike the inet_aton spellings there is nothing for literal_ip_guard.go's
-	// gap-filler to fill. They arrive here on the CANONICAL path with To4() ==
-	// nil (To4 unwraps only ::ffff:/96), IsLoopback/IsLinkLocalUnicast answer
-	// false, and PrivateReserved has no ::/96 entry — so the address walked past
-	// step 0 AND past vetHostLift's literal fast path, leaving nothing but the
-	// default-deny allowlist between that spelling and a dial. Re-run the
-	// embedded v4 the same way the NAT64 arm does, so the denial names the real
-	// target and both guards agree with what dials.
-	//
-	// Only the embedded address decides (the prefix is not denied wholesale, and
-	// :: / ::1 are already named above), so this can only ADD denials that the
-	// canonical spelling of the same address already gets.
+	// The IPv4-COMPATIBLE ::/96 form is the THIRD embedded-v4 shape, and the
+	// one the predicates above cannot see: net.ParseIP parses "::127.0.0.1"
+	// with To4()==nil, IsLoopback/IsLinkLocalUnicast false, and no ::/96 entry
+	// in PrivateReserved — walking past both step 0 and the literal fast
+	// path. Re-run the embedded v4 the same way the NAT64 arm does. Only the
+	// embedded address decides (the prefix isn't denied wholesale), so this
+	// can only ADD denials the canonical spelling already gets.
 	if embedded, ok := v4CompatibleEmbeddedV4(ip); ok {
 		if kind, why := isBlockedIP(embedded); kind != blockNone {
 			return blockV4Compat, "ipv4-compatible-embedded " + why

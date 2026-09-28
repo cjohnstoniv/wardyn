@@ -166,7 +166,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 					"refusing to launch rather than running with no profile enforcement",
 			})))
 		s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
-			"this run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
+			"This run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
 		return
 	}
 	// Only the values a phase below REBINDS get a local alias; everything else is
@@ -181,6 +181,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// provision → CAS → compensate sequence always completes. The completion watcher
 	// already runs on BaseCtx, not ctx.
 	ctx = context.WithoutCancel(ctx)
+	createCtx, endCreate := s.creates.track(ctx, run.ID) // a kill cancels only the create, below
+	defer endCreate()
 
 	// KILL-RACE GUARD (entry): claim PENDING->STARTING conditionally. A
 	// POST /runs/{id}/kill landing in the pre-dispatch window (grant writes, the
@@ -286,7 +288,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
-			"this run was not launched: its runner's capabilities could not be confirmed, "+
+			"This run was not launched: its runner's capabilities could not be confirmed, "+
 				"so whether it can deliver this run's managed settings (%s) is unknown",
 			agentPolicyBasis(run.AutonomyLevel, p.holdLane())))
 		return
@@ -575,9 +577,17 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
 	// it runs on the failure path too (runStatusDetailWriter has the contract).
+	// The proxy config is stored before any proxy holds it (#1176): a revive
+	// rebuilds the proxy from this row alone.
+	if err := s.keepRunProxyConfig(ctx, run.ID, spec.ProxyConfig); err != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy config could not be stored")
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		return
+	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = onWaiting
-	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
+	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the

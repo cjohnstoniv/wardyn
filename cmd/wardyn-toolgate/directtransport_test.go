@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// B11a-F13. -base defaults to $HTTP_PROXY — the gate's control plane IS the
+// -base defaults to $HTTP_PROXY — the gate's control plane IS the
 // run's own wardyn-proxy — but the client used http.DefaultTransport, whose
 // Proxy is ProxyFromEnvironment. With the default proxy URL those are the same
 // address and the bug is invisible; under `--proxy-url http://<other-host>:3128`

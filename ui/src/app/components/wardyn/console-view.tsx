@@ -9,6 +9,7 @@ import { Button } from "../ui/button";
 import { health } from "../../lib/api/health";
 import { useRoleResolved } from "./operator-context";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
+import { appURL } from "../../lib/base-path";
 import {
   CONSOLE_VIEW,
   OPEN_IN_USER_VIEW,
@@ -165,7 +166,7 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
     throw e;
   }
   viewChannel()?.postMessage(to);
-  window.location.assign(target);
+  window.location.assign(appURL(target));
 }
 
 /** M-7 (§4.6, QM-7): what the Admin view gives in place of a personal door on
@@ -211,7 +212,9 @@ export function OpenInUserView({ runId, className }: { runId?: string; className
   );
 }
 
-function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {
+// Exported for AdminSettingsScreen's S-5 refusal (packet M-5, #636): same
+// shape as every other tier refusal in this file, a different body and CTA.
+export function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6 py-16">
       <section className="w-full max-w-md space-y-2 rounded-xl border border-border bg-card p-6">

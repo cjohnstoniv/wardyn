@@ -23,7 +23,7 @@ vi.mock("./harness-login-pane", () => ({
 import { ModelConnectionsCard } from "./model-connections-card";
 import { WithDoor } from "../../../../test/door-harness";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
-import { CONNECTIONS } from "../../wardyn/copy/door";
+import { CONNECTIONS, KEY_DOOR } from "../../wardyn/copy/door";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -100,5 +100,7 @@ it("a key row's Replace button opens the key door with the stored state", async 
   const s = providerStatus([{ provider: MODEL_PROVIDERS.anthropicKey, state: "live" }]);
   renderCard(s);
   await user.click(await screen.findByRole("button", { name: CONNECTIONS.REPLACE }));
-  expect(await screen.findByRole("dialog", { name: `Add your key for ${MODEL_PROVIDERS.anthropicKey.name}` })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("dialog", { name: KEY_DOOR.TITLE_REPLACE(false, MODEL_PROVIDERS.anthropicKey.name) }),
+  ).toBeInTheDocument();
 });

@@ -73,6 +73,8 @@ const sshKeyFeatureRefusal = "SSH keys aren't available to you. Ask your admin."
 // so validation here fails closed: unparseable input, private-key material,
 // and more-than-one-key input are all refused (422), never stored.
 func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
+	// A body held across session revocation must not create a newer credential.
+	authorizedAt := s.cfg.Now().UTC()
 	// May this person add a key at all (capFeature). Before the body is read,
 	// so a refused caller learns nothing about their key's validity. Member
 	// mode is not refused here — it CLAMPS the stored role below, same as any
@@ -104,7 +106,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		// key that will ever work. Reject before writing one that would sit
 		// dead in the store forever (docs/SSH.md's admin-token/CI-only note).
 		writeError(w, http.StatusUnprocessableEntity,
-			"a key registered with the admin token can never authorize an SSO-signed-in human's run — sign in to the console and add the key from Account -> SSH keys instead")
+			"a key registered with the admin token can never authorize an SSO-signed-in human's run — sign in to the console and add the key from Your account instead")
 		return
 	}
 
@@ -147,11 +149,19 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	if s.isOperator(r.Context()) && !capped {
 		role = oidc.RoleAdmin
 	}
-	// now is both CreatedAt and RoleCheckedAt: registration IS a role check —
-	// role above was just read from this same request's live session — so a
-	// freshly-registered key must not read as stale (migration 0046) before
-	// its owner's next login ever gets a chance to refresh it.
-	now := s.cfg.Now().UTC()
+	// The admission stamp also closes an INSERT that races this last check:
+	// SSH auth and new channels compare it against the same session cutoff.
+	if s.cfg.SessionRevocations != nil {
+		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), authorizedAt)
+		if err != nil {
+			writeServerError(w, r, "add ssh key", err)
+			return
+		}
+		if revoked {
+			writeError(w, http.StatusForbidden, "sign in again before registering an SSH key")
+			return
+		}
+	}
 
 	k := types.SSHPublicKey{
 		// FingerprintSHA256 + MarshalAuthorizedKey are both computed from the
@@ -162,9 +172,9 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		Name:          name,
 		PublicKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(pk)), "\n"),
 		Role:          role,
-		RoleCheckedAt: &now,
+		RoleCheckedAt: &authorizedAt,
 		Capped:        capped,
-		CreatedAt:     now,
+		CreatedAt:     authorizedAt,
 	}
 	added, err := s.cfg.Store.AddSSHKey(r.Context(), k)
 	if errors.Is(err, store.ErrConflict) {

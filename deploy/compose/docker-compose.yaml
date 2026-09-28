@@ -320,16 +320,18 @@ services:
       # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
       WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
-      # internal/runner.ProxySidecarEnvKnobs copies these three from wardynd's
+      # internal/runner.ProxySidecarEnvKnobs copies these from wardynd's
       # OWN process env into every proxy sidecar it creates (docker Env / k8s
       # pod Env — one shared list, both drivers). They read wardynd's env only,
       # never compose's own; unforwarded here, setting them in the operator's
       # shell before `docker compose up` did nothing — the knob was
       # UNREACHABLE, not "off" (docs/ENV.md WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS
-      # / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS / WARDYN_LLM_SCAN already
-      # documents the container-runner forward; this is the missing host hop).
+      # / WARDYN_LLM_SCAN already documents the container-runner forward; this
+      # is the missing host hop). #203 folds the former, standalone
+      # WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's
+      # {app,pat} scope, so this is now one line, not two.
       # Empty default in all of them: each var's own reader (cmd/wardyn-proxy's
-      # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSSwitch) treats an
+      # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSScopes) treats an
       # unset OR explicitly-empty value as "leave the compiled default" — the
       # re-auth hold's budget included (credentialReauthBudget clamps and falls
       # back on anything it cannot parse) — so
@@ -337,7 +339,6 @@ services:
       # are indistinguishable and all resolve to the same safe default.
       WARDYN_LLM_SCAN: "${WARDYN_LLM_SCAN:-}"
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
-      WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
       # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off"): "off"
       # restores the pre-0.7.6 behaviour for NEW dispatches only. Empty
@@ -504,9 +505,12 @@ services:
       # empty WARDYN_UI_SANDBOX_LISTEN means no listener and no relay cookie
       # key, whatever the port mapping above publishes. Turn it on with
       # WARDYN_UI_SANDBOX_LISTEN=:8081 (matching that mapping) and
-      # WARDYN_UI_SANDBOX_ADVERTISE=http://localhost:8081 — the second value is
+      # WARDYN_UI_SANDBOX_ADVERTISE=http://127.0.0.1:8081 — the second value is
       # what the console's Open button uses, and it must NOT be the console's
-      # own origin: the relay serves the sandbox's own pages. The per-run
+      # own origin: the relay serves the sandbox's own pages. Use the SAME host
+      # name you open the console at (the installer prints http://127.0.0.1:8080;
+      # with the sso profile it is localhost, the redirect URL's host):
+      # localhost and 127.0.0.1 are different sites, and Open then fails. The per-run
       # origin template is not usable here (it needs wildcard DNS), so a
       # compose stack runs the shared-origin mode this documents as a residual
       # (threatmodel/THREAT-MODEL.md §5 #18).
@@ -764,7 +768,11 @@ services:
     profiles: ["groundtruth"]
     environment:
       WARDYN_TETRAGON_EXPORT: "/var/log/tetragon/tetragon.log"
-      WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
+      # wardynd's internal TLS listener, pinned to its own internal CA, which
+      # wardynd writes beside the token file below. http:// to a non-loopback
+      # host is refused at start: the bearer never crosses in plaintext.
+      WARDYN_CONTROL_PLANE_URL: "https://wardynd:8443"
+      WARDYN_CONTROL_PLANE_CA_FILE: "/var/run/wardyn-gt/control-plane-ca.pem"
       # Host-sensor token (aud=wardyn-groundtruth). PREFERRED: the shared file below,
       # which wardynd's rotator keeps fresh so this sidecar RECOVERS when the ~1h token
       # expires instead of going permanently blind. WARDYN_GROUNDTRUTH_TOKEN is
@@ -778,7 +786,8 @@ services:
     volumes:
       # Read the Tetragon JSON export.
       - tetragon_export:/var/log/tetragon:ro
-      # The host-sensor token wardynd's rotator keeps fresh; read-only here.
+      # The host-sensor token wardynd's rotator keeps fresh, and the internal
+      # CA certificate wardynd publishes at boot; read-only here.
       - groundtruth_token:/var/run/wardyn-gt:ro
       # Read the host docker socket to list wardyn-managed containers for
       # correlation. Daemon-trust tradeoff applies (see the top-of-file note);
@@ -908,6 +917,7 @@ volumes:
   postgres_data:
   # Shared host-sensor token file: wardynd's rotator writes it, the tetragon-ingest
   # sidecar reads it, so the ground-truth stream survives the ~1h token TTL.
+  # wardynd also writes its internal CA certificate here (control-plane-ca.pem).
   groundtruth_token:
   recordings:
     # Empty under the default `pg` store; used only with

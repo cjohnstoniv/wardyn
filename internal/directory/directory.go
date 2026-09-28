@@ -3,24 +3,19 @@
 
 // Package directory turns what an admin TYPES into what Wardyn STORES.
 //
-// Every "who" field in the product — a governance assignment's subject, the SSO
-// People step's mapping value — is a claim value, and the claim value is rarely
-// the thing a human knows. An Entra group's `groups` claim carries the group's
-// OBJECT GUID, not its name; an App Role arrives as its manifest `value`, not
-// its display name. Hand-typing those is a silent-mismatch landmine: a
-// plausible-looking wrong string binds nothing and fails open to whatever the
-// unassigned default is.
+// Every "who" field in the product is a claim value, rarely the thing a
+// human knows (an Entra group's `groups` claim carries its OBJECT GUID, not
+// its name). Hand-typing those is a silent-mismatch landmine: a
+// plausible-looking wrong string binds nothing and fails open.
 //
-// So: Entry.ClaimValue IS the contract. It is the exact string the claim will
-// carry — email for a user, object GUID for a group, manifest value for an App
-// Role — and it is what a UI inserts on selection. Entry.DisplayName is what a
-// UI RENDERS. The two are deliberately different fields because for groups they
+// So: Entry.ClaimValue IS the contract — the exact string the claim will
+// carry, and what a UI inserts on selection. Entry.DisplayName is what a UI
+// RENDERS. The two are deliberately different fields, since for groups they
 // are deliberately different strings.
 //
-// Provider-abstracted on purpose (PF-29): one interface, Entra ships first,
+// Provider-abstracted on purpose: one interface, Entra ships first,
 // Okta/Google are later connectors behind the same contract. The whole
-// capability is opt-in — unconfigured, there is no Directory at all and every
-// field stays free text, exactly as it behaves today.
+// capability is opt-in — unconfigured, every field stays free text.
 package directory
 
 import (
@@ -29,10 +24,9 @@ import (
 	"fmt"
 )
 
-// Kind selects which class of directory object a search covers. KindAny is IN
-// the v1 contract, not a convenience: the People-step Value field is one
-// kind-LESS input that accepts an App Role, a group, or an email, so a
-// one-kind-per-request interface would force a rework at the swap.
+// Kind selects which class of directory object a search covers. KindAny is
+// IN the v1 contract, not a convenience: the People-step Value field is one
+// kind-LESS input that accepts an App Role, a group, or an email.
 type Kind string
 
 const (
@@ -52,22 +46,18 @@ func (k Kind) Valid() bool {
 }
 
 const (
-	// MaxResults is ONE GLOBAL cap across every kind in a single search — not a
-	// per-kind quota. In KindAny the three per-kind result sets are concatenated
-	// in anyKindOrder and the first MaxResults survive, so the outcome is
-	// deterministic and explainable ("App Roles first, then groups, then users,
-	// twenty in total") instead of an interleaving whose shape depends on how
-	// many hits each kind happened to return.
-	//
-	// Every search re-trims to this cap on the way out, single-kind ones
-	// included: $top is a request to the upstream, not a guarantee from it.
+	// MaxResults is ONE GLOBAL cap across every kind in a single search, not a
+	// per-kind quota: in KindAny the three per-kind result sets are
+	// concatenated in anyKindOrder and the first MaxResults survive, so the
+	// outcome is deterministic ("App Roles first, then groups, then users").
+	// Every search re-trims to this cap on the way out: $top is a request to
+	// the upstream, not a guarantee from it.
 	MaxResults = 20
 
-	// MinQueryLen is the shortest query a connector will send upstream. Below it
-	// a search returns empty WITHOUT a round trip: one or two characters match
-	// most of a directory, so the request costs a Graph call to produce noise.
-	// The HTTP layer enforces the same floor as a request contract; this is the
-	// connector-side backstop so the package is safe called directly.
+	// MinQueryLen is the shortest query a connector will send upstream. Below
+	// it a search returns empty WITHOUT a round trip, since one or two
+	// characters match most of a directory. The connector-side backstop for
+	// the same floor the HTTP layer enforces.
 	MinQueryLen = 2
 )
 
@@ -76,14 +66,13 @@ type Entry struct {
 	// DisplayName is the human-readable label — a user's display name, a
 	// group's name, an App Role's display name. Never store this.
 	DisplayName string `json:"display_name"`
-	// ClaimValue is the exact string the claim carries and the field must hold:
-	// email (user), object GUID (group), manifest value (App Role). THIS is
-	// what a UI inserts when a row is picked.
+	// ClaimValue is the exact string the claim carries and the field must
+	// hold: email (user), object GUID (group), manifest value (App Role).
 	ClaimValue string `json:"claim_value"`
 	// Kind is which of the three sources produced this entry.
 	Kind Kind `json:"kind"`
-	// Detail is a secondary disambiguator for the row ("group · 8f3c1a2b",
-	// a user's other address). Presentation only — never the stored value.
+	// Detail is a secondary disambiguator for the row. Presentation only —
+	// never the stored value.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -96,19 +85,15 @@ type Directory interface {
 	Search(ctx context.Context, q string, kind Kind) ([]Entry, error)
 }
 
-// ErrUnconfigured means no directory provider is configured — the credentials
-// were absent at construction, or there is no Directory at all. The HTTP layer
-// answers it with a distinct 503 code, which is the UI's ABSENT-MODE signal:
-// the combobox degrades to a plain free-text input with no error surface.
-//
-// It is deliberately a sentinel and not a ProviderError: nothing upstream
-// failed, the feature is simply off.
+// ErrUnconfigured means no directory provider is configured. The HTTP layer
+// answers it with a distinct 503 code, the UI's ABSENT-MODE signal: the
+// combobox degrades to a plain free-text input. Deliberately a sentinel, not
+// a ProviderError — nothing upstream failed, the feature is simply off.
 var ErrUnconfigured = errors.New("directory: no provider configured")
 
-// ProviderError wraps a failure talking to the upstream directory. Op names the
-// call ("token", "users", "groups", "approles") and Status carries the upstream
-// HTTP status when there was one (0 otherwise), so the HTTP layer can decide
-// what to tell the admin without re-parsing an error string.
+// ProviderError wraps a failure talking to the upstream directory. Op names
+// the call and Status carries the upstream HTTP status when there was one (0
+// otherwise), so the HTTP layer can decide what to tell the admin.
 type ProviderError struct {
 	Provider string // "entra"
 	Op       string
@@ -126,20 +111,16 @@ func (e *ProviderError) Error() string {
 func (e *ProviderError) Unwrap() error { return e.Err }
 
 // anyKindOrder is the FIXED order KindAny concatenates in. App Roles lead
-// because they are the smallest, most-intentional set (an operator authored
-// them); users trail because they are the largest and would otherwise crowd out
-// the other two under the global cap.
+// since they are the smallest, most-intentional set; users trail since they
+// are the largest and would otherwise crowd out the other two under the cap.
 var anyKindOrder = [...]Kind{KindAppRole, KindGroup, KindUser}
 
 // searchAny implements the KindAny merge ONCE, here, so every connector gets
-// the same order and the same single cap. per is the connector's single-kind
-// query.
-//
-// An error from any per-kind query aborts the whole search: a partial result
-// silently missing a whole class of subjects is worse than an honest failure.
-// The one exception is deliberate and lives in the connector, not here — Entra's
-// App Role lookup needs a permission the tenant may not have granted, so it
-// degrades to (nil, nil) rather than failing every mixed-kind search.
+// the same order and the same single cap. per is the connector's
+// single-kind query. An error from any per-kind query aborts the whole
+// search (a partial result silently missing a whole class of subjects is
+// worse than an honest failure) — except Entra's App Role lookup, which
+// degrades to (nil, nil) when the tenant lacks the permission for it.
 func searchAny(ctx context.Context, q string, per func(context.Context, string, Kind) ([]Entry, error)) ([]Entry, error) {
 	out := make([]Entry, 0, MaxResults)
 	for _, k := range anyKindOrder {

@@ -132,7 +132,7 @@ See `ARCHITECTURE.md` → "Deployment surface".
 
 `wardynd` serves plain HTTP by default (loud startup `WARNING` on loopback or
 the unspecified bind; a specific non-loopback bind is **refused at boot** unless
-a TLS posture or `WARDYN_ALLOW_PLAINTEXT_LISTEN=true` is set). For any
+a TLS posture or `WARDYN_LISTEN_ALLOW_PLAINTEXT=true` is set). For any
 non-localhost deploy set `WARDYN_TLS_CERT`+`WARDYN_TLS_KEY` (both or neither —
 one alone fails closed at boot), or `WARDYN_TLS_TERMINATED=true` behind a
 terminating proxy; see [docs/ENV.md](../../docs/ENV.md). Do NOT set either for
@@ -205,7 +205,11 @@ sensor (`tetragon`) exports kernel events as JSON, and a sidecar
 (`wardyn-tetragon-ingest`) correlates each to a Wardyn run (via the
 `wardyn.run-id` container label), maps a bounded subset to `kernel.*` audit
 events, and POSTs them to wardynd — where they are recorded append-only and fan
-to every SIEM sink, exactly like every other event.
+to every SIEM sink, exactly like every other event. The POSTs ride wardynd's
+internal TLS listener (`https://wardynd:8443`), pinned to wardynd's internal CA,
+which wardynd writes to the shared `groundtruth_token` volume as
+`control-plane-ca.pem`; the sidecar refuses to start on a non-loopback
+`http://` URL.
 
 This tier is **opt-in** (compose profile `groundtruth`) and **honestly
 degradable**: with it OFF, `wardynd`'s `/healthz` reports

@@ -27,6 +27,12 @@ type recordingLoginStampStore struct {
 	tokenCalls []loginStampCall
 	sshErr     error
 	tokenErr   error
+	signedIn   []loginStampCall
+}
+
+func (r *recordingLoginStampStore) MarkPersonSignedIn(_ context.Context, principal string, now time.Time) error {
+	r.signedIn = append(r.signedIn, loginStampCall{principal: principal, checkedAt: now})
+	return nil
 }
 
 func (r *recordingLoginStampStore) RefreshSSHKeyRoles(_ context.Context, principal, role string, checkedAt time.Time) error {
@@ -101,6 +107,10 @@ func TestRefreshLoginStampsPassesPrincipalAndRoleInOrder(t *testing.T) {
 	}
 	if !tok.truncated {
 		t.Error("api_tokens: re-stamped truncated = false, want true — the caller's own completeness bit was dropped, not passed through")
+	}
+	// #1157: a pre-created person attaches by this login's subject.
+	if len(st.signedIn) != 1 || st.signedIn[0].principal != sub || !st.signedIn[0].checkedAt.Equal(now) {
+		t.Errorf("people: signed-in stamps = %+v, want one for %q at %s", st.signedIn, sub, now)
 	}
 }
 

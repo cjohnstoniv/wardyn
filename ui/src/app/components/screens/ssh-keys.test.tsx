@@ -31,7 +31,7 @@ vi.mock("../../lib/api/permissions", () => ({
   permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
 }));
 
-import { SSHKeysScreen } from "./ssh-keys";
+import { SshKeysPane } from "./ssh-keys";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import type { MeCapabilities } from "../../lib/types";
@@ -39,7 +39,7 @@ import type { MeCapabilities } from "../../lib/types";
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <SSHKeysScreen />
+      <SshKeysPane />
     </MemoryRouter>,
   );
 }
@@ -48,7 +48,7 @@ function renderAsUser() {
   return render(
     <MemoryRouter>
       <OperatorProvider operator={false} securityOperator={false}>
-        <SSHKeysScreen />
+        <SshKeysPane />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -62,7 +62,7 @@ beforeEach(() => {
   deleteKeyMock.mockReset();
 });
 
-describe("SSHKeysScreen — empty state", () => {
+describe("SshKeysPane — empty state", () => {
   it("shows the empty-state copy and an Add key affordance", async () => {
     listKeysMock.mockResolvedValue([]);
     renderScreen();
@@ -71,7 +71,7 @@ describe("SSHKeysScreen — empty state", () => {
   });
 });
 
-describe("SSHKeysScreen — list + remove", () => {
+describe("SshKeysPane — list + remove", () => {
   beforeEach(() => {
     listKeysMock.mockResolvedValue([
       { fingerprint: "SHA256:abc/def", principal: "alice@example.com", name: "laptop", public_key: "", created_at: aheadByHours(-1) },
@@ -128,7 +128,7 @@ describe("SSHKeysScreen — list + remove", () => {
   });
 });
 
-describe("SSHKeysScreen — add key", () => {
+describe("SshKeysPane — add key", () => {
   beforeEach(() => {
     listKeysMock.mockResolvedValue([]);
   });
@@ -199,7 +199,7 @@ describe("SSHKeysScreen — add key", () => {
 // re-taken, so a demoted admin's key keeps the SSH override until it is
 // deleted and added again (docs/SSH.md §Bounds). The list is the only place a
 // human can see which of their keys carries it.
-describe("SSHKeysScreen — admin-override badge", () => {
+describe("SshKeysPane — admin-override badge", () => {
   it("marks only the admin-stamped key", async () => {
     listKeysMock.mockResolvedValue([
       {
@@ -230,8 +230,11 @@ describe("SSHKeysScreen — admin-override badge", () => {
 
 // #584: a key added in the user view is capped at member rights for good
 // (docs/SSH.md §Bounds). The chip reads the API's `capped`, not `role`.
-// Frozen strings: docs/design/admin-access-canon.md.
-describe("SSHKeysScreen — capped-key chip", () => {
+// Frozen strings: docs/design/admin-access-canon.md. M-5 (#636, S-2, approved
+// 2026-09-27): "Member access" rewritten to "User access" — the old tooltip
+// pointed at a door M-5 removed (the user view was the only place left to add
+// ANY key), so it now points at Admin Settings' new Admin SSH keys card (S-1).
+describe("SshKeysPane — capped-key chip", () => {
   it("marks only the capped key, with the owner-approved tooltip", async () => {
     listKeysMock.mockResolvedValue([
       {
@@ -254,19 +257,19 @@ describe("SSHKeysScreen — capped-key chip", () => {
       },
     ]);
     renderScreen();
-    const chip = await screen.findByText("Member access");
-    expect(screen.getAllByText("Member access")).toHaveLength(1);
+    const chip = await screen.findByText("User access");
+    expect(screen.getAllByText("User access")).toHaveLength(1);
     expect(chip.closest("tr")).toHaveTextContent("laptop");
     expect(chip.closest("[title]")).toHaveAttribute(
       "title",
-      "Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.",
+      "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
     );
   });
 });
 
 // UT-12: the `feature` kind. The server's check is the wall; the pane only
 // says so before the click, with the server's own sentence.
-describe("SSHKeysScreen — ssh_key feature not available", () => {
+describe("SshKeysPane — ssh_key feature not available", () => {
   beforeEach(() => {
     listKeysMock.mockResolvedValue([]);
     mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };

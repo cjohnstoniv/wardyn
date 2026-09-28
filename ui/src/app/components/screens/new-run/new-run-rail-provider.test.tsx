@@ -48,8 +48,6 @@ function baseLaunch(overrides: Partial<ComponentProps<typeof RunRail>["launch"]>
     error: null,
     errorSeq: 0,
     credentialRefused: false,
-    warnings: [],
-    onOpenRun: null,
     ...overrides,
   };
 }
@@ -68,6 +66,7 @@ function renderRail(opts: {
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
+        unattended={false}
         launch={baseLaunch(opts.launch)}
         preflight={{ error: null, errorSeq: 0, result: null }}
         modelProvider={opts.modelProvider}

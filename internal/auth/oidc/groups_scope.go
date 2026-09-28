@@ -10,16 +10,10 @@ import (
 )
 
 // claimKeyedRoleMapValues returns the role-map keys that ONLY a `roles` or
-// `groups` claim can answer, sorted.
-//
-// A key holding "@" is an email, and the `email` claim is one the authorization
-// request already asks for — such a row is unaffected by a gated group scope
-// and must never trigger either half of the warning. One implementation, used
-// by the boot half and the login half alike, so "which rows depend on the group
-// claim" cannot come out differently in the two places that ask it.
-//
-// Sorted because a map's iteration order is not, and an operator comparing two
-// restarts (or two log lines) must not see the same fact rendered two ways.
+// `groups` claim can answer, sorted (map iteration order is not, and both the
+// boot half and login half of this warning must render the same fact the
+// same way). A key holding "@" is an email, already covered by the requested
+// `email` claim, so it never triggers the warning.
 func claimKeyedRoleMapValues(roleMap map[string]string) []string {
 	var claimKeyed []string
 	for k := range roleMap {
@@ -32,50 +26,28 @@ func claimKeyedRoleMapValues(roleMap map[string]string) []string {
 }
 
 // warnMergedMapNeedsGroupsScope is the LOGIN-TIME half of
-// warnUnrequestedGroupsScope, and it exists because the boot half is
-// structurally blind to most of what it is about.
+// warnUnrequestedGroupsScope: boot only sees Config.RoleMap, but the map a
+// login actually uses is that MERGED with Config.RoleMappings (console rows
+// added/removed at runtime), so a console-only deployment needs this check
+// at login, not construction.
 //
-// Boot sees Config.RoleMap — the chart's WARDYN_OIDC_ROLE_MAP — and nothing
-// else. The map a login actually derives from is that one MERGED with
-// Config.RoleMappings, the console's Getting Started -> People rows, which are
-// created and deleted through the API while the process runs. A deployment that
-// manages every group->role row from the console therefore booted completely
-// silent on exactly the finding the boot warning was added for, and reading the
-// store at construction would not have closed it: the row added at 10am was not
-// there at 9am. The merged map only exists at login, so this is where the
-// question gets asked.
+// Fires only when all three hold: the provider advertises an unrequested
+// `groups` scope (Entra never does, so this never fires there); the merged
+// map has a value only a `roles`/`groups` claim can answer; and no login
+// this process has seen carried that claim (sawGroupClaim latches true
+// permanently the first time one does).
 //
-// THE CONDITIONS, all three, or it is noise:
-//
-//   - The provider advertises a `groups` scope this request does not ask for
-//     (a.groupsScopeUnrequested, read from the discovery document in New). Every
-//     Entra tenant answers false here — Entra defines no such scope and emits
-//     the claim without one — so the documented Entra path never sees this line.
-//   - The MERGED map holds a value only a claim can answer. A map keyed purely
-//     on emails depends on nothing that is missing.
-//   - No login since this process started has carried a `roles` or `groups`
-//     value. One that did is proof the IdP sends the claim to this client, and
-//     the question is then settled for good — sawGroupClaim latches, and the
-//     line can never fire afterwards.
-//
-// It is deliberately ONE line per process (warnedMergedGroupsScope): this is an
-// observation about how the deployment is configured, not an event, and a
-// per-login warning about a condition the operator cannot fix from the log is
-// how a warning gets filtered out permanently.
-//
-// It cannot be a DENIAL. An omitted `groups` claim is byte-for-byte "this human
-// is in no groups" — there is no `_claim_names` marker to fail closed on, the
-// way an Entra overage has (see claimsOverage) — so refusing the login here
-// would lock out every human on an IdP that simply has no groups to send.
-// Telling the operator is the only honest move available.
+// Logs once per process (warnedMergedGroupsScope) rather than per login: an
+// operator can't fix this from the log, so repeating it just gets filtered.
+// It cannot deny the login: an omitted `groups` claim is indistinguishable
+// from "this human is in no groups", so failing closed here would lock out
+// every human on an IdP that has none to send.
 func (a *Authenticator) warnMergedMapNeedsGroupsScope(roleMap map[string]string, rolesClaim, groupsClaim []string) {
 	if !a.groupsScopeUnrequested {
 		return
 	}
 	if len(rolesClaim) > 0 || len(groupsClaim) > 0 {
-		// This IdP does send the claim to this client. Latch it: the warning is
-		// about a claim that never arrives, and one that did answers the
-		// question for every login after this one too.
+		// This IdP does send the claim: latch it, settling the question for good.
 		a.sawGroupClaim.Store(true)
 		return
 	}

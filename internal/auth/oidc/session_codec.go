@@ -71,9 +71,9 @@ func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
 		base64.RawURLEncoding.EncodeToString(sig)
 
 	cookie := &http.Cookie{
-		Name:     sessionCookieName,
+		Name:     a.cookieName(sessionCookieName),
 		Value:    encoded,
-		Path:     "/",
+		Path:     a.cookiePath(),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   a.cfg.SecureCookies, // true only under TLS (direct or terminated); false over plain HTTP
@@ -86,7 +86,7 @@ func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
 // Returns ErrNoSession if the cookie is absent, ErrInvalidSession if tampered
 // or expired according to the signature.
 func (a *Authenticator) decodeSession(r *http.Request) (Session, error) {
-	c, err := r.Cookie(sessionCookieName)
+	c, err := r.Cookie(a.cookieName(sessionCookieName))
 	if err != nil {
 		return Session{}, ErrNoSession
 	}

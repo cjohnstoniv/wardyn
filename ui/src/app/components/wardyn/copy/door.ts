@@ -77,6 +77,9 @@ export const CLAUDE_DOOR = {
 
 export const KEY_DOOR = {
   TITLE: (token: boolean, name: string) => `Add your ${token ? "token" : "key"} for ${name}`,
+  // Packet F §1: a Replace open (a credential is already stored) gets its own
+  // title — the Add title would claim there is nothing there yet.
+  TITLE_REPLACE: (token: boolean, name: string) => `Replace your ${token ? "token" : "key"} for ${name}`,
   FIELD: (token: boolean) => (token ? "Token" : "Key"),
   DESTINATION: (host: string) => `Sent to ${host}`,
   NOTE: "Stored for you alone. Wardyn injects it at the proxy, so it never enters the sandbox.",
@@ -84,4 +87,47 @@ export const KEY_DOOR = {
   CANCEL: "Cancel",
   REMOVE: "Remove",
   SAVED_TOAST: (token: boolean) => (token ? "Token saved" : "Key saved"),
+  // The PUT's 503 when the configured store answered unavailable (packet F,
+  // server canon: keyDoorSaveUnavailable, internal/api/model_provider_credentials.go).
+  // Kept here too so a test can assert the dialog shows the server's own
+  // sentence verbatim rather than a client-invented one.
+  SAVE_UNAVAILABLE:
+    "Wardyn couldn't reach the service that stores credentials, so this wasn't saved. Nothing changed. Try again in a moment.",
+} as const;
+
+// The write-only chip on the key door's field label (packet F §1) — was
+// "write-only" (lower-case) on /secrets; sentence case, and shared so the two
+// surfaces can never say it two ways.
+export const WRITE_ONLY = {
+  CHIP: "Write-only",
+  TOOLTIP: "Write-only: the value can be replaced or removed, but never read back — not even by you.",
+} as const;
+
+// The key door's three-line notice (packet F §1). Line 1 is KEY_DOOR.NOTE,
+// unchanged; KEK is the store-mode line (design §3, F-4).
+export const CRED_NOTICE = {
+  STORED_HINT: (token: boolean) =>
+    `Your ${token ? "token" : "key"} is stored and can't be shown. Paste a new one to replace it.`,
+  LOCAL: "Encrypted in Wardyn's database with a key this deployment holds.",
+  KEY_SERVICE: (product: string) =>
+    `Encrypted in Wardyn's database. The key that unlocks it is held in ${product} and never leaves it.`,
+  // The store-mode line (design §3, F-4): names the product, never a host,
+  // path or vault name.
+  KEK: (product: string) => `Stored in your organisation's ${product}. Wardyn keeps no copy and no key.`,
+  ADMINS: "Admins can see that you stored it, when, and when a run last used it — never the value.",
+} as const;
+
+// The confirm dialog Remove now opens (packet F §3, CONSOLE-RULES §6): today
+// it deletes on the first click.
+export const REMOVE_CONFIRM = {
+  TITLE: (token: boolean, name: string) => `Remove your ${token ? "token" : "key"} for ${name}?`,
+  BODY: "It's deleted now, and runs already going stop using it within 10 minutes. Backups keep a copy until they expire.",
+  BODY_VAULT:
+    "It's deleted from your organisation's Vault now, and runs already going stop using it within 10 minutes.",
+  BODY_KEY_VAULT:
+    "It's deleted from your organisation's Key Vault now, which keeps deleted secrets recoverable for a set time. Runs already going stop using it within 10 minutes.",
+  UPSTREAM: (host: string) => `It still works at ${host} until you revoke it there.`,
+  CONFIRM: "Remove",
+  CANCEL: "Cancel",
+  REMOVED_TOAST: (token: boolean) => (token ? "Token removed" : "Key removed"),
 } as const;

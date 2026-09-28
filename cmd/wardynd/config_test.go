@@ -108,7 +108,7 @@ func TestValidateConfig(t *testing.T) {
 			dsn:         "postgres://localhost/wardyn",
 			listen:      "10.0.0.5:8080",
 			wantErr:     true,
-			errContains: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+			errContains: "WARDYN_LISTEN_ALLOW_PLAINTEXT",
 		},
 		{
 			name:                 "specific-routable bind allowed with the explicit override",
@@ -575,6 +575,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 		listen         string
 		sshListen      string
 		originTemplate string
+		stripCookies   string
 		posture        tlsPosture
 		allowPlaintext bool
 		wantErr        string // substring; empty = must succeed
@@ -639,7 +640,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 			// listener serving exactly what the first one refuses to.
 			name:     "plaintext UI gateway on a specific-routable bind is refused",
 			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
-			wantErr: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+			wantErr: "WARDYN_LISTEN_ALLOW_PLAINTEXT",
 		},
 		{
 			name:     "plaintext UI gateway names its own flag in the refusal",
@@ -667,10 +668,44 @@ func TestValidateUISandboxConfig(t *testing.T) {
 			name:     "unspecified UI bind stays warn-only",
 			uiListen: ":8081", listen: "127.0.0.1:8080",
 		},
+		{
+			name: "inbound cookie allow list", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:session, csrf_*",
+		},
+		{
+			name: "inbound cookie deny list", uiListen: ":8081", listen: ":8080",
+			stripCookies: "deny:*",
+		},
+		{
+			name: "unknown cookie policy mode refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "strip:session", wantErr: "WARDYN_UI_SANDBOX_STRIP_COOKIES",
+		},
+		{
+			name: "empty cookie policy list refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:", wantErr: "not a cookie name",
+		},
+		{
+			name: "cookie policy entry with a separator refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "deny:a;b", wantErr: "not a cookie name",
+		},
+		{
+			name: "cookie policy entry with an inner wildcard refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "deny:a*b", wantErr: "not a cookie name",
+		},
+		{
+			// wardyn_* is stripped whatever the policy says; an allow entry
+			// naming one reads as forwarding a credential, so boot says so.
+			name: "allow list naming a wardyn cookie refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:app,WARDYN_ui_sess", wantErr: "never forwarded",
+		},
+		{
+			name: "allow list with a wardyn prefix refused", uiListen: ":8081", listen: ":8080",
+			stripCookies: "allow:wardyn_*", wantErr: "never forwarded",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.posture, tc.allowPlaintext)
+			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.stripCookies, tc.posture, tc.allowPlaintext)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("want accepted, got %v", err)
@@ -843,13 +878,16 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
+	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
+	basePath := ""
 	return &bootFlags{
+		basePath:                &basePath,
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
 		oidcIssuer:              &issuerURL,
@@ -858,6 +896,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		oidcClientSecret:        &oidcClientSecret,
 		oidcRedirectURL:         &oidcRedirectURL,
 		oidcEmailDomains:        &oidcEmailDomains,
+		oidcExtraScopes:         &oidcExtraScopes,
 		oidcOperatorEmails:      &oidcOperatorEmails,
 		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
 		oidcRoleMap:             &oidcRoleMap,
@@ -911,7 +950,7 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 
 	t.Run("sso-only with an admin token set: refused", func(t *testing.T) {
 		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", true)
-		_, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		_, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false)
 		if err == nil {
 			t.Fatal("buildOptionalFeatures: want a refusal booting WARDYN_SSO_ONLY alongside WARDYN_ADMIN_TOKEN, got nil error")
 		}
@@ -924,7 +963,7 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 
 	t.Run("sso-only with nothing else set: boots clean, real OIDC configured", func(t *testing.T) {
 		f := ssoOnlyBootFlags(httpSrv.URL, "", true)
-		of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false)
 		if err != nil {
 			t.Fatalf("buildOptionalFeatures: unexpected error: %v", err)
 		}
@@ -935,7 +974,7 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 
 	t.Run("an admin token alone (sso-only unset): unaffected", func(t *testing.T) {
 		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", false)
-		if _, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false); err != nil {
+		if _, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false); err != nil {
 			t.Fatalf("buildOptionalFeatures: unexpected error with sso-only unset: %v", err)
 		}
 	})

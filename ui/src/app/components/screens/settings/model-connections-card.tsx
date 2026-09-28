@@ -5,7 +5,7 @@
 
 // "Your model connections" (#541, design §5.4, packet MP-D) — the page every
 // person, admins included, connects their own model-provider credential from.
-// Renders in the User view only (SettingsScreen gates it on !adminView), since
+// Renders in the User view only (YourAccountScreen gates it on !adminView), since
 // an admin reaches it by switching to Member view (the same rule the shell
 // strip and the door already follow — model-access-banner.tsx's own comment).
 //
@@ -68,9 +68,8 @@ function ConnectionRowView({
 }
 
 /** ModelConnectionsCard renders nothing with no provider block — the caller
- *  (SettingsScreen) gates the mount on `status.model_providers`, but this
- *  stays defensive so a direct-mount suite gets today's absence rather than
- *  an empty card shell. */
+ *  (YourAccountScreen) mounts it in the User view whatever the block, so this
+ *  check is what keeps a legacy install's page free of an empty card shell. */
 export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatus; onChanged: () => void }) {
   const door = useModelAccessDoor();
   // No memo: a handful of providers, and connectionRows/connectionRowCopy are

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, sql } from "./fixtures";
+import { test, expect, sql, consoleAPI } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 // ============================================================================
@@ -41,26 +41,39 @@ function runIdByTask(task: string): string {
   return id;
 }
 
-// window.open is stubbed BEFORE the app loads: the assertion is what the
-// console hands the browser, and letting a real popup open would navigate to a
-// gateway whose run has no sandbox behind it (the `none` runner) — a 409 that
-// says nothing about the affordance.
-async function stubWindowOpen(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    (window as unknown as { __opened: string[] }).__opened = [];
-    window.open = ((url?: string | URL) => {
-      (window as unknown as { __opened: string[] }).__opened.push(String(url ?? ""));
-      return null;
-    }) as typeof window.open;
-  });
-}
-
 async function openRunDetail(page: Page, task: string): Promise<void> {
   await page.goto(`/runs/${runIdByTask(task)}`);
   await expect(page.getByRole("heading", { name: task, level: 1 })).toBeVisible();
   // The card is the last widget in the live rail, so it may be below its
   // container's fold.
   await page.getByText("UI apps", { exact: true }).scrollIntoViewIfNeeded();
+}
+
+// submitEnter drives the enter hand-off from page as a real form navigation
+// (what the console's Open does), and returns the gateway's status for it.
+async function submitEnter(page: Page, action: string, fields: Record<string, string>): Promise<number> {
+  const response = page
+    .context()
+    .waitForEvent("response", (r) => r.url() === action && r.request().method() === "POST");
+  await page.evaluate(
+    ({ action, fields }) => {
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = action;
+      form.target = "_blank";
+      for (const [name, value] of Object.entries(fields)) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    },
+    { action, fields },
+  );
+  return (await response).status();
 }
 
 test.describe("Run detail — UI apps lane", () => {
@@ -76,28 +89,79 @@ test.describe("Run detail — UI apps lane", () => {
     expect(await page.locator("iframe").count()).toBe(0);
   });
 
-  test("Open mints a ticket and leaves for the gateway's own origin", async ({ page }) => {
-    await stubWindowOpen(page);
+  // #1220: Open POSTs the ticket via a hidden auto-submitted form — the
+  // console never puts it in a URL at all now. Intercepted rather than
+  // stubbed (window.open is gone from this path): the popup's own first
+  // request IS the assertion, and it is fulfilled locally rather than let
+  // through, since the `none` runner behind this backend has no sandbox to
+  // relay into (a real redeem-and-303 would just 409 here).
+  test("Open mints a ticket and POSTs it to the gateway's own origin, never in a URL", async ({ page, context }) => {
     await openRunDetail(page, RUN_TASK);
-
     const runId = runIdByTask(RUN_TASK);
-    await page.getByRole("button", { name: "Open vscode" }).click();
-    await expect
-      .poll(async () => (await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).length)
-      .toBe(1);
 
-    const opened = (await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened))[0];
-    const url = new URL(opened);
-    // A DIFFERENT origin than the console's — the server's advertised one, never
-    // one the console built from window.location.
+    let captured: { url: string; postData: string | null; cookie: string } | null = null;
+    await context.route("**/__wardyn/enter", async (route) => {
+      const headers = await route.request().allHeaders();
+      captured = { url: route.request().url(), postData: route.request().postData(), cookie: headers["cookie"] ?? "" };
+      await route.fulfill({ status: 200, contentType: "text/plain", body: "stopped for the test" });
+    });
+
+    const [popup] = await Promise.all([
+      context.waitForEvent("page"),
+      page.getByRole("button", { name: "Open vscode" }).click(),
+    ]);
+    await popup.waitForLoadState("domcontentloaded").catch(() => {});
+
+    expect(captured).not.toBeNull();
+    const { url: openedURL, postData, cookie } = captured!;
+    const url = new URL(openedURL);
+    // A DIFFERENT origin than the console's — the server's advertised one,
+    // never one the console built from window.location.
     expect(url.origin).not.toBe(new URL(page.url()).origin);
     expect(url.pathname).toBe("/__wardyn/enter");
-    expect(url.searchParams.get("run")).toBe(runId);
-    expect(url.searchParams.get("app")).toBe("vscode");
-    // A real single-use ticket from POST /runs/{id}/attach-ticket, not a
-    // placeholder the template left behind.
-    expect(url.searchParams.get("ticket") ?? "").not.toBe("{ticket}");
-    expect((url.searchParams.get("ticket") ?? "").length).toBeGreaterThan(16);
+    // The whole point of #1220: no query string at all on this request.
+    expect(url.search).toBe("");
+    const form = new URLSearchParams(postData ?? "");
+    expect(form.get("run")).toBe(runId);
+    expect(form.get("app")).toBe("vscode");
+    // A real single-use ticket from POST /runs/{id}/attach/ticket, not a
+    // placeholder the template left behind, and it travels in the form body.
+    expect(form.get("ticket") ?? "").not.toBe("{ticket}");
+    expect((form.get("ticket") ?? "").length).toBeGreaterThan(16);
+    // #1241: Open bound the ticket first, and the new tab's POST carries that
+    // HttpOnly binding cookie on the gateway's origin.
+    expect(cookie).toMatch(/wardyn_ui_bind_[0-9a-f]{16}=[0-9a-f]{64}/);
+    await popup.close();
+  });
+
+  // #1241: a ticket minted and bound in one browser is refused in another — a
+  // page pushing someone else's browser through the hand-off gets a 403 — and
+  // that refusal does not spend it. The browser that bound it gets past the
+  // ticket check: 409 here, because the `none` runner has no sandbox.
+  test("a ticket is refused in a browser that did not bind it, and accepted in the one that did", async ({ page, browser }) => {
+    await openRunDetail(page, RUN_TASK);
+    const runId = runIdByTask(RUN_TASK);
+    const health = JSON.parse((await consoleAPI(page, "GET", "/healthz")).text);
+    const enterURL: string = health.ui_sandbox.enter_post_url;
+    const bindURL: string = health.ui_sandbox.bind_url;
+    const mint = await consoleAPI(page, "POST", `/api/v1/runs/${runId}/attach/ticket`);
+    expect(mint.status, mint.text).toBe(200);
+    const ticket: string = JSON.parse(mint.text).ticket;
+    const fields = { run: runId, app: "vscode", ticket };
+
+    const other = await browser.newContext();
+    const victim = await other.newPage();
+    await victim.setContent("<html><body></body></html>");
+    expect(await submitEnter(victim, enterURL, fields)).toBe(403);
+    await other.close();
+
+    const bound = await page.evaluate(
+      async ({ url, ticket }) =>
+        (await fetch(url, { method: "POST", credentials: "include", body: new URLSearchParams({ ticket }) })).status,
+      { url: bindURL, ticket },
+    );
+    expect(bound).toBe(204);
+    expect(await submitEnter(page, enterURL, fields)).toBe(409);
   });
 
   test("a run that declares nothing says so, and names the policy field", async ({ page }) => {

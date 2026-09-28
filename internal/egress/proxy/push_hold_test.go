@@ -106,6 +106,22 @@ func (c *pushCP) wire(t *testing.T, p *Proxy) {
 }
 
 // reviewSpec is a run policy with review rules (and optionally deny rules).
+// shortPushHolds makes one hold_seconds last 50ms for the rest of a test, for
+// a case that waits for a hold to run out rather than timing it.
+func shortPushHolds(t *testing.T) {
+	t.Helper()
+	prev := pushHoldSecond
+	pushHoldSecond = 50 * time.Millisecond
+	t.Cleanup(func() { pushHoldSecond = prev })
+}
+
+// TestPushHoldSecond_ProductionValueUnchanged pins what shortPushHolds shrinks.
+func TestPushHoldSecond_ProductionValueUnchanged(t *testing.T) {
+	if pushHoldSecond != time.Second {
+		t.Fatalf("pushHoldSecond = %v, want the production 1s", pushHoldSecond)
+	}
+}
+
 func reviewSpec(holdSeconds int, review []string, deny ...string) types.RunPolicySpec {
 	return types.RunPolicySpec{PushRules: &types.PushRulesSpec{
 		DenyPaths: deny, RequireReviewPaths: review, HoldSeconds: holdSeconds,
@@ -181,6 +197,72 @@ func TestPushHoldForwardsOnApprove(t *testing.T) {
 	}
 	if strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGitPushHeld) {
 		t.Errorf("an approved push wrote a held refusal row: %q", sink.String())
+	}
+}
+
+// TestPushHoldSameCommitsDifferentBranchAsksAgain is T-62 (#722): the
+// dedup key pushScope builds is (Repo, Branch, PathsDigest, Commits) — an
+// approval of a push's commits says nothing about the SAME commits reaching
+// another branch. This pins that half of the doc comment at the top of this
+// file ("The same commits to ANOTHER repository or branch are another
+// question, and are held again"), which no other test in this package names.
+//
+// The second push is built from the first push's OWN recorded request:
+// same old/new object ids and the identical packfile bytes (a git push
+// carries no ref name inside the pack — only in the command line), a
+// different ref within the run's namespace. A real `git push` of the exact
+// same commit to a second branch would produce byte-identical packfile
+// content anyway (the pack is a function of the objects, not the ref), so
+// this is not a synthetic shortcut — it is the deterministic way to record
+// that exact case without a second real git checkout landing on a different
+// commit ID (a fresh `git commit` always mints a new timestamp/oid).
+//
+// COUNTERFACTUAL: drop Branch from pushScope's dedup key (join only Repo,
+// PathsDigest, Commits) and the second push is silently forwarded without a
+// second raise — this test's "raises = 1, want 2" catches it.
+func TestPushHoldSameCommitsDifferentBranchAsksAgain(t *testing.T) {
+	p, _, up, cp, _ := newAppLaneHold(t, reviewSpec(5, []string{".github/workflows/**"}), types.ApprovalApproved)
+
+	ref1 := BranchNSPrefix(p.runID) + "work"
+	body1 := recordedPush(t, ref1, workflowPush)
+	rec1 := postPush(t, p, string(body1))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first push (branch %q): status = %d body %q, want 200", ref1, rec1.Code, rec1.Body.String())
+	}
+	if raises, _ := cp.counts(); raises != 1 {
+		t.Fatalf("first push: raises = %d, want 1", raises)
+	}
+
+	res, err := gitpack.Inspect(body1)
+	if err != nil || len(res.Commands) != 1 {
+		t.Fatalf("inspect first push: %v (%d commands)", err, len(res.Commands))
+	}
+	cmd := res.Commands[0]
+	packIdx := bytes.Index(body1, []byte("PACK"))
+	if packIdx < 0 {
+		t.Fatal("no packfile magic found in the recorded push")
+	}
+
+	ref2 := BranchNSPrefix(p.runID) + "other"
+	body2 := []byte(pkt(cmd.Old+" "+cmd.New+" "+ref2+firstCaps) + "0000")
+	body2 = append(body2, body1[packIdx:]...)
+
+	rec2 := postPush(t, p, string(body2))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second push (same commit, branch %q): status = %d body %q, want 200", ref2, rec2.Code, rec2.Body.String())
+	}
+	if !bytes.Equal(up.gitBody, body2) {
+		t.Error("the second push (a different branch) was not forwarded verbatim")
+	}
+	if raises, _ := cp.counts(); raises != 2 {
+		t.Errorf("same commits on a different branch must be asked again: raises = %d, want 2", raises)
+	}
+	kinds, scopes := cp.raised()
+	if len(scopes) == 2 && scopes[0].Branch == scopes[1].Branch {
+		t.Errorf("both raises carry Branch %q; want %q then %q", scopes[0].Branch, ref1, ref2)
+	}
+	if len(kinds) == 2 && (kinds[0] != string(types.ApprovalPushContent) || kinds[1] != string(types.ApprovalPushContent)) {
+		t.Errorf("kinds = %v, want two push_content raises", kinds)
 	}
 }
 
@@ -379,7 +461,7 @@ func TestPushHoldAbsentRulesAskNothing(t *testing.T) {
 // branch-namespace switch ON, for a GitLab host and an Azure DevOps one: a
 // review path must hold wherever a deny path would refuse.
 func TestPushHoldOnTheTokenLane(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "true")
+	setPATBranchNS(t, "true")
 	for _, c := range []struct {
 		host, path, repo string
 	}{
@@ -427,6 +509,7 @@ func TestPushHoldOnTheTokenLane(t *testing.T) {
 				}
 			})
 			t.Run("timeout refuses", func(t *testing.T) {
+				shortPushHolds(t)
 				p, _, up, _, _ := lane(t, review, types.ApprovalPending)
 				rec := post(p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush))
 				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "nobody decided") || up.gitHits != 0 {
@@ -494,6 +577,7 @@ func recordedPushArgs(t *testing.T, ref string, files map[string]string, pushArg
 // branch, or to another repository the run can reach, are a new question —
 // raised as their own row and held, never forwarded on the first approval.
 func TestPushHoldApprovalDoesNotTravel(t *testing.T) {
+	shortPushHolds(t)
 	t.Run("another branch on the App lane", func(t *testing.T) {
 		p, _, up, cp, _ := newAppLaneHold(t, reviewSpec(1, []string{".github/workflows/**"}), types.ApprovalApproved)
 		work := recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)

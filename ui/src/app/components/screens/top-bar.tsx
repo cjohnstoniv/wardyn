@@ -12,6 +12,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronsUpDown, Fingerprint, LogOut, Moon, Plus, Sun } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
+import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
@@ -80,7 +81,8 @@ export function TopBar({
         className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
       >
         {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
-        <WardynWordmark compact="sm" />
+        {/* #1125: the brand's wordmark; unbranded, exactly as before. */}
+        <BrandSlot part="bar" fallback={<WardynWordmark compact="sm" />} />
       </Link>
       {/* Beside the wordmark (packet M-A QM-1): which console you are in is the
           first thing read on every page. Below sm it moves into the nav sheet. */}
@@ -110,6 +112,7 @@ export function TopBar({
       {/* F7-F2: min-w-0 lets this cluster actually shrink instead of forcing
           the header wider than the viewport (no flex-wrap/height change). */}
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <BrandSlot part="link" />
         <Button
           variant="ghost"
           size="icon"

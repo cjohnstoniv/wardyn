@@ -134,6 +134,7 @@ function railTree(props: {
       startup="It starts."
       showHoldNote={props.showHoldNote ?? false}
       toolRules={null}
+      unattended={false}
       launch={{
         onLaunch: props.onLaunch ?? (() => {}),
         disabled: false,
@@ -143,8 +144,6 @@ function railTree(props: {
         error: props.launchError ?? null,
         errorSeq: props.launchErrorSeq ?? 0,
         credentialRefused: props.credentialRefused ?? false,
-        warnings: [],
-        onOpenRun: null,
       }}
       preflight={{
         error: props.preflightError ?? null,
