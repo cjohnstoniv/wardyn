@@ -156,7 +156,9 @@ describe("ViewGate", () => {
     expect(screen.getByRole("heading", { name: VIEW_TO_ADMIN.TITLE })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: VIEW_TO_ADMIN.GO }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/admin/audit?x=1"));
-    expect(setMode).toHaveBeenCalledWith(false, false);
+    // #912: switchView's third arg (userType) is forwarded through as an
+    // explicit undefined when none is given.
+    expect(setMode).toHaveBeenCalledWith(false, false, undefined);
   });
 
   it("a failed switch says so and stays put", async () => {
