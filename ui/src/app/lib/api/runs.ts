@@ -7,6 +7,8 @@
 // credential-grant eligibility. Consumed directly (import { runs }) so a route
 // that never touches runs drops this module from its chunk.
 import type {
+  AdminProxyWindowResult,
+  AdminRestartResponse,
   AgentRun,
   AttachHolder,
   CreateRunInput,
@@ -15,7 +17,9 @@ import type {
   PolicyGrade,
   PreflightResult,
   ProfileProposal,
+  ReviveResult,
   RunDetail,
+  RunEndWaitResult,
   RunFilesResult,
   RunPolicySpec,
   RunResources,
@@ -378,6 +382,43 @@ export const runs = {
     }
   },
 
+  // PATCH /api/v1/runs/{id} — the run's end and/or wait (long-holds design
+  // rev 4 §2.3, RL-4/RL-15): owner or super admin. `endsAt: null` asks for No
+  // end; omitting a field leaves it alone. An over-ask is never refused — the
+  // server caps it to the run's captured limit and names the field in the
+  // response's `capped`, which the caller renders rather than treating as an
+  // error.
+  async setRunEndAndWait(
+    id: string,
+    change: { endsAt?: string | null; waitBudgetSec?: number },
+  ): Promise<RunEndWaitResult> {
+    const body: Record<string, unknown> = {};
+    if ("endsAt" in change) body.ends_at = change.endsAt;
+    if (change.waitBudgetSec != null) body.wait_budget_sec = change.waitBudgetSec;
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunEndWaitResult>(res);
+  },
+
+  // POST /api/v1/runs/{id}/revive — owner or super admin (long-holds design
+  // rev 4 §4.1, RL-10/RL-11). Gives a lost or live run a fresh proxy built
+  // from the run's own stored config, with the owner's CURRENT profile denies
+  // unioned over the frozen policy; a rebooted/outaged run's agent is started
+  // again behind it. Authority is always the OWNER's, never the caller's.
+  async reviveRun(id: string): Promise<ReviveResult> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/revive`, { method: "POST" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<ReviveResult>(res);
+  },
+
+  // POST /api/v1/runs/{id}/resume — owner or super admin: thaw a run the
+  // pause reaper froze (long-holds design rev 4 §3, RL-7). 409s if the run
+  // isn't RUNNING or was never paused; the caller re-fetches either way.
+  async resumeRun(id: string): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/resume`, { method: "POST" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+  },
+
   // GET /api/v1/runs/{id}/grants — the run's credential-grant eligibility
   // records (what it MAY request), including grants that were never minted.
   async getGrants(runId: string): Promise<CredentialGrant[]> {
@@ -435,5 +476,25 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/takeover`, { method: "POST" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<{ promoted: boolean }>(res);
+  },
+
+  // GET /api/v1/admin/runs/proxy-window — operator only (F2/#580, PR #1317
+  // review, RL-10). Every live run whose proxy started outside the supported
+  // wardynd N/N-1 window; these are exactly the ids the bulk restart below
+  // takes.
+  async getAdminProxyWindow(): Promise<AdminProxyWindowResult> {
+    const res = await wfetch("/admin/runs/proxy-window", { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<AdminProxyWindowResult>(res);
+  },
+
+  // POST /api/v1/admin/runs/restart { run_ids } — operator only. Restarts
+  // each named run's proxy under its OWNER's current limits, one at a time;
+  // a per-run failure (including a rebooted run's own "revive it from the
+  // run's page" 409) never aborts the rest — see AdminRestartResult.
+  async restartAdminRuns(runIds: string[]): Promise<AdminRestartResponse> {
+    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<AdminRestartResponse>(res);
   },
 };

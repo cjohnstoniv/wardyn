@@ -10,7 +10,14 @@ import type { AgentRun } from "../../lib/types";
 
 const listRunsFilteredMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
-  runs: { listRunsFiltered: (...a: unknown[]) => listRunsFilteredMock(...a) },
+  runs: {
+    listRunsFiltered: (...a: unknown[]) => listRunsFilteredMock(...a),
+    // F2 (PR #1317 review): AdminOlderLimitsCard fetches this unconditionally
+    // in the Admin view (RunsScreen mounts it there) — an empty outside list
+    // is the "nothing to restart" case, so it renders nothing and stays a
+    // no-op for every test in this file, none of which are about it.
+    getAdminProxyWindow: vi.fn().mockResolvedValue({ release: "", window: [], outside: [] }),
+  },
 }));
 const getSetupStatusMock = vi.fn();
 vi.mock("../../lib/api/setup", () => ({

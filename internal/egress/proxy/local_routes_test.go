@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -110,6 +111,24 @@ func TestLocalRouteForwardsRunTokenAndBody(t *testing.T) {
 			route:          routeRecordings + runID.String(),
 			body:           `{"version":2}`,
 			wantCPPath:     "/api/v1/internal/recordings/" + runID.String(),
+			wantStatus:     http.StatusNoContent,
+			wantRuleSource: ruleSourceRecordings,
+		},
+		{
+			name:           "recording-part",
+			method:         http.MethodPut,
+			route:          routeRecordings + runID.String() + "/parts/2",
+			body:           `{"version":2}`,
+			wantCPPath:     "/api/v1/internal/recordings/" + runID.String() + "/parts/2",
+			wantStatus:     http.StatusNoContent,
+			wantRuleSource: ruleSourceRecordings,
+		},
+		{
+			name:           "recording-part-at-the-limit",
+			method:         http.MethodPut,
+			route:          routeRecordings + runID.String() + "/parts/" + strconv.Itoa(types.RecordingMaxParts),
+			body:           `{"version":2}`,
+			wantCPPath:     "/api/v1/internal/recordings/" + runID.String() + "/parts/" + strconv.Itoa(types.RecordingMaxParts),
 			wantStatus:     http.StatusNoContent,
 			wantRuleSource: ruleSourceRecordings,
 		},
@@ -390,6 +409,11 @@ func TestLocalRouteRejectsBadPathSegment(t *testing.T) {
 		{"recording-nonuuid", http.MethodPut, routeRecordings + "x"},
 		{"recording-traversal", http.MethodPut, routeRecordings + "../decisions"},
 		{"recording-nested", http.MethodPut, routeRecordings + uuid.New().String() + "/extra"},
+		{"recording-part-1", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/1"},
+		{"recording-part-padded", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/02"},
+		{"recording-part-nonnumeric", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/x"},
+		{"recording-part-nested", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/2/extra"},
+		{"recording-part-bad-run", http.MethodPut, routeRecordings + "x/parts/2"},
 		{"approval-nested", http.MethodGet, routeApprovals + "abc/extra"},
 		{"approval-expire-nonuuid", http.MethodPost, routeApprovals + "abc" + routeApprovalsExpireSuffix},
 	}
@@ -764,4 +788,23 @@ func funcBody(src, name string) string {
 		return rest[:end]
 	}
 	return rest
+}
+
+// TestLocalRouteRefusesAPartAboveTheLimit: a part past types.RecordingMaxParts
+// is refused at the proxy (413, a deny decision) and never reaches the control
+// plane; the part at the limit is forwarded (the table above).
+func TestLocalRouteRefusesAPartAboveTheLimit(t *testing.T) {
+	cpCalled := false
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { cpCalled = true }))
+	defer cp.Close()
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+	rec := httptest.NewRecorder()
+	route := routeRecordings + uuid.New().String() + "/parts/" + strconv.Itoa(types.RecordingMaxParts+1)
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPut, route, strings.NewReader(`{"version":2}`)))
+	if rec.Code != http.StatusRequestEntityTooLarge || cpCalled {
+		t.Fatalf("part above the limit: status %d, control plane called %v; want 413 and never forwarded", rec.Code, cpCalled)
+	}
+	if d := lastDecision(t, buf); d.RuleSource != ruleSourceRecordings || d.Decision != egress.Deny {
+		t.Fatalf("decision = %+v, want %s deny", d, ruleSourceRecordings)
+	}
 }

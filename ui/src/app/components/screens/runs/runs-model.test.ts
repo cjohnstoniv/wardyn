@@ -86,20 +86,38 @@ describe("rowPresentation — reauth / ado_consent (design.md §2.2 rows 2-3)", 
   });
 });
 
-describe("rowPresentation — lost (H-7 seam: no Revive action built here)", () => {
-  it("by=you: Sandbox stopped, amber, needsYou, but NO action (L5 builds Revive)", () => {
+describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () => {
+  it("by=you: Sandbox stopped, amber, needsYou, action revive", () => {
     const r = run({ attention: { kind: "lost", by: "you", pending: 0 } });
+    expect(rowPresentation(r, false)).toMatchObject({
+      hue: "amber",
+      word: "Sandbox stopped",
+      action: "revive",
+      needsYou: true,
+    });
+  });
+
+  it("by=owner: no action — nobody but the owner can revive it", () => {
+    const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
+    expect(rowPresentation(r, true)).toMatchObject({ action: null, needsYou: false });
+  });
+
+  it("in the admin view, a lost run is never by=you (the server forces owner)", () => {
+    const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
+    expect(rowPresentation(r, true).needsYou).toBe(false);
+  });
+
+  // F18 (PR #1317 round-2 review): no k8s revive in 0.8 (L6) — the run
+  // page's own lifetime banner already treats a k8s lost run as not
+  // revivable, so the row must not offer a button the run page won't honour.
+  it("by=you on a k8s run: still Needs you, but no action — needsYou survives without a button", () => {
+    const r = run({ attention: { kind: "lost", by: "you", pending: 0 }, runner_target: "k8s" });
     expect(rowPresentation(r, false)).toMatchObject({
       hue: "amber",
       word: "Sandbox stopped",
       action: null,
       needsYou: true,
     });
-  });
-
-  it("in the admin view, a lost run is never by=you (the server forces owner)", () => {
-    const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
-    expect(rowPresentation(r, true).needsYou).toBe(false);
   });
 });
 
@@ -143,6 +161,51 @@ describe("rowPresentation — plain state words with no attention", () => {
     expect(p.word).toBe(word);
     expect(p.action).toBeNull();
     expect(p.needsYou).toBe(false);
+  });
+});
+
+describe("rowPresentation — RL-15: the board's own ends-soon warning (design.md §2.3)", () => {
+  it("10 minutes left: amber 'Ends in 10 minutes', no attention needed", () => {
+    const r = run({ state: "RUNNING", ends_at: new Date(NOW + 9 * 60_000).toISOString() });
+    expect(rowPresentation(r, false)).toMatchObject({
+      hue: "amber",
+      word: "Ends in 10 minutes",
+      action: null,
+      needsYou: false,
+    });
+  });
+
+  it("1 hour left: amber 'Ends in 1 hour'", () => {
+    const r = run({ state: "RUNNING", ends_at: new Date(NOW + 45 * 60_000).toISOString() });
+    expect(rowPresentation(r, false).word).toBe("Ends in 1 hour");
+  });
+
+  it("24 hours left on a lease over 2 days: amber 'Ends in 24 hours'", () => {
+    const r = run({
+      created_at: new Date(NOW - 3 * 24 * 3600_000).toISOString(),
+      state: "RUNNING",
+      ends_at: new Date(NOW + 20 * 3600_000).toISOString(),
+    });
+    expect(rowPresentation(r, false).word).toBe("Ends in 24 hours");
+  });
+
+  it("24 hours left on a short (<= 2 day) lease: no warning yet — plain Running", () => {
+    const r = run({
+      created_at: new Date(NOW - 60_000).toISOString(),
+      state: "RUNNING",
+      ends_at: new Date(NOW + 20 * 3600_000).toISOString(),
+    });
+    expect(rowPresentation(r, false).word).toBe("Running");
+  });
+
+  it("no end (ends_at absent): plain Running, never a warning", () => {
+    const r = run({ state: "RUNNING" });
+    expect(rowPresentation(r, false).word).toBe("Running");
+  });
+
+  it("a run already past its end (should have been marked ended/lost): no warning, not negative", () => {
+    const r = run({ state: "RUNNING", ends_at: new Date(NOW - 60_000).toISOString() });
+    expect(rowPresentation(r, false).word).toBe("Running");
   });
 });
 
