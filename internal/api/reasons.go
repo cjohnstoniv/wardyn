@@ -896,6 +896,27 @@ const (
 	reasonInlinePolicyInvalid = "inline_policy_invalid"
 )
 
+// GET/PUT /api/v1/ui-layout (ui_layout.go): the console's own saved-layout
+// door.
+const (
+	reasonUILayoutInvalidPreset          = "ui_layout_invalid_preset"
+	reasonUILayoutTooManyWidgets         = "ui_layout_too_many_widgets"
+	reasonUILayoutUnknownWidget          = "ui_layout_unknown_widget"
+	reasonUILayoutInvalidGeometry        = "ui_layout_invalid_geometry"
+	reasonUILayoutPersistenceUnavailable = "ui_layout_persistence_unavailable"
+)
+
+// /scm/azure-devops/signin and its callback (ado_entra.go): the console's own
+// Azure DevOps per-person sign-in doors, distinct from the ADOEntraFailure
+// enum a REDEMPTION classifies as (ado_entra_store.go, its own documented
+// guard exception).
+const (
+	reasonADOSignInUnconfigured = "ado_sign_in_unconfigured"
+	reasonADOSignInForeignApp   = "ado_sign_in_foreign_app"
+	reasonADOSignInNoSession    = "ado_sign_in_no_session"
+	reasonADOSignInScopeInvalid = "ado_sign_in_scope_invalid"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

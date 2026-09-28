@@ -374,7 +374,7 @@ func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 // response has already been written.
 func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEntraConfig, bool) {
 	if s.cfg.ADOEntra == nil {
-		writeError(w, http.StatusNotFound, adoSignInUnconfiguredRefusal)
+		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
 		return ADOEntraConfig{}, false
 	}
 	cfg, found, err := s.cfg.ADOEntra(r.Context())
@@ -383,7 +383,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 		return ADOEntraConfig{}, false
 	}
 	if !found {
-		writeError(w, http.StatusNotFound, adoSignInUnconfiguredRefusal)
+		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
 		return ADOEntraConfig{}, false
 	}
 	if err := cfg.validate(); err != nil {
@@ -394,7 +394,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 	// application's id_token cannot be bound to this session, so a sign-in
 	// against one must never be started at all.
 	if !cfg.isLoginApplication() {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(adoSignInForeignAppRefusal, cfg.ClientID))
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInForeignApp, fmt.Sprintf(adoSignInForeignAppRefusal, cfg.ClientID))
 		return ADOEntraConfig{}, false
 	}
 	// The override is validated here too, not only where a URL is composed, so
@@ -424,7 +424,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	subject := oidcHumanFromContext(r.Context())
 	if subject == "" {
-		writeError(w, http.StatusForbidden, adoSignInNoSessionRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
 	cfg, ok := s.resolveADOEntra(w, r)
@@ -433,7 +433,7 @@ func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	asked, err := adoRequestedScopes(r.URL.Query(), cfg.Scopes)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInScopeInvalid, err.Error())
 		return
 	}
 
@@ -549,7 +549,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	subject := oidcHumanFromContext(ctx)
 	if subject == "" {
-		writeError(w, http.StatusForbidden, adoSignInNoSessionRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
 	cfg, ok := s.resolveADOEntra(w, r)
