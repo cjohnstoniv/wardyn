@@ -164,6 +164,13 @@ describe("glyphKindFor — the shape half of the colour/glyph rule", () => {
     expect(glyphKindFor("grey", "Stopped", "STOPPED")).toBe("square-outline");
     expect(glyphKindFor("grey", "Archived", "ARCHIVED")).toBe("square-outline");
   });
+
+  it("review round 2 F5: a lease-ended row (state still RUNNING) gets the square outline, not the pulsing dot", () => {
+    // rowPresentation gives it grey + "Ended at its end time" while `state`
+    // stays RUNNING (see runs-model.ts's own note) — the RUNNING check must
+    // not win the shape decision for this word.
+    expect(glyphKindFor("grey", "Ended at its end time", "RUNNING")).toBe("square-outline");
+  });
 });
 
 describe("sectionRuns — need, then time (H-1/H-6)", () => {

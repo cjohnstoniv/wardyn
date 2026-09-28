@@ -181,9 +181,16 @@ export function RunsScreen() {
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(filters);
 
+  // Round 2 (lead decision, following the mock): N counts every run the
+  // caller owns, BEFORE filters and ageing (home-runs-1197-packet.html:672,
+  // S.RUNS_DESC_USER(sc.length)) — not just the rows this fetch happens to
+  // show. Under the default filters the two hidden counts (the ageing
+  // window, killed-exclusion) are exactly the gap between the shown rows and
+  // the true total, so adding them back in matches the mock's own worked
+  // example (13 shown + 4 older + 1 killed = "Your runs · 18").
   const description = adminView
     ? "Every run, live — each confined behind its own barrier."
-    : `Your runs · ${runsList.length}`;
+    : `Your runs · ${runsList.length + hiddenOlder + hiddenKilled}`;
 
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 

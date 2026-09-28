@@ -112,6 +112,12 @@ export function RowGlyph({ hue, kind, className }: { hue: RowHue; kind: RowGlyph
 export function glyphKindFor(hue: RowHue, word: string, state: string): RowGlyphKind {
   if (hue === "amber") return "need";
   if (hue === "red") return "fail";
+  // Round 2 F5: a lease-ended run's `state` is still RUNNING (rowPresentation
+  // pre-empts only the word/hue, not the field itself), so the RUNNING check
+  // below would still hand it the pulsing dot. The mock's glyph() legend is
+  // explicit: "Ended at its end time" is the square-outline shape, same as
+  // any other over row — checked on the word, ahead of the state switch.
+  if (word === "Ended at its end time") return "square-outline";
   if (state === "RUNNING") return "dot";
   if (state === "STARTING" || state === "PENDING") return "ring";
   if (word === "Completed") return "check";
