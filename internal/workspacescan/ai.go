@@ -172,7 +172,7 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 	// NeedsReview so an operator must deliberately promote it via the
 	// workspace's ApprovedEgress list before it can ever reach a run.
 	//
-	// B11b-F6: through validateSuggestedHosts, the SAME normalise (lowercase,
+	// Through validateSuggestedHosts, the SAME normalise (lowercase,
 	// strip scheme/port/path), charset check, dot requirement and cap the
 	// deterministic content lane's own suggested hosts cross. An advisory host
 	// and a content-derived one land in one field and are promoted by one

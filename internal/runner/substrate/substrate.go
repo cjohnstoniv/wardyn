@@ -9,10 +9,12 @@
 // MUST: prove confined egress rather than merely assert it (L0 structural or
 // L1 network-policy, see ClassSupport.NetworkPolicy); advertise NO
 // Confinement Classes if it can prove neither, except behind an explicit,
-// still-warning operator opt-out; error from CreateSandbox, never silently
-// downgrade, when the demanded class can't be enforced; never let the run
-// token/secrets reach the agent's environment; make teardown idempotent and
-// reconstructable from the run id.
+// still-warning operator opt-out that MUST keep advertising
+// StructuralEgress=false, NetworkPolicy=false so it never reads as confined
+// on /healthz; error from CreateSandbox BEFORE creating anything, never
+// silently downgrade, when the demanded class can't be enforced; never let
+// the run token/secrets reach the agent's environment; make teardown
+// idempotent and reconstructable from the run id.
 package substrate
 
 import (
@@ -44,8 +46,7 @@ type ClassSupport struct {
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate.
 type Substrate interface {
-	// Name reports the substrate kind, surfaced on /healthz.
-	Name() string
+	Name() string // reports the substrate kind, surfaced on /healthz
 	// Classes reports the enforceable Confinement Classes + their substrate labels.
 	Classes(ctx context.Context) (ClassSupport, error)
 	// CreateSandbox provisions the run's sandbox, fail-closed with full rollback on any error.
@@ -55,14 +56,11 @@ type Substrate interface {
 	// (k8s ephemeral containers are ADD-ONLY) and MUST error rather than
 	// no-op or return the PRIOR id when it can't honour a second.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
-	// Wait blocks until the agent process for ref exits and returns its code.
-	Wait(ctx context.Context, ref string) (int, error)
-	// Attach opens an interactive PTY session inside ref.
-	Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error)
+	Wait(ctx context.Context, ref string) (int, error)                                         // blocks until the agent process for ref exits and returns its code
+	Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error) // opens an interactive PTY session inside ref
 	// ExecStream launches a fresh, streamable exec, repeatable against the SAME ref (see runner.ExecStream's doc).
 	ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error)
-	// Status reports the sandbox lifecycle state.
-	Status(ctx context.Context, ref string) (runner.Status, error)
+	Status(ctx context.Context, ref string) (runner.Status, error) // reports the sandbox lifecycle state
 	// AgentStatus reports the AGENT's state restart-safely, falling back to Status when agentExecID is "".
 	AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error)
 	// StopSandbox is the graceful teardown (idempotent on a gone sandbox).

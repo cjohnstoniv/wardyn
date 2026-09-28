@@ -58,23 +58,19 @@ var errDriveAllocationInvalid = errors.New("this drive cannot be mounted on Kube
 // only in-container path a drive may bind at.
 var errDriveTargetInvalid = errors.New("this drive cannot be mounted on Kubernetes: it did not arrive addressed to the reserved drive path; report the run to your administrator (no setting on the allocation produces this)")
 
-// errDriveClaimTerminating: reuseDriveClaim's refusal of an existing claim
-// being deleted; re-creating it would undo an operator's deliberate reclaim.
-var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all")
+var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all") // reuseDriveClaim's refusal; re-creating it would undo an operator's deliberate reclaim
 
-// errDriveClaimVanished: ensureDrivePVC's refusal when a create race is lost
-// twice (AlreadyExists then NotFound); the next run's Get→Create self-heals.
-var errDriveClaimVanished = errors.New("your drive's volume claim was deleted while your run was starting; start the run again")
+var errDriveClaimVanished = errors.New("your drive's volume claim was deleted while your run was starting; start the run again") // ensureDrivePVC's refusal when a create race is lost twice; the next run's Get→Create self-heals
 
 // errDriveClaimForeign: reuseDriveClaim's refusal of a claim whose IDENTITY
-// labels say it belongs to a different member (driveClaimIdentity).
+// labels say it belongs to a different member (driveClaimIdentity). The
+// claim's NAME cannot prove that by itself: DriveObjectName's slug fold can
+// collide two different (drive, home) pairs onto one name.
 //
 // DRAFT (M2 canon pending) — the frozen member sentence for this refusal.
 var errDriveClaimForeign = errors.New("drive: your drive's volume is not the one allocated to you — ask an admin")
 
-// errDriveBackendUnsupported: ensureDrivePVC's refusal of a drive whose
-// backend belongs to another substrate; reaching here is a bug.
-var errDriveBackendUnsupported = errors.New("k8s: this drive's backend is not a Kubernetes one and cannot be mounted on this substrate")
+var errDriveBackendUnsupported = errors.New("k8s: this drive's backend is not a Kubernetes one and cannot be mounted on this substrate") // ensureDrivePVC's refusal of a drive whose backend belongs to another substrate; reaching here is a bug
 
 // errSecondExec: Kubernetes ephemeral containers are ADD-ONLY, so a second
 // Exec can't be honoured the way docker's re-exec is.
