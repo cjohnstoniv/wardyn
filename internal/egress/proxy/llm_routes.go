@@ -356,9 +356,10 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 // The returned release MUST be deferred by the caller: gives the buffer back
 // to maxRetainedScanBytes. Always non-nil and safe to call more than once.
 func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
-	// Scan slot bounds live heap against the sidecar's cgroup cap. Waited
-	// through the request ctx AND a wall-clock bound (scanQueueWait); fails
-	// CLOSED on either, since an uninspectable request must not be forwarded.
+	// Scan slot (maxConcurrentScans) bounds live heap against the sidecar's
+	// cgroup cap. Waited through the request ctx AND a wall-clock bound
+	// (scanQueueWait); fails CLOSED on either, since an uninspectable request
+	// must not be forwarded.
 	noRelease := func() {}
 	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
 	defer cancel()
