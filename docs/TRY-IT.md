@@ -41,8 +41,8 @@ confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault =
 CC3 Kata microVM), whether an LLM path exists, secret-store durability — then
 walks the rail's steps to your first run. Whatever you configure has to pass a live
 probe before that step unlocks; nothing is ambient, so a run reaches an
-integration only when its workspace requires it by name (see
-[OPERATIONS.md](OPERATIONS.md) → "Model access resolves" for the one exception).
+integration only when its workspace requires it by name, and a model only
+through a model provider.
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 
@@ -235,28 +235,20 @@ that ruleset back and gate on it (`WARDYN_GITHUB_REQUIRE_REF_RULESET`,
 opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
 `threatmodel/THREAT-MODEL.md` asset #4 and [ROADMAP.md](../ROADMAP.md).
 
-### Model auth: three ways to give Claude Code its LLM access
+### Model auth: model providers
 
-Wardyn credentials a Claude run one of three ways. Real precedence: host-staged
-subscription mount (host mode's resident `~/.claude`) > managed subscription >
-Bedrock > api-key — **except** that an `api_key` grant the run's policy
-already brokers for `api.anthropic.com` is treated as an explicit operator
-opt-in and suppresses the managed-subscription fallback: `wardyn subscription
-connect` fills in only for a run that has neither a resident mount nor that
-grant, it never silently overrides a run you gave its own key
-(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`).
+As of 0.8 a run's model credential comes only from its **model provider**: an
+admin adds providers under Settings → Model providers (`PUT
+/api/v1/model-providers`), and each person connects their OWN credential for
+a provider — a key, a Claude sign-in or an AWS sign-in — from Getting started.
+Wardyn never substitutes: a run whose provider cannot credential it is refused
+at create, naming the provider and what to fix, and a run with no provider at
+all launches with only a warning. Upgrading converts the old setup once
+(migration `0099_model_provider_conversion`; see the CHANGELOG).
 
-That precedence is what fires when nobody has said otherwise. An admin who
-writes an **agent providers** row (`PUT /api/v1/agent-providers`, or the
-Agents tab) declares the ONE lane an agent's runs may use — and from then on
-Wardyn never substitutes: a run whose declared lane is not the lane that
-resolved is refused at create and at launch, naming the lane and its state,
-rather than quietly billed to whatever else happened to be configured
-(`enforceConfiguredLLMMechanism`). With no row for an agent, nothing changes —
-the precedence above is the whole story, and a run with no model credential at
-all still launches with only a warning. All three keep
-the real credential out of the sandbox *except* the Bedrock access-key path
-(see below):
+The operator-held lanes below (a key in the operator's secret store, the
+managed subscription, Bedrock boot configuration) no longer credential any
+run; they are described here only until their boot settings are removed:
 
 - **API key** (Level 2 above) — `wardyn secret set anthropic-api-key`. The proxy
   injects `x-api-key` at startup; **never resident**.

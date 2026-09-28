@@ -459,8 +459,8 @@ services:
       # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
       # = every authenticated human is an operator (unchanged). Set it to a
       # comma-separated list of full addresses and every other signed-in human
-      # becomes a read-only member on the harness-credential, policy, workspace
-      # and site-config writes. See docs/OPERATIONS.md "Who can change what".
+      # becomes a read-only member on the policy, workspace and site-config
+      # writes. See docs/OPERATIONS.md "Who can change what".
       WARDYN_OIDC_OPERATOR_EMAILS: "${WARDYN_OIDC_OPERATOR_EMAILS:-}"
       # Leaving the list empty WITH OIDC configured refuses to boot
       # (validateOperatorPosture) — every signed-in human would be

@@ -120,7 +120,7 @@ result for them is evidence only for the tip somebody actually ran it on.
   on a kind cluster, the containerized `aws sso login` against an on-cluster
   fake IAM Identity Center, and a member's Bedrock run whose role credentials
   the fake confirms were minted for THAT member's pinned account/role. Covers
-  the per-user credential path end to end — `internal/api`'s `resolveBedrockAuth`
+  the per-user credential path end to end — `internal/api`'s `bedrockSSOAuth`
   ssoInject branch, `harnesscred.go`'s login run, `awssso_refresh.go`'s
   dispatch-time renewal — plus `internal/runner/k8s`'s Attach/ExecStream, which
   read 0.0% in the K8S-gated bucket above. Prereqs: `make kind-quickstart` +

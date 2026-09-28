@@ -107,11 +107,11 @@ served header in full.
   (opt-in, `WARDYN_ENVBUILD`) and gates launch on an in-sandbox
   `agent-run --selftest`, fail-closed (`internal/api/runs_dispatch.go`). Operator docs:
   `deploy/images/README.md`, "Bring your own image".
-- **Managed harness credential** — a containerized control plane (no host
-  `~/.claude`) connects a Claude subscription via an interactive login sandbox
-  plus a pasted `claude setup-token` credential, stored age-encrypted and
-  injected proxy-side like the resident-login path
-  (`internal/api/harnesscred.go`, `POST /api/v1/setup/harness-login`).
+- **Model-provider sign-in** — each person signs in to a `bedrock_sso` or
+  `anthropic_subscription` model provider through an interactive login
+  sandbox; the capture is stored age-encrypted in their own namespace and
+  injected proxy-side (`internal/api/provider_signin.go`,
+  `POST /api/v1/model-providers/{id}/sign-in`).
 - **CI mode (BYOA)** — headless one-shot launches from pipelines: `wardyn run
   --wait` maps the run outcome to the CLI exit code (the real task exit code
   rides the `run.complete` audit event), `--image` exposes the BYOI wrap,

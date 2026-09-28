@@ -681,9 +681,11 @@ The kind quickstart (`deploy/kind/quickstart.sh`) and the kind SSO walk
 
 The walk also EXPORTS `WARDYN_WALK_ADMIN_TOKEN`, `WARDYN_WALK_FAKE_URL`, `WARDYN_WALK_FAKE_CA`,
 `WARDYN_WALK_PIN_ACCOUNT`, `WARDYN_WALK_PIN_ROLE`, `WARDYN_WALK_SSO_START_URL`,
-`WARDYN_WALK_SSO_REGION`, `WARDYN_WALK_KUBE_CONTEXT`,
-`WARDYN_WALK_KUBE_NAMESPACE` and `WARDYN_WALK_KUBE_NODE` as its own internal
-handoff to `ui/e2e/walk/sso-member.spec.ts` and
+`WARDYN_WALK_SSO_REGION`, `WARDYN_WALK_BEDROCK_MODEL`, `WARDYN_WALK_BEDROCK_BASE_URL`
+(the pinned-account model ARN and the fake's bedrock-runtime address, which
+`ui/e2e/walk/helpers.ts` writes onto the walk's `bedrock_sso` model provider),
+`WARDYN_WALK_KUBE_CONTEXT`, `WARDYN_WALK_KUBE_NAMESPACE` and
+`WARDYN_WALK_KUBE_NODE` as its own internal handoff to `ui/e2e/walk/sso-member.spec.ts` and
 `ui/e2e/walk/sso-member-recovery.spec.ts` (which read them via `process.env`) —
 outputs of the walk, not operator inputs; nothing external should set them. The
 last three are the cluster coordinates the recovery spec's cold-start case needs
