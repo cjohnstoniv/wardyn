@@ -241,13 +241,22 @@ export async function asRealSecurityAdmin(page: Page): Promise<void> {
 // Render-only splices for specs that supply deliberately hypothetical states.
 // Requests still carry the operator token; use asRealMember for authorization.
 export async function mockMemberRole(page: Page): Promise<void> {
+  // CACHE-AND-SERVE, not route.fetch()+refulfill per match — the same reason
+  // mockMemberSetupStatus below does it: a real round trip PER match races
+  // Playwright disposing an in-flight route's response ("apiResponse.json:
+  // Response has been disposed"). One real fetch, then every match is
+  // fulfilled from the cached body.
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/me", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.role = "user";
-    json.operator = false;
-    json.security_operator = false;
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+      body.role = "user";
+      body.operator = false;
+      body.security_operator = false;
+      cached = body;
+    }
+    // TS cannot narrow a `let` captured across the await above; the `if` does.
+    await route.fulfill({ json: cached! });
   });
   await mockMemberSetupStatus(page);
 }
@@ -306,13 +315,22 @@ export async function mockMemberSetupStatus(page: Page): Promise<void> {
 // Render-only security tier: server authorization is unchanged by this splice.
 // Use asRealSecurityAdmin when a refusal or ownership check is under test.
 export async function mockSecurityAdminRole(page: Page): Promise<void> {
+  // CACHE-AND-SERVE, not route.fetch()+refulfill per match — the same reason
+  // mockMemberSetupStatus above does it: a real round trip PER match races
+  // Playwright disposing an in-flight route's response ("apiResponse.json:
+  // Response has been disposed"). One real fetch, then every match is
+  // fulfilled from the cached body.
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/me", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.role = "security_admin";
-    json.operator = false;
-    json.security_operator = true;
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+      body.role = "security_admin";
+      body.operator = false;
+      body.security_operator = true;
+      cached = body;
+    }
+    // TS cannot narrow a `let` captured across the await above; the `if` does.
+    await route.fulfill({ json: cached! });
   });
 }
 

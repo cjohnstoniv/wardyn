@@ -75,11 +75,22 @@ async function mockRunsList(page: Page, handler: RunsListHandler): Promise<void>
 }
 
 async function mockHasRuns(page: Page, hasRuns: boolean): Promise<void> {
+  // CACHE-AND-SERVE, not route.fetch()+refulfill per match — the same reason
+  // fixtures.ts's mockMemberSetupStatus does it: the landing redirect, the
+  // shell's poll and a screen's own mount all hit this endpoint, and a real
+  // round trip PER match races Playwright disposing an in-flight route's
+  // response ("apiResponse.json: Response has been disposed"). One real fetch,
+  // then every match is fulfilled from the cached body. The glob keeps the
+  // trailing `*`: the console re-reads with `?recheck=1`.
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.has_runs = hasRuns;
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+      body.has_runs = hasRuns;
+      cached = body;
+    }
+    // TS cannot narrow a `let` captured across the await above; the `if` does.
+    await route.fulfill({ json: cached! });
   });
 }
 
