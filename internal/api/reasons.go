@@ -940,6 +940,26 @@ const (
 	reasonBrandingBodyUnreadable   = "branding_body_unreadable"
 )
 
+// writeServerError's own classified/unclassified split (writeservererror.go):
+// the ONE 5xx chokepoint ~149 sites in this package were written against
+// before it existed. reasonInternalError is deliberately the single generic
+// fallback for everything writeServerError does not otherwise classify —
+// never the driver text err carries (that stays in the log line, not the
+// wire), just enough for a caller to tell "server-side, not yours" from a
+// specific classified cause.
+const (
+	reasonOrgRevoked    = "org_revoked"
+	reasonInternalError = "internal_error"
+)
+
+// GET /api/v1/directory/search (directory_search.go).
+const (
+	reasonDirectorySearchQueryTooShort = "directory_search_query_too_short"
+	reasonDirectorySearchUnknownType   = "directory_search_unknown_type"
+	reasonDirectorySearchRateLimited   = "directory_search_rate_limited"
+	reasonDirectorySearchFailed        = "directory_search_failed"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

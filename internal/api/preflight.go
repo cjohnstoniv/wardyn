@@ -146,7 +146,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -190,7 +190,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Review) and only failing for real once the operator clicks launch.
 	if req.IntegrationID != "" {
 		if in, ok := s.resolveIntegrationRef(ctx, s.secretOwnerFromRequest(r), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
+			writeErrorReason(w, http.StatusBadRequest, reasonIntegrationNotAIProvider, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return
 		}
 	}
@@ -270,7 +270,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// the backend checklist row covers the first.
 	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
 	if !ccOK {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
+		writeErrorReason(w, http.StatusBadRequest, reasonConfinementClassUnknown, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
 		return
 	}
 	// Best-effort capabilities read for the same reason enforcedConfinement now
@@ -288,7 +288,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 	enforced, err := enforcedConfinement(spec, reqCC, advertised)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return
 	}
 
