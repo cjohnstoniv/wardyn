@@ -22,6 +22,7 @@ type lostStore struct {
 	*leaseStore
 	lapsed  bool
 	claimed bool
+	gotLife time.Duration // the life ListLapsedTokenRuns was actually called with
 }
 
 func (s *lostStore) StampRunTokenRenewed(context.Context, uuid.UUID) (bool, error) {
@@ -34,7 +35,10 @@ func (s *lostStore) StampRunTokenRenewed(context.Context, uuid.UUID) (bool, erro
 	return true, nil
 }
 
-func (s *lostStore) ListLapsedTokenRuns(ctx context.Context, _ time.Duration) ([]types.AgentRun, error) {
+func (s *lostStore) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error) {
+	s.mu.Lock()
+	s.gotLife = life
+	s.mu.Unlock()
 	run, _ := s.GetRun(ctx, s.run.ID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -348,6 +352,29 @@ func TestLostRun_RenewStampsAndRefusesAKeptRun(t *testing.T) {
 	}
 	if !hasAudit(h, "identity.renew", "denied") {
 		t.Error("no identity.renew/denied audit row for a lost run's renew")
+	}
+}
+
+// TestLostRun_DeadIdentityWindowIsBounded pins runTokenLapseAfter itself and
+// that sweepLapsedRunTokens actually plumbs it, unmodified, to the store: the
+// proxy renews at least every 30 minutes and gives up an hour after its last
+// good renew (egress/proxy/renew.go renewGiveUpAfter), after which it keeps
+// forwarding allowlisted egress on a dead identity, audit-dark, until this
+// sweep catches it. That window has to be a fixed, small ceiling — never
+// unbounded, and never so tight that ordinary clock skew between the database
+// and the minting replica trips it on a healthy run. No existing test reads
+// the value ListLapsedTokenRuns is actually called with.
+func TestLostRun_DeadIdentityWindowIsBounded(t *testing.T) {
+	if want := time.Hour + 5*time.Minute; runTokenLapseAfter != want {
+		t.Fatalf("runTokenLapseAfter = %v, want exactly %v (the proxy's 1h give-up plus a 5-minute skew budget)",
+			runTokenLapseAfter, want)
+	}
+
+	f := newLostFixture(t)
+	f.sweepTokens(t)
+	if got := f.ls.gotLife; got != runTokenLapseAfter {
+		t.Fatalf("sweepLapsedRunTokens called ListLapsedTokenRuns with life=%v, want the exact constant %v",
+			got, runTokenLapseAfter)
 	}
 }
 

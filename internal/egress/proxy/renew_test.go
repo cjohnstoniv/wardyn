@@ -310,6 +310,58 @@ func TestRenewer_SuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
 	}
 }
 
+// TestRenewer_GiveUpCannotLeaveRenewedIdentity: give-up follows at least one
+// HEALTHY period, not just an all-failing one (every existing give-up test
+// fails from the very first attempt). Once the control plane starts refusing,
+// the token the loop leaves in ts must be exactly the last one it actually
+// renewed — never the stale startup token, and never overwritten by a later
+// failed attempt — because that renewed token, and its stamp
+// (StampRunTokenRenewed), is what the control plane's own dead-identity
+// window (internal/api/run_lost.go runTokenLapseAfter) is measured from.
+func TestRenewer_GiveUpCannotLeaveRenewedIdentity(t *testing.T) {
+	cp := &renewCP{ttl: 30 * time.Millisecond} // succeeds until flipped below
+	srv := httptest.NewServer(cp.handler())
+	defer srv.Close()
+
+	ts := newTokenSource("startup-token")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runTokenRenewerTuned(ctx, ts, srv.URL, srv.Client(), renewerTuning{
+			firstRetry: 10 * time.Millisecond, maxInterval: 20 * time.Millisecond,
+			giveUpAfter: 150 * time.Millisecond, now: time.Now,
+		})
+	}()
+
+	// Let it renew successfully at least twice before flipping the CP to refuse.
+	deadline := time.Now().Add(2 * time.Second)
+	for cp.renewAttempts() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if cp.renewAttempts() < 3 {
+		t.Fatal("the loop never renewed successfully at least twice before the flip; the test proves nothing")
+	}
+	lastGood := ts.Get()
+	if lastGood == "startup-token" {
+		t.Fatal("token is still the startup one; no successful renew actually landed before the flip")
+	}
+	cp.mu.Lock()
+	cp.renewErr = http.StatusUnauthorized
+	cp.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the loop never gave up after the control plane started refusing")
+	}
+	if got := ts.Get(); got != lastGood {
+		t.Errorf("token after giving up = %q, want the last successfully renewed one %q — "+
+			"a give-up must leave the last good identity in place, not a stale or corrupted one", got, lastGood)
+	}
+}
+
 // TestServerStartsRenewerAndShutdownStopsIt drives the REAL lifecycle
 // the sidecar uses: NewServer, then ListenAndServe on one goroutine and Shutdown
 // from another (exactly cmd/wardyn-proxy's shape). It proves the renewer actually
