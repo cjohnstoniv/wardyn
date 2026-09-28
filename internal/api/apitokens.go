@@ -124,7 +124,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			slog.ErrorContext(r.Context(), "api: api-token lookup failed; this request could not be authenticated",
 				"error", err, "path", r.URL.Path)
 			s.metrics.authStoreErrorInc()
-			writeError(w, http.StatusServiceUnavailable, "api token lookup failed")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 			return
 		}
 		// A row minted for a reserved principal (before the sign-in callback
@@ -162,7 +162,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
 				s.metrics.authStoreErrorInc()
-				writeError(w, http.StatusServiceUnavailable, "api token lookup failed")
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 				return
 			}
 			if revoked {
@@ -263,11 +263,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" {
-		writeError(w, http.StatusForbidden, apiTokenNoHumanRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
 		return
 	}
 	if apiTokenIDFromContext(ctx) != uuid.Nil {
-		writeError(w, http.StatusForbidden,
+		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromAPIToken,
 			"an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
@@ -275,7 +275,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// already keeps it off this route, and this keeps a list edit from turning
 	// ten minutes of delegation into a permanent credential.
 	if _, delegated := audit.DelegationFrom(ctx); delegated {
-		writeError(w, http.StatusForbidden,
+		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromDelegatedToken,
 			"a delegated token cannot create an API token — sign in to the console to mint one")
 		return
 	}
@@ -285,7 +285,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// would silently become an admin one — a credential outliving the mode that
 	// created it. See internal/api/membermode.go.
 	if oidc.MemberModeFromContext(ctx) {
-		writeError(w, http.StatusConflict, userViewMintRefusal)
+		writeErrorReason(w, http.StatusConflict, reasonAPITokenMemberModeMint, userViewMintRefusal)
 		return
 	}
 	// May this person mint a token at all (capFeature).
@@ -368,7 +368,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if revoked {
-			writeError(w, http.StatusForbidden, apiTokenNoHumanRefusal)
+			writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
 			return
 		}
 	}
@@ -395,7 +395,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 func apiTokenName(w http.ResponseWriter, raw string) (string, bool) {
 	name := strings.TrimSpace(raw)
 	if len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
-		writeError(w, http.StatusUnprocessableEntity, "name: invalid")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAPITokenNameInvalid, "name: invalid")
 		return "", false
 	}
 	return name, true
@@ -418,7 +418,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 		}
 	}
 	if live >= apiTokenMaxPerPrincipal {
-		writeError(w, http.StatusUnprocessableEntity,
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAPITokenCapReached,
 			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
 		return true
 	}

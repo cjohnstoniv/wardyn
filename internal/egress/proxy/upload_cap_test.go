@@ -71,12 +71,13 @@ func TestBrokeredUploadBodyBoundary(t *testing.T) {
 			}))
 			defer cp.Close()
 			p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
-			r := mustLocalReq(t, http.MethodPut, routeRecordings+uuid.NewString(), strings.NewReader(body))
+			id := uuid.NewString()
+			r := mustLocalReq(t, http.MethodPut, routeRecordings+id, strings.NewReader(body))
 			if tc.unknownLength {
 				r.ContentLength = -1
 			}
 			w := httptest.NewRecorder()
-			p.forwardBrokeredUpload(w, r, routeRecordings, "/api/v1/internal/recordings/",
+			p.forwardBrokeredUpload(w, r, id, "/api/v1/internal/recordings/"+id,
 				ruleSourceRecordings, "read recording body", limit)
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status=%d; want %d", w.Code, tc.wantStatus)

@@ -17,6 +17,8 @@
 //  2. -upload-url <url>  HTTP PUT the cast to <url> with a Bearer token from
 //     -run-token (or WARDYN_RUN_TOKEN env). Used when the
 //     control plane is reachable from the agent container.
+//     An asciinema cast goes up in parts while it records
+//     (tail.go); a .log goes up whole at exit.
 //
 // -upload-url takes precedence. The control plane's launcher (RecorderArgv,
 // internal/runner/sandbox.go) never passes both: when an upload URL is offered
@@ -57,11 +59,23 @@ import (
 // minute, longer than the site-config probe's own wait budget
 // (siteConfigProbeWaitTimeout, internal/api/site_config_probe.go). A cast is
 // small and the proxy hop is local, so 5s to dial / 20s total is generous,
-// not tight.
+// not tight. A long run's tail part is not small (up to 32 MiB), so each PUT
+// also gets its body's time at uploadMinBytesPerSec (uploadTimeout): a small
+// cast still has 20s, and a full part about two and a half minutes.
 var (
 	uploadDialTimeout   = 5 * time.Second
 	uploadClientTimeout = 20 * time.Second
 )
+
+// uploadMinBytesPerSec is the slowest proxy-to-control-plane path an upload
+// is given time for (2 Mbit/s). Below it a full part times out on every
+// attempt and the tail stalls on it.
+const uploadMinBytesPerSec = 256 << 10
+
+// uploadTimeout is one PUT's deadline for an n-byte body.
+func uploadTimeout(n int) time.Duration {
+	return uploadClientTimeout + time.Duration(n)*time.Second/uploadMinBytesPerSec
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -116,20 +130,29 @@ func run(args []string) error {
 			// No delivery: original fast-path — exec asciinema directly.
 			return execAsciinema(path, cast, agentArgv)
 		}
+		var upload func() error
+		if *uploadURL != "" {
+			upload = startTailUploader(cast, *uploadURL, *runToken).finish
+		}
 		exitCode, err := runAsciinema(path, cast, agentArgv)
 		if err != nil {
 			return err
 		}
-		return deliverAndExit(cast, *outDir, *uploadURL, *runToken, exitCode)
+		return deliverAndExit(cast, *outDir, upload, exitCode)
 	}
 
-	// Fallback: plain log capture.
+	// Fallback: plain log capture. A .log has no header to re-prefix, so it
+	// uploads whole at exit rather than in parts.
 	log := logFile(*castDir, *runID)
 	exitCode, err := recordToLog(log, agentArgv)
 	if err != nil {
 		return err
 	}
-	return deliverAndExit(log, *outDir, *uploadURL, *runToken, exitCode)
+	var upload func() error
+	if *uploadURL != "" {
+		upload = func() error { return uploadCast(log, *uploadURL, *runToken) }
+	}
+	return deliverAndExit(log, *outDir, upload, exitCode)
 }
 
 // deliverAndExit runs best-effort delivery of the finished recording, then
@@ -140,8 +163,8 @@ func run(args []string) error {
 // agent run because the recording could not be copied/uploaded. deliver() is a
 // no-op when neither -out-dir nor -upload-url is set, so this is safe to call
 // unconditionally (os.Exit only for a non-zero agent exit).
-func deliverAndExit(srcPath, outDir, uploadURL, runToken string, exitCode int) error {
-	if derr := deliver(srcPath, outDir, uploadURL, runToken); derr != nil {
+func deliverAndExit(srcPath, outDir string, upload func() error, exitCode int) error {
+	if derr := deliver(srcPath, outDir, upload); derr != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-rec: recording delivery failed (non-fatal):", derr)
 	}
 	if exitCode != 0 {
@@ -261,8 +284,9 @@ func recordToLog(logPath string, agentArgv []string) (int, error) {
 	return 0, nil
 }
 
-// deliver copies/uploads the finished recording file. Both modes may be active.
-func deliver(srcPath, outDir, uploadURL, runToken string) error {
+// deliver copies/uploads the finished recording file. Both modes may be active;
+// upload is nil when there is no -upload-url.
+func deliver(srcPath, outDir string, upload func() error) error {
 	var errs []string
 
 	if outDir != "" {
@@ -270,8 +294,8 @@ func deliver(srcPath, outDir, uploadURL, runToken string) error {
 			errs = append(errs, fmt.Sprintf("out-dir: %v", err))
 		}
 	}
-	if uploadURL != "" {
-		if err := uploadCast(srcPath, uploadURL, runToken); err != nil {
+	if upload != nil {
+		if err := upload(); err != nil {
 			errs = append(errs, fmt.Sprintf("upload: %v", err))
 		}
 	}
@@ -318,10 +342,14 @@ func uploadCast(srcPath, uploadURL, runToken string) error {
 	if err != nil {
 		return fmt.Errorf("read cast: %w", err)
 	}
+	return putCast(data, uploadURL, runToken)
+}
 
+// putCast is uploadCast's request, shared with the tail uploader's parts.
+func putCast(data []byte, uploadURL, runToken string) error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: uploadDialTimeout}).DialContext
-	client := &http.Client{Timeout: uploadClientTimeout, Transport: transport}
+	client := &http.Client{Timeout: uploadTimeout(len(data)), Transport: transport}
 	req, err := http.NewRequest(http.MethodPut, uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)

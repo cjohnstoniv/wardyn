@@ -169,11 +169,11 @@ type putSecretRequest struct {
 // returning ok=false on failure. Shared by Put and Delete.
 func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) bool {
 	if !secretNameRE.MatchString(name) {
-		writeError(w, http.StatusBadRequest, "invalid secret name (lowercase alphanumerics, '.', '_', '-')")
+		writeErrorReason(w, http.StatusBadRequest, reasonSecretNameInvalid, "invalid secret name (lowercase alphanumerics, '.', '_', '-')")
 		return false
 	}
 	if secretsAPIReserved(name) {
-		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
+		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, "secret name is reserved for platform internals")
 		return false
 	}
 	// The three RESIDENT AWS SigV4 names are ALWAYS resolved from the operator
@@ -191,7 +191,7 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 	// compiles and passes almost everything — see the per-name tests in
 	// secrets_test.go. Shared by Put and Delete so both paths carry it.
 	if owner != "" && sinkReservedSecret(name) {
-		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
+		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, "secret name is reserved for platform internals")
 		return false
 	}
 	return true
@@ -215,7 +215,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"secret.write", name, "denied", mustJSON(map[string]any{"reason": "owner_param"})))
-		writeError(w, http.StatusForbidden, secretPutOwnerRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonSecretOwnerParamRefused, secretPutOwnerRefusal)
 		return
 	}
 	owner := s.secretOwnerFromRequest(r)
@@ -224,7 +224,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	var body putSecretRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil || body.Value == "" {
-		writeError(w, http.StatusBadRequest, `body must be {"value":"<non-empty secret>"}`)
+		writeErrorReason(w, http.StatusBadRequest, reasonSecretBodyInvalid, `body must be {"value":"<non-empty secret>"}`)
 		return
 	}
 	// Fail-CLOSED: reject a secret the masking/scanning layers would SILENTLY drop
@@ -237,7 +237,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	// credential material, so masking it would be meaningless and refusing it
 	// would break GitHub App setup via the wizard/CLI.
 	if name != secretGitHubAppID && len(body.Value) < secretmask.MinLen {
-		writeError(w, http.StatusBadRequest,
+		writeErrorReason(w, http.StatusBadRequest, reasonSecretValueTooShort,
 			fmt.Sprintf("secret too short: must be at least %d bytes to be masked and scanned", secretmask.MinLen))
 		return
 	}
@@ -288,7 +288,7 @@ func (s *Server) admitSecretCount(w http.ResponseWriter, r *http.Request, owner,
 	if err != nil || len(names) < secretsMaxPerOwner || slices.Contains(names, name) {
 		return true
 	}
-	writeError(w, http.StatusUnprocessableEntity,
+	writeErrorReason(w, http.StatusUnprocessableEntity, reasonSecretCapReached,
 		fmt.Sprintf("too many stored secrets (max %d) — delete one first", secretsMaxPerOwner))
 	return false
 }
@@ -386,7 +386,7 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		if r.Method == http.MethodDelete { // the name list is a read, and unaudited
 			s.auditOwnerRefusal(r, "secret.delete", chi.URLParam(r, "name"), ownerRefusalReason(refusal))
 		}
-		writeError(w, http.StatusUnprocessableEntity, refusal)
+		writeErrorReason(w, http.StatusUnprocessableEntity, ownerRefusalReason(refusal), refusal)
 		return "", false, false
 	}
 	return resolved, known, true
@@ -401,12 +401,13 @@ func (s *Server) auditOwnerRefusal(r *http.Request, action, target, reason strin
 }
 
 // ownerRefusalReason is the audit reason for one of resolveSecretOwner's
-// refusals.
+// refusals — also reused verbatim by resolveSSHKeyOwner (sshkeys_admin.go),
+// the same two-cause shape (#656 slice 2 review round).
 func ownerRefusalReason(refusal string) string {
 	if refusal == secretOwnerAmbiguousMsg {
-		return "owner_ambiguous"
+		return reasonOwnerAmbiguous
 	}
-	return "owner_unresolved"
+	return reasonOwnerUnresolved
 }
 
 // denyMemberOwnerParam answers a non-operator naming ?owner=: a constant 403,
@@ -572,7 +573,7 @@ func (s *Server) crossOwnerDeleteHitsARow(w http.ResponseWriter, r *http.Request
 	if err != nil || slices.Contains(names, name) {
 		return true
 	}
-	writeError(w, http.StatusNotFound, "that owner holds no secret by that name")
+	writeErrorReason(w, http.StatusNotFound, reasonSecretNotFound, "that owner holds no secret by that name")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"secret.delete", name, "failure", mustJSON(map[string]any{
 			"secret_owner": owner, "reason": "not_found",

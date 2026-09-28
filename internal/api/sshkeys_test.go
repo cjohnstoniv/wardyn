@@ -142,6 +142,11 @@ func TestSSHKeysREST_DuplicateFingerprintConflicts(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("re-add of the identical key: code = %d, want 409; body=%s", w.Code, w.Body.String())
 	}
+	// #656 slice 2 review round S4: pin the LITERAL wire reason, not just the
+	// Go constant.
+	if got := errorReason(w); got != "ssh_key_registration_refused" {
+		t.Errorf("reason = %q, want the literal \"ssh_key_registration_refused\"; body=%s", got, w.Body.String())
+	}
 }
 
 // TestSSHKeysREST_ScopedToOwnPrincipal pins the self-service scope: a key
