@@ -810,6 +810,18 @@ const (
 	reasonUserTypeDeleteConflict    = "user_type_delete_conflict"      // something started naming it between the read and the delete
 )
 
+// POST /runs/{id}/attach (attach.go): the interactive WebSocket door.
+const (
+	reasonAttachNoRunner         = "attach_no_runner"           // this deployment configures no runner
+	reasonAttachTicketNotYourRun = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
+	reasonAttachNotRunning       = "attach_not_running"         // the run is not in the RUNNING state
+	reasonAttachRunKept          = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
+	reasonAttachNoSandbox        = "attach_no_sandbox"          // the run has no sandbox ref
+	reasonAttachResumeFailed     = "attach_resume_failed"       // thawing a paused run for the attach failed
+	reasonAttachTicketMintFailed = "attach_ticket_mint_failed"  // mintAttachTicket failed
+	reasonAttachTakeoverNoHolder = "attach_takeover_no_holder"  // nobody is currently attached to this run
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
