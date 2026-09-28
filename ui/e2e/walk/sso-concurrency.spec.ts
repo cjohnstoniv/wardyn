@@ -18,10 +18,13 @@
  *
  *   A. two members signing in to AWS at the same moment each end up holding
  *      their OWN capture — neither sign-in rotates the other's session away;
- *   C. three runs each, launched together, spend only their OWNER's session:
- *      every GetRoleCredentials a run's proxy made, and every bedrock call it
- *      signed, lands under one fake session per person, and the two people's
- *      sessions never share a run;
+ *   C. three runs each, taking turns between the two members while both
+ *      sessions are live, spend only their OWNER's session: every
+ *      GetRoleCredentials a run's proxy made, and every bedrock call it signed,
+ *      lands under one fake session per person, and the two people's sessions
+ *      never share a run. Turns, not all at once: the walk's node is one
+ *      4-vCPU kind node, which holds one agent run (2 vCPU plus its proxy);
+ *      a run that cannot schedule fails its sandbox rather than waiting;
  *   B. one member opening two sign-ins at once gets ONE live sign-in sandbox:
  *      the per-person lock (harnesscred_supersede.go) ends the older launch,
  *      and the capture that lands is the other one's.
@@ -47,6 +50,7 @@ import { execFileSync } from "node:child_process";
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { TERMINAL_RUN_STATES, type RunState } from "../../src/app/lib/types/runs";
 import {
+  ADMIN_TOKEN,
   LOGIN_DONE,
   MEMBER_EMAIL,
   SANDBOX_UP,
@@ -120,6 +124,32 @@ async function launchSignIn(page: Page): Promise<{ status: number; run_id?: stri
   }, SSO_START_URL);
 }
 
+async function killRun(page: Page, id: string): Promise<void> {
+  const status = await page.evaluate(async (runID: string) => {
+    const r = await fetch(`/api/v1/runs/${runID}/kill`, { method: "POST", credentials: "include" });
+    return r.status;
+  }, id);
+  expect(status, `killing run ${id}`).toBeLessThan(400);
+}
+
+/** End every run still alive from the earlier files, so this file's sandboxes
+ *  can schedule on the walk's one node (nightly 36420610869: a run the
+ *  recovery file left running held it, and A's sign-in sandbox never got a
+ *  proxy pod IP). */
+async function endLeftoverRuns(request: APIRequestContext): Promise<void> {
+  const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  const active = async () => {
+    const res = await request.get("/api/v1/runs?status=active", { headers });
+    expect(res.status(), `GET /runs?status=active: ${await res.text()}`).toBe(200);
+    return (await res.json()) as Array<{ id: string }>;
+  };
+  for (const run of await active()) {
+    const res = await request.post(`/api/v1/runs/${run.id}/kill`, { headers });
+    expect(res.status(), `killing leftover run ${run.id}: ${await res.text()}`).toBeLessThan(500);
+  }
+  await expect.poll(async () => (await active()).length, { timeout: SANDBOX_UP }).toBe(0);
+}
+
 async function runState(page: Page, id: string): Promise<string> {
   return page.evaluate(async (runID: string) => {
     const r = await fetch(`/api/v1/runs/${runID}`, { credentials: "include" });
@@ -157,6 +187,7 @@ test("A: two members sign in to AWS at the same moment and each holds their own 
   // Both actionable first: the member has no door until the pin contradicts
   // their capture; the second member has never signed in, which is actionable
   // under any pin.
+  await endLeftoverRuns(request);
   memberPage = await signedIn(browser, MEMBER_EMAIL);
   member2Page = await signedIn(browser, MEMBER2_EMAIL);
   await ensureActionable(request, memberPage);
@@ -174,66 +205,46 @@ test("A: two members sign in to AWS at the same moment and each holds their own 
   expect(after[0], "both members' captures name the same sign-in run").not.toBe(after[1]);
 });
 
-test("C: three runs each, launched together, spend only their owner's session", async () => {
+test("C: three runs each, taking turns, spend only their owner's session", async () => {
   const owners = [
-    { name: "member", page: memberPage, runs: [] as string[] },
-    { name: "member2", page: member2Page, runs: [] as string[] },
+    { name: "member", page: memberPage, sessions: new Set<number>() },
+    { name: "member2", page: member2Page, sessions: new Set<number>() },
   ];
-  // Counters since the fake's restart include earlier specs' runs, whose proxy
-  // pods may have had the IPs these runs get: every read below is a delta.
-  const baseline = (await seen()).sessions;
-  await Promise.all(
-    owners.map(async (o) => {
-      for (let i = 1; i <= RUNS_PER_MEMBER; i++) {
-        o.runs.push(await launchRun(o.page, `concurrency ${o.name} ${i}`));
-      }
-    }),
-  );
-
-  // A run is its proxy pod's IP, read while the run is alive: a finished
-  // run's pod is deleted, and the IP with it.
-  const ipOf = new Map<string, string>();
-  const all = owners.flatMap((o) => o.runs);
-  await expect
-    .poll(
-      () => {
-        for (const id of all) {
-          if (!ipOf.has(id)) {
-            const ip = proxyPodIP(id);
-            if (ip) ipOf.set(id, ip);
-          }
-        }
-        return ipOf.size;
-      },
-      { timeout: SANDBOX_UP * 2, intervals: [2_000] },
-    )
-    .toBe(all.length);
-  expect(new Set(ipOf.values()).size, "two runs reported the same proxy pod IP; attribution would be ambiguous").toBe(all.length);
-
-  // Every run both minted role credentials and spent them on bedrock.
-  const sessionsOf = async (ip: string, field: "role_cred_callers" | "bedrock_callers") =>
-    (await seen()).sessions
-      .filter((s) => (s[field][ip] ?? 0) > (baseline.find((b) => b.session === s.session)?.[field][ip] ?? 0))
-      .map((s) => s.session);
-  for (const id of all) {
-    const ip = ipOf.get(id) ?? "";
-    await expect.poll(async () => (await sessionsOf(ip, "role_cred_callers")).length, { timeout: LOGIN_DONE }).toBeGreaterThan(0);
-    await expect.poll(async () => (await sessionsOf(ip, "bedrock_callers")).length, { timeout: LOGIN_DONE }).toBeGreaterThan(0);
-  }
-
-  const sessionOfOwner: number[] = [];
-  for (const o of owners) {
-    const used = new Set<number>();
-    for (const id of o.runs) {
-      const ip = ipOf.get(id) ?? "";
+  type Field = "role_cred_callers" | "bedrock_callers";
+  for (let i = 1; i <= RUNS_PER_MEMBER; i++) {
+    for (const o of owners) {
+      // One run at a time: the node holds one agent run. Its calls are the
+      // delta over its own window at its own proxy pod's IP, so an IP an
+      // earlier run held cannot lend it another session's counts.
+      const before = (await seen()).sessions;
+      const id = await launchRun(o.page, `concurrency ${o.name} ${i}`);
+      let ip = "";
+      await expect
+        .poll(() => (ip = ip || proxyPodIP(id)), { timeout: SANDBOX_UP, intervals: [2_000] })
+        .not.toBe("");
+      const grew = async (field: Field) =>
+        (await seen()).sessions
+          .filter((s) => (s[field][ip] ?? 0) > (before.find((b) => b.session === s.session)?.[field][ip] ?? 0))
+          .map((s) => s.session);
+      await expect
+        .poll(async () => (await grew("role_cred_callers")).length > 0 && (await grew("bedrock_callers")).length > 0, {
+          timeout: LOGIN_DONE,
+          message: `${o.name}'s run ${id} never both minted role credentials and signed a bedrock call`,
+        })
+        .toBe(true);
       for (const field of ["role_cred_callers", "bedrock_callers"] as const) {
-        for (const s of await sessionsOf(ip, field)) used.add(s);
+        for (const s of await grew(field)) o.sessions.add(s);
       }
+      await killRun(o.page, id);
+      await expect
+        .poll(async () => TERMINAL_RUN_STATES.includes((await runState(o.page, id)) as RunState), { timeout: SANDBOX_UP })
+        .toBe(true);
     }
-    expect([...used], `${o.name}'s runs spent sessions ${[...used]}; want exactly one — their own`).toHaveLength(1);
-    sessionOfOwner.push([...used][0]);
   }
-  expect(sessionOfOwner[0], "both members' runs spent the SAME session").not.toBe(sessionOfOwner[1]);
+  for (const o of owners) {
+    expect([...o.sessions], `${o.name}'s runs spent sessions ${[...o.sessions]}; want exactly one — their own`).toHaveLength(1);
+  }
+  expect([...owners[0].sessions][0], "both members' runs spent the SAME session").not.toBe([...owners[1].sessions][0]);
 });
 
 test("B: one member opening two sign-ins at once gets one live sign-in sandbox", async ({ request }) => {
