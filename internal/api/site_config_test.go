@@ -732,6 +732,11 @@ func TestHandlePutSiteConfig_IfMatch(t *testing.T) {
 	if w.Code != http.StatusPreconditionFailed {
 		t.Fatalf("stale If-Match: code = %d, want 412; body=%s", w.Code, w.Body.String())
 	}
+	// #656 slice 2 review round S4: pin the LITERAL wire reason, not just the
+	// Go constant.
+	if got := errorReason(w); got != "site_config_stale" {
+		t.Errorf("reason = %q, want the literal \"site_config_stale\"; body=%s", got, w.Body.String())
+	}
 	if fake.putSeen != nil {
 		t.Fatalf("a refused If-Match must never reach the store, got %+v", fake.putSeen)
 	}

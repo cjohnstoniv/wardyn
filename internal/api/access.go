@@ -100,7 +100,7 @@ func (s *Server) requireOIDC(w http.ResponseWriter) bool {
 	if s.cfg.OIDC != nil {
 		return true
 	}
-	writeError(w, http.StatusServiceUnavailable, "SSO is not configured")
+	writeErrorReason(w, http.StatusServiceUnavailable, reasonSSONotConfigured, "SSO is not configured")
 	return false
 }
 
@@ -578,7 +578,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	value, err := canonicalRoleMapValue(req.Value)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessRoleMapValueInvalid, err.Error())
 		return
 	}
 	userTypes, err := s.cfg.Store.ListUserTypes(r.Context())
@@ -588,7 +588,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	write, msg := accessMappingTarget(req, value, userTypes)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessMappingTargetInvalid, msg)
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
@@ -607,7 +607,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// more specific, more actionable refusal — not a generic "email mappings
 	// are off" that would be true but beside the point.
 	if strings.Contains(value, "@") && !s.cfg.AllowEmailMappings {
-		writeError(w, http.StatusBadRequest, accessEmailKeyRefused)
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessEmailMappingDisabled, accessEmailKeyRefused)
 		return
 	}
 
@@ -633,7 +633,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 
 	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
-		writeError(w, http.StatusBadRequest, lerr.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessLockout, lerr.Error())
 		return
 	}
 
@@ -647,7 +647,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if errors.Is(err, store.ErrNotFound) {
 		// The type was removed between the list above and this write: the
 		// foreign key refused the row.
-		writeError(w, http.StatusBadRequest, accessUnknownUserType(write.UserType))
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessUnknownUserType, accessUnknownUserType(write.UserType))
 		return
 	}
 	if err != nil {
@@ -740,7 +740,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 
 	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
-		writeError(w, http.StatusBadRequest, lerr.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessLockout, lerr.Error())
 		return
 	}
 
@@ -812,7 +812,7 @@ func (s *Server) handlePreviewRole(w http.ResponseWriter, r *http.Request) {
 	roles, groups, email := req.Roles, req.Groups, req.Email
 	if req.UseSession {
 		if oidcHumanFromContext(r.Context()) == "" {
-			writeError(w, http.StatusBadRequest, "no session claims to preview")
+			writeErrorReason(w, http.StatusBadRequest, reasonAccessPreviewNoSessionClaims, "no session claims to preview")
 			return
 		}
 		roles, groups, email = nil, oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())

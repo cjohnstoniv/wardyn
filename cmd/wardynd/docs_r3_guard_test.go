@@ -355,7 +355,12 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 // const block, so the doc is checked against that block rather than a list
 // typed twice.
 func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
-	src := readSrc(t, "internal", "api", "user_drives_resolve.go")
+	// driveUnavailableUserType and driveUnavailableUnmountable moved to
+	// reasons.go (#656 slice 2 review round), the one file
+	// TestReasonDocsMatchReasonsGo reads for every wire-visible reason; the
+	// other three (Groups, Unknown, Governance) stay declared beside their
+	// own GET /me field in user_drives_resolve.go, so this guard reads both.
+	src := readSrc(t, "internal", "api", "user_drives_resolve.go") + readSrc(t, "internal", "api", "reasons.go")
 	tokens := driveUnavailableTokens(t, src)
 	if len(tokens) < 4 {
 		t.Fatalf("found %d driveUnavailable* tokens (%v) — the matcher needs updating, it is checking almost nothing", len(tokens), tokens)

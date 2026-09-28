@@ -127,4 +127,46 @@ test.describe("the admin run monitor (M-7)", () => {
       sql(`DELETE FROM agent_runs WHERE id = '${id}'`);
     }
   });
+
+  // F2 (#580, PR #1317 review) — the mock's own "Admin" section
+  // (long-holds-packet.html:301-303): the "Older limits" chip + bulk
+  // "Restart with current limits", over the real routes (RL-10, #575). This
+  // harness runs `-runner none` (no real proxy release ever gets stored), so
+  // the listing and the restart are both route-mocked, same technique
+  // run-lifetime.spec.ts uses for revive.
+  test("Older limits chip + Restart with current limits (F2); R2-4: the result survives an empty refetch", async ({ page }) => {
+    // R2-4 (PR #1317 round-2 review): a REAL successful restart rewrites the
+    // run's own proxy_release (store_run_revive.go), so the very next
+    // listing comes back with nothing outside the window — the mock must
+    // change after the restart the same way the real server does, or this
+    // test would pass against a fiction that can never expose the card
+    // hiding its own result.
+    let restarted = false;
+    await page.route("**/api/v1/admin/runs/proxy-window", (route) =>
+      route.fulfill({
+        json: {
+          release: "0.8.0",
+          window: ["0.8", "0.7"],
+          outside: restarted ? [] : [{ run_id: "r1", created_by: ME, state: "RUNNING", proxy_release: "0.6" }],
+        },
+      }),
+    );
+    let restartedIds: string[] = [];
+    await page.route("**/api/v1/admin/runs/restart", async (route) => {
+      restartedIds = JSON.parse(route.request().postData() ?? "{}").run_ids;
+      restarted = true;
+      await route.fulfill({ json: { results: [{ run_id: "r1", ok: true }] } });
+    });
+
+    await page.goto("/admin/runs");
+    const card = page.getByTestId("admin-older-limits-card");
+    await expect(card.getByText("Older limits · 1")).toBeVisible();
+    await card.getByRole("button", { name: "Restart with current limits" }).click();
+    await expect.poll(() => restartedIds).toEqual(["r1"]);
+    // The chip and button are gone (nothing left outside the window), but the
+    // restart's own result stays visible — the whole point of R2-4.
+    await expect(card.getByText("Older limits · 1")).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "Restart with current limits" })).toHaveCount(0);
+    await expect(card.getByText(/Restarted/)).toBeVisible();
+  });
 });

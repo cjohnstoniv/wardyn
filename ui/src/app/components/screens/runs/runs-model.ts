@@ -20,10 +20,11 @@ import { isTerminalRunState } from "../../../lib/types";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
+import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
 import { statusDetailSentence } from "../run-status-detail";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
-export type RowAction = "review" | "sign-in" | null;
+export type RowAction = "review" | "sign-in" | "revive" | null;
 
 export interface RowPresentation {
   hue: RowHue;
@@ -96,15 +97,33 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
           needsYou: you,
         };
       case "lost":
-        // #1197 L5 owns the Revive row and its own copy — this is a clean
-        // seam (H-7): the run still lands in Needs you when `you`, with the
-        // reused short word and NO action, rather than nothing at all.
-        return { hue: "amber", word: RUNS_ROW_WORD.SANDBOX_STOPPED, action: null, needsYou: you };
+        // #1197 L5 (F1, PR #1317 review): Revive-from-row, reusing RL-15's own
+        // run-page action (runs.reviveRun) — offered only to `you` (the
+        // owner or a super admin), matching the server's ownsRunOrSuperAdmin
+        // gate on POST /runs/{id}/revive; `by=owner` still lands in Needs you
+        // with no action, since nobody else can act on it.
+        // F18 (PR #1317 round-2 review): no k8s revive in 0.8 (L6) — the run
+        // page's own lifetime banner already treats a k8s lost run as not
+        // revivable, so the row must not offer a button the run page itself
+        // won't honour.
+        return {
+          hue: "amber",
+          word: RUNS_ROW_WORD.SANDBOX_STOPPED,
+          action: you && run.runner_target !== "k8s" ? "revive" : null,
+          needsYou: you,
+        };
     }
   }
   switch (run.state) {
-    case "RUNNING":
+    case "RUNNING": {
+      // RL-15 (design.md §2.3): the board's own "Ends in 1 hour" warning —
+      // same three thresholds (24h/1h/10m) the run page's banner uses, from
+      // runs-model.ts's one shared rule. A run with no attention and no
+      // upcoming warning stays the plain Running word.
+      const stage = endsWarningStage(run.ends_at, Date.now(), Date.parse(run.ends_at ?? "") - Date.parse(run.created_at));
+      if (stage) return { hue: "amber", word: endsWarningWord(stage), action: null, needsYou: false };
       return { hue: "blue", word: RUNS_ROW_WORD.RUNNING, action: null, needsYou: false };
+    }
     case "STARTING":
       return {
         hue: "blue",

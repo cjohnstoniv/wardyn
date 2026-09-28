@@ -850,6 +850,11 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (would remove the caller's own admin access); body=%s", w.Code, w.Body.String())
 	}
+	// #656 slice 2 review round S4: pin the LITERAL wire reason, not just the
+	// Go constant.
+	if got := errorReason(w); got != "access_lockout" {
+		t.Errorf("reason = %q, want the literal \"access_lockout\"; body=%s", got, w.Body.String())
+	}
 	if st.rows[0].Role != oidc.RoleAdmin {
 		t.Fatalf("blocked write must not have applied; rows[0] = %+v", st.rows[0])
 	}
