@@ -486,7 +486,7 @@ func adoRequestedScopes(q url.Values, ceiling []string) ([]string, error) {
 // withhold the very cookies that prove it belongs to this browser.
 func (s *Server) adoCookie(name, value string) *http.Cookie {
 	return &http.Cookie{
-		Name:     name,
+		Name:     s.consoleCookieName(name),
 		Value:    value,
 		Path:     s.cookiePath(),
 		MaxAge:   adoCookieMaxAge,
@@ -498,8 +498,8 @@ func (s *Server) adoCookie(name, value string) *http.Cookie {
 
 func (s *Server) clearADOCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: "", Path: s.cookiePath(), MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Name: s.consoleCookieName(name), Value: "", Path: s.cookiePath(), MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.OIDCSecureCookies,
 	})
 }
 
@@ -517,18 +517,18 @@ func (s *Server) clearADOCookie(w http.ResponseWriter, name string) {
 // and nothing else about the request is worth reading until that holds.
 func (s *Server) consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
 	stateParam := r.URL.Query().Get("state")
-	stateCookie, err := r.Cookie(adoStateCookieName)
+	stateCookie, err := r.Cookie(s.consoleCookieName(adoStateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam == "" ||
 		subtle.ConstantTimeCompare([]byte(stateParam), []byte(stateCookie.Value)) != 1 {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return "", "", false
 	}
-	nonceCookie, err := r.Cookie(adoNonceCookieName)
+	nonceCookie, err := r.Cookie(s.consoleCookieName(adoNonceCookieName))
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
 		return "", "", false
 	}
-	pkceCookie, err := r.Cookie(adoPKCECookieName)
+	pkceCookie, err := r.Cookie(s.consoleCookieName(adoPKCECookieName))
 	if err != nil || pkceCookie.Value == "" {
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
 		return "", "", false

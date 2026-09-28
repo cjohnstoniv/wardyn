@@ -413,7 +413,8 @@ attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
 hostname would otherwise hand console cookies to sandbox code: every forwarded
-request has **all `wardyn_*` cookies**, `Authorization`, `Proxy-Authorization`
+request has **all `wardyn_*` cookies** (their `__Host-` and `__Secure-`
+spellings included), `Authorization`, `Proxy-Authorization`
 and any `?ticket` stripped, and every response has `Set-Cookie: wardyn_*`
 dropped (cookie tossing), on a `1xx` as well as the final response. Every
 other cookie is forwarded by default. If the relay host sits under a parent

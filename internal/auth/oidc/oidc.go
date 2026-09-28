@@ -11,6 +11,10 @@
 //  2. SameSite=Lax on all session cookies: protects all same-site navigations
 //     from cross-site request forgery without requiring a synchronizer token.
 //
+// SameSite does not stop a same-site host from PLANTING a cookie, so under
+// SecureCookies every cookie carries the __Host- prefix (cookies.go): the
+// browser refuses a Domain= one, and the unprefixed name is never read.
+//
 // A PKCE code_challenge (S256) is included in the authorization request and
 // verified by the token endpoint. This provides additional security even when
 // the state check is bypassed (e.g. by a mix-up attack).
@@ -38,7 +42,6 @@
 package oidc
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -143,6 +146,7 @@ type Config struct {
 	// or TLS terminates at an upstream reverse proxy. CRITICAL: Secure cookies
 	// are never sent over plain HTTP, so leaving this false (the default) is
 	// required for plain-HTTP demo deployments — otherwise login silently breaks.
+	// True also gives every cookie the __Host- prefix and Path=/ (cookies.go).
 	SecureCookies bool
 	// Revocations is the pg-backed revoke-a-human-now lever (D16). Sessions
 	// are stateless signed cookies with no server-side session table (see the
@@ -618,7 +622,7 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 		// The marker the callback reads to know THIS redirect asked for more
 		// than a login, and may therefore be retried without the extra.
 		http.SetCookie(w, a.loginCookie(widenedCookieName, "1"))
-	} else if _, err := r.Cookie(widenedCookieName); err == nil {
+	} else if _, err := r.Cookie(a.cookieName(widenedCookieName)); err == nil {
 		// An unwidened request clears a marker LEFT BY AN EARLIER ATTEMPT, so
 		// one can never make an unwidened callback retry — and only when the
 		// browser actually presented one, so the overwhelmingly common
@@ -636,11 +640,6 @@ func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	a.clearSessionCookie(w)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
-
-// cookiePath scopes every cookie Wardyn issues to the console's base path
-// (WARDYN_BASE_PATH), so a neighbouring application on the same host never
-// receives the session.
-func (a *Authenticator) cookiePath() string { return cmp.Or(a.cfg.BasePath, "/") }
 
 // Middleware returns an http.Handler wrapper that:
 //   - If a valid (non-expired, correctly signed) session cookie is present,
@@ -763,48 +762,6 @@ func emailDomainAllowed(email string, allowed []string) bool {
 		}
 	}
 	return false
-}
-
-// loginCookie returns a short-lived HttpOnly SameSite=Lax cookie. These are
-// one-time cookies used during the login flow; they expire after 10 minutes.
-// Secure is set from cfg.SecureCookies so the login leg matches the session
-// cookie: marked Secure only under TLS (direct or terminated), false over plain
-// HTTP (else the browser drops them and the demo login breaks).
-func (a *Authenticator) loginCookie(name, value string) *http.Cookie {
-	return &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     a.cookiePath(),
-		MaxAge:   600, // 10 minutes
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   a.cfg.SecureCookies,
-	}
-}
-
-// clearCookieAt instructs the browser to delete a named cookie at path.
-func (a *Authenticator) clearCookieAt(w http.ResponseWriter, name, path string) {
-	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: "", Path: path, MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-	})
-}
-
-// clearCookie instructs the browser to delete a named cookie at the base path.
-func (a *Authenticator) clearCookie(w http.ResponseWriter, name string) {
-	a.clearCookieAt(w, name, a.cookiePath())
-}
-
-// clearSessionCookie clears wardyn_session at the base path and, when under
-// WARDYN_BASE_PATH, ALSO at Path=/ — a session from before a same-host
-// migration onto the base carries that path, and cookie identity is
-// name+domain+path (RFC 6265), so the base-path clear alone would leave it
-// authenticating. No-op extra header at BasePath == "" (cookiePath is "/").
-func (a *Authenticator) clearSessionCookie(w http.ResponseWriter) {
-	a.clearCookie(w, sessionCookieName)
-	if a.cfg.BasePath != "" {
-		a.clearCookieAt(w, sessionCookieName, "/")
-	}
 }
 
 // Auth-error codes carried on the "/?auth_error=<code>" redirect:
