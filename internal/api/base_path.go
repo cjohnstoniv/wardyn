@@ -4,9 +4,10 @@
 package api
 
 import (
-	"cmp"
 	"net/http"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
 // Handler returns the console listener's handler: the chi router, mounted
@@ -35,8 +36,17 @@ func underBasePath(base string, h http.Handler) http.Handler {
 	})
 }
 
-// cookiePath is the Path of every cookie the console listener sets.
-func (s *Server) cookiePath() string { return cmp.Or(s.cfg.BasePath, "/") }
+// cookiePath is the Path of every cookie the console listener sets, and
+// consoleCookieName the name it sets and reads one under: both follow the
+// sign-in's cookies (oidc.CookieName, oidc.CookiePath), so under secure
+// cookies they are __Host- cookies at Path=/.
+func (s *Server) cookiePath() string {
+	return oidc.CookiePath(s.cfg.OIDCSecureCookies, s.cfg.BasePath)
+}
+
+func (s *Server) consoleCookieName(name string) string {
+	return oidc.CookieName(s.cfg.OIDCSecureCookies, name)
+}
 
 // uiBasePath is the prefix the UI gateway serves under: the base path in
 // shared-origin path mode, and nothing in host mode, where every run has an

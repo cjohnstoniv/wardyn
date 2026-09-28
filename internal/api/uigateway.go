@@ -578,9 +578,15 @@ func uiFilterSetCookie(h http.Header) {
 // uiIsWardynCookie matches the reserved cookie namespace case-insensitively.
 // Browsers treat cookie names case-sensitively, so a "WARDYN_" cookie is a
 // different cookie and harmless — stripping it anyway costs nothing and
-// removes a class of near-miss confusion.
+// removes a class of near-miss confusion. The __Host- and __Secure- spellings
+// are the same namespace: under secure cookies the console's own session is
+// __Host-wardyn_session (oidc.CookieName), and on a shared hostname the
+// browser sends it here too.
 func uiIsWardynCookie(name string) bool {
-	return strings.HasPrefix(strings.ToLower(name), uiCookiePrefix)
+	n := strings.ToLower(name)
+	n = strings.TrimPrefix(n, "__host-")
+	n = strings.TrimPrefix(n, "__secure-")
+	return strings.HasPrefix(n, uiCookiePrefix)
 }
 
 // dial: one exec per connection

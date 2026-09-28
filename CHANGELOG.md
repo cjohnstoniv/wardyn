@@ -1786,6 +1786,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **Under TLS the console's cookies carry the `__Host-` prefix (#1258).** The session, the sign-in's
+  one-time cookies and the Azure DevOps sign-in's are now `__Host-wardyn_session`,
+  `__Host-wardyn_oidc_state` and so on: `Secure`, `Path=/`, no `Domain`. A browser refuses to store
+  such a cookie from any other host, so a page on a sibling host under the console's registrable
+  domain (a relayed UI-sandbox app among them) can no longer plant a session or sign-in state the
+  console reads. The unprefixed names are never read under TLS. The prefix forces `Path=/`, so under
+  `WARDYN_BASE_PATH` these cookies are no longer scoped to the base. Plain-HTTP installs keep the
+  old names and paths, since a browser refuses `__Host-` there; OPERATIONS.md "Console cookies under
+  TLS" and threat-model residual 18 state what that leaves open. The UI gateway strips and drops the
+  `__Host-` and `__Secure-` spellings of `wardyn_*` cookies as it does the plain ones.
 - **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
   Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
   operator's and a device's, so an identity provider that let a user pick their `sub` could
@@ -3040,6 +3050,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Upgrading
 
+- **Under TLS every SSO human is signed out once (#1258).** The session cookie is renamed
+  `__Host-wardyn_session` and the old `wardyn_session` is never read, so each human signs in again at
+  their next request. Plain-HTTP installs, admin-token and API-token auth are unaffected.
 - **`wardyn workspace get` now prints the one-line table by default (#200).** A script that parsed
   its default JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
