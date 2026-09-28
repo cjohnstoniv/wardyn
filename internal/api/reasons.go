@@ -180,4 +180,200 @@ const (
 	reasonWorkspaceSSHSourcesNotReady = "workspace_ssh_sources_not_ready" // an SSH-remote source names a secret that has not been stored yet
 	reasonWorkspaceSourcesNotAllowed  = "workspace_sources_not_allowed"   // the caller's own local_dir sources fail the member-safe mount gate
 	reasonWorkspaceDeleteActiveRun    = "workspace_delete_active_run"     // the workspace is in use by a still-active run
+
+	// #656 slice 2 — site-config, governance and the user-drive doors share this
+	// one: the caller's group-membership snapshot is missing or was truncated at
+	// sign-in, so a group-keyed governance profile cannot be resolved. Same cause,
+	// three routes (PUT/POST governance, the drive resolver) — one reason.
+	//
+	// This is a literal, not a reference to authz.ReasonGroupsSnapshotStale
+	// (internal/authz/registry.go), so TestReasonDocsMatchReasonsGo (which
+	// only reads string literals in this file) can see it — the tradeoff
+	// #656 slice 2's review round chose over an unreadable-by-regex
+	// reference. It is the SAME registered reason string, deliberately, not
+	// a second copy invented for this package: see
+	// adHocReasonLiterals["reasons.go:groups_snapshot_stale"]
+	// (refusal_test.go) for TestNoAdHocAuthz's matching exception.
+	reasonGroupsSnapshotStale = "groups_snapshot_stale"
+
+	// GET/PUT /site-config.
+	reasonSiteConfigRequestInvalid          = "site_config_request_invalid"            // the PUT body did not decode
+	reasonSiteConfigArtifactOverrideInvalid = "site_config_artifact_override_invalid"  // a legacy artifact-override field fails validation
+	reasonSiteConfigIntegrationsViaOwnRoute = "site_config_integrations_via_own_route" // integrations were named inline instead of through their own endpoints
+	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
+	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
+
+	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
+	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
+	reasonSiteConfigProbeURLInvalid     = "site_config_probe_url_invalid"     // the probe target is not a plain http(s) URL
+	reasonEgressRedirectFromRequired    = "egress_redirect_from_required"     // an egress-redirect edit named no `from`
+	reasonEgressRedirectNotFound        = "egress_redirect_not_found"         // no egress_redirects entry matches `from`
+
+	// PUT/POST /governance/{profiles,assignments} and the preview routes.
+	reasonGovernanceProfileRequestInvalid = "governance_profile_request_invalid" // the profile body did not decode
+	reasonGovernanceCeilingInvalid        = "governance_ceiling_invalid"         // the ceiling names a grant outside the deployment's own EligibleGrants
+	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
+	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
+	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
+	// and the user-drive naming preview (user_drives_preview.go): both feed the
+	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
+	reasonGovernancePreviewClaimsInvalid = "governance_preview_claims_invalid"
+
+	// /api/v1/secrets.
+	reasonSecretNameInvalid       = "secret_name_invalid"        // the name fails the secret-name format
+	reasonSecretNameReserved      = "secret_name_reserved"       // the name is reserved for platform internals
+	reasonSecretOwnerParamRefused = "secret_owner_param_refused" // ?owner= was sent on a write, which only the owning person may do
+	reasonSecretBodyInvalid       = "secret_body_invalid"        // the body is not {"value":"<non-empty secret>"}
+	reasonSecretValueTooShort     = "secret_value_too_short"     // the value is below the mask's minimum length
+	reasonSecretCapReached        = "secret_cap_reached"         // the owner already holds the maximum number of secrets
+	reasonSecretNotFound          = "secret_not_found"           // that owner holds no secret by that name
+
+	// /api/v1/people.
+	reasonPeopleStoreUnavailable  = "people_store_unavailable"  // pre-created people require the Postgres store backend
+	reasonPersonPrincipalInvalid  = "person_principal_invalid"  // principal is not 1-255 printable characters
+	reasonPersonPrincipalReserved = "person_principal_reserved" // principal is reserved for a non-person identity
+	reasonPersonEmailInvalid      = "person_email_invalid"      // email fails validation
+	reasonPersonCollision         = "person_collision"          // the principal or email collides with an existing person
+	reasonPersonEmailTaken        = "person_email_taken"        // another subject is already known by this email
+	// reasonPersonMintNoHuman / reasonAPITokenFromAPIToken are shared: minting a
+	// token needs a signed-in human, and neither an API token nor a delegated
+	// token may mint another — the SAME two shapes apitokens.go's own
+	// self-service mint door refuses with byte-identical sentences.
+	reasonPersonMintNoHuman    = "mint_no_human"
+	reasonAPITokenFromAPIToken = "api_token_from_api_token"
+	reasonPersonNotFound       = "person_not_found" // no person is recorded under this subject
+
+	// /api/v1/tokens (self-service) and /api/v1/sessions/revoke,
+	// /api/v1/delegation's authentication lookups.
+	// reasonTokenLookupUnavailable is shared by the API-token and delegated-token
+	// authentication middlewares: both answer the SAME shape (the revocation
+	// store could not be read to authenticate the bearer) with a 503.
+	reasonTokenLookupUnavailable     = "token_lookup_unavailable"
+	reasonAPITokenNoHuman            = "api_token_no_human"             // an API token belongs to a signed-in human
+	reasonAPITokenFromDelegatedToken = "api_token_from_delegated_token" // a delegated (portal) token cannot mint an API token
+	reasonAPITokenMemberModeMint     = "api_token_member_mode_mint"     // a member-mode session cannot mint a token that would outlive the view
+	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
+	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
+	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
+
+	// /api/v1/access (role-mapping admin).
+	reasonSSONotConfigured             = "sso_not_configured"               // the route needs OIDC, and this deployment has none configured
+	reasonAccessRoleMapValueInvalid    = "access_role_map_value_invalid"    // ?value= (or the body's value) does not canonicalize
+	reasonAccessMappingTargetInvalid   = "access_mapping_target_invalid"    // the mapping key/value pair fails validation
+	reasonAccessEmailMappingDisabled   = "access_email_mapping_disabled"    // email-keyed mappings are off on this install
+	reasonAccessLockout                = "access_lockout"                   // the edit would lock every admin out
+	reasonAccessUnknownUserType        = "access_unknown_user_type"         // the mapping names a user type this deployment does not have
+	reasonAccessPreviewNoSessionClaims = "access_preview_no_session_claims" // use_session was set with no caller session to read claims from
+
+	// /api/v1/permissions (capability grants + availability).
+	reasonCapabilityGrantInvalid          = "capability_grant_invalid"           // the grant fails validation
+	reasonCapabilityKindUnknown           = "capability_kind_unknown"            // the enforcement body names an unknown capability kind
+	reasonCapabilityEnforcementStale      = "capability_enforcement_stale"       // If-Match does not match the current enforcement ETag
+	reasonAvailabilityKindNotRestrictable = "availability_kind_not_restrictable" // this capability kind cannot be restricted to a list
+	reasonAvailabilityTargetInvalid       = "availability_target_invalid"        // the wildcard path segment naming the target does not decode or names the wildcard itself
+	reasonAvailabilityRestrictedRequired  = "availability_restricted_required"   // the body named no `restricted` value
+	reasonAvailabilityOnlyEmpty           = "availability_only_empty"            // "Only" was chosen with an empty allow-list
+
+	// /api/v1/delegation (portal delegate registration).
+	reasonDelegationStoreUnavailable = "delegation_store_unavailable" // delegate registration requires the Postgres store backend
+	reasonDelegateNameInvalid        = "delegate_name_invalid"
+	reasonDelegateClientIDInvalid    = "delegate_client_id_invalid"
+	reasonDelegateClientIDIsPortal   = "delegate_client_id_is_portal" // idp_client_id named this deployment's own OIDC client
+	reasonDelegateGroupInvalid       = "delegate_group_invalid"
+
+	// /api/v1/setup/integrations and /api/v1/setup/onboarding.
+	reasonIntegrationInvalid              = "integration_invalid"                // the integration write fails validation
+	reasonIntegrationNotFound             = "integration_not_found"              // no stored integration by that id
+	reasonSetupOnboardingStoreUnavailable = "setup_onboarding_store_unavailable" // onboarding-complete needs a configured store
+
+	// /api/v1/ssh-keys (self-service) and the admin delete-by-principal door.
+	reasonSSHKeyInvalid                       = "ssh_key_invalid"              // the public-key line does not parse
+	reasonSSHKeyRequiresHuman                 = "ssh_key_requires_human"       // only a signed-in human's own POST can register a working key
+	reasonSSHKeyCapReached                    = "ssh_key_cap_reached"          // the principal already holds the maximum number of keys
+	reasonSSHKeyRevokedSession                = "ssh_key_revoked_session"      // the session was revoked mid-request; sign in again
+	reasonSSHKeyRegistrationRefused           = "ssh_key_registration_refused" // deliberately generic (THREAT-MODEL.md): never confirms whether the key is already registered, by whom
+	reasonSSHKeyFingerprintInvalidEncoding    = "ssh_key_fingerprint_invalid_encoding"
+	reasonSSHKeyAdminPrincipalInvalidEncoding = "ssh_key_admin_principal_invalid_encoding"
+	reasonSSHKeyAdminPrincipalRequired        = "ssh_key_admin_principal_required"
+
+	// /api/v1/drives (user drives): allocation/grant/reclaim admin.
+	reasonUserDriveRequestInvalid        = "user_drive_request_invalid"         // the create/update body fails validation
+	reasonUserDriveRehomeInvalid         = "user_drive_rehome_invalid"          // the re-home guard refused the requested change
+	reasonUserDriveAllocatedConflict     = "user_drive_allocated_conflict"      // the drive was allocated to someone else mid-edit
+	reasonUserDriveSlugConflict          = "user_drive_slug_conflict"           // another drive's name folds to the same storage-object name
+	reasonUserDriveHomeNamespaceConflict = "user_drive_home_namespace_conflict" // another host_path drive on the same root uses a different home_template
+	reasonUserDriveNameConflict          = "user_drive_name_conflict"           // a drive by that name already exists
+	reasonUserDriveStillAllocated        = "user_drive_still_allocated"         // the drive cannot be deleted while allocations exist
+	// reasonUserDriveGrantInvalid covers every shape ValidateUserDriveGrant (or
+	// the group-subject/home-name checks beside it) refuses — all prefixed
+	// "invalid allocation: " on the wire, one cause bucket on the wire reason.
+	reasonUserDriveGrantInvalid            = "user_drive_grant_invalid"
+	reasonUserDriveSizeRefused             = "user_drive_size_refused"              // the size override exceeds what the ceiling allows
+	reasonUserDriveGrantConflict           = "user_drive_grant_conflict"            // that grant already exists
+	reasonUserDriveReclaimInvalid          = "user_drive_reclaim_invalid"           // the reclaim request fails validation
+	reasonUserDriveReclaimSubjectAmbiguous = "user_drive_reclaim_subject_ambiguous" // subject_type names more than one person's storage
+	reasonUserDriveNotReclaimable          = "user_drive_not_reclaimable"           // this drive cannot be reclaimed here (wrong backend/runner target)
+	reasonUserDriveReclaimFailed           = "user_drive_reclaim_failed"            // the reclaim object read/write failed
+	reasonUserDriveReclaimUnsupported      = "user_drive_reclaim_unsupported"       // this deployment's runner cannot reclaim drive storage
+	reasonUserDriveReclaimConflict         = "user_drive_reclaim_conflict"          // the reclaim was refused at the storage layer
+	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
+	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
+
+	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the deployment's drive-size ceiling (site config) could not be read
+	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard
+	reasonUserDriveReclaimNoDirectoryName = "user_drive_reclaim_no_directory_name" // the allocation resolves to no directory name, so there is no object to reclaim
+
+	// owner_ambiguous / owner_unresolved: resolveSecretOwner's (secrets.go) and
+	// resolveSSHKeyOwner's (sshkeys_admin.go) shared two-cause shape — more
+	// than one known principal matches a name, or none does.
+	reasonOwnerAmbiguous  = "owner_ambiguous"
+	reasonOwnerUnresolved = "owner_unresolved"
+
+	// personMintRefusal's own closed set (people.go, POST /people/{principal}/tokens).
+	reasonPersonMintNoSignIn                 = "no_sign_in"                  // the derived role has no sign-in on this deployment
+	reasonPersonMintDefaultRoleUnknownGroups = "default_role_unknown_groups" // an elevated role rests on the default role, which the person's still-unknown groups might narrow — they must sign in once first
+	reasonPersonMintElevatedTarget           = "elevated_target"             // minting for an admin/security-admin target needs a super admin
+)
+
+// The driveRefusal* closed set (internal/api/user_drives_run.go's
+// refuseDrive/driveBindFailure): one reason per launch-time drive-mount
+// cause, already used for the wardyn_drive_refusals_total metric and its own
+// WARN log line, now also on the wire. Declared here, not beside refuseDrive,
+// so TestReasonDocsMatchReasonsGo (which only reads this file) can see every
+// wire-visible reason in one place (#656 slice 2 review round).
+const (
+	driveRefusalNoAllocation      = "no_allocation"
+	driveRefusalPaused            = "paused"
+	driveRefusalRunnerCannotMount = "runner_cannot_mount"
+	driveRefusalBackendElsewhere  = "backend_elsewhere"
+	driveRefusalCeilingMoved      = "ceiling_moved"
+	driveRefusalHomeMissing       = "home_missing"
+	// driveRefusalHomeUnreadable is the #165 arm: the home directory EXISTS
+	// (driveRefusalHomeMissing's own check already passed) but the sandbox's
+	// own agent uid — not this daemon's root process — cannot read it. A
+	// distinct reason from home_missing because the remedy differs: an admin
+	// fixes permissions, not a directory that is already there.
+	driveRefusalHomeUnreadable   = "home_unreadable"
+	driveRefusalShareUnreachable = "share_unreachable"
+	driveRefusalReadOnly         = "read_only"
+	// driveRefusalDrivesDisabled is the ORG SWITCH, not a door: this install
+	// offers no drives at all, so nobody was denied by a profile. Counted like
+	// the rest, because an operator who turns the switch off wants to see how
+	// many runs are still asking. Shared with userDriveWriteRefusal's OWN
+	// org-switch check (user_drives.go): the identical cause, one route apart.
+	driveRefusalDrivesDisabled = "drives_disabled"
+)
+
+// The user-drive resolver's own closed enum (user_drives_resolve.go) members
+// that reach writeDriveError's wire body. driveUnavailableGroups,
+// driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
+// their own GET /me field instead — they never reach errorBody.Reason, so
+// TestReasonDocsMatchReasonsGo does not need to see them, and docs/sdk.md does
+// not document them (#656 slice 2 review round S3: a documented-but-unsent
+// reason is worse than an undocumented one, and `unavailable` collided with
+// ADOEntraFailure's own reason of the same name).
+const (
+	driveUnavailableUserType    = "user_type_unknown" // the caller's stamped user type no longer exists. 403 at launch.
+	driveUnavailableUnmountable = "unmountable"       // an allocation EXISTS and cannot be mounted — a home name that cannot name a directory, a share that is not there. 422 at launch, and the one state whose remedy is an admin's, not the member's.
 )

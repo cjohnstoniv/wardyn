@@ -350,7 +350,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		DisabledCapabilities: req.DisabledCapabilities,
 	}
 	if err := validateIntegrationWrite(in); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid integration: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonIntegrationInvalid, "invalid integration: "+err.Error())
 		return
 	}
 	ctx := r.Context()
@@ -419,7 +419,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 	}
 	idx := slices.IndexFunc(sc.Integrations, func(x types.Integration) bool { return x.ID == id })
 	if idx < 0 {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("no stored integration %q", id))
+		writeErrorReason(w, http.StatusNotFound, reasonIntegrationNotFound, fmt.Sprintf("no stored integration %q", id))
 		return
 	}
 	gone := sc.Integrations[idx]

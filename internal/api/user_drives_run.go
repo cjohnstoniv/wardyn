@@ -87,33 +87,15 @@ import (
 // One entry per arm below. A refusal with no reason in this list cannot be
 // recorded, which is the point: adding an arm means naming it here, and naming
 // it here is what makes it operable.
+// The driveRefusal* reason values themselves live in reasons.go (#656 slice 2
+// review round: TestReasonDocsMatchReasonsGo only reads that file, so every
+// wire-visible reason's literal belongs there, not scattered beside each
+// lane).
 var driveRefusalReasons = []string{
 	driveRefusalNoAllocation, driveRefusalPaused, driveRefusalRunnerCannotMount,
 	driveRefusalBackendElsewhere, driveRefusalCeilingMoved, driveRefusalHomeMissing,
 	driveRefusalHomeUnreadable, driveRefusalShareUnreachable, driveRefusalReadOnly, driveRefusalDrivesDisabled,
 }
-
-const (
-	driveRefusalNoAllocation      = "no_allocation"
-	driveRefusalPaused            = "paused"
-	driveRefusalRunnerCannotMount = "runner_cannot_mount"
-	driveRefusalBackendElsewhere  = "backend_elsewhere"
-	driveRefusalCeilingMoved      = "ceiling_moved"
-	driveRefusalHomeMissing       = "home_missing"
-	// driveRefusalHomeUnreadable is the #165 arm: the home directory EXISTS
-	// (driveRefusalHomeMissing's own check already passed) but the sandbox's
-	// own agent uid — not this daemon's root process — cannot read it. A
-	// distinct reason from home_missing because the remedy differs: an admin
-	// fixes permissions, not a directory that is already there.
-	driveRefusalHomeUnreadable   = "home_unreadable"
-	driveRefusalShareUnreachable = "share_unreachable"
-	driveRefusalReadOnly         = "read_only"
-	// driveRefusalDrivesDisabled is the ORG SWITCH, not a door: this install
-	// offers no drives at all, so nobody was denied by a profile. Counted like
-	// the rest, because an operator who turns the switch off wants to see how
-	// many runs are still asking.
-	driveRefusalDrivesDisabled = "drives_disabled"
-)
 
 // refuseDrive is the ONE place a run is told it cannot have its drive: it
 // writes the member's frozen sentence, counts the refusal by reason, and logs
@@ -145,7 +127,9 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 	s.metrics.driveRefused(reason)
 	slog.Warn("wardynd: user drive: a run was refused its drive",
 		append([]any{slog.String("reason", reason)}, attrs...)...)
-	writeError(w, status, driveRefusal(member))
+	// #656: reason was already the metric/log class (driveRefusalReasons); the
+	// wire now gets the same one, not a second vocabulary for the same cause.
+	writeErrorReason(w, status, reason, driveRefusal(member))
 }
 
 // seedRequestDrive resolves the run request's drive flag into the mount the
@@ -374,6 +358,11 @@ func (f *driveBindFailure) body() string {
 // 503 for the runner-unavailable arm.
 func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
 	if f.reason == "" || f.silent {
+		// #656: deliberately still a bare writeError — f.reason=="" is the
+		// runner-unavailable arm (a 503 about the deployment, no class), and
+		// silent's whole point is not counting or naming this refusal the way a
+		// real one is (see driveBindFailure's own doc comment); giving it a wire
+		// class here would undo that.
 		writeError(w, f.status, f.body())
 		return
 	}

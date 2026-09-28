@@ -148,7 +148,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 	// rule that has already drifted twice.
 	g := types.UserDriveGrant{SubjectType: req.SubjectType, Subject: req.Subject, DriveID: id}
 	if err := types.ValidateUserDriveGrant(&g); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid reclaim request: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonUserDriveReclaimInvalid, "invalid reclaim request: "+err.Error())
 		return
 	}
 	if g.SubjectType != types.CapabilitySubjectUser {
@@ -158,7 +158,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		// than resolved to something: the two ways a destructive verb could
 		// answer this are "guess one" and "delete them all", and neither is a
 		// thing a machine may decide. Reclaim the people one at a time.
-		writeError(w, http.StatusBadRequest, "subject_type: a reclaim names one person's storage — a "+
+		writeErrorReason(w, http.StatusBadRequest, reasonUserDriveReclaimSubjectAmbiguous, "subject_type: a reclaim names one person's storage — a "+
 			string(g.SubjectType)+" allocation gives each person their own object, so reclaim them one subject at a time")
 		return
 	}
@@ -171,12 +171,12 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if code, msg := driveReclaimableHere(d, s.cfg.RunnerTarget); msg != "" {
-		writeError(w, code, msg)
+		writeErrorReason(w, code, reasonUserDriveNotReclaimable, msg)
 		return
 	}
-	object, code, msg := s.driveReclaimObject(r.Context(), d, g)
+	object, code, reason, msg := s.driveReclaimObject(r.Context(), d, g)
 	if msg != "" {
-		writeError(w, code, msg)
+		writeErrorReason(w, code, reason, msg)
 		return
 	}
 	reclaimer, ok := s.cfg.Runner.(runner.DriveReclaimer)
@@ -184,7 +184,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		// 501, the same verdict handleRunFiles gives for a capability the wired
 		// runner does not have: a permanent fact about this deployment, not a
 		// blip to retry. Nothing is audited — no attempt reached the storage.
-		writeError(w, http.StatusNotImplemented, "this deployment's runner cannot reclaim drive storage; "+
+		writeErrorReason(w, http.StatusNotImplemented, reasonUserDriveReclaimUnsupported, "this deployment's runner cannot reclaim drive storage; "+
 			"remove the object with the substrate command in docs/OPERATIONS.md instead")
 		return
 	}
@@ -209,7 +209,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 			// are already in the 200 body and the audit row, and the route is
 			// super-admin only, so the body crosses no trust boundary.
 			s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
-			writeError(w, http.StatusConflict, "reclaim refused: "+err.Error())
+			writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "reclaim refused: "+err.Error())
 			return
 		}
 		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeFailed, false)
@@ -273,10 +273,13 @@ func driveReclaimableHere(d types.UserDrive, runnerTarget string) (int, string) 
 // template's. docs/OPERATIONS.md's runbook says to reclaim BEFORE deleting the
 // allocation for exactly that reason, and the object name the response and the
 // audit row carry is what an operator checks against the preview.
-func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant) (string, int, string) {
+// Two distinct causes (#656 slice 2 review round: they used to share
+// user_drive_reclaim_failed) — a store read failure, and the home name
+// itself failing to resolve.
+func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant) (object string, code int, reason, msg string) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
-		return "", http.StatusInternalServerError, loggedMsg(ctx, "list user drive allocations", err)
+		return "", http.StatusInternalServerError, reasonUserDriveReclaimFailed, loggedMsg(ctx, "list user drive allocations", err)
 	}
 	override := ""
 	for _, existing := range grants {
@@ -287,9 +290,9 @@ func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g ty
 	}
 	home, err := types.DriveHomeName(d, g.Subject, override)
 	if err != nil {
-		return "", http.StatusBadRequest, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
+		return "", http.StatusBadRequest, reasonUserDriveReclaimNoDirectoryName, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
 	}
-	return types.DriveObjectName(d, home), 0, ""
+	return types.DriveObjectName(d, home), 0, "", ""
 }
 
 // driveHomeOf recovers the home segment from an object name for the mount the

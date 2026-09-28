@@ -24,16 +24,24 @@ func TestPersonMintRefusal_DerivationArms(t *testing.T) {
 		name   string
 		d      oidc.Derivation
 		status int
+		// reason is the LITERAL wire string (#656 slice 2 review round S4),
+		// not the Go constant, so a rename of the constant's value cannot
+		// pass this test unnoticed. "" for the two admitted rows.
+		reason string
 	}{
-		{"no sign-in", oidc.Derivation{Denial: oidc.DenialNoRole}, http.StatusConflict},
-		{"elevated default role", oidc.Derivation{Role: oidc.RoleAdmin, UserType: types.UserTypeStandard, Matches: byDefault}, http.StatusConflict},
+		{"no sign-in", oidc.Derivation{Denial: oidc.DenialNoRole}, http.StatusConflict, "no_sign_in"},
+		{"elevated default role", oidc.Derivation{Role: oidc.RoleAdmin, UserType: types.UserTypeStandard, Matches: byDefault}, http.StatusConflict, "default_role_unknown_groups"},
 		{"user default role", oidc.Derivation{Role: oidc.RoleUser, UserType: types.UserTypeStandard,
-			Matches: []oidc.Match{{Source: oidc.MatchSourceDefaultRole, Role: oidc.RoleUser}}}, 0},
-		{"mapped admin, super admin caller", oidc.Derivation{Role: oidc.RoleAdmin, UserType: types.UserTypeStandard}, 0},
+			Matches: []oidc.Match{{Source: oidc.MatchSourceDefaultRole, Role: oidc.RoleUser}}}, 0, ""},
+		{"mapped admin, super admin caller", oidc.Derivation{Role: oidc.RoleAdmin, UserType: types.UserTypeStandard}, 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got, _, _ := s.personMintRefusal(super, tc.d); got != tc.status {
+			got, reason, _ := s.personMintRefusal(super, tc.d)
+			if got != tc.status {
 				t.Fatalf("status = %d, want %d", got, tc.status)
+			}
+			if reason != tc.reason {
+				t.Errorf("reason = %q, want the literal %q", reason, tc.reason)
 			}
 		})
 	}

@@ -176,7 +176,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	}
 	users, msg := normalizeGovernancePreviewClaims(req.UserSubjects, "user_subjects")
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
 	// A claims-less preview is a 400 about the REQUEST, and it must not be
@@ -191,12 +191,12 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// answering an admin's empty form with one would put a member-facing
 	// sentence on a screen no member can reach.
 	if len(users) == 0 {
-		writeError(w, http.StatusBadRequest, "user_subjects: at least one claim is needed to derive the directory name")
+		writeErrorReason(w, http.StatusBadRequest, reasonUserDrivePreviewNoClaims, "user_subjects: at least one claim is needed to derive the directory name")
 		return
 	}
 	groups, msg := normalizeGovernancePreviewClaims(req.Groups, "groups")
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
 	// (0) the org switch, ahead of the door — the launch path's own order, and
@@ -251,7 +251,10 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// that member reads.
 	if !resolved.Paused {
 		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
-			writeError(w, f.status, f.body())
+			// #656: the same reason the real enforcement door would send
+			// (refuseDrive) — this IS that door's verdict, just written by the
+			// admin preview instead of a launch, so the class is identical.
+			writeErrorReason(w, f.status, f.reason, f.body())
 			return
 		}
 	}
@@ -334,7 +337,7 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 		return governanceCeiling{}, false
 	}
 	if name, shut := driveDoorShut(ceiling); shut {
-		writeError(w, http.StatusForbidden, driveDeniedByProfileMsg(name))
+		writeErrorReason(w, http.StatusForbidden, reasonUserDriveDeniedByProfile, driveDeniedByProfileMsg(name))
 		return governanceCeiling{}, false
 	}
 	return ceiling, true

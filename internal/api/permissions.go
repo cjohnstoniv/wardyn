@@ -362,7 +362,7 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		Effect:      req.Effect,
 	}
 	if err := validateCapabilityGrant(&g); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid grant: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonCapabilityGrantInvalid, "invalid grant: "+err.Error())
 		return
 	}
 	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) {
@@ -437,7 +437,7 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	}
 	for kind := range body {
 		if !validCapabilityKind(kind) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown capability kind %q", kind))
+			writeErrorReason(w, http.StatusBadRequest, reasonCapabilityKindUnknown, fmt.Sprintf("unknown capability kind %q", kind))
 			return
 		}
 	}
@@ -449,7 +449,7 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(existing)) {
-		writeError(w, http.StatusPreconditionFailed,
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonCapabilityEnforcementStale,
 			"If-Match does not match the current capability enforcement map — GET /permissions again and retry")
 		return
 	}

@@ -34,7 +34,7 @@ func (s *Server) mountDelegationRoutes(r chi.Router) {
 func (s *Server) delegateStoreOr501(w http.ResponseWriter) (store.DelegateStore, bool) {
 	ds, ok := s.cfg.Store.(store.DelegateStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "delegation requires the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonDelegationStoreUnavailable, "delegation requires the Postgres store backend")
 	}
 	return ds, ok
 }
@@ -63,21 +63,21 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
-		writeError(w, http.StatusUnprocessableEntity, "name: required, at most 200 bytes, no control characters")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateNameInvalid, "name: required, at most 200 bytes, no control characters")
 		return
 	}
 	clientID := strings.TrimSpace(req.IdPClientID)
 	if clientID == "" || len(clientID) > apiTokenNameMaxLen || !controlCharFree(clientID) {
-		writeError(w, http.StatusUnprocessableEntity, "idp_client_id: required, at most 200 bytes, no control characters")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateClientIDInvalid, "idp_client_id: required, at most 200 bytes, no control characters")
 		return
 	}
 	if s.cfg.OIDC != nil && clientID == s.cfg.OIDC.ClientID() {
-		writeError(w, http.StatusUnprocessableEntity, "idp_client_id: must be the portal's own client, not this deployment's")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateClientIDIsPortal, "idp_client_id: must be the portal's own client, not this deployment's")
 		return
 	}
 	group, ok := oidc.CanonicalGroupSubject(req.Group)
 	if !ok {
-		writeError(w, http.StatusUnprocessableEntity, "group: required, printable ASCII")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateGroupInvalid, "group: required, printable ASCII")
 		return
 	}
 	raw := newBearer(delegateCredentialPrefix)
