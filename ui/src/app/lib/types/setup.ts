@@ -407,8 +407,9 @@ export interface SetupStatus {
   model_providers?: SetupModelProvider[];
   // THIS PRINCIPAL's own connection state for each provider in
   // `model_providers` (MP-12) — one row per provider, graded against the
-  // caller's own credential. Same absence rule as `model_providers`: absent
-  // with no provider block, or when it lists none.
+  // caller's own credential. Absent with no provider block, or when it lists
+  // none — unlike `model_providers`, this field still carries `omitempty`,
+  // so the two shapes above are not distinguished here.
   provider_access?: SetupProviderAccess[];
   // The CALLER's own Azure DevOps access state — ModelAccess's sibling.
   // Absent when no Azure DevOps row is configured at all.

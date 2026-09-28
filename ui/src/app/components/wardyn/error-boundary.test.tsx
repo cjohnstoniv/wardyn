@@ -91,7 +91,6 @@ describe("ErrorBoundary — stale-chunk recovery", () => {
 
 describe("ErrorBoundary — ordinary render errors are untouched", () => {
   it("never reloads, and keeps Try again with the real message", async () => {
-    const reset = vi.fn();
     render(
       <ErrorBoundary region="Runs">
         <Boom message="Cannot read properties of undefined (reading 'backends')" />
@@ -101,7 +100,6 @@ describe("ErrorBoundary — ordinary render errors are untouched", () => {
     expect(screen.getByText(/Something went wrong rendering Runs/)).toBeInTheDocument();
     expect(screen.getByText(/reading 'backends'/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
-    expect(reset).not.toHaveBeenCalled();
   });
 
   it("a custom fallback still wins for both kinds", () => {
