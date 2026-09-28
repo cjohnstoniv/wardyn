@@ -13,11 +13,14 @@
 #
 # WHAT THIS SCRIPT BUILDS, AND WHAT #690 ALSO ASKS FOR THAT IT DOES NOT:
 #
-#   BUILT: v0.7.11 install -> one admin-namespace secret + one RUNNING
-#   interactive run -> upgrade to tip (Recreate, the chart's own default
-#   strategy) -> assert the boot-time secret conversion log, the secret still
-#   reads back, the run reaches a real outcome rather than getting stuck, a
-#   fresh run succeeds over the tip image, /healthz.proxy_hop_tls=true -> helm
+#   BUILT: v0.7.11 install WITH the k8s substrate (its proxy and agent images
+#   built from the v0.7.11 tag: only wardynd is published) -> one
+#   admin-namespace secret + one interactive run that genuinely reaches
+#   RUNNING -> upgrade to tip (Recreate, the chart's own default strategy) ->
+#   assert the boot-time secret conversion log, the secret still reads back,
+#   the carried run keeps the documented pre-0.7.12 outcome (see "THE CARRIED
+#   RUN" below), a fresh run succeeds over the tip image,
+#   /healthz.proxy_hop_tls=true -> helm
 #   rollback back to v0.7.11 recorded as evidence (informational — no
 #   published release yet carries the downgrade refusal that would let this
 #   assert a specific pass/fail outcome; see "THE ROLLBACK ASSERTION" below).
@@ -76,6 +79,25 @@
 # Follow-up: once a release ships PR #834's guard, FROM_VERSION should move to
 # it and this step should go back to a hard pass/fail assertion on the
 # refusal text.
+#
+# THE CARRIED RUN, AND WHY IT IS NOT ASSERTED TERMINAL. A v0.7.11 proxy
+# predates the TLS control-plane hop (0.7.12, #561): it dials wardynd's console
+# listener in plaintext. The documented outcome after an upgrade past #1263 is
+# CHANGELOG.md [Unreleased] "Once the control-plane hop is TLS, the console
+# listener refuses /api/v1/internal/*" and docs/OPERATIONS.md's proxy-facing
+# TLS section: such a proxy "gets 404 on every call after an upgrade (on the
+# chart it has no route back at all ...)"; the operator restarts such runs or
+# stops them ("stop any run dispatched before 0.7.12 before you upgrade",
+# CHANGELOG.md [Unreleased], the #606 entry). Nothing documents the upgrade
+# itself ending the run, and its token
+# only lapses an hour on (runTokenLapseAfter). So the walk asserts: the run
+# still reads RUNNING on the SAME two pods (neither ended, lost nor
+# re-dispatched by the upgrade), GET /admin/runs/proxy-window lists it outside
+# the supported window (proxy_release '' — started before migration 0084),
+# and the operator's stop ends it cleanly: KILLED, both pods gone. The bulk
+# restart's answer is recorded as evidence only: on Kubernetes the substrate
+# implements no runner.ProxyReviver, so it refuses rather than re-points the
+# proxy.
 #
 # Usage: scripts/kind-upgrade-walk.sh   (needs docker, kind, kubectl, helm, jq, curl)
 # CLUSTER overrides the cluster name (default kind-upgrade-walk); refuses to
@@ -154,6 +176,8 @@ CREATED_CLUSTER="${CLUSTER}"
 export KUBECONFIG="${WORK}/kubeconfig"
 
 kubectl create namespace "${NS}" >/dev/null
+# The runs namespace, before BOTH installs: the chart never creates one.
+kubectl create namespace wardyn-runs >/dev/null
 
 CALICO_VERSION="v3.28.0"
 step "installing Calico ${CALICO_VERSION} (same recipe as deploy/kind/quickstart.sh)"
@@ -180,6 +204,24 @@ kubectl -n "${NS}" create secret generic wardyn-postgres-dsn \
   --from-literal=dsn="postgres://wardyn:wardyn@postgres:5432/wardyn?sslmode=disable" \
   --from-literal=age-key="${AGE_KEY}" >/dev/null
 
+# The v0.7.11 proxy and agent images, built from the tag's own tree: only
+# wardynd is published, and a run carried across the upgrade has to have been
+# dispatched by v0.7.11 with v0.7.11's sidecar for the upgrade to mean anything.
+FROM_PROXY_IMAGE="wardyn/wardyn-proxy:kind-upgrade-from"
+FROM_AGENT_IMAGE="wardyn/agent-claude-code:kind-upgrade-from"
+step "building the v${FROM_VERSION} proxy and claude-code agent images from the v${FROM_VERSION} tag"
+git rev-parse -q --verify "refs/tags/v${FROM_VERSION}" >/dev/null \
+  || git fetch -q --depth 1 origin "refs/tags/v${FROM_VERSION}:refs/tags/v${FROM_VERSION}" \
+  || die "could not fetch tag v${FROM_VERSION}"
+mkdir -p "${WORK}/from-src"
+git archive "v${FROM_VERSION}" | tar -x -C "${WORK}/from-src" || die "could not export the v${FROM_VERSION} tree"
+docker build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" >"${WORK}/build-from-proxy.log" 2>&1 \
+  || { tail -40 "${WORK}/build-from-proxy.log" >&2; die "building the v${FROM_VERSION} proxy image failed"; }
+docker build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" >"${WORK}/build-from-agent.log" 2>&1 \
+  || { tail -40 "${WORK}/build-from-agent.log" >&2; die "building the v${FROM_VERSION} claude-code agent image failed"; }
+kind load docker-image "${FROM_PROXY_IMAGE}" --name "${CLUSTER}" >/dev/null
+kind load docker-image "${FROM_AGENT_IMAGE}" --name "${CLUSTER}" >/dev/null
+
 ADMIN_TOKEN="$(openssl rand -hex 20)"
 BASE="http://127.0.0.1:${HTTP_PORT}"
 kind load docker-image "ghcr.io/cjohnstoniv/wardynd:${FROM_VERSION}" --name "${CLUSTER}" >/dev/null
@@ -193,6 +235,9 @@ NODE_CIDR="$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Subnet}} {
   | tr ' ' '\n' | grep -v ':' | grep -v '^$' | head -1)"
 [[ -n "${NODE_CIDR}" ]] || die "could not read the kind docker network's IPv4 subnet"
 cat >"${WORK}/values.yaml" <<EOF
+env:
+  # The agent image is loaded into this cluster, not pullable from ghcr.
+  WARDYN_AGENT_IMAGES: '{"claude-code":"${FROM_AGENT_IMAGE}"}'
 networkPolicy:
   ingress:
     from:
@@ -211,6 +256,10 @@ helm install "${RELEASE}" "${CHART_REF}" --version "${FROM_VERSION}" \
   --set auth.adminToken.value="${ADMIN_TOKEN}" \
   --set service.type=NodePort \
   --set service.port="${HTTP_PORT}" \
+  --set k8s.enabled=true \
+  --set k8s.proxyImage="${FROM_PROXY_IMAGE}" \
+  --set k8s.runsNamespace=wardyn-runs \
+  --set serviceAccount.automount=true \
   || die "helm install of the published v${FROM_VERSION} chart failed"
 # The chart has no nodePort value (deploy/kind/quickstart.sh's own finding —
 # it is a Service field, not a Wardyn one): k8s assigns a random one at
@@ -247,7 +296,26 @@ code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:kind-upgrade"
 [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${WORK}/resp.json" >&2; die "POST /runs on v${FROM_VERSION} answered ${code}"; }
 CARRIED_RUN_ID="$(jq -r '.id' "${WORK}/resp.json")"
 [[ -n "${CARRIED_RUN_ID}" && "${CARRIED_RUN_ID}" != "null" ]] || die "create-run on v${FROM_VERSION} carried no id"
-pass "run ${CARRIED_RUN_ID} launched on v${FROM_VERSION}"
+carried_state=""
+for _ in $(seq 1 120); do
+  code=$(api GET "/api/v1/runs/${CARRIED_RUN_ID}")
+  [[ "${code}" == "200" ]] && carried_state="$(jq -r '.state' "${WORK}/resp.json")"
+  case "${carried_state}" in RUNNING|COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) break ;; esac
+  sleep 2
+done
+[[ "${carried_state}" == "RUNNING" ]] || {
+  cat "${WORK}/resp.json" >&2
+  kubectl -n wardyn-runs describe pods >&2 || true
+  die "run ${CARRIED_RUN_ID} never reached RUNNING on v${FROM_VERSION} (last read: ${carried_state:-<unreadable>})"
+}
+AGENT_POD="wardyn-agent-${CARRIED_RUN_ID}"
+PROXY_POD="wardyn-proxy-${CARRIED_RUN_ID}"
+pod_uid() { kubectl -n wardyn-runs get pod "$1" -o jsonpath='{.metadata.uid}/{.status.phase}' 2>/dev/null; }
+AGENT_UID_BEFORE="$(pod_uid "${AGENT_POD}")"
+PROXY_UID_BEFORE="$(pod_uid "${PROXY_POD}")"
+[[ "${AGENT_UID_BEFORE}" == */Running && "${PROXY_UID_BEFORE}" == */Running ]] \
+  || die "run ${CARRIED_RUN_ID} reads RUNNING but its pods are not both Running (agent=${AGENT_UID_BEFORE:-absent} proxy=${PROXY_UID_BEFORE:-absent})"
+pass "run ${CARRIED_RUN_ID} RUNNING on v${FROM_VERSION}, agent and proxy pods Running"
 
 # ── upgrade to tip ───────────────────────────────────────────────────────────
 step "building this tree's own tip images (wardynd + proxy) and loading them"
@@ -258,8 +326,6 @@ docker build -f deploy/compose/Dockerfile.proxy -t "${TIP_PROXY_IMAGE}" . >"${WO
   || { tail -40 "${WORK}/build-tip-proxy.log" >&2; die "building the tip proxy image failed"; }
 kind load docker-image "${TIP_IMAGE}" --name "${CLUSTER}" >/dev/null
 kind load docker-image "${TIP_PROXY_IMAGE}" --name "${CLUSTER}" >/dev/null
-
-kubectl create namespace wardyn-runs >/dev/null
 
 step "helm upgrade --install to tip (the chart's own Recreate strategy tears the old pod down first)"
 helm upgrade --install "${RELEASE}" ./deploy/helm/wardyn \
@@ -299,25 +365,43 @@ jq -e --arg n "${SECRET_NAME}" 'any(.mine[]; . == $n)' "${WORK}/resp.json" >/dev
   && pass "secret ${SECRET_NAME} still present after the conversion" \
   || fail "expected ${SECRET_NAME} to still be listed after the upgrade"
 
-step "confirming the run carried across the upgrade reached a real outcome (not stuck RUNNING forever with no proxy)"
-carried_state=""
-carried_terminal=""
-for _ in $(seq 1 30); do
+step "the run carried across the upgrade keeps the documented pre-0.7.12 outcome (see THE CARRIED RUN above)"
+# Sampled for 20 s, not read once: a boot sweep that ended or re-dispatched it
+# a moment after the first read must still fail this.
+carried_ok=1
+for _ in $(seq 1 10); do
   code=$(api GET "/api/v1/runs/${CARRIED_RUN_ID}")
-  [[ "${code}" == "200" ]] || { sleep 2; continue; }
-  carried_state="$(jq -r '.state' "${WORK}/resp.json")"
-  case "${carried_state}" in
-    COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) carried_terminal=1; break ;;
-  esac
+  carried_state="$([[ "${code}" == "200" ]] && jq -r '.state' "${WORK}/resp.json")"
+  [[ "${carried_state}" == "RUNNING" ]] || { carried_ok=""; break; }
   sleep 2
 done
-# A real outcome means a TERMINAL state, matching types.RunState.IsTerminal —
-# RUNNING, STARTING, PENDING, WAITING_FOR_CONFIRMATION or an unreadable
-# `null` (jq -r '.state' on a body with no state field) are all still "stuck",
-# not "reached an outcome".
-[[ -n "${carried_terminal}" ]] \
-  && pass "run ${CARRIED_RUN_ID} reads back as ${carried_state} after the upgrade (never silently vanished, never stuck)" \
-  || fail "run ${CARRIED_RUN_ID} did not reach a terminal state within 60s after the upgrade (last read: ${carried_state:-<unreadable>})"
+[[ -n "${carried_ok}" ]] \
+  && pass "run ${CARRIED_RUN_ID} still RUNNING after the upgrade (neither ended nor lost by it)" \
+  || fail "run ${CARRIED_RUN_ID} left RUNNING across the upgrade (read: ${carried_state:-<unreadable>}: $(cat "${WORK}/resp.json"))"
+agent_after="$(pod_uid "${AGENT_POD}")"
+proxy_after="$(pod_uid "${PROXY_POD}")"
+[[ "${agent_after}" == "${AGENT_UID_BEFORE}" && "${proxy_after}" == "${PROXY_UID_BEFORE}" ]] \
+  && pass "the same v${FROM_VERSION} agent and proxy pods are still Running (not re-dispatched)" \
+  || fail "the carried run's pods changed across the upgrade: agent ${AGENT_UID_BEFORE} -> ${agent_after:-absent}, proxy ${PROXY_UID_BEFORE} -> ${proxy_after:-absent}"
+code=$(api GET /api/v1/admin/runs/proxy-window)
+[[ "${code}" == "200" ]] && jq -e --arg id "${CARRIED_RUN_ID}" 'any(.outside[]; .run_id == $id and .proxy_release == "")' "${WORK}/resp.json" >/dev/null \
+  && pass "GET /admin/runs/proxy-window lists it outside the supported window (proxy_release '')" \
+  || fail "expected GET /admin/runs/proxy-window to list ${CARRIED_RUN_ID} outside the window; answered ${code}: $(cat "${WORK}/resp.json")"
+code=$(api POST /api/v1/admin/runs/restart "{\"run_ids\":[\"${CARRIED_RUN_ID}\"]}")
+echo "evidence: POST /admin/runs/restart answered ${code}: $(cat "${WORK}/resp.json")"
+kubectl -n wardyn-runs logs "${PROXY_POD}" --all-containers --tail=5 2>&1 | sed 's/^/evidence: carried proxy log: /' || true
+code=$(api POST "/api/v1/runs/${CARRIED_RUN_ID}/kill")
+[[ "${code}" == "200" || "${code}" == "202" ]] || fail "POST /runs/${CARRIED_RUN_ID}/kill answered ${code}: $(cat "${WORK}/resp.json")"
+carried_state=""
+for _ in $(seq 1 60); do
+  code=$(api GET "/api/v1/runs/${CARRIED_RUN_ID}")
+  [[ "${code}" == "200" ]] && carried_state="$(jq -r '.state' "${WORK}/resp.json")"
+  [[ "${carried_state}" == "KILLED" && -z "$(pod_uid "${AGENT_POD}")" && -z "$(pod_uid "${PROXY_POD}")" ]] && break
+  sleep 2
+done
+[[ "${carried_state}" == "KILLED" && -z "$(pod_uid "${AGENT_POD}")" && -z "$(pod_uid "${PROXY_POD}")" ]] \
+  && pass "the operator's stop ended it cleanly: KILLED, both v${FROM_VERSION} pods gone" \
+  || fail "expected the stop to leave ${CARRIED_RUN_ID} KILLED with no pods (state=${carried_state:-<unreadable>} agent=$(pod_uid "${AGENT_POD}") proxy=$(pod_uid "${PROXY_POD}"))"
 
 step "confirming /healthz.proxy_hop_tls=true and a FRESH run succeeds on tip"
 h="$(curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz")"
