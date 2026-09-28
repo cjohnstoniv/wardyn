@@ -556,6 +556,61 @@ const (
 	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
 )
 
+// POST /internal/* (internal.go, internal_live_run.go): the sidecar/proxy
+// surface, not the member-facing API.
+const (
+	reasonInternalDecisionLogInvalid = "internal_decision_log_invalid" // the egress decision log body did not decode
+	reasonGroundtruthBatchInvalid    = "groundtruth_batch_invalid"     // the ground-truth batch body did not decode
+	reasonGroundtruthBatchTooLarge   = "groundtruth_batch_too_large"   // the batch named more than 1000 events
+	reasonGroundtruthActionNotKernel = "groundtruth_action_not_kernel" // an event's action lacks the required kernel. prefix
+	reasonGroundtruthWriteFailed     = "groundtruth_write_failed"      // persisting a ground-truth event failed
+	// reasonInternalApprovalRequestInvalid, reasonUnsupportedInternalApprovalKind,
+	// reasonMissingRequestedScope and reasonReservedScopeKey are
+	// handleInternalRequestApproval's own refusals (internal.go); the latter
+	// three are already the exact strings its own s.auditAuthFailedAs call
+	// wrote before #656 slice 3 gave them a reasons.go home.
+	reasonInternalApprovalRequestInvalid   = "internal_approval_request_invalid"
+	reasonUnsupportedInternalApprovalKind  = "unsupported_internal_approval_kind"
+	reasonMissingRequestedScope            = "missing_requested_scope"
+	reasonReservedScopeKey                 = "reserved_scope_key"
+	reasonInternalApprovalCountUnavailable = "internal_approval_count_unavailable" // the per-run approval count could not be read
+	reasonInternalApprovalCapReached       = "internal_approval_cap_reached"       // the run already holds the maximum number of approvals
+	reasonBrokerNotConfigured              = "broker_not_configured"               // this deployment configures no credential broker
+	reasonMintGrantIDRequired              = "mint_grant_id_required"              // the mint request named no grant_id
+	// reasonBrokeredForgeSingleLane{,Unverifiable} are handleInternalMint's own
+	// single-lane guard (internal.go); already the exact strings its own audit
+	// row wrote before #656 slice 3 put them on the wire too.
+	reasonBrokeredForgeSingleLane             = "brokered_forge_single_lane"
+	reasonBrokeredForgeSingleLaneUnverifiable = "brokered_forge_single_lane_unverifiable"
+	reasonGrantRunMismatch                    = "grant_run_mismatch"          // the grant belongs to a different run
+	reasonGrantNotFound                       = "grant_not_found"             // no such grant
+	reasonGrantRequiresSPIRE                  = "grant_requires_spire"        // the grant needs the embedded SPIRE identity provider
+	reasonRunRenewStoreUnavailable            = "run_renew_store_unavailable" // no store configured to verify the run is still alive
+	reasonRunRenewReadFailed                  = "run_renew_read_failed"       // reading the run for the renew gate failed
+	reasonRunRenewStampFailed                 = "run_renew_stamp_failed"      // stamping the run's token-renewed marker failed
+	// reasonInternalLivenessReadFailed is refuseTerminalRun's own 503
+	// (internal_live_run.go) — the shared /internal/* liveness gate every
+	// sidecar door runs through.
+	reasonInternalLivenessReadFailed = "internal_liveness_read_failed"
+)
+
+// The credential-injection sinks' own closed set (injection.go's
+// storeReadRefusal and its callers across injection_provider_key.go,
+// injection_awssso.go, provider_subscription.go, internal.go): one reason per
+// cause, shared across every lane that hits the identical store-level fact
+// rather than each inventing a synonym — sinkStoreUnreachable's own sentence
+// already flows to several of these unchanged.
+const (
+	reasonSinkStoreUnavailable = "store_unavailable" // the credential store did not answer (transient)
+	reasonSinkSecretNotFound   = "not_found"         // the named secret is not in the store
+	reasonSinkSecretRefused    = "refused"           // the secret exists but the store refused to serve it
+	reasonSinkResolveFailed    = "resolve_failed"    // resolving a subscription/managed token failed for a reason other than an unreachable store
+	// reasonProviderStoreRefused is providerStoreReadRefusal's own split of
+	// reasonSinkSecretRefused: a person's own model-provider credential, never
+	// the generic secret sentence.
+	reasonProviderStoreRefused = "store_refused"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

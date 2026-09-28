@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
@@ -31,7 +32,7 @@ import (
 func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	var dl egress.DecisionLog
@@ -39,7 +40,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// plus an optional scan summary, so nothing legitimate comes near it, and a
 	// too-tight cap here would DROP an egress audit record behind a 413.
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&dl); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid decision log")
+		writeErrorReason(w, http.StatusBadRequest, reasonInternalDecisionLogInvalid, "invalid decision log")
 		return
 	}
 	normalizeN1Decision(&dl)
@@ -241,7 +242,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// maxJSONBody, so this stream gets its own larger cap rather than 413ing a
 	// full sensor batch.
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGroundtruthBatchBytes)).Decode(&batch); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid ground-truth batch")
+		writeErrorReason(w, http.StatusBadRequest, reasonGroundtruthBatchInvalid, "invalid ground-truth batch")
 		return
 	}
 	if len(batch.Events) == 0 {
@@ -250,7 +251,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	}
 	const maxBatch = 1000
 	if len(batch.Events) > maxBatch {
-		writeError(w, http.StatusRequestEntityTooLarge, "batch too large")
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonGroundtruthBatchTooLarge, "batch too large")
 		return
 	}
 
@@ -271,7 +272,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// write kernel-prefixed events. This prevents a compromised sensor from
 		// forging egress./credential./identity./policy. events.
 		if !strings.HasPrefix(ev.Action, groundtruth.KernelActionPrefix) {
-			writeError(w, http.StatusBadRequest, "action must use the kernel. prefix")
+			writeErrorReason(w, http.StatusBadRequest, reasonGroundtruthActionNotKernel, "action must use the kernel. prefix")
 			return
 		}
 		// Validate a non-NULL run_id against agent_runs. NULL is allowed for
@@ -324,7 +325,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 			// Propagate as a non-2xx so the sender retries (fail-closed
 			// durability). accepted so far is not reported as success: the caller
 			// re-sends the whole batch.
-			writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "record ground-truth event", err))
+			writeErrorReason(w, http.StatusBadGateway, reasonGroundtruthWriteFailed, loggedMsg(r.Context(), "record ground-truth event", err))
 			return
 		}
 		accepted++
@@ -413,13 +414,13 @@ type internalApprovalRequest struct {
 func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	var body internalApprovalRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body); err != nil ||
 		len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
-		writeError(w, http.StatusBadRequest, "invalid approval request")
+		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
 		return
 	}
 	switch body.Kind {
@@ -432,14 +433,15 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
 		// rate-bound auth.fail row, limiter and suppressed
 		// counter as every other refusal; the KIND is a closed enum of our own
-		// types, never echoed from the body.
-		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")
-		writeError(w, http.StatusBadRequest, "unsupported approval kind for internal request")
+		// types, never echoed from the body. The SAME string is now the wire
+		// reason too (#656 slice 3).
+		s.auditAuthFailedAs(r, internalApprovalActor, reasonUnsupportedInternalApprovalKind)
+		writeErrorReason(w, http.StatusBadRequest, reasonUnsupportedInternalApprovalKind, "unsupported approval kind for internal request")
 		return
 	}
 	if len(body.RequestedScope) == 0 {
-		s.auditAuthFailedAs(r, internalApprovalActor, "missing_requested_scope")
-		writeError(w, http.StatusBadRequest, "requested_scope is required")
+		s.auditAuthFailedAs(r, internalApprovalActor, reasonMissingRequestedScope)
+		writeErrorReason(w, http.StatusBadRequest, reasonMissingRequestedScope, "requested_scope is required")
 		return
 	}
 	// `lane` names a control-plane-raised escalation (the Azure DevOps
@@ -447,8 +449,8 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	// grant_id, which this route never sets — but a sidecar that tries to
 	// write it is probing that boundary, so it is refused and recorded.
 	if scopeNamesLane(body.RequestedScope) {
-		s.auditAuthFailedAs(r, internalApprovalActor, "reserved_scope_key")
-		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
+		s.auditAuthFailedAs(r, internalApprovalActor, reasonReservedScopeKey)
+		writeErrorReason(w, http.StatusBadRequest, reasonReservedScopeKey, "requested_scope may not name a lane")
 		return
 	}
 	if body.Kind == types.ApprovalPushContent {
@@ -463,11 +465,11 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	// tell how many this run has" must not read as "allow another one".
 	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
 	if cerr != nil {
-		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalApprovalCountUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
 		return
 	}
 	if n >= maxApprovalsPerRun {
-		writeError(w, http.StatusTooManyRequests, "this run has raised too many approvals; no more will be accepted")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached, "this run has raised too many approvals; no more will be accepted")
 		return
 	}
 
@@ -507,7 +509,7 @@ func scopeNamesLane(scope json.RawMessage) bool {
 func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "approval")
@@ -524,7 +526,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	}
 	if ap.RunID != claims.RunID {
 		// Do not confirm existence of another run's approval.
-		writeError(w, http.StatusNotFound, "approval not found")
+		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return
 	}
 	// Reconcile-on-read for a mid-run credential re-auth: a PENDING row whose
@@ -561,7 +563,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "approval")
@@ -579,7 +581,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 	if ap.RunID != claims.RunID || ap.Kind != types.ApprovalToolCall || ap.GrantID != nil {
 		// Do not confirm existence of another run's approval, or of an
 		// approval this route was never meant to touch.
-		writeError(w, http.StatusNotFound, "approval not found")
+		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return
 	}
 	if err := s.cfg.Approvals.ExpireOne(r.Context(), id, claims.SPIFFEID, "client_withdrawn"); err != nil {
@@ -623,16 +625,16 @@ type mintResponse struct {
 func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	if s.cfg.Broker == nil {
-		writeError(w, http.StatusServiceUnavailable, "broker not configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonBrokerNotConfigured, "broker not configured")
 		return
 	}
 	var body mintRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil || body.GrantID == uuid.Nil {
-		writeError(w, http.StatusBadRequest, "grant_id is required")
+		writeErrorReason(w, http.StatusBadRequest, reasonMintGrantIDRequired, "grant_id is required")
 		return
 	}
 
@@ -664,10 +666,11 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
 				body.GrantID.String(), "denied", mustJSON(map[string]any{
 					"grant_id": body.GrantID.String(),
-					"reason":   "brokered_forge_single_lane_unverifiable",
+					"reason":   reasonBrokeredForgeSingleLaneUnverifiable,
 				})))
-			writeError(w, http.StatusServiceUnavailable, "wardyn: could not read this run's grants to check the brokered-forge single-lane rule, "+
-				"so the mint is refused rather than answered unchecked. Retry.")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonBrokeredForgeSingleLaneUnverifiable,
+				"wardyn: could not read this run's grants to check the brokered-forge single-lane rule, "+
+					"so the mint is refused rather than answered unchecked. Retry.")
 			return
 		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
@@ -675,7 +678,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 				"grant_id": body.GrantID.String(),
 				"kind":     string(kind),
 				"host":     host,
-				"reason":   "brokered_forge_single_lane",
+				"reason":   reasonBrokeredForgeSingleLane,
 			})))
 		second := "a resident SSH key gives the same run a second push path SSH makes unparseable"
 		alt := "your own key"
@@ -683,7 +686,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 			second = "a resident PAT gives the same run a second push path that is an opaque CONNECT tunnel no parser can read"
 			alt = "your own PAT"
 		}
-		writeError(w, http.StatusForbidden, "wardyn: this run also holds a github_token grant, and a brokered forge is single-lane — "+
+		writeErrorReason(w, http.StatusForbidden, reasonBrokeredForgeSingleLane, "wardyn: this run also holds a github_token grant, and a brokered forge is single-lane — "+
 			"the git-broker route is its only route to "+host+" by name, so every push it carries is parsed and confined to "+
 			"refs/heads/wardyn/<run-id>/, while "+second+". "+
 			"Push through the git broker, or re-run from a policy without the github_token grant to push with "+alt)
@@ -816,19 +819,21 @@ func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err erro
 	}
 	switch {
 	case errors.Is(err, broker.ErrRunMismatch):
-		writeError(w, http.StatusForbidden, "caller run does not own this grant")
+		writeErrorReason(w, http.StatusForbidden, reasonGrantRunMismatch, "caller run does not own this grant")
 	case errors.Is(err, broker.ErrGrantNotFound):
-		writeError(w, http.StatusNotFound, "grant not found")
+		writeErrorReason(w, http.StatusNotFound, reasonGrantNotFound, "grant not found")
 	case errors.Is(err, broker.ErrRequiresSPIRE):
-		writeError(w, http.StatusUnprocessableEntity, "grant requires the spire identity provider")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonGrantRequiresSPIRE, "grant requires the spire identity provider")
 	case errors.Is(err, broker.ErrScopeMismatch):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictScopeMismatch, "error": "requested scope does not match grant (no-widening)"})
 	case errors.Is(err, broker.ErrAlreadyMinted):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
 	case mintUnreachable(err):
 		// Transient, like the store's own outage: a run's proxy rides it out
-		// on its last-good header (K8) instead of dropping it at once.
-		writeError(w, http.StatusServiceUnavailable, sinkStoreUnreachable)
+		// on its last-good header (K8) instead of dropping it at once. The
+		// SAME reason the credential-injection sinks use for the identical
+		// shape (reasonSinkStoreUnavailable, #656 slice 3).
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonSinkStoreUnavailable, sinkStoreUnreachable)
 	default:
 		writeServerError(w, r, "mint", err)
 	}
@@ -894,13 +899,13 @@ type tokenRenewResponse struct {
 func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	// Fail closed: with no run store we cannot prove the run is still alive, so
 	// we refuse rather than renew on an unverifiable authority.
 	if s.cfg.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "run store not configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStoreUnavailable, "run store not configured")
 		return
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
@@ -918,19 +923,24 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		}
 		// Transient store failure: refuse (fail closed) but signal retryable, so a
 		// Postgres blip costs a renew attempt and not the run's credentials.
-		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "read run", err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewReadFailed, loggedMsg(r.Context(), "read run", err))
 		return
 	}
 	if isTerminalRunState(run.State) {
 		s.auditRenewDenied(r, claims, "run_terminal:"+string(run.State))
-		writeError(w, http.StatusForbidden, "run is terminal")
+		// The SAME registered reason refuseTerminalRun's own terminal arm
+		// writes (internal_live_run.go, #656 slice 3) — the identical cause,
+		// reached by renew's own separate read instead of the shared gate.
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return
 	}
 	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
 	// it one, with a token of its own. Nothing may carry its identity forward.
 	if runIsKept(run) {
 		s.auditRenewDenied(r, claims, "run_lost:"+string(run.LostReason))
-		writeError(w, http.StatusForbidden, "run is lost")
+		// The SAME registered reason refuseTerminalRun's own kept-run arm
+		// writes (internal_live_run.go, #656 slice 3).
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 		return
 	}
 
@@ -947,12 +957,12 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
 		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID)
 		if serr != nil {
-			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "stamp run token renewed", serr))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, loggedMsg(r.Context(), "stamp run token renewed", serr))
 			return
 		}
 		if !stamped {
 			s.auditRenewDenied(r, claims, "run_lost")
-			writeError(w, http.StatusForbidden, "run is lost")
+			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 			return
 		}
 	}

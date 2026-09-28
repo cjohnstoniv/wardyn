@@ -279,7 +279,9 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
 			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
-		writeError(w, status, body)
+		// reason reaches the wire now (#656 slice 3), matching
+		// injection_bedrock_bearer.go's identical fix.
+		writeErrorReason(w, status, reason, body)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
@@ -357,12 +359,12 @@ const sinkStoreUnreachable = "Wardyn couldn't reach the service that holds this 
 func storeReadRefusal(name string, err error) (status int, reason, body string) {
 	switch {
 	case errors.Is(err, secretstore.ErrUnavailable):
-		return http.StatusServiceUnavailable, "store_unavailable", sinkStoreUnreachable
+		return http.StatusServiceUnavailable, reasonSinkStoreUnavailable, sinkStoreUnreachable
 	case errors.Is(err, secretstore.ErrNotFound):
-		return http.StatusFailedDependency, "not_found", "secret " + name + " is not in the store (set it with `wardyn secret set`)"
+		return http.StatusFailedDependency, reasonSinkSecretNotFound, "secret " + name + " is not in the store (set it with `wardyn secret set`)"
 	default:
 		// The row exists: re-setting it would overwrite what an operator may need to inspect.
-		return http.StatusFailedDependency, "refused", "secret " + name + " exists but could not be used: the store refused it " +
+		return http.StatusFailedDependency, reasonSinkSecretRefused, "secret " + name + " exists but could not be used: the store refused it " +
 			"(its value is gone or bound to another row, or Wardyn's access to it was revoked). Nothing was substituted; ask an admin to check it."
 	}
 }
@@ -444,14 +446,14 @@ func (s *Server) resolveSubscriptionSentinelInjection(w http.ResponseWriter, r *
 		// Fail closed: never inject an expired/absent token. A store that
 		// did not answer (the managed token's) is the transient 503, as on
 		// the stored-key path.
-		reason, status, body := "resolve_failed", http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error()
+		reason, status, body := reasonSinkResolveFailed, http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error()
 		if errors.Is(terr, secretstore.ErrUnavailable) {
-			reason, status, body = "store_unavailable", http.StatusServiceUnavailable, sinkStoreUnreachable
+			reason, status, body = reasonSinkStoreUnavailable, http.StatusServiceUnavailable, sinkStoreUnreachable
 		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", sentinel, "failure",
 			mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": source})))
-		writeError(w, status, body)
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 	// The OAuth token has exactly ONE correct wire shape: Authorization: Bearer

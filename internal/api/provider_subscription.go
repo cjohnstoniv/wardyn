@@ -236,9 +236,9 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	tok, err := s.ownerSubscriptionToken(claims.Sub, uid).Current(ctx)
 	switch {
 	case errors.Is(err, secretstore.ErrUnavailable):
-		return fail(http.StatusServiceUnavailable, "store_unavailable", sinkStoreUnreachable)
+		return fail(http.StatusServiceUnavailable, reasonSinkStoreUnavailable, sinkStoreUnreachable)
 	case err != nil:
-		return fail(http.StatusFailedDependency, "resolve_failed", fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
+		return fail(http.StatusFailedDependency, reasonSinkResolveFailed, fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
 	}
 	// One correct wire shape, whatever the grant says (see the legacy arm).
 	formatted := formatInjectionValue("Bearer %s", []byte(tok.Value))
