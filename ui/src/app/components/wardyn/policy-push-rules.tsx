@@ -4,11 +4,16 @@
  */
 
 // The push_rules editor — a section beside the spec, mirroring ToolRulesSection's
-// own pattern (#57 packet, PR-1): it reads and writes the SAME RunPolicySpec
-// document the textarea shows, so there is one source of truth and no sync to
-// get wrong. deny_paths/require_review_paths are flat string lists, structurally
-// simpler than tool_rules' object rows, so each gets its own add/remove list
-// rather than tool_rules' named-vs-default split.
+// own pattern: it reads and writes the SAME RunPolicySpec document the textarea
+// shows, so there is one source of truth and no sync to get wrong.
+// deny_paths/require_review_paths are flat string lists, structurally simpler
+// than tool_rules' object rows, so each gets its own add/remove list rather
+// than tool_rules' named-vs-default split.
+//
+// The two reserved PushRulesSpec fields (deny_new_executables,
+// max_file_size_mib) are not on the wire type yet — its own Go doc comment
+// says so — so this editor never authors them. When they land, they get their
+// own mock round rather than a quiet addition here.
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { GrantSpec, PushRulesSpec, RunPolicySpec } from "../../lib/types";
@@ -19,14 +24,6 @@ import { cn } from "../ui/utils";
 import { Chip, SectionLabel } from "./primitives";
 import { Field } from "./form-primitives";
 
-// Scope check, recorded (#57 packet, PR-3): PushRulesSpec's own doc comment
-// (internal/types/policy.go) says DenyNewExecutables and MaxFileSizeMiB are
-// "reserved for a later change" — they are not on the wire type yet, so this
-// editor deliberately never authors them. Designing UI for a field the server
-// cannot accept is exactly what CONSOLE-RULES §12's mock-first rule exists to
-// catch; when they land, they get their own mock round, not a quiet addition
-// here.
-
 const UTF8 = new TextEncoder();
 
 // Mirrors internal/api/policy.go's maxPushRulesPathBytes — the same ceiling,
@@ -35,10 +32,8 @@ export const MAX_PUSH_RULE_PATH_BYTES = 256;
 
 // unicode.IsControl (Go) — what the server's controlCharFree
 // (internal/api/permissions.go) checks against directly — covers C0
-// (U+0000-U+001F), DEL (U+007F) AND C1 (U+0080-U+009F). \x7f-\x9f alone (not
-// \x7f, then a gap, then \x9f) is what actually spans DEL through the C1
-// block; missing that range let a C1 control (e.g. U+0085 NEL) through live
-// while the server refused it (review finding F1).
+// (U+0000-U+001F), DEL (U+007F) AND C1 (U+0080-U+009F): \x7f-\x9f is one
+// contiguous range spanning DEL through the end of C1.
 function hasControlChar(s: string): boolean {
   return /[\x00-\x1f\x7f-\x9f]/.test(s);
 }
@@ -56,16 +51,17 @@ function stripLeadingSlash(pattern: string): string {
 // as whitespace — a pattern with only a leading/trailing BOM is legal on the
 // wire (DenyPathSegments requires only valid UTF-8, which the JS string
 // already is), so flagging it here would be a false positive the server
-// accepts (review finding F3). The literal FEFF exclusion inside a negated
-// class is the same "\S plus one exception" idiom either side of `[^...]`.
+// accepts. The literal FEFF exclusion inside a negated class is the same "\S
+// plus one exception" idiom on either side of `[^...]`.
 function trimLikeGo(s: string): string {
-  return s.replace(/^[^\S\uFEFF]+/, "").replace(/[^\S\uFEFF]+$/, "");
+  return s.replace(/^[^\S﻿]+/, "").replace(/[^\S﻿]+$/, "");
 }
 
 // hasEmptyPathSegment mirrors types.DenyPathSegments' segment split
 // (internal/types/policy.go): a leading "/" is stripped, a trailing one reads
 // as "everything beneath" (so it can never itself be the empty final segment),
-// and no segment may be "", "." or "..".
+// and no segment may be "", "." or "..". A bare "/" strips to "", which is
+// itself the one empty segment — DenyPathSegments refuses it too.
 function hasEmptyPathSegment(pattern: string): boolean {
   const p = stripLeadingSlash(pattern);
   const withTrailing = p.endsWith("/") ? `${p}**` : p;
@@ -76,12 +72,13 @@ function hasEmptyPathSegment(pattern: string): boolean {
 // (internal/api/policy.go, internal/types/policy.go) for ONE pattern, in the
 // same order the server checks them — advisory only, the server stays the
 // gate. An empty pattern is not flagged: a freshly added, unwritten row is not
-// yet a mistake, and the server itself only refuses a truly empty SAVED entry
-// (PushRulesSection drops one on blur instead — see PathListRows).
+// yet a mistake, and PushRulesSection never lets one reach the wire anyway
+// (see withPushRules).
 //
-// isReview is the packet's own scope call (#57, PR-2 "the three questions"):
-// the empty/./.. segment check renders live only for require_review_paths —
-// deny_paths gets the identical check, just server-side only, at Save.
+// The empty/./.. segment check renders live only for require_review_paths —
+// deny_paths gets the identical check, just server-side only, at Save. That
+// asymmetry is deliberate: the two lists share a pattern language, but this
+// packet only asked for the review side's live check.
 export function pushRulePatternProblem(pattern: string, isReview: boolean): string | null {
   const bytes = UTF8.encode(pattern).length;
   if (bytes > MAX_PUSH_RULE_PATH_BYTES) {
@@ -92,12 +89,15 @@ export function pushRulePatternProblem(pattern: string, isReview: boolean): stri
   }
   // DenyPathSegments strips the leading "/" BEFORE checking whitespace, so
   // "/ a" is a whitespace violation server-side even though the raw string's
-  // first character is "/", not a space (review finding F2).
+  // first character is "/", not a space.
   const stripped = stripLeadingSlash(pattern);
   if (stripped.length > 0 && trimLikeGo(stripped) !== stripped) {
     return "Remove the leading or trailing space — it can never match a real path.";
   }
-  if (isReview && stripped.length > 0 && hasEmptyPathSegment(pattern)) {
+  // Guarded on the RAW pattern's length, not the slash-stripped one: "/" is
+  // non-empty before stripping but strips to "", which is itself the empty
+  // segment DenyPathSegments refuses — it must still reach this check.
+  if (isReview && pattern.length > 0 && hasEmptyPathSegment(pattern)) {
     return "A path segment can't be empty, \".\", or \"..\".";
   }
   return null;
@@ -173,6 +173,14 @@ function readPushRules(pr: PushRulesSpec | undefined): {
 // key: `push_rules: {}` and no key at all read identically everywhere else
 // this field is consulted (types.PushRulesSpec.IsSet), so the shorter form is
 // what a policy authored before this editor existed looks like.
+//
+// deny/review are filtered to non-blank entries here, on the way to the wire:
+// PathListRows hands this every row's raw text, including a freshly added or
+// still-blank one (so it can stay visible while the operator edits it), and a
+// blank pattern is refused server-side with no row-level hint ("empty entry",
+// validatePushRulePaths) and no canon string for that refusal to show live.
+// This is the one place that text becomes the wire document, so it is the one
+// place that filter needs to run.
 function withPushRules(
   spec: RunPolicySpec,
   deny: readonly string[],
@@ -180,9 +188,12 @@ function withPushRules(
   maxPack: number,
   hold: number,
 ): RunPolicySpec {
+  const nonBlank = (list: readonly string[]) => list.filter((p) => p.trim() !== "");
   const pr: PushRulesSpec = {};
-  if (deny.length) pr.deny_paths = [...deny];
-  if (review.length) pr.require_review_paths = [...review];
+  const cleanDeny = nonBlank(deny);
+  const cleanReview = nonBlank(review);
+  if (cleanDeny.length) pr.deny_paths = cleanDeny;
+  if (cleanReview.length) pr.require_review_paths = cleanReview;
   if (maxPack > 0) pr.max_inspect_pack_mib = maxPack;
   if (hold > 0) pr.hold_seconds = hold;
   const next = { ...spec };
@@ -191,12 +202,34 @@ function withPushRules(
   return next;
 }
 
-// One path-pattern list (Deny or Hold for review) — add/remove rows, each with
-// its own live error line directly under it (#57 packet, PR-2).
+// One path-pattern list's rows (Deny or Hold for review) — add/remove, each
+// row with its own live error line directly under it.
 //
-// idBase namespaces every row/error id under this section's useId() plus
-// which list this is ("deny"/"review"), so aria-describedby always points at
-// THIS list's row, never the other list's same-index one.
+// Rows carry a stable id, assigned once per row and independent of its
+// position in the list — never the array index. An id-keyed row survives a
+// resize correctly: removing one row leaves every OTHER row's identity (and
+// DOM node, and focus) exactly where it was, instead of every row AFTER the
+// removed one silently shifting down onto a neighbor's DOM node.
+//
+// Local `rows` state, not `paths` directly, is what gets rendered — `paths`
+// (the wire) never carries a blank or whitespace-only entry (withPushRules
+// filters those out before they reach the spec), but the operator still needs
+// a visible, editable blank row right after clicking "Add path". Every local
+// edit writes the FILTERED projection of `rows` back to the wire via
+// `onChange`, so the two stay in lockstep without ever putting a blank on the
+// wire. If `paths` changes for a reason other than this component's own
+// edits — a hand-edited JSON textarea, a template click, switching policies —
+// `rows` is reseeded from it below.
+let nextRowId = 0;
+interface Row {
+  id: number;
+  value: string;
+}
+
+function seedRows(paths: readonly string[]): Row[] {
+  return paths.map((value) => ({ id: ++nextRowId, value }));
+}
+
 function PathListRows({
   idBase,
   listLabel,
@@ -210,59 +243,85 @@ function PathListRows({
   isReview: boolean;
   onChange: (next: string[]) => void;
 }) {
-  const rowId = (i: number) => `${idBase}-row-${i}`;
-  const errId = (i: number) => `${idBase}-err-${i}`;
+  const [rows, setRows] = React.useState<Row[]>(() => seedRows(paths));
   const addRef = React.useRef<HTMLButtonElement>(null);
-  // Tracks the list length across renders purely to detect "a row was just
-  // added" (always appended, so it's the new last row) vs. "a row was just
-  // removed" (removedIndexRef says which one) — an effect, not the click
-  // handler itself, because the new/shifted DOM node the focus call needs
-  // doesn't exist until the parent re-renders with the changed spec.
-  const prevLength = React.useRef(paths.length);
-  const removedIndexRef = React.useRef<number | null>(null);
+  // Set right before a commit that should move focus once its row exists in
+  // the DOM (an add, or a remove whose neighbor should pick up focus); read
+  // and cleared by the effect below, which runs after that render commits.
+  const focusTargetRef = React.useRef<number | "add" | null>(null);
+
+  // Reseed from an EXTERNAL change to `paths` — withPushRules always writes
+  // back exactly this component's non-blank values (it drops blank/
+  // whitespace-only entries before they reach the wire), so if the non-blank
+  // projection of the current `rows` no longer matches `paths`, something
+  // else changed the document. A still-blank local row is never mistaken for
+  // this: it can never appear in `paths` in the first place.
+  const ownNonBlank = rows.filter((r) => r.value.trim() !== "").map((r) => r.value);
+  const external = ownNonBlank.length !== paths.length || ownNonBlank.some((v, i) => v !== paths[i]);
+  if (external) {
+    setRows(seedRows(paths));
+  }
+
+  const rowDomId = (id: number) => `${idBase}-row-${id}`;
+  const errDomId = (id: number) => `${idBase}-err-${id}`;
 
   React.useEffect(() => {
-    if (paths.length > prevLength.current) {
-      document.getElementById(rowId(paths.length - 1))?.focus();
-    } else if (paths.length < prevLength.current && removedIndexRef.current !== null) {
-      // The row now AT the removed index (the next one shifted up), or the
-      // new last row if the removed one was last, or the Add-path button if
-      // the list is now empty.
-      const target = paths.length > 0 ? Math.min(removedIndexRef.current, paths.length - 1) : -1;
-      if (target >= 0) document.getElementById(rowId(target))?.focus();
-      else addRef.current?.focus();
+    const target = focusTargetRef.current;
+    focusTargetRef.current = null;
+    if (target === null) return;
+    if (target === "add") {
+      addRef.current?.focus();
+    } else {
+      document.getElementById(rowDomId(target))?.focus();
     }
-    removedIndexRef.current = null;
-    prevLength.current = paths.length;
-  }, [paths.length]);
+  });
+
+  // Every row's raw text goes to `rows` (so a blank one stays visible) and to
+  // `onChange` (so a mid-edit value is graded live and reflected everywhere
+  // else that reads the document) — withPushRules is what keeps a blank or
+  // whitespace-only entry off the wire, not this function.
+  function commit(next: Row[]) {
+    setRows(next);
+    onChange(next.map((r) => r.value));
+  }
+
+  function addRow() {
+    const row: Row = { id: ++nextRowId, value: "" };
+    focusTargetRef.current = row.id;
+    commit([...rows, row]);
+  }
+
+  function editRow(id: number, value: string) {
+    commit(rows.map((r) => (r.id === id ? { ...r, value } : r)));
+  }
+
+  function removeRow(id: number) {
+    const i = rows.findIndex((r) => r.id === id);
+    const remaining = rows.filter((r) => r.id !== id);
+    // The row that shifted into the removed one's place, or the new last row
+    // if the removed one was last, or the Add-path button if the list is now
+    // empty.
+    const next = remaining[i] ?? remaining[remaining.length - 1];
+    focusTargetRef.current = next ? next.id : "add";
+    commit(remaining);
+  }
 
   return (
     <>
-      {paths.map((p, i) => {
-        const problem = pushRulePatternProblem(p, isReview);
+      {rows.map((row, i) => {
+        const problem = pushRulePatternProblem(row.value, isReview);
         return (
-          <div key={i}>
+          <div key={row.id}>
             <div className="mt-1.5 flex items-start gap-2">
               <Input
-                id={rowId(i)}
+                id={rowDomId(row.id)}
                 aria-label={`${listLabel} path ${i + 1}`}
                 aria-invalid={problem ? true : undefined}
-                aria-describedby={problem ? errId(i) : undefined}
-                value={p}
+                aria-describedby={problem ? errDomId(row.id) : undefined}
+                value={row.value}
                 spellCheck={false}
                 className={cn("h-8 flex-1 font-mono text-body", problem && "border-danger")}
-                onChange={(e) =>
-                  onChange(paths.map((row, n) => (n === i ? e.target.value : row)))
-                }
-                // F10: a row added and left blank must not reach Save (the
-                // server 400s "empty entry" with no row-level hint, since
-                // empty is deliberately not flagged live — see
-                // pushRulePatternProblem's own doc comment). Dropping it here,
-                // on blur, needs no new canon error string and keeps every
-                // other row's live validation exactly as authored above.
-                onBlur={() => {
-                  if (paths[i] === "") onChange(paths.filter((_, n) => n !== i));
-                }}
+                onChange={(e) => editRow(row.id, e.target.value)}
               />
               <Button
                 type="button"
@@ -270,30 +329,20 @@ function PathListRows({
                 size="icon"
                 className="size-8"
                 aria-label={`Remove ${listLabel} path ${i + 1}`}
-                onClick={() => {
-                  removedIndexRef.current = i;
-                  onChange(paths.filter((_, n) => n !== i));
-                }}
+                onClick={() => removeRow(row.id)}
               >
                 <Trash2 className="size-4" />
               </Button>
             </div>
             {problem && (
-              <p id={errId(i)} role="alert" className="mt-1 text-xs text-danger">
+              <p id={errDomId(row.id)} role="alert" className="mt-1 text-xs text-danger">
                 {problem}
               </p>
             )}
           </div>
         );
       })}
-      <Button
-        ref={addRef}
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="mt-1.5 px-1"
-        onClick={() => onChange([...paths, ""])}
-      >
+      <Button ref={addRef} type="button" variant="ghost" size="sm" className="mt-1.5 px-1" onClick={addRow}>
         <Plus className="size-4" /> Add path
       </Button>
     </>
@@ -321,8 +370,7 @@ export function PushRulesSection({
       <div className="mb-2 flex items-center gap-2">
         <SectionLabel>Push rules</SectionLabel>
         {/* The mock's own header (packet script, "Try it") carries this exact
-            count next to the title in every one of its five scenarios — not a
-            canon string (no Strings-table row), but not ambiguous either. */}
+            count next to the title in every one of its five scenarios. */}
         <span className="text-xs text-muted-foreground">
           {deny.length} deny · {review.length} held for review
         </span>

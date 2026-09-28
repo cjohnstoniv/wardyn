@@ -60,10 +60,8 @@ describe("pushRulePatternProblem — mirrors validatePushRulePaths + DenyPathSeg
     );
   });
 
-  // F1: unicode.IsControl (what the server's controlCharFree actually calls)
-  // covers C1 (U+0080-U+009F) too, not just C0/DEL. A parity probe against the
-  // real server found U+0080, U+0085 (NEL) and U+009F accepted live while the
-  // server refused them.
+  // unicode.IsControl (what the server's controlCharFree actually calls)
+  // covers C1 (U+0080-U+009F) too, not just C0/DEL.
   it("refuses a C1 control character (U+0080-U+009F), not just C0/DEL", () => {
     expect(pushRulePatternProblem("a\u0080b", false)).toMatch(/control character/);
     expect(pushRulePatternProblem("a\u0085b", false)).toMatch(/control character/);
@@ -77,21 +75,16 @@ describe("pushRulePatternProblem — mirrors validatePushRulePaths + DenyPathSeg
     expect(pushRulePatternProblem("deploy/** ", false)).toMatch(/leading or trailing space/);
   });
 
-  // F2: DenyPathSegments strips the leading "/" BEFORE checking whitespace —
+  // DenyPathSegments strips the leading "/" BEFORE checking whitespace —
   // "/ a" is a whitespace violation server-side even though its first
-  // character is "/", not a space. A parity probe confirmed the server
-  // refuses "/ a" while the unfixed live check accepted it.
+  // character is "/", not a space.
   it("checks whitespace AFTER stripping the leading slash, matching the server's order", () => {
     expect(pushRulePatternProblem("/ a", false)).toMatch(/leading or trailing space/);
     expect(pushRulePatternProblem("/a ", false)).toMatch(/leading or trailing space/);
-    // A lone leading slash with nothing after it strips to "", which has no
-    // whitespace to flag.
-    expect(pushRulePatternProblem("/", false)).toBeNull();
   });
 
-  // F3: Go's strings.TrimSpace (unicode.IsSpace) does NOT treat U+FEFF
-  // (BOM/ZWNBSP) as whitespace, unlike JavaScript's String.prototype.trim().
-  // A parity probe confirmed the server accepts a leading/trailing BOM.
+  // Go's strings.TrimSpace (unicode.IsSpace) does NOT treat U+FEFF (BOM/ZWNBSP)
+  // as whitespace, unlike JavaScript's String.prototype.trim().
   it("does not flag a leading/trailing BOM (U+FEFF) as whitespace — the server accepts it", () => {
     expect(pushRulePatternProblem("﻿deploy/**", false)).toBeNull();
     expect(pushRulePatternProblem("deploy/**﻿", false)).toBeNull();
@@ -99,8 +92,8 @@ describe("pushRulePatternProblem — mirrors validatePushRulePaths + DenyPathSeg
     expect(pushRulePatternProblem(" ﻿deploy/**", false)).toMatch(/leading or trailing space/);
   });
 
-  // F7/M3: the byte-cap comparison must be a strict `>`, not `>=` — exactly
-  // 256 bytes is legal (validatePushRulePaths only refuses OVER the cap).
+  // The byte-cap comparison must be a strict `>`, not `>=` — exactly 256
+  // bytes is legal (validatePushRulePaths only refuses OVER the cap).
   it("accepts exactly the byte ceiling and refuses one byte over it", () => {
     const atCeiling = "a".repeat(MAX_PUSH_RULE_PATH_BYTES);
     const overCeiling = "a".repeat(MAX_PUSH_RULE_PATH_BYTES + 1);
@@ -108,17 +101,24 @@ describe("pushRulePatternProblem — mirrors validatePushRulePaths + DenyPathSeg
     expect(pushRulePatternProblem(overCeiling, false)).toMatch(/bytes/);
   });
 
-  // F7/M7: hasEmptyPathSegment strips the leading "/" too (DenyPathSegments'
-  // own first step) — without it, "/deploy/**" splits into ["", "deploy",
-  // "**"], a leading empty segment that would falsely refuse a legal,
-  // root-anchored review pattern.
+  // hasEmptyPathSegment strips the leading "/" too (DenyPathSegments' own
+  // first step) — without it, "/deploy/**" splits into ["", "deploy", "**"],
+  // a leading empty segment that would falsely refuse a legal, root-anchored
+  // review pattern.
   it("strips the leading slash before the segment check, so a root-anchored review pattern is not falsely flagged", () => {
     expect(pushRulePatternProblem("/deploy/**", true)).toBeNull();
   });
 
-  // The packet's own scope call (PR-2): the empty/./.. segment check is
-  // rendered live only for require_review_paths — deny_paths gets the
-  // identical check, just server-side only, at Save.
+  // A bare "/" strips to "" — DenyPathSegments treats that as the one empty
+  // segment and refuses it, so the segment check must still run for it even
+  // though it's non-empty only before stripping.
+  it("flags a bare '/' on review paths as an empty segment", () => {
+    expect(pushRulePatternProblem("/", true)).toMatch(/path segment/);
+  });
+
+  // The empty/./.. segment check is rendered live only for
+  // require_review_paths — deny_paths gets the identical check, just
+  // server-side only, at Save.
   it("flags an empty/./.. path segment live only for review paths", () => {
     expect(pushRulePatternProblem("deploy/../etc", true)).toBe(
       'A path segment can\'t be empty, ".", or "..".',
@@ -332,11 +332,11 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/dev\.azure\.com/);
   });
 
-  // F7/M6: the non-GitHub warning's gate is `deny.length > 0` specifically
-  // (mirroring risk.go's own `len(spec.PushRules.DenyPaths) > 0`), not "any
-  // push_rules at all" — review-only rules on a non-GitHub host raise no
-  // warning, because the forge-read limitation risk.go documents is about
-  // what a DENY match refuses, not what a review hold pauses.
+  // The non-GitHub warning's gate is `deny.length > 0` specifically (mirroring
+  // risk.go's own `len(spec.PushRules.DenyPaths) > 0`), not "any push_rules at
+  // all" — review-only rules on a non-GitHub host raise no warning, because
+  // the forge-read limitation risk.go documents is about what a DENY match
+  // refuses, not what a review hold pauses.
   it("does not warn about a non-GitHub host when only review-only rules are set (no deny_paths)", () => {
     render(
       <PushRulesSection
@@ -351,8 +351,8 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  // F9: the mock's own header (packet script) carries this exact count next
-  // to the title in every one of its five "Try it" scenarios.
+  // The mock's own header (packet script) carries this exact count next to
+  // the title in every one of its five "Try it" scenarios.
   it("the header states the deny/review counts, and they track the document", () => {
     const { rerender } = render(<PushRulesSection spec={BASE} onSpecChange={() => {}} />);
     expect(screen.getByText("0 deny · 0 held for review")).toBeInTheDocument();
@@ -368,9 +368,9 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(screen.getByText("2 deny · 1 held for review")).toBeInTheDocument();
   });
 
-  // F8 (a11y): a row's error is not just visually beside its input — an
-  // assistive technology needs aria-invalid + aria-describedby to associate
-  // the two, the same way a native form field/error pairing works.
+  // A row's error is not just visually beside its input — an assistive
+  // technology needs aria-invalid + aria-describedby to associate the two,
+  // the same way a native form field/error pairing works.
   it("ties a row's error to its input with aria-invalid and aria-describedby", () => {
     render(
       <PushRulesSection
@@ -397,24 +397,22 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(row).not.toHaveAttribute("aria-describedby");
   });
 
-  // F8 (a11y): "Add path" should move focus straight to the row it just
-  // created — otherwise a keyboard/screen-reader user has to hunt for it.
+  // "Add path" should move focus straight to the row it just created —
+  // otherwise a keyboard/screen-reader user has to hunt for it. Rows are
+  // keyed by a stable id, not their position, so this holds even with two
+  // rows open (still blank) at once.
   it("focuses the new row when Add path is clicked", async () => {
     render(<Harness initial={BASE} />);
     await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
     expect(screen.getByLabelText("Deny path 1")).toHaveFocus();
 
-    // Fill the first row before adding a second — clicking Add path while a
-    // row is still blank blurs (and F10 drops) that blank row first, which is
-    // its own behavior (covered below), not what this test is pinning.
-    await user.type(screen.getByLabelText("Deny path 1"), "a/**");
     await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
     expect(screen.getByLabelText("Deny path 2")).toHaveFocus();
   });
 
-  // F8 (a11y): removing a row should not just drop focus to the page body —
-  // it moves to the row that shifted into the removed one's place, or the
-  // last remaining row, or the Add-path button once the list is empty.
+  // Removing a row should not just drop focus to the page body — it moves to
+  // the row that shifted into the removed one's place, or the last remaining
+  // row, or the Add-path button once the list is empty.
   it("moves focus sensibly after removing a row", async () => {
     render(
       <Harness
@@ -438,31 +436,58 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(within(denySection()).getByRole("button", { name: "Add path" })).toHaveFocus();
   });
 
-  // F10: an added row left blank must not reach Save and come back as the
-  // server's "empty entry" 400 with no row-level hint (empty is deliberately
-  // not flagged live — pushRulePatternProblem's own doc comment). Blur drops
-  // it; a row the operator actually typed into survives blur untouched.
-  it("drops a row on blur if it was left empty, but keeps one that was filled in", async () => {
-    // Renders with an existing (non-freshly-added) blank row and clicks
-    // straight into it — independent of whether "Add path" itself moves
-    // focus, so this pins ONLY the blur-drop behavior.
+  // Rows are keyed by a stable id rather than their position in the array.
+  // With index keys, clearing a row's text and then clicking ITS OWN Remove
+  // button removed the WRONG row: React reused the cleared row's DOM node for
+  // whichever row now sat at that index after the first re-render, so the
+  // click landed on a neighbor instead. Stable ids keep every other row's
+  // identity (and the click target) fixed regardless of what changes size.
+  it("clearing a row and removing it leaves every other row untouched", async () => {
     let current: RunPolicySpec = BASE;
     render(
       <Harness
-        initial={{ ...BASE, push_rules: { deny_paths: [""] } }}
+        initial={{ ...BASE, push_rules: { deny_paths: ["a/**", "b/**", "c/**"] } }}
         capture={(next) => (current = next)}
       />,
     );
-    const blank = screen.getByLabelText("Deny path 1");
-    await user.click(blank);
-    await user.click(document.body); // blur without typing anything
-    expect(screen.queryByLabelText("Deny path 1")).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Deny path 1"));
+    await user.click(screen.getByRole("button", { name: "Remove Deny path 1" }));
+    expect(current.push_rules).toEqual({ deny_paths: ["b/**", "c/**"] });
+  });
+
+  // The stable id is what makes the fix above actually work, pinned directly:
+  // a row keyed by its position in the array would have React reuse the
+  // wrong DOM node after a resize (the node that used to show "a/**" would
+  // just get relabeled and repainted with "b/**"'s value, rather than "b/**"
+  // keeping the node it already had).
+  it("keeps each row's own DOM node across a resize, not the node at its old position", async () => {
+    render(<Harness initial={{ ...BASE, push_rules: { deny_paths: ["a/**", "b/**", "c/**"] } }} />);
+    const bNodeBefore = screen.getByLabelText("Deny path 2");
+    await user.click(screen.getByRole("button", { name: "Remove Deny path 1" }));
+    const bNodeAfter = screen.getByLabelText("Deny path 1");
+    expect(bNodeAfter).toBe(bNodeBefore);
+    expect(bNodeAfter).toHaveValue("b/**");
+  });
+
+  // A row added and left blank must not reach Save and come back as the
+  // server's "empty entry" 400 with no row-level hint (empty is deliberately
+  // not flagged live — pushRulePatternProblem's own doc comment). The row
+  // stays visible and editable; it just never joins the saved document until
+  // it holds real text.
+  it("an empty added row is left out of the saved spec, but the row itself stays visible", async () => {
+    let current: RunPolicySpec = BASE;
+    render(<Harness initial={BASE} capture={(next) => (current = next)} />);
+    await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
+    expect(screen.getByLabelText("Deny path 1")).toBeInTheDocument();
     expect(Object.keys(current)).not.toContain("push_rules");
 
-    await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
+    // Whitespace-only text does not promote it either.
+    await user.type(screen.getByLabelText("Deny path 1"), "   ");
+    expect(Object.keys(current)).not.toContain("push_rules");
+
+    // Real text does.
+    await user.clear(screen.getByLabelText("Deny path 1"));
     await user.type(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
-    await user.click(document.body); // blur a FILLED row
-    expect(screen.getByLabelText("Deny path 1")).toBeInTheDocument();
     expect(current.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
   });
 

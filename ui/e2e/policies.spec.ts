@@ -447,9 +447,9 @@ test("push_rules editor: add a row, an invalid pattern shows its error, fixing i
   await row.fill(".github/workflows/**");
   await expect(dialog.getByRole("alert")).toHaveCount(0);
 
-  // F4 (PR #1271 review): the row-level checks above only prove the EDITOR's
-  // own opinion — assert what actually reaches the server. Capture the real
-  // POST body rather than trusting the dialog closing/the row appearing.
+  // The row-level checks above only prove the EDITOR's own opinion — assert
+  // what actually reaches the server. Capture the real POST body rather than
+  // trusting the dialog closing/the row appearing.
   const created = page.waitForRequest(
     (r) => r.url().includes("/api/v1/policies") && r.method() === "POST",
   );
