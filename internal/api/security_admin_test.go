@@ -279,6 +279,39 @@ func TestAttachTicketRefusesForeignRunForSecurityAdmin(t *testing.T) {
 	}
 }
 
+// TestAttachTicketForeignRunIsByteIdenticalToMissingForSecurityAdmin (#656
+// final review round L7 / FIX-3): the pinning test
+// TestAttachTicketRefusesForeignRunForSecurityAdmin above checks the 404 and
+// the AUDIT reason, but never the wire BODY — so it could not catch
+// attach_ticket.go's own .AsIf(reasonRunNotFound) being removed, even though
+// that is the one no-existence-oracle guarantee this route makes. The review
+// proved this directly: removing only that .AsIf left the whole suite green.
+// This test compares the two bodies byte for byte, which a removed .AsIf
+// would break (a foreign run's real reason, attach_ticket_foreign_run, is
+// hidden from the wire on purpose).
+func TestAttachTicketForeignRunIsByteIdenticalToMissingForSecurityAdmin(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &secAdminRunStore{run: types.AgentRun{ID: runID, CreatedBy: "someone-else", State: types.RunRunning}}
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+	sess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+
+	foreign := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+runID.String()+"/attach-ticket", sess, "")
+	missing := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+uuid.NewString()+"/attach-ticket", sess, "")
+
+	if foreign.Code != http.StatusNotFound || missing.Code != http.StatusNotFound {
+		t.Fatalf("status = foreign %d, missing %d; want both 404", foreign.Code, missing.Code)
+	}
+	if foreign.Body.String() != missing.Body.String() {
+		t.Errorf("bodies differ — an existence oracle: foreign %s, missing %s", foreign.Body.String(), missing.Body.String())
+	}
+	if got := errorReason(foreign); got != "run_not_found" {
+		t.Errorf("foreign run reason = %q, want the literal %q", got, "run_not_found")
+	}
+}
+
 // TestAttachTicketOwnRunStampsMemberForSecurityAdmin: their OWN run still
 // mints (the strict guard is about FOREIGN runs), and the ticket carries
 // member — the same never-stamp rule the ssh key follows, for the same reason.

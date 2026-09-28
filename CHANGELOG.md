@@ -50,9 +50,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …) now shares `invalid_limit_param`/
   `invalid_offset_param` for a bad `?limit=`/`?offset=`. `client.APIError.Reason` and
   `docs/sdk.md`'s closed reason set (`internal/api/reasons.go`) cover the new routes; the CLI/SDK
-  behavior is otherwise unchanged. Two refusals are deliberately still bare: an unanswered AWS
-  Bedrock SSO renewal (an outage, not an actionable class) and a push-content approval's
-  foreign-owner 404 (must stay byte-identical to a missing approval's).
+  behavior is otherwise unchanged. One refusal is deliberately still bare: an unanswered AWS
+  Bedrock SSO renewal (an outage, not an actionable class). `GET /approvals/{id}/paths`' own
+  foreign-owner 404 DOES carry a reason (`approval_not_found`), byte-identical to a missing
+  approval's — the wire class, not only the body, must not tell the two apart.
 - **`/site-config` (including its probe and egress-redirect routes), `/governance`, `/secrets`,
   `/people`, `/access`, `/permissions`, `/admin/delegates`, `/setup/integrations`,
   `/setup/onboarding-complete`, `/sessions/revoke`, `/ssh-keys` (self-service and admin), and the
@@ -64,6 +65,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   — a literal in `reasons.go`, not a reference, so the docs⟷reasons.go guard can see it, tied to
   authz's value by a documented `TestNoAdHocAuthz` exception rather than a second copy invented for
   this package. `docs/sdk.md`'s reason table covers the new routes.
+- **Every remaining route — the `run_*.go` per-run actions (revive, the owner-authority re-check,
+  end/wait, title, files, resources, resume, model-provider choice), the UI gateway, device
+  federation, the Azure DevOps sign-in callback, branding, the CSRF guard, and the rest of the
+  surface — now sends the same machine-readable `reason` on every refusal, closing #656.** Coverage
+  is uniform: `TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new
+  unreviewed bare body, `TestReasonDocsMatchReasonsGo` checks `docs/sdk.md`'s reason table against
+  both `internal/api/reasons.go`/`reasons_routes.go` and `internal/authz`'s own registry (every
+  authorization refusal `s.refuse` sends carries its registered reason too, not only the doors this
+  package validates by hand), and nine of the newly-converted reasons are pinned by a literal-string
+  test against a renamed constant slipping past the docs guard unnoticed. Three refusals are
+  deliberately still bare, each with its own pinning test: a transient model-provider store failure
+  (no door), an unanswered AWS Bedrock SSO renewal (not a refusal class), and the drive-mount
+  resolver's runner-unavailable/caller-cancelled arms.
 - **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
   rail lists every provider you may use for it, with its kind, your connection state and where
   the credential lives during the run, and the run is sent with the one you pick. The agent's

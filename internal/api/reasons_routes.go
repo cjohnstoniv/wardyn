@@ -469,7 +469,13 @@ const (
 )
 
 // /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is
-// one cause bucket, the same grain as reasonSiteConfigInvalid.
+// one cause bucket, the same grain as reasonSiteConfigInvalid. Deliberately
+// NOT split per arm (#656 final review round L2 considered it: the "user type
+// does not exist" and "unknown confinement_class" arms echo POST /runs' own
+// per-field reasons) — this is an operator-only authoring route, the field
+// the caller sent is already in the 400's own message, and slice 1's
+// reasonWorkspaceRequestInvalid bucket is the same policy for the same kind
+// of route.
 const reasonPresetRequestInvalid = "preset_request_invalid"
 
 // /api/v1/model-providers/{id}/credential (model_provider_credentials.go):
@@ -648,11 +654,12 @@ const (
 	reasonRecordingStoreUnavailable = "recording_store_unavailable"
 	reasonRecordingTooLarge         = "recording_too_large"
 	reasonRecordingInvalidPart      = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
-	// reasonRecordingPartLimit is the SAME value as recordingPartLimitReason
-	// (recording.go), the nested audit-detail field this refusal's own
-	// recording.upload row already carried — a literal here, not a reference,
-	// so TestReasonDocsMatchReasonsGo (which only reads this file) can see it
-	// (#656 slice 3).
+	// reasonRecordingPartLimit is recording.upload's ONLY name for a part
+	// above types.RecordingMaxParts — the wire reason AND the nested
+	// audit-detail field this refusal's own recording.upload row carries
+	// (#656 final review round L3: recording.go used to declare a second,
+	// separately-drifting const for the identical fact; deleted in favor of
+	// this one).
 	reasonRecordingPartLimit = "part_limit"
 )
 

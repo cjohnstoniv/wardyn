@@ -156,34 +156,37 @@ if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
 }
 ```
 
-**Coverage is being phased in lane by lane (#204, #656), not uniform yet.**
-The three credential-injection resolve arms behind `GET
-/api/v1/internal/injection/{grantID}` — Azure DevOps, AWS SSO and Bedrock
-bearer — send a reason on every refusal, and #656 slice 1 has now converted
-`GET/POST /approvals` (list, decide, its `/paths` route) and the internal
-sidecar's push-content raise route, `POST /runs` and `POST /runs/preflight`
-(create validation, the resolved-spec workspace-source checks) and `GET /runs`
-(the list filters), run kill, workspace delete, and the workspace
-create/update/admission/env-as-code/providers routes. Slice 2 adds
-`/site-config` (including its probe and egress-redirect routes), `/governance`
-(profiles, assignments, the preview routes), `/secrets`, `/people` (and its
-per-person token mint), `/access` (role-mapping admin), `/permissions`
-(capability grants and availability), `/admin/delegates`,
-`/setup/integrations`, `/setup/onboarding-complete`, `/sessions/revoke`,
-`/ssh-keys` (self-service and the admin delete-by-principal door), and the
-user-drive doors (`/user-drives`, allocation, reclaim, the naming/bind
-previews, and the launch-time drive resolver). Most OTHER routes still send
-`error` alone, so `apiErr.Reason == ""`
-does not mean "no error", only "this route has not been converted yet". Two
-refusals are DELIBERATELY still bare even on a converted route: an AWS
-Bedrock SSO renewal AWS never answered (an outage, not a class the console's
-sign-in door should open over), and a push-content approval's 404 for "someone
-else's approval" (which must stay byte-identical to a genuinely missing one, or
-the reason itself becomes an existence oracle). Every lane's reasons are drawn
-from the same closed set
-(`internal/api/reasons.go`), so a reason two lanes share (the dispatch-time-
-snapshot family below, or the hold-chain terminal/exhausted pair) always
-means the same thing regardless of which lane sent it:
+**Coverage is uniform (#204, #656): every non-2xx body this API writes
+carries `reason`, or is one of a small, reviewed, named exception.** The
+sweep ran lane by lane — the three credential-injection resolve arms behind
+`GET /api/v1/internal/injection/{grantID}` (Azure DevOps, AWS SSO, Bedrock
+bearer) first, then #656 slice 1 (`GET/POST /approvals` including its
+`/paths` route, the internal sidecar's push-content raise route, `POST /runs`
+and `POST /runs/preflight`, `GET /runs`, run kill, workspace delete and the
+workspace create/update/admission/env-as-code/providers routes), slice 2
+(`/site-config`, `/governance`, `/secrets`, `/people`, `/access`,
+`/permissions`, `/admin/delegates`, `/setup/*`, `/sessions/revoke`,
+`/ssh-keys`, the user-drive doors), and slice 3 (every remaining `run_*.go`
+per-run action, the UI gateway, device federation, and the rest of the route
+surface) — but a route reached today answers exactly like one reached at the
+start: `apiErr.Reason` is never empty on a non-2xx response, full stop. A
+repo-wide guard (`TestEveryWriteErrorCallCarriesAReasonOrIsReviewed`) enforces
+this at test time: an unreviewed bare body fails the build. Three refusals
+are DELIBERATELY still bare, each with its own pinning test proving the
+absence is intentional (a transient model-provider store failure that is no
+door, an unanswered AWS Bedrock SSO renewal that is not a refusal class, and
+the drive-mount resolver's own runner-unavailable/caller-cancelled arms) — see
+`internal/api/reason_coverage_guard_test.go`'s own allowlist for exactly
+which three and why. Every OTHER reason is drawn from one of two sources: the
+closed set in `internal/api/reasons.go` and `reasons_routes.go` (a reason two
+routes share — the dispatch-time-snapshot family below, the hold-chain
+terminal/exhausted pair — always means the same thing regardless of which one
+sent it), or `internal/authz/registry.go`'s own registry, which `s.refuse`
+writes directly for every Deny/Unprocessable/Conflict-effect authorization
+refusal (its two Hidden-effect reasons are never themselves a wire value — see
+the authz section below). `TestReasonDocsMatchReasonsGo` checks both sources
+against this whole table, so a value missing here is a red build, not a
+silent gap:
 
 | Reason | Meaning |
 |---|---|
@@ -205,7 +208,7 @@ means the same thing regardless of which lane sent it:
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals`, `GET /runs` and `GET /runs/policy-history`. |
-| `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route EXCEPT `GET /approvals/{id}/paths`, which keeps `notFoundIf`'s bare 404 instead (see the push-content exception above): a foreign approval and a missing one must stay indistinguishable there, on the wire class as much as the body. |
+| `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, or the body did not decode. |
 | `invalid_decision_scope` / `decision_scope_until_needs_expiry` / `decision_expiry_in_past` / `decision_expiry_too_far` / `decision_expiry_without_until` | The `decision_scope`/`decision_expires_at` shape rules (0-3) on a decide call. |
 | `decision_scope_always_unavailable` / `decision_always_no_workspace_link` / `decision_always_invalid_host` / `decision_always_workspace_gone` / `decision_always_host_builtin` / `decision_always_host_denied` | The operator-only `decision_scope=always` persistence chain (rules 5-7): no store to persist to, the run names no workspace, the host does not parse, the workspace is gone, or the host is built-in-routed or on the reject list. `decision_scope_always_unavailable` also covers the internal push-content raise route's own "no store" arm (the identical `s.cfg.Store == nil` cause, one route apart). |
@@ -219,11 +222,11 @@ means the same thing regardless of which lane sent it:
 | `run_kill_already_terminal` / `run_kill_state_changed` | `POST /runs/{id}/kill`: the run was already terminal, or moved to another state between the read and the write. |
 | `workspace_repo_not_admitted` | The repository is not on this deployment's admitted list (`workspace_admission.go`), at create/update and at launch. |
 | `workspace_envcode_no_local_dir` / `workspace_envcode_no_profile` | `GET /workspaces/{id}/env-as-code`: the workspace has no `local_dir` source, or no scanned profile, to emit from. |
-| `workspace_providers_invalid` / `workspace_providers_stale` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation, or `If-Match` is stale. |
+| `workspace_providers_invalid` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation. Its stale-`If-Match` arm shares `site_config_stale` below — the identical ETag cause, on the same underlying site-config document. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason (`internal/authz/registry.go`) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
-| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, or `If-Match` is stale. |
+| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, or `If-Match` is stale. `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
 | `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. |
 | `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}`: the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. |
@@ -279,7 +282,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `injection_grant_not_api_key` / `reserved_secret_name` / `invalid_header_name` / `oauth_host_not_anthropic` / `shared_subscription_posture` / `no_oauth_provider` | `/internal/injection/{grantID}` (`injection.go`): the proxy's own `api_key` resolve door. Most values are already the exact strings each site's own `secret.read` audit row wrote. |
 | `record_session_name_required` / `record_label_collision` / `record_no_runner` / `record_import_step_busy` / `record_promote_no_recording` / `record_promote_rejected` / `record_promote_host_not_promotable` / `record_promote_cap_reached` / `record_promote_conflict` | Record Mode (`record.go`): per-task recording sandboxes and their promotion to durable requirement rows. `record_promote_rejected` is `promotableRecordHosts`' own bucket for several distinct pre-promotion checks that all refuse for the same reason — the entry is not durable-policy material yet. |
 | `user_type_request_invalid` / `user_type_conflict` / `user_type_not_found` / `user_type_id_immutable` / `user_type_built_in_no_priority` / `user_type_built_in_immutable` / `user_type_in_use` / `user_type_delete_conflict` | `/api/v1/admin/user-types` (`user_types.go`). |
-| `preset_request_invalid` | `/api/v1/admin/presets` (`presets.go`): `validatePresetRequest`'s whole check is one cause bucket, the same grain as `site_config_invalid`. |
+| `preset_request_invalid` | `/api/v1/admin/presets` (`presets.go`): `validatePresetRequest`'s whole check is one cause bucket, the same grain as `site_config_invalid` — deliberately not split per arm (two arms echo `POST /runs`' own `user_type_*`/`confinement_class_unknown` reasons): an operator-only authoring route, the field is already named in the 400's own message, and `workspace_request_invalid` (slice 1) is the same policy for the same kind of route. |
 | `model_provider_credential_no_store` / `model_provider_credential_no_person` / `model_provider_credential_is_sign_in` / `model_provider_credential_body_invalid` / `model_provider_credential_too_short` / `model_provider_credential_store_unavailable` | `/api/v1/model-providers/{id}/credential` (`model_provider_credentials.go`): the console's own key/token storage door, distinct from the sign-in door and run-create's model-provider choice. |
 | `harness_login_no_secret_store` / `harness_login_provider_unsupported` / `harness_login_preview_blocked` / `harness_login_no_start_url` / `harness_login_bad_start_url` / `harness_login_no_region` / `harness_login_roster_unavailable` / `harness_login_legacy_door_closed` / `harness_credential_no_secret_store` / `harness_credential_unknown_provider` | `POST /api/v1/setup/harness-login` and `PUT /api/v1/setup/harness-credential/{provider}` (`harnesscred_launch.go`): the managed container sign-in launch door and the operator-pasted setup-token door. `harness_login_roster_unavailable` is shared with `handleHarnessDisconnect`'s identical roster-read failure. |
 | `audit_invalid_run_id` / `audit_export_store_unavailable` / `audit_chain_verify_store_unavailable` / `audit_chain_verify_busy` / `audit_chain_sweep_failed` / `audit_invalid_timestamp_param` / `audit_invalid_actor_type` / `audit_invalid_origin` | `/api/v1/admin/audit` (`audit.go`): the security tier's audit-log query, export and chain-verification doors. |
@@ -297,7 +300,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `credential_erase_principal_required` / `credential_erase_operator_namespace` | `DELETE /people/{principal}/credentials` (`credential_erase.go`). |
 | `explain_principal_invalid` | `GET /permissions/explain` (`capabilities_explain.go`). |
 | `credential_inventory_no_meta` | `GET /admin/credentials/inventory` (`credential_inventory.go`). |
-| `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the same value the refusal's own `recording.upload` audit row already carries in its nested `reason` detail field, now also on the wire. |
+| `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the ONE name for a part above the limit, both on the wire and in the refusal's own `recording.upload` audit row's nested `reason` detail field. |
 | `ado_decision_scope_invalid` / `ado_access_above_ceiling` | The Azure DevOps escalation's decision rule (`injection_ado_capability.go`). |
 | `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. |
 | `scan_facts_invalid` / `scan_upload_superseded` | `/internal/scan-results/{runID}` (`scanresult.go`). |

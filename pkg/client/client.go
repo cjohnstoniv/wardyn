@@ -913,7 +913,7 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...s
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return nil, newAPIError(resp.StatusCode, raw)
+		return nil, NewAPIError(resp.StatusCode, raw)
 	}
 	return resp.Body, nil
 }
@@ -955,7 +955,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, hea
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return newAPIError(resp.StatusCode, raw)
+		return NewAPIError(resp.StatusCode, raw)
 	}
 
 	// Success path: decode the FULL body (no 2 KiB cap). Streaming via
