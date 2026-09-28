@@ -1461,7 +1461,7 @@ jobs:
   # run trips it; scoped to push-to-main only (`if:`, not the trigger list) so
   # a red PR or merge-queue run never opens one.
   main-red:
-    needs: [changes, go, build, diagrams, ui, helm, helm-install-test, compose, conformance, envbuild-integration, test-pg, trivy, notices, gates, dco]
+    needs: [changes, go, build, diagrams, ui, ui-e2e, helm, helm-install-test, compose, conformance, conformance-k8s, envbuild-integration, test-pg, trivy, notices, gates, dco]
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

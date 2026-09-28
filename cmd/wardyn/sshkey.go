@@ -35,11 +35,12 @@ func sshKeyCmd(client clientFn) *cobra.Command {
 		Short: "Manage the SSH keys the gateway trusts for your account",
 		Long: `Manage the SSH keys the gateway trusts for your account.
 
-Keys registered here — or from the console's Your account page — are capped:
-they never carry the admin override, even for a super admin. Registering a
-key with admin reach, one that can open a run someone else created, is a
-separate, admin-view-only door: the Admin SSH keys card in Admin view ->
-Settings, super admins only.`,
+A key registered here follows your token's own role: an operator's key can
+carry the admin override, same as a super admin's. The console's Your
+account page instead follows the session's mode — capped to user rights,
+never the admin override, whenever that session is viewing as a member.
+Registering a key with admin reach while staying in Admin view is the Admin
+SSH keys card: Admin view -> Settings, super admins only.`,
 	}
 	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client), sshKeyDeleteCmd(client))
 	return subcommandGroup(cmd)
