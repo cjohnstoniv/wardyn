@@ -166,6 +166,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Launching with an ungranted repo-kind workspace now refuses, instead of launching without it
+  (#1259).** A `workspace_repos` entry naming an onboarded workspace the caller does not hold the
+  `workspace` capability for used to be silently dropped, launching a smaller run; it now refuses
+  with the same named 403 `req.workspace_id` already gives for the identical workspace, audited
+  under the same `capability_workspace` reason.
 - **`WARDYN_BEDROCK_BASE_URL` on a wardyn-proxy sidecar's own subnet now refuses boot instead of
   denying every model call (#1198).** The proxy's SSRF guard never lifts an address on any subnet
   its own interfaces sit on, so a Bedrock PrivateLink endpoint resolving onto the docker
