@@ -332,6 +332,52 @@ jobs:
           name: docker-tagged-live-reports
           path: test/reports/go/docker/**
 
+  # #677's CI gap (T-17): no CI job ever set WARDYN_TEST_DOCKER and
+  # WARDYN_TEST_PG together, so #1129's hermetic Docker+Postgres slice of the
+  # per-person Claude subscription lane — TestProviderSubscriptionDocker_
+  # PerPersonCaptureAndRunIsolation (internal/api, //go:build docker) — ran
+  # only locally. The test is fully self-contained (builds its own
+  # test/subfake binary and its own wardyn-proxy image from this checkout;
+  # see the test file's own doc comment), so this job only has to give it the
+  # two knobs neither ci.yml (no live daemon under WARDYN_TEST_DOCKER) nor
+  # docker-tagged-live above (no Postgres) provides.
+  provider-subscription-docker-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Docker available
+        run: docker --version
+      - name: Hermetic per-person subscription test (real Docker + real Postgres)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        shell: bash
+        run: |
+          mkdir -p test/reports/go
+          go test -tags docker -count=1 -v -timeout 300s ./internal/api -run '^TestProviderSubscriptionDocker_' 2>&1 | tee test/reports/go/provider-subscription-docker-pg.log
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: provider-subscription-docker-pg-report
+          path: test/reports/go/provider-subscription-docker-pg.log
+          if-no-files-found: error
+
   # ── Lanes still NOT wired anywhere, and why ────────────────────────────────
   # Stated so "it runs nightly" is not read as "everything runs nightly":
   #
@@ -1054,10 +1100,9 @@ jobs:
   # credentialed squid proving OIDC discovery through the proxy) is a
   # separate owner step against the owner's own live estate, not this job.
   #
-  # NOT in notify-new-lanes.needs / release.yml's watched= yet (PR #1245
-  # review F2): it has never run, so watching it from day one would block a
-  # release on a job that might fail deterministically. Add it to BOTH lists
-  # together (guard 13) once it has gone green on a real nightly run.
+  # Went green on its first real nightly run (workflow_dispatch, 2026-09-28,
+  # run 36377937351) — now in notify-new-lanes.needs AND release.yml's
+  # watched= (guard 13), per PR #1245 review F2's own promotion rule.
   daemon-proxy-secret-kind:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1160,7 +1205,7 @@ jobs:
         run: ./scripts/nightly-migration-merge-check.sh
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1182,7 +1227,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk or compose-sso-roles." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles or daemon-proxy-secret-kind." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \

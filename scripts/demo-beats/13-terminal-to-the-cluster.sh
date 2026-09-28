@@ -110,6 +110,10 @@ LOG="${TAKE_DIR}/preflight.log"
 # Where the verifier reads this take's run id back from (check_video_13).
 HANDOFF="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-13}/v13-run-id.txt"
 
+# shellcheck source=../lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"
+# v13's own tag/color differ from common.sh's default — kept as a local
+# override defined AFTER sourcing (common.sh's own contract for this case).
 die()  { printf '\n\033[1;31mv13: %s\033[0m\n' "$*" >&2; exit 1; }
 note() { printf '[v13] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
 

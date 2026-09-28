@@ -59,7 +59,7 @@ func auditSeq(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) int64 {
 // Postgres: consecutive rows link, the head hash the insert path hands back is
 // the one the sweep reports, and the sweep re-hashes every row clean.
 func TestPG_AuditChain_LinksAndVerifies(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 
 	first := appendChained(t, pool, "chain-test-1")
@@ -95,7 +95,7 @@ func TestPG_AuditChain_LinksAndVerifies(t *testing.T) {
 // in one order and read the head in the other, leaving seq order and chain
 // order inverted — which this sweep reports as tampering.
 func TestPG_AuditChain_SurvivesConcurrentWriters(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 
 	const writers, each = 12, 6
@@ -147,7 +147,7 @@ func TestPG_AuditChain_SurvivesConcurrentWriters(t *testing.T) {
 // and shared by every other test in this package, so leaving it broken would
 // fail every later sweep in the same run.
 func TestPG_AuditChain_DetectsTamperedMiddleRow(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 
 	appendChained(t, pool, "tamper-test-before")
