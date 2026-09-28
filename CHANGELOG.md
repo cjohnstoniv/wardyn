@@ -23,14 +23,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- **`GET/POST /approvals` (list, decide, push-content review, `/paths`), `POST/GET /runs`
-  (create validation, list filters, kill) and the workspace create/update/admission/env-as-code/
-  providers routes now send a machine-readable `reason` on every refusal (#656 slice 1), the same
-  `{"error","reason"}` shape #204 shipped for the Azure DevOps/AWS SSO/Bedrock-bearer credential
-  lanes. `client.APIError.Reason` and `docs/sdk.md`'s closed reason set (`internal/api/reasons.go`)
-  cover the new routes; the CLI/SDK behavior is otherwise unchanged. Two refusals are deliberately
-  still bare: an unanswered AWS Bedrock SSO renewal (an outage, not an actionable class) and a
-  push-content approval's foreign-owner 404 (must stay byte-identical to a missing approval's).
+- **`GET/POST /approvals` (list, decide, `/paths`), the internal sidecar's push-content raise
+  route, `POST /runs` and `POST /runs/preflight` (create validation, the resolved-spec
+  workspace-source checks), `GET /runs` (list filters), run kill, workspace delete, and the
+  workspace create/update/admission/env-as-code/providers routes now send a machine-readable
+  `reason` on every refusal (#656 slice 1), the same `{"error","reason"}` shape #204 shipped for
+  the Azure DevOps/AWS SSO/Bedrock-bearer credential lanes — and every `parseListPage` list route
+  (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`,
+  `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …) now shares `invalid_limit_param`/
+  `invalid_offset_param` for a bad `?limit=`/`?offset=`. `client.APIError.Reason` and
+  `docs/sdk.md`'s closed reason set (`internal/api/reasons.go`) cover the new routes; the CLI/SDK
+  behavior is otherwise unchanged. Two refusals are deliberately still bare: an unanswered AWS
+  Bedrock SSO renewal (an outage, not an actionable class) and a push-content approval's
+  foreign-owner 404 (must stay byte-identical to a missing approval's).
 
 - **The person side of "Available to" disables Launch, in the console, before the server ever has to
   refuse (#922).** New Run's own Launch button is now disabled with
