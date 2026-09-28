@@ -20,6 +20,7 @@ import { isTerminalRunState } from "../../../lib/types";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
+import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
 import { statusDetailSentence } from "../run-status-detail";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
@@ -103,8 +104,15 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
     }
   }
   switch (run.state) {
-    case "RUNNING":
+    case "RUNNING": {
+      // RL-15 (design.md §2.3): the board's own "Ends in 1 hour" warning —
+      // same three thresholds (24h/1h/10m) the run page's banner uses, from
+      // runs-model.ts's one shared rule. A run with no attention and no
+      // upcoming warning stays the plain Running word.
+      const stage = endsWarningStage(run.ends_at, Date.now(), Date.parse(run.ends_at ?? "") - Date.parse(run.created_at));
+      if (stage) return { hue: "amber", word: endsWarningWord(stage), action: null, needsYou: false };
       return { hue: "blue", word: RUNS_ROW_WORD.RUNNING, action: null, needsYou: false };
+    }
     case "STARTING":
       return {
         hue: "blue",

@@ -15,7 +15,9 @@ import type {
   PolicyGrade,
   PreflightResult,
   ProfileProposal,
+  ReviveResult,
   RunDetail,
+  RunEndWaitResult,
   RunFilesResult,
   RunPolicySpec,
   RunResources,
@@ -376,6 +378,43 @@ export const runs = {
     if (!res.ok) {
       throw new HttpError(res.status, await errText(res));
     }
+  },
+
+  // PATCH /api/v1/runs/{id} — the run's end and/or wait (long-holds design
+  // rev 4 §2.3, RL-4/RL-15): owner or super admin. `endsAt: null` asks for No
+  // end; omitting a field leaves it alone. An over-ask is never refused — the
+  // server caps it to the run's captured limit and names the field in the
+  // response's `capped`, which the caller renders rather than treating as an
+  // error.
+  async setRunEndAndWait(
+    id: string,
+    change: { endsAt?: string | null; waitBudgetSec?: number },
+  ): Promise<RunEndWaitResult> {
+    const body: Record<string, unknown> = {};
+    if ("endsAt" in change) body.ends_at = change.endsAt;
+    if (change.waitBudgetSec != null) body.wait_budget_sec = change.waitBudgetSec;
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunEndWaitResult>(res);
+  },
+
+  // POST /api/v1/runs/{id}/revive — owner or super admin (long-holds design
+  // rev 4 §4.1, RL-10/RL-11). Gives a lost or live run a fresh proxy built
+  // from the run's own stored config, with the owner's CURRENT profile denies
+  // unioned over the frozen policy; a rebooted/outaged run's agent is started
+  // again behind it. Authority is always the OWNER's, never the caller's.
+  async reviveRun(id: string): Promise<ReviveResult> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/revive`, { method: "POST" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<ReviveResult>(res);
+  },
+
+  // POST /api/v1/runs/{id}/resume — owner or super admin: thaw a run the
+  // pause reaper froze (long-holds design rev 4 §3, RL-7). 409s if the run
+  // isn't RUNNING or was never paused; the caller re-fetches either way.
+  async resumeRun(id: string): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/resume`, { method: "POST" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 
   // GET /api/v1/runs/{id}/grants — the run's credential-grant eligibility

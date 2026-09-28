@@ -146,6 +146,51 @@ describe("rowPresentation — plain state words with no attention", () => {
   });
 });
 
+describe("rowPresentation — RL-15: the board's own ends-soon warning (design.md §2.3)", () => {
+  it("10 minutes left: amber 'Ends in 10 minutes', no attention needed", () => {
+    const r = run({ state: "RUNNING", ends_at: new Date(NOW + 9 * 60_000).toISOString() });
+    expect(rowPresentation(r, false)).toMatchObject({
+      hue: "amber",
+      word: "Ends in 10 minutes",
+      action: null,
+      needsYou: false,
+    });
+  });
+
+  it("1 hour left: amber 'Ends in 1 hour'", () => {
+    const r = run({ state: "RUNNING", ends_at: new Date(NOW + 45 * 60_000).toISOString() });
+    expect(rowPresentation(r, false).word).toBe("Ends in 1 hour");
+  });
+
+  it("24 hours left on a lease over 2 days: amber 'Ends in 24 hours'", () => {
+    const r = run({
+      created_at: new Date(NOW - 3 * 24 * 3600_000).toISOString(),
+      state: "RUNNING",
+      ends_at: new Date(NOW + 20 * 3600_000).toISOString(),
+    });
+    expect(rowPresentation(r, false).word).toBe("Ends in 24 hours");
+  });
+
+  it("24 hours left on a short (<= 2 day) lease: no warning yet — plain Running", () => {
+    const r = run({
+      created_at: new Date(NOW - 60_000).toISOString(),
+      state: "RUNNING",
+      ends_at: new Date(NOW + 20 * 3600_000).toISOString(),
+    });
+    expect(rowPresentation(r, false).word).toBe("Running");
+  });
+
+  it("no end (ends_at absent): plain Running, never a warning", () => {
+    const r = run({ state: "RUNNING" });
+    expect(rowPresentation(r, false).word).toBe("Running");
+  });
+
+  it("a run already past its end (should have been marked ended/lost): no warning, not negative", () => {
+    const r = run({ state: "RUNNING", ends_at: new Date(NOW - 60_000).toISOString() });
+    expect(rowPresentation(r, false).word).toBe("Running");
+  });
+});
+
 describe("glyphKindFor — the shape half of the colour/glyph rule", () => {
   it("every needs-you kind (amber) gets the same 'need' disc, regardless of underlying state", () => {
     expect(glyphKindFor("amber", "Waiting for an admin", "RUNNING")).toBe("need");
