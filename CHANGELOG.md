@@ -1780,7 +1780,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   which the proxy reports at most once a minute to the new internal `POST /internal/activity`.
   Keepalives and a silent open tab do not count. Typing, attaching, an ssh channel or an in-sandbox
   UI connection thaws a paused run first; so does `POST /api/v1/runs/{id}/resume` (owner or super
-  admin), and the last open request being decided, cancelled or expired. The run page's files and
+  admin), and the last open request being decided, cancelled or expired. A resume re-reads the
+  sandbox after the thaw: one that is no longer running fails and keeps the pause. The run page's files and
   resources reads answer 409 on a paused run rather than wake it. The run carries `paused_at`,
   `paused_reason` (`waiting` or `idle`) and `active_at` on the wire. Audited as `run.pause` and
   `run.resume`. A paused run is not contained: kill still is. Migration `0097_agent_runs_pause` adds

@@ -88,6 +88,7 @@ type pauseRunner struct {
 	*fakeRunner
 	freeze         map[types.ConfinementClass]bool
 	cpu            string // runResourcesScript output; "" fails the exec
+	gone           bool   // Status reads the sandbox as no longer running
 	onFreeze       func()
 	mu             sync.Mutex
 	freezes, thaws int
@@ -97,6 +98,13 @@ func (r *pauseRunner) Capabilities(ctx context.Context) (runner.Capabilities, er
 	caps, err := r.fakeRunner.Capabilities(ctx)
 	caps.Freeze = r.freeze
 	return caps, err
+}
+
+func (r *pauseRunner) Status(ctx context.Context, ref string) (runner.Status, error) {
+	if r.gone {
+		return runner.Status{State: types.RunStopped, Message: "container not found"}, nil
+	}
+	return r.fakeRunner.Status(ctx, ref)
 }
 
 func (r *pauseRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
@@ -149,7 +157,7 @@ type pauseFixture struct {
 
 // newPauseFixture is one RUNNING CC1 run with a sandbox, nothing stamped for
 // quiet, on a runner whose CC1 freeze is verified.
-func newPauseFixture(t *testing.T, quiet time.Duration) *pauseFixture {
+func newPauseFixture(t *testing.T, quiet time.Duration, configure ...func(*Config)) *pauseFixture {
 	t.Helper()
 	run := newFinalizeRun()
 	run.CreatedBy, run.SandboxRef = pauseOwner, "ref-pause"
@@ -161,6 +169,9 @@ func newPauseFixture(t *testing.T, quiet time.Duration) *pauseFixture {
 	cfg := baseTestConfig(h, st)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Runner = rn
+	for _, c := range configure {
+		c(&cfg)
+	}
 	return &pauseFixture{h: h, srv: New(cfg), st: st, rn: rn, audit: h.audit, run: run}
 }
 
@@ -475,5 +486,31 @@ func TestInternalActivity_StampsTheTokensRunOnly(t *testing.T) {
 	if agentActivityDecision(ruleSourceApprovalsPoll) || agentActivityDecision(ruleSourceCredentialReauthTimeout) ||
 		!agentActivityDecision("policy:allowlist") {
 		t.Error("agentActivityDecision: the approvals poll and the re-auth timeout are not activity; an allow is")
+	}
+}
+
+// TestResumeRun_AVanishedSandboxStaysPaused: a thaw of a container that no
+// longer exists is a no-op success, so resume re-reads the sandbox's status.
+// A sandbox that is not running is a failed resume: the run stays marked
+// paused, a failure row names why, and Resume answers 502.
+func TestResumeRun_AVanishedSandboxStaysPaused(t *testing.T) {
+	f := newPauseFixture(t, time.Hour)
+	paused := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseIdle
+	f.rn.gone = true
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/resume", owner, ""); w.Code != http.StatusBadGateway {
+		t.Fatalf("resume of a vanished sandbox = %d %s, want 502", w.Code, w.Body.String())
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil {
+		t.Error("the pause was cleared over a sandbox that is not running")
+	}
+	if rows := f.rows("run.resume", "success"); len(rows) != 0 {
+		t.Errorf("run.resume success rows = %+v, want none", rows)
+	}
+	rows := f.rows("run.resume", "failure")
+	if len(rows) != 1 || !strings.Contains(leaseAuditData(t, rows[0])["error"].(string), "not running") {
+		t.Errorf("run.resume failure rows = %+v, want one naming the sandbox not running", rows)
 	}
 }

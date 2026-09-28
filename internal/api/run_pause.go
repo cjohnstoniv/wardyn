@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -227,14 +228,26 @@ func (s *Server) approvalClosed(ctx context.Context, runID uuid.UUID) {
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
 }
 
-// resumeRun thaws a paused run, then clears its pause. Thawing first means a
-// failure leaves the run marked paused, so the next keystroke, Resume or sweep
-// tries again; clearing first could leave a frozen agent nobody knows about.
+// errResumedSandboxGone is resumeRun's answer when the thaw succeeded but the
+// sandbox is no longer running: a thaw of a missing container is a no-op
+// success, so it is the status re-read that tells the two apart.
+var errResumedSandboxGone = errors.New("the run's sandbox is not running")
+
+// resumeRun thaws a paused run, re-reads its sandbox's status, then clears its
+// pause. Thawing first means a failure leaves the run marked paused, so the
+// next keystroke, Resume or sweep tries again; clearing first could leave a
+// frozen agent nobody knows about. The re-read keeps a vanished sandbox from
+// reading as a resumed run: its pause stays until the watcher or the
+// reconciler settles the run.
 func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun,
 	actorType types.ActorType, principal, reason string) error {
 	data := map[string]any{"reason": reason, "paused_reason": run.PausedReason, "paused_at": run.PausedAt}
 	if f, ok := s.cfg.Runner.(runner.Freezer); ok && run.SandboxRef != "" {
-		if err := f.ThawSandbox(ctx, run.SandboxRef); err != nil && !errors.Is(err, runner.ErrFreezeUnsupported) {
+		err := f.ThawSandbox(ctx, run.SandboxRef)
+		if err == nil {
+			err = s.thawedSandboxRunning(ctx, run.SandboxRef)
+		}
+		if err != nil && !errors.Is(err, runner.ErrFreezeUnsupported) {
 			data["error"] = err.Error()
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 				run.ID.String(), "failure", mustJSON(data)))
@@ -248,6 +261,19 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 	if cleared {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 			run.ID.String(), "success", mustJSON(data)))
+	}
+	return nil
+}
+
+// thawedSandboxRunning re-reads a just-thawed sandbox's status: nil only when
+// it is RUNNING.
+func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
+	st, err := s.cfg.Runner.Status(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if st.State != types.RunRunning {
+		return fmt.Errorf("%w (state=%s)", errResumedSandboxGone, st.State)
 	}
 	return nil
 }
