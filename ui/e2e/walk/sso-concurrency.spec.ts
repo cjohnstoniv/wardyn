@@ -19,16 +19,16 @@
  *
  *   A. two members signing in to AWS at the same moment each end up holding
  *      their OWN capture — neither sign-in rotates the other's session away;
+ *   B. one member opening two sign-ins at once gets ONE live sign-in sandbox:
+ *      the per-person lock (harnesscred_supersede.go) ends the older launch,
+ *      and the capture that lands is the other one's;
  *   C. three runs each, taking turns between the two members while both
  *      sessions are live, spend only their OWNER's session: every
  *      GetRoleCredentials a run's proxy made, and every bedrock call it signed,
  *      lands under one fake session per person, and the two people's sessions
  *      never share a run. Turns, not all at once: the walk's node is one
  *      4-vCPU kind node, which holds one agent run (2 vCPU plus its proxy);
- *      a run that cannot schedule fails its sandbox rather than waiting;
- *   B. one member opening two sign-ins at once gets ONE live sign-in sandbox:
- *      the per-person lock (harnesscred_supersede.go) ends the older launch,
- *      and the capture that lands is the other one's.
+ *      a run that cannot schedule fails its sandbox rather than waiting.
  *
  * Run order is A, B, C. B flips the pin to make the member actionable, so C
  * first puts the walk pin back and signs the member in under it again.
@@ -36,10 +36,10 @@
  * HOW A RUN IS TIED TO A SESSION. The fake (test/awsssofake) gives every
  * sign-in its own session and lists, per session, the peers that called
  * GetRoleCredentials and the peers whose bedrock calls were signed with that
- * session's key or, on this walk, carried its bearer (/_seen `sessions`): the
- * stub shares the portal's host, which the proxy terminates to set the SSO
- * bearer, so a bedrock call arrives with the member's session token instead
- * of its SigV4 signature. On this cluster the peer is the run's own
+ * session's key (/_seen `sessions`). The bedrock stub has its own Service
+ * (wardyn-awsssofake-bedrock), so a model call reaches it through the proxy's
+ * SigV4 passthrough with its signature intact, as real Bedrock gets it; the
+ * portal's host is the one the proxy terminates. On this cluster the peer is the run's own
  * proxy pod — the sandbox's only way out — so a run is its proxy pod's IP,
  * read with kubectl while the run is alive. Nothing here needs to know which
  * session is whose in advance: the assertion is that each person's runs sit

@@ -113,8 +113,8 @@ func TestConcurrentSignInsKeepTheirOwnSessions(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// The same call as the proxy delivers it on the walk, where the stub
-	// shares the portal's terminated host: no SigV4, A's session bearer.
+	// A call with no SigV4 signature but A's session bearer, the shape a proxy
+	// terminating the stub's host would deliver: it still names A's session.
 	req, _ = http.NewRequest(http.MethodPost, s.URL()+"/model/m/converse", strings.NewReader("{}"))
 	req.Header.Set(bearerHeader, refreshed["accessToken"].(string))
 	resp, err = http.DefaultClient.Do(req)
