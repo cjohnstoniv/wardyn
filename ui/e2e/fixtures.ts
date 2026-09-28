@@ -130,6 +130,8 @@ export type NavLabel =
   | "Permissions"
   // 0.8 (UT-7a) — both admin tiers, beside Permissions.
   | "User types"
+  // CS-8 (design F-1) — right after Permissions, both admin tiers too.
+  | "Credentials"
   | "Secrets"
   | "Audit"
   | "Recordings"

@@ -611,17 +611,19 @@ func TestListSecrets_OwnNamespaceReadIsNotAudited(t *testing.T) {
 }
 
 // secretOwnerDirectory is the identity directory ?owner= resolves against: the
-// (principal, email) pairing api_tokens holds, and nothing else.
+// (principal, email) pairing api_tokens holds, and workspaces.owned_by, which
+// names a principal with none (review finding F9 wants both exercised).
 type secretOwnerDirectory struct {
 	store.Store
 	toks []types.APIToken
+	wss  []types.Workspace
 }
 
 func (d secretOwnerDirectory) ListAPITokens(context.Context) ([]types.APIToken, error) {
 	return d.toks, nil
 }
 func (d secretOwnerDirectory) ListWorkspaces(context.Context) ([]types.Workspace, error) {
-	return nil, nil
+	return d.wss, nil
 }
 
 // TestDeleteSecret_UnknownBareOwnerIsMarkedInTheAudit pins the residual case,

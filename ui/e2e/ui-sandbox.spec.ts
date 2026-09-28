@@ -41,20 +41,6 @@ function runIdByTask(task: string): string {
   return id;
 }
 
-// window.open is stubbed BEFORE the app loads: the assertion is what the
-// console hands the browser, and letting a real popup open would navigate to a
-// gateway whose run has no sandbox behind it (the `none` runner) — a 409 that
-// says nothing about the affordance.
-async function stubWindowOpen(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    (window as unknown as { __opened: string[] }).__opened = [];
-    window.open = ((url?: string | URL) => {
-      (window as unknown as { __opened: string[] }).__opened.push(String(url ?? ""));
-      return null;
-    }) as typeof window.open;
-  });
-}
-
 async function openRunDetail(page: Page, task: string): Promise<void> {
   await page.goto(`/runs/${runIdByTask(task)}`);
   await expect(page.getByRole("heading", { name: task, level: 1 })).toBeVisible();
@@ -76,28 +62,45 @@ test.describe("Run detail — UI apps lane", () => {
     expect(await page.locator("iframe").count()).toBe(0);
   });
 
-  test("Open mints a ticket and leaves for the gateway's own origin", async ({ page }) => {
-    await stubWindowOpen(page);
+  // #1220: Open POSTs the ticket via a hidden auto-submitted form — the
+  // console never puts it in a URL at all now. Intercepted rather than
+  // stubbed (window.open is gone from this path): the popup's own first
+  // request IS the assertion, and it is fulfilled locally rather than let
+  // through, since the `none` runner behind this backend has no sandbox to
+  // relay into (a real redeem-and-303 would just 409 here).
+  test("Open mints a ticket and POSTs it to the gateway's own origin, never in a URL", async ({ page, context }) => {
     await openRunDetail(page, RUN_TASK);
-
     const runId = runIdByTask(RUN_TASK);
-    await page.getByRole("button", { name: "Open vscode" }).click();
-    await expect
-      .poll(async () => (await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).length)
-      .toBe(1);
 
-    const opened = (await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened))[0];
-    const url = new URL(opened);
-    // A DIFFERENT origin than the console's — the server's advertised one, never
-    // one the console built from window.location.
+    let captured: { url: string; postData: string | null } | null = null;
+    await context.route("**/__wardyn/enter", async (route) => {
+      captured = { url: route.request().url(), postData: route.request().postData() };
+      await route.fulfill({ status: 200, contentType: "text/plain", body: "stopped for the test" });
+    });
+
+    const [popup] = await Promise.all([
+      context.waitForEvent("page"),
+      page.getByRole("button", { name: "Open vscode" }).click(),
+    ]);
+    await popup.waitForLoadState("domcontentloaded").catch(() => {});
+
+    expect(captured).not.toBeNull();
+    const { url: openedURL, postData } = captured!;
+    const url = new URL(openedURL);
+    // A DIFFERENT origin than the console's — the server's advertised one,
+    // never one the console built from window.location.
     expect(url.origin).not.toBe(new URL(page.url()).origin);
     expect(url.pathname).toBe("/__wardyn/enter");
-    expect(url.searchParams.get("run")).toBe(runId);
-    expect(url.searchParams.get("app")).toBe("vscode");
+    // The whole point of #1220: no query string at all on this request.
+    expect(url.search).toBe("");
+    const form = new URLSearchParams(postData ?? "");
+    expect(form.get("run")).toBe(runId);
+    expect(form.get("app")).toBe("vscode");
     // A real single-use ticket from POST /runs/{id}/attach/ticket, not a
-    // placeholder the template left behind.
-    expect(url.searchParams.get("ticket") ?? "").not.toBe("{ticket}");
-    expect((url.searchParams.get("ticket") ?? "").length).toBeGreaterThan(16);
+    // placeholder the template left behind, and it travels in the form body.
+    expect(form.get("ticket") ?? "").not.toBe("{ticket}");
+    expect((form.get("ticket") ?? "").length).toBeGreaterThan(16);
+    await popup.close();
   });
 
   test("a run that declares nothing says so, and names the policy field", async ({ page }) => {

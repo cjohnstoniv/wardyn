@@ -110,6 +110,11 @@ const (
 	// command string in policy — the policy names an app, the IMAGE decides
 	// what that means.
 	uiLauncherPrefix = "/usr/local/bin/wardyn-ui-"
+	// maxUIEnterFormBytes bounds the POST hand-off's form body (run uuid, app
+	// name, ticket token — a few hundred bytes at most), the same
+	// http.MaxBytesReader pattern the rest of internal/api uses for small
+	// bodies (e.g. harnesscred_launch.go).
+	maxUIEnterFormBytes = 4 << 10
 )
 
 // uiGatewayEnabled reports whether the gateway is configured. Empty listen
@@ -134,6 +139,11 @@ func (s *Server) uiSandboxHealthz() map[string]any {
 	return map[string]any{
 		"enabled":            true,
 		"enter_url_template": s.uiEnterURLTemplate(),
+		// enter_post_url is enter_url_template's base with no query string at
+		// all: the console builds an auto-submitted POST form against it
+		// (run/app/ticket as form fields) so the ticket never lands in a URL,
+		// browser history, or a reverse-proxy access log.
+		"enter_post_url": s.uiEnterBaseURL(),
 		// host_mode says whether each run gets its own origin
 		// (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) or every run shares one — the
 		// residual an operator has to know about, published rather than buried.
@@ -141,10 +151,11 @@ func (s *Server) uiSandboxHealthz() map[string]any {
 	}
 }
 
-// uiEnterURLTemplate builds the enter URL with {run}/{app}/{ticket}
-// placeholders. In host mode the origin template already carries {run}; in
-// path mode the advertised base is shared by every run.
-func (s *Server) uiEnterURLTemplate() string {
+// uiEnterBaseURL builds the enter endpoint's URL with no query string, the
+// shared base for both the GET template and the POST hand-off. In host mode
+// the origin template already carries {run}; in path mode the advertised base
+// is shared by every run.
+func (s *Server) uiEnterBaseURL() string {
 	base := s.cfg.UIOriginTemplate
 	if base == "" {
 		base = s.cfg.UIAdvertiseURL
@@ -154,7 +165,13 @@ func (s *Server) uiEnterURLTemplate() string {
 		// second flag; boot warns that this is almost never externally right.
 		base = "http://" + s.cfg.UIListenAddr
 	}
-	return strings.TrimSuffix(base, "/") + s.uiBasePath() + uiEnterPath + "?run={run}&app={app}&ticket={ticket}"
+	return strings.TrimSuffix(base, "/") + s.uiBasePath() + uiEnterPath
+}
+
+// uiEnterURLTemplate builds the enter URL with {run}/{app}/{ticket}
+// placeholders, for the GET form of the hand-off (kept for compatibility).
+func (s *Server) uiEnterURLTemplate() string {
+	return s.uiEnterBaseURL() + "?run={run}&app={app}&ticket={ticket}"
 }
 
 // UIGatewayHandler returns the gateway's http.Handler, or nil when the gateway
@@ -192,28 +209,77 @@ func (s *Server) UIGatewayHandler() http.Handler {
 
 // enter: redeem the ticket, re-check, set the cookie
 
-// handleUIEnter is the ticket handoff:
+// handleUIEnter is the ticket handoff, in two forms that share one path:
 //
-//	GET /__wardyn/enter?run=<uuid>&app=<name>&ticket=<token>
+//	GET  /__wardyn/enter?run=<uuid>&app=<name>&ticket=<token>   (compatibility)
+//	POST /__wardyn/enter   body: run=<uuid>&app=<name>&ticket=<token>
+//	     (application/x-www-form-urlencoded)
 //
-// It consumes the single-use attach ticket (the SAME one the web terminal
-// uses — no second ticket type), then RE-CHECKS everything the ticket cannot
+// Both consume the single-use attach ticket (the SAME one the web terminal
+// uses — no second ticket type), then RE-CHECK everything the ticket cannot
 // prove on its own against freshly-loaded state: owner-or-admin for THIS run
 // (the ticket's stamped role/principal, as handleAttachWS does), the run still
 // RUNNING with a sandbox, and the app actually declared in the run's EFFECTIVE
-// policy. Only then does a cookie exist.
+// policy. Only then does a cookie exist. uiEnterCommon holds that one path;
+// this function only extracts the three fields from the right place and picks
+// the redirect status (302 for GET, 303 for POST — a POST must not be
+// silently retried as a GET against the relay path).
+//
+// CSRF: neither form needs an extra token, and POST adds no risk GET did not
+// already have. What the ticket stops: a page that does not hold a
+// freshly-minted, still-valid ticket for THIS run cannot forge a session for
+// someone ELSE's run — the ticket is single-use, ~30s-TTL, bound to one run
+// and one principal, and mintable only by an already-authenticated
+// owner-or-admin call to POST /runs/{id}/attach/ticket (behind the console's
+// own CSRF guard). csrf.go (this package) says explicitly that its
+// same-origin guard does not, and is not meant to, cover this listener.
+//
+// What the ticket does NOT stop: any Wardyn user can mint a ticket for their
+// OWN run and drive a victim's browser to redeem it here — by a POST exactly
+// like this one, or, unchanged, by a plain GET link — landing the victim's
+// browser on a session for the ATTACKER's app (login CSRF / session
+// fixation). uiEnterCommon only checks that the ticket's principal owns the
+// run it names; it has no idea who the browser actually belongs to. Host mode
+// bounds this to the attacker's own origin (a phishing risk, not a same-origin
+// one); the pre-existing shared-origin (path mode) chain — the victim's
+// browser then shares an origin with the victim's OWN other relayed apps, plus
+// what an attacker service worker registered on that shared origin can see of
+// later navigations — is tracked in #1241, not introduced or widened by this
+// PR.
 func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		q := r.URL.Query()
+		s.uiEnterCommon(w, r, q.Get("run"), q.Get("app"), q.Get("ticket"), http.StatusFound)
+	case http.MethodPost:
+		// No mixed mode: a ticket in the query on a POST is refused outright
+		// rather than silently accepted, so there is exactly one place a caller
+		// can put it and exactly one place it can leak from.
+		if r.URL.Query().Has("ticket") {
+			writeError(w, http.StatusBadRequest, "the ticket must be a form field, not a query parameter, on POST")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxUIEnterFormBytes)
+		if err := r.ParseForm(); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid form body")
+			return
+		}
+		s.uiEnterCommon(w, r, r.PostForm.Get("run"), r.PostForm.Get("app"), r.PostForm.Get("ticket"), http.StatusSeeOther)
+	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
-	q := r.URL.Query()
-	runID, err := uuid.Parse(q.Get("run"))
+}
+
+// uiEnterCommon is the one consume-then-re-check path GET and POST both run;
+// see handleUIEnter. redirectStatus is 302 for the GET form and 303 for the
+// POST form (a POST hand-off must not be replayable as a GET against the
+// relay path by a browser that retries the redirect with the original method).
+func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, app, ticket string, redirectStatus int) {
+	runID, err := uuid.Parse(runRaw)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or missing run id")
 		return
 	}
-	app := q.Get("app")
 	// Host binding (host mode only): the cookie about to be set is scoped to
 	// THIS origin, so an enter served on the wrong host would mint a session
 	// the run's own origin never sees — and would put one run's cookie on
@@ -225,7 +291,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, q.Get("ticket"), runID, s.cfg.Now())
+	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, ticket, runID, s.cfg.Now())
 	if err != nil {
 		// A store failure is not a bad ticket (attach_ticket.go's own rule):
 		// say so, log it, and never leak the database error to a caller who has
@@ -304,7 +370,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
 		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))
-	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
+	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
 }
 
 // uiRunOrigin returns the host this run's apps must be served on in HOST mode

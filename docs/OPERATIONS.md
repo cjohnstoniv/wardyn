@@ -991,7 +991,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `POST /people`, `POST /people/{principal}/tokens` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and minting or listing API tokens for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). The mint is refused for an admin or security-admin target unless the caller is an admin | ⛔ admin or `security_admin` |
-| `GET /model-providers/credentials` — the credential inventory (0.8): for each model provider, every person who holds a credential of their own for it, with its state (`stored`, or `expired` past its sign-in's expiry), where it is stored (`pg`, `vaultkv`, `azurekv`), when it was added and when a run last used it (to the minute: a sink stamps a row at most once a minute), plus counts. The erase's companion; read from the rows' metadata, never a value | ⛔ admin or `security_admin` |
+| `GET /model-providers/credentials` — the credential inventory (0.8): for each model provider, every person who holds a credential of their own for it, with its state (`stored`, or `expired` past its sign-in's expiry), where it is stored (`pg`, `vaultkv`, `azurekv`), when it was added and when a run last used it (to the minute: a sink stamps a row at most once a minute), plus counts. Each row also carries `email` and `provider_name` (CS-8, both additive and non-secret) so a `security_admin` — who has no route to the model-provider roster or an identity directory — can still read the table well enough to offboard from it. The console's own page is `/admin/credentials`. The erase's companion; read from the rows' metadata, never a value | ⛔ admin or `security_admin` |
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach/ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
@@ -4049,8 +4049,9 @@ To put Wardyn behind a reverse proxy at a sub-path next to another application
 - **UI sandboxes.** The shared-origin gateway (no
   `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) serves its enter and relay routes under
   the same prefix on its own listener, and `/healthz`'s
-  `ui_sandbox.enter_url_template` includes it — proxy that origin with the prefix
-  too. Per-run origins (host mode) are separate hosts and are unchanged.
+  `ui_sandbox.enter_url_template` and `ui_sandbox.enter_post_url` both include it
+  — proxy that origin with the prefix too. Per-run origins (host mode) are
+  separate hosts and are unchanged.
 - **Not detected.** A proxy that strips the prefix is not refused at boot —
   nothing in a request says it was stripped; it shows up as 404s on every page.
 
