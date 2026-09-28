@@ -113,6 +113,18 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
+// PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
+type PauseReason string
+
+const (
+	// PauseWaiting is a run parked on an open request that nobody has
+	// answered, with no one at it.
+	PauseWaiting PauseReason = "waiting"
+	// PauseIdle is a run nobody has used for its profile's
+	// pause_idle_after_sec, whose CPU is quiet.
+	PauseIdle PauseReason = "idle"
+)
+
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -282,7 +294,21 @@ type AgentRun struct {
 	// grace makes it terminal, so ITS end time is LostAt, not EndedAt — the
 	// landing page's end-time reader always picks between the two on
 	// LostReason, never reads EndedAt alone.
-	EndedAt *time.Time `json:"ended_at,omitempty"`
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
+	EndTightenedAt *time.Time `json:"end_tightened_at,omitempty"` // profile re-clamp (RL-8) shortened the end; migration 0095
+	// PausedAt / PausedReason mark a run whose agent container is frozen in
+	// place because nobody is there (long-holds §3). It keeps its RunState,
+	// memory, files and proxy; a person typing, an exec, the request it waits
+	// on closing, or POST /runs/{id}/resume thaws it. A paused run is not
+	// contained: kill still is. Nil / "" is a run that is not paused.
+	// Migration 0097.
+	PausedAt     *time.Time  `json:"paused_at,omitempty"`
+	PausedReason PauseReason `json:"paused_reason,omitempty"`
+	// ActiveAt is the presence clock: the last input a person typed into the
+	// run, the agent's last egress decision, or the last bytes the proxy moved
+	// for it. Keepalives never move it. Nil (a run from before migration 0097,
+	// or one nothing has happened in yet) reads as CreatedAt.
+	ActiveAt *time.Time `json:"active_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and
@@ -330,6 +356,7 @@ type AgentRun struct {
 	HasRecording         bool    `json:"has_recording"`
 	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
+	DiskMiB              int     `json:"disk_mib,omitempty"` // effective ephemeral disk cap MiB, set by SetRunDiskMiB at dispatch (RL-13); 0 = no cap resolved
 	// Attention is #1197's projection: what this LIVE run is waiting on,
 	// and who (in the caller's own view) can clear it. DERIVED, never stored,
 	// like the three recording fields above — projected only by the
@@ -873,78 +900,4 @@ type Person struct {
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
-}
-
-// CapabilitySubjectType names WHO a capability grant is written against
-// (migration 0042). Closed and complete — its DB CHECK is pinned against these
-// constants by internal/db's TestClosedEnumChecksMatchConstants.
-type CapabilitySubjectType string
-
-const (
-	// CapabilitySubjectUser is one human, named by either their lowercased OIDC
-	// "sub" or their email — a grant on EITHER matches, so an admin can write
-	// down the identity they actually know rather than the one the IdP prefers.
-	CapabilitySubjectUser CapabilitySubjectType = "user"
-	// CapabilitySubjectGroup is one entry of the login-time union of the ID
-	// token's roles+groups claims (see oidc.Session.Groups). Entra App Roles are
-	// grantable through this without any extra configuration.
-	CapabilitySubjectGroup CapabilitySubjectType = "group"
-	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
-	// that emits no usable groups claim. Subject is "" for this type.
-	CapabilitySubjectAll CapabilitySubjectType = "all"
-	// CapabilitySubjectUserType is everyone of one user type, named by the
-	// type's id (UserType.ID). A person holds exactly one type, stamped at
-	// sign-in. For the governance ceiling and drives it is a tier between
-	// group and all; for capability grants it is one more subject, so a DENY
-	// written against a type is a wall no user or group allow lifts.
-	CapabilitySubjectUserType CapabilitySubjectType = "user_type"
-)
-
-// Valid reports whether t is one of the four subject types. Used to reject a
-// garbage value at the API write boundary, mirroring ApprovalScope.Valid.
-func (t CapabilitySubjectType) Valid() bool {
-	switch t {
-	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll, CapabilitySubjectUserType:
-		return true
-	default:
-		return false
-	}
-}
-
-// CapabilityEffect is a grant's direction. Closed and complete; DENY BEATS
-// ALLOW at resolution time, with no user-vs-group precedence — "Bob's user
-// allow overrode the group deny" is a breach report, not a feature.
-type CapabilityEffect string
-
-const (
-	CapabilityAllow CapabilityEffect = "allow"
-	CapabilityDeny  CapabilityEffect = "deny"
-)
-
-// Valid reports whether e is allow or deny.
-func (e CapabilityEffect) Valid() bool {
-	return e == CapabilityAllow || e == CapabilityDeny
-}
-
-// CapabilityGrant is one row of the permissioning grant list (migration 0042):
-// "subject S may (or may not) use capability C at value V".
-//
-// Capability is a PLAIN STRING here, not a typed enum, and that is deliberate:
-// the closed kind set lives in exactly one Go slice in internal/api
-// (capabilityKinds) and is validated at the write boundary, so a fifth kind is
-// a constant plus a call site with no schema change. A stored kind this binary
-// does not know is inert — no resolver ever asks for it.
-//
-// Value's meaning is per kind: a host or "*.suffix" for egress_host, an exact
-// secret name / workspace uuid / image ref for the others, and "*" is the
-// per-kind wildcard everywhere.
-type CapabilityGrant struct {
-	ID          uuid.UUID             `json:"id"`
-	SubjectType CapabilitySubjectType `json:"subject_type"`
-	Subject     string                `json:"subject"`
-	Capability  string                `json:"capability"`
-	Value       string                `json:"value"`
-	Effect      CapabilityEffect      `json:"effect"`
-	CreatedAt   time.Time             `json:"created_at"`
-	CreatedBy   string                `json:"created_by,omitempty"`
 }

@@ -136,6 +136,7 @@ func (s *bootReconcileStore) GetRun(_ context.Context, id uuid.UUID) (types.Agen
 // against the SAME persisted value, rather than hand-setting AgentExecID and
 // only ever exercising the guard's condition in isolation.
 func (s *bootReconcileStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
+func (s *bootReconcileStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error    { return nil }
 
 func (s *bootReconcileStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	s.mu.Lock()

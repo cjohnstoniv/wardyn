@@ -240,6 +240,35 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
     expect(await screen.findByText(GOV.LIMITS_NONE)).toBeInTheDocument();
   });
 
+  // RL-14 (#579): the run-limits summary chip, and "None" reads all seven
+  // run-limit fields, as on the Governance list.
+  it("a bound profile's run limits show as the summary chip; a default end alone is not None", async () => {
+    const t = type();
+    const bind = (limits: Record<string, unknown>) =>
+      getGovernanceMock.mockResolvedValue({
+        profiles: [{ id: "prof-1", name: "Portfolio", ceiling: {}, limits, created_at: "", updated_at: "" }],
+        assignments: [
+          { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+        ],
+      });
+    bind({ max_end_ahead_sec: 30 * 86400, max_wait_sec: 8 * 3600, user_changes_limits: true });
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    expect(
+      await screen.findByText("Ends within 30 days · waits up to 8 hours · people may change these"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(GOV.LIMITS_NONE)).not.toBeInTheDocument();
+    cleanup();
+
+    bind({ default_end_sec: 86400 });
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    expect(await screen.findByText(UT.CEILING_PROFILE("Portfolio"))).toBeInTheDocument();
+    expect(screen.queryByText(GOV.LIMITS_NONE)).not.toBeInTheDocument();
+  });
+
   it("no assignment: names the fallback rather than a blank section", async () => {
     const t = type();
     renderScreen([t]);

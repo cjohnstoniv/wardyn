@@ -6670,9 +6670,11 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
 `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
-`api_tokens.user_type` with its CHECK. The long-holds runs add three more on `agent_runs`:
+`api_tokens.user_type` with its CHECK. The long-holds runs add six more on `agent_runs`:
 `0083` adds `token_renewed_at` and `0084` adds `proxy_release`, and `0088`
-(`0088_agent_runs_containment_error`) adds `containment_error` and `containment_error_at`.
+(`0088_agent_runs_containment_error`) adds `containment_error` and `containment_error_at`;
+`0095` adds `end_tightened_at`, `0096` adds `disk_mib` and `0097` adds the pause columns
+(`paused_at`, `paused_reason`, `active_at`).
 `0089` adds `agent_runs.operator_owned`.
 `0090` adds `api_tokens.minted_by` beside its new `people` table.
 `0092` adds `agent_runs.ended_at`.

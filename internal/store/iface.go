@@ -37,6 +37,7 @@ type Store interface {
 	UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error)
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
 	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
+	SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error
 	SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error
 	// The run-watcher lease is NOT here on purpose — see RunWatcherLeaser
