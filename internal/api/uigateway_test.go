@@ -500,16 +500,17 @@ func TestUIGateway_TicketInvalidReasonIsPinned(t *testing.T) {
 }
 
 // TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket (#656 final review
-// round 2, N1): uigateway.go:300's "not bound to this browser" refusal is
-// DELIBERATELY byte-identical to :315's "garbage/expired/already-used" one —
-// a probe must not tell an unbound-but-real ticket from one that never
-// existed. TestUIGateway_TicketInvalidReasonIsPinned above pins the SHARED
-// value both carry, but blanking either site's own reason argument alone
-// still passes the whole suite (round 2's own finding, N1): only a body
-// comparison catches that. A REAL, freshly-minted ticket sent with no binding
-// cookie at all (bypassing uiHarness.enter's own h.bound, which binds
-// whatever ticket string it is given, garbage included) reaches :300; the
-// existing "garbage ticket" string reaches :315.
+// round 2, N1): uiEnterCommon's uiTicketBound check ("not bound to this
+// browser") is DELIBERATELY byte-identical to its consumeAttachTicket
+// ok==false arm ("garbage/expired/already-used") a few lines later — a probe
+// must not tell an unbound-but-real ticket from one that never existed.
+// TestUIGateway_TicketInvalidReasonIsPinned above pins the SHARED value both
+// carry, but blanking either site's own reason argument alone still passes
+// the whole suite (round 2's own finding, N1): only a body comparison
+// catches that. A REAL, freshly-minted ticket sent with no binding cookie at
+// all (bypassing uiHarness.enter's own h.bound, which binds whatever ticket
+// string it is given, garbage included) reaches uiTicketBound's refusal; the
+// existing "garbage ticket" string reaches consumeAttachTicket's.
 func TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	real := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
