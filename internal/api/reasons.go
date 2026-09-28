@@ -522,6 +522,40 @@ const (
 	reasonPolicyNameConflict      = "policy_name_conflict"       // a policy by that name already exists
 )
 
+// POST/Review /runs' model-provider door (run_model_provider.go), the 4 field
+// arms outside writeProviderRefusal — which always carries its own reason,
+// llmRefusalAuditReason or the generic authz.ReasonModelProviderUnavailable.
+const (
+	reasonModelProviderIDInvalid           = "model_provider_id_invalid"           // model_provider is not a plain provider id
+	reasonModelProviderNotApplicable       = "model_provider_not_applicable"       // model_provider was set on a run that calls no model
+	reasonModelProviderNoBlockConfigured   = "model_provider_no_block_configured"  // model_provider was named but this deployment has no model providers
+	reasonModelProviderIntegrationConflict = "model_provider_integration_conflict" // integration_id was named alongside a model-providers block
+)
+
+// PATCH /runs/{id}/title (run_title.go).
+const (
+	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
+)
+
+// GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
+// run_files.go): the two widgets read the identical run-state facts, so they
+// share a reason per cause rather than each inventing its own synonym.
+const (
+	reasonRunInspectNoRunner              = "run_inspect_no_runner"               // this deployment configures no runner at all
+	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
+	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
+	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
+	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
+	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
+)
+
+// POST /runs/{id}/resume (run_pause.go).
+const (
+	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
+	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

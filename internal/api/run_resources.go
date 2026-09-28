@@ -205,7 +205,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		// inspected" next to "couldn't load right now": one a permanent
 		// capability fact, the other a transient blip the operator will retry
 		// forever. No runner configured is the former for both.
-		writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg)
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectNoRunner, runResourcesUnsupportedMsg)
 		return
 	}
 
@@ -220,15 +220,15 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	// run answers "gone", never a 500 (finalize clears the ref on clean
 	// teardown; kill/idle-stop leave a stale one).
 	if run.State.IsTerminal() {
-		writeError(w, http.StatusConflict, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "run has finished; its sandbox is gone (state="+string(run.State)+")")
 		return
 	}
 	if run.SandboxRef == "" {
-		writeError(w, http.StatusConflict, "run has no sandbox to inspect (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectNoSandbox, "run has no sandbox to inspect (state="+string(run.State)+")")
 		return
 	}
 	if run.PausedAt != nil {
-		writeError(w, http.StatusConflict, runPausedReadMsg)
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
 		return
 	}
 
@@ -255,10 +255,10 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 			// server_error_driver_text_guard_test.go's allowlist entry for
 			// this line, and TestRunResources_ExecStreamUnsupported_Returns501,
 			// which pins the sentinel staying in the body.
-			writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg+": "+err.Error())
+			writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, runResourcesUnsupportedMsg+": "+err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "sandbox resource usage read failed")
+		writeErrorReason(w, http.StatusInternalServerError, reasonRunResourcesReadFailed, "sandbox resource usage read failed")
 		return
 	}
 

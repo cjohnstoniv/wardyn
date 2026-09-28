@@ -196,7 +196,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 ) (runProviderChoice, bool) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
+		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderIDInvalid, fmt.Sprintf(mpRunBadID, req.ModelProvider))
 		return runProviderChoice{}, false
 	}
 	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is
@@ -206,7 +206,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	_, needsModel := agentLLMProvider(req.Agent)
 	if !needsModel || !createDoorIsModelRun(req) {
 		if req.ModelProvider != "" {
-			writeError(w, http.StatusBadRequest, mpRunNoModel)
+			writeErrorReason(w, http.StatusBadRequest, reasonModelProviderNotApplicable, mpRunNoModel)
 			return runProviderChoice{}, false
 		}
 		return runProviderChoice{}, true
@@ -220,13 +220,17 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			// both doors refuse an unreadable provider block (#532) rather than
 			// have one 500 with driver text while the other names the cause.
 			slog.ErrorContext(ctx, "api: get site config for model-provider choice", slog.Any("err", err))
+			// Deliberately bare (#656 slice 3): the sentence alone, matching
+			// resolveProviderLane's identical arm — a transient store failure
+			// is no door, and TestProviderJoin_DoorsEveryKind pins both
+			// "provider-unreadable" and "block-unreadable" reason-less.
 			writeError(w, http.StatusServiceUnavailable, mpRunUnreadable)
 			return runProviderChoice{}, false
 		}
 	}
 	if sc.ModelProviders == nil {
 		if req.ModelProvider != "" {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderNoBlockConfigured, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
 			return runProviderChoice{}, false
 		}
 		return runProviderChoice{}, true
@@ -234,7 +238,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	// An AI integration no longer credentials a run here (foldRunIntegration
 	// folds none under a block), so naming one is refused, not ignored.
 	if req.IntegrationID != "" {
-		writeError(w, http.StatusUnprocessableEntity, mpRunNoIntegration)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderIntegrationConflict, mpRunNoIntegration)
 		return runProviderChoice{}, false
 	}
 	var pin string
@@ -261,8 +265,9 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		// one-use refresh token; dispatch renews.
 		_, d, err := s.providerLiveness(ctx, choice.provider, req.Agent, runIdentitySubject(ctx, principalFromRequest(r)), false)
 		if err != nil {
-			// The sentence alone: a transient store failure is no door
-			// (multi-provider §5.8), and `provider` is what keys one.
+			// Deliberately bare (#656 slice 3): the sentence alone — a
+			// transient store failure is no door (multi-provider §5.8), and
+			// `provider` is what keys one.
 			slog.ErrorContext(ctx, "api: read model provider credential", slog.String("provider", choice.provider.ID), slog.Any("err", err))
 			writeError(w, http.StatusServiceUnavailable, providerReadFailed(choice.provider))
 			return runProviderChoice{}, false
