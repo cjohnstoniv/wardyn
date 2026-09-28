@@ -141,11 +141,17 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// forever; and needing leader election) is answered where it actually
 	// runs: SweepTerminalSandboxesPage bounds each tick to one
 	// store.Pager.ListRunsPage page, so per-tick cost is constant regardless of
-	// run history, and claimSingleInstance (cmd/wardynd/single_instance.go)
-	// already holds db.SingleInstanceLockKey for the WHOLE process
-	// lifetime — before any background worker starts, unlike the lifecycle
-	// reaper's own per-tick reapTickLock — so at most one wardynd ever runs
-	// against a database and the ticker needs no election of its own.
+	// run history. Election is NOT free, though: claimSingleInstance
+	// (cmd/wardynd/single_instance.go) holds db.SingleInstanceLockKey for the
+	// whole process lifetime only in the DEFAULT configuration — a deployment
+	// booted with -allow-multi-instance skips that claim entirely, and a
+	// Postgres restart/failover can release its session under a still-running
+	// daemon while a second one boots and claims it (SingleInstanceLockKey's
+	// own HONEST CEILING). So the ticker takes its own per-tick advisory lock
+	// (terminalSandboxSweepTickLock, cmd/wardynd/adapters.go) the same way the
+	// lifecycle reaper's reapTickLock does, rather than relying on the
+	// single-instance claim: a control plane that loses skips the tick
+	// entirely instead of queuing it.
 	//
 	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
 	// reboot stopped is then marked lost (reboot), which says its agent needs

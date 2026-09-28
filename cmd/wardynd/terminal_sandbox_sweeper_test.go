@@ -5,6 +5,9 @@ package main
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"sync"
 	"testing"
 	"time"
@@ -15,8 +18,11 @@ import (
 // fakeTerminalSandboxPager simulates a store.Pager-backed
 // SweepTerminalSandboxesPage over a fixed-size run table, offset-paged the
 // same way real Postgres would: a page starting past the end is empty, and a
-// page crossing the end is short. Every call is recorded so a test can assert
-// on the exact sequence of pages a run of ticks issued.
+// page crossing the end is short. swept is always 0 — the production reality
+// (an abandoned kill tail or a leaked sandbox is rare) — so a test asserting
+// on offsets cannot pass by accident if the paging arithmetic wraps or
+// advances on swept instead of on pageLen. Every call is recorded so a test
+// can assert on the exact sequence of pages a run of ticks issued.
 type fakeTerminalSandboxPager struct {
 	mu        sync.Mutex
 	totalRuns int
@@ -35,7 +41,7 @@ func (f *fakeTerminalSandboxPager) SweepTerminalSandboxesPage(_ context.Context,
 	if n > page.Limit {
 		n = page.Limit
 	}
-	return n, n, nil
+	return 0, n, nil // swept=0: nothing in the fake table is ever an orphan
 }
 
 func (f *fakeTerminalSandboxPager) snapshot() []store.Page {
@@ -62,15 +68,16 @@ func waitForCalls(t *testing.T, f *fakeTerminalSandboxPager, n int) []store.Page
 
 // TestRunTerminalSandboxSweeper_SweepsEveryRunAcrossTicksOnePageAtATime is
 // #710's paging pin: a table with more runs than one page is swept fully
-// across several ticks, each of which reads at most one page, and the
-// sweeper wraps back to offset 0 once a page comes back short (the end of the
-// table) rather than paging forever.
+// across several ticks, each of which reads at most one page. The offset
+// advances by pageLen (not by swept, which the fake holds at 0 throughout —
+// the production reality) and wraps back to 0 only once a page comes back
+// short (the end of the table), never on every tick.
 func TestRunTerminalSandboxSweeper_SweepsEveryRunAcrossTicksOnePageAtATime(t *testing.T) {
 	fake := &fakeTerminalSandboxPager{totalRuns: 2*terminalSandboxSweepPageSize + 50} // two full pages + a short one
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runTerminalSandboxSweeper(ctx, fake, time.Millisecond)
+		runTerminalSandboxSweeper(ctx, fake, nil, time.Millisecond)
 		close(done)
 	}()
 
@@ -92,8 +99,42 @@ func TestRunTerminalSandboxSweeper_SweepsEveryRunAcrossTicksOnePageAtATime(t *te
 	wantOffsets := []int{0, terminalSandboxSweepPageSize, 2 * terminalSandboxSweepPageSize, 0}
 	for i, want := range wantOffsets {
 		if calls[i].Offset != want {
-			t.Errorf("call %d offset = %d, want %d (offsets so far: %+v)", i, calls[i].Offset, want, calls)
+			t.Errorf("call %d offset = %d, want %d (offsets so far: %+v) — the offset must advance by pageLen and "+
+				"wrap only on a short page, never on swept (which is 0 here, like production almost always is)",
+				i, calls[i].Offset, want, calls)
 		}
+	}
+}
+
+// alwaysDeniedLock never grants the tick lock — the "another control plane
+// holds it" case.
+func alwaysDeniedLock(context.Context) (func(), bool) { return nil, false }
+
+// TestRunTerminalSandboxSweeper_SkipsTheTickWhenTheLockIsHeldElsewhere is
+// F3's pin: a tick that cannot take the per-control-plane lock does no
+// work at all — it neither sweeps nor advances the offset — rather than
+// racing whoever holds it.
+func TestRunTerminalSandboxSweeper_SkipsTheTickWhenTheLockIsHeldElsewhere(t *testing.T) {
+	fake := &fakeTerminalSandboxPager{totalRuns: 10}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runTerminalSandboxSweeper(ctx, fake, alwaysDeniedLock, time.Millisecond)
+		close(done)
+	}()
+
+	// Several tick intervals' worth of real time, so a sweep that ignored the
+	// lock would have shown up by now.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runTerminalSandboxSweeper did not exit after ctx was cancelled")
+	}
+
+	if calls := fake.snapshot(); len(calls) != 0 {
+		t.Errorf("SweepTerminalSandboxesPage was called %d times while the lock was held elsewhere, want 0: %+v", len(calls), calls)
 	}
 }
 
@@ -121,7 +162,7 @@ func (f *fakeBackgrounder) GoBackground(fn func()) {
 func TestStartTerminalSandboxSweeper_ShutdownWaitsForTheTickerToExit(t *testing.T) {
 	fake := &fakeBackgrounder{}
 	ctx, cancel := context.WithCancel(context.Background())
-	startTerminalSandboxSweeper(ctx, fake, time.Millisecond)
+	startTerminalSandboxSweeper(ctx, fake, nil, time.Millisecond)
 
 	waited := make(chan struct{})
 	go func() {
@@ -140,5 +181,58 @@ func TestStartTerminalSandboxSweeper_ShutdownWaitsForTheTickerToExit(t *testing.
 	case <-waited:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the tracked wait never returned after ctx was cancelled — the ticker did not exit, or was not registered through GoBackground")
+	}
+}
+
+// TestStartBackgroundWorkers_WiresTerminalSandboxSweeper is N5's wiring pin:
+// startTerminalSandboxSweeper needs a real *pgxpool.Pool and *api.Server to
+// exercise for real, so nothing else in this package's test suite calls it —
+// removing its call from startBackgroundWorkers would otherwise pass the
+// whole package silently. Walks the AST rather than grepping source text, so
+// a reformat cannot defeat it (the same shape the deleted TestServeShutdownOrder
+// used).
+func TestStartBackgroundWorkers_WiresTerminalSandboxSweeper(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "boot_serve.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fn *ast.FuncDecl
+	for _, d := range file.Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "startBackgroundWorkers" {
+			fn = f
+		}
+	}
+	if fn == nil {
+		t.Fatal("boot_serve.go no longer defines startBackgroundWorkers")
+	}
+	var reconcilePos, sweeperPos token.Pos
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if fn.Name == "startTerminalSandboxSweeper" && sweeperPos == token.NoPos {
+				sweeperPos = call.Pos()
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == "ReconcileOnBoot" && reconcilePos == token.NoPos {
+				reconcilePos = call.Pos()
+			}
+		}
+		return true
+	})
+	if sweeperPos == token.NoPos {
+		t.Fatal("startBackgroundWorkers no longer calls startTerminalSandboxSweeper — the ticker would never run")
+	}
+	if reconcilePos == token.NoPos {
+		t.Fatal("startBackgroundWorkers no longer calls ReconcileOnBoot — the guard below has nothing to order against")
+	}
+	if sweeperPos < reconcilePos {
+		t.Error("startBackgroundWorkers calls startTerminalSandboxSweeper before ReconcileOnBoot — the ticker must start " +
+			"AFTER boot reconciliation returns (N1), so an overlapping tick cannot double-tear an orphan " +
+			"TestReconcileOnBoot_SweepsOrphanedTerminalSandbox requires be torn down exactly once")
 	}
 }

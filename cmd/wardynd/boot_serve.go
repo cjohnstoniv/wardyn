@@ -75,13 +75,6 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
 	}
 
-	// Terminal sandbox sweep ticker (#710): gated the same as the lifecycle
-	// reaper above (nothing to probe with no Runner), independent of
-	// autoStopInterval — see terminal_sandbox_sweeper.go.
-	if run != nil {
-		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepInterval)
-	}
-
 	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
 		// THREE connections are spoken for here: the single-instance boot lock
 		// and the rotator's leader lock each hold one for the whole process
@@ -132,6 +125,16 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// this call on run left that deployment's build containers never swept.
 	if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
 		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
+	}
+
+	// Terminal sandbox sweep ticker (#710): started AFTER ReconcileOnBoot
+	// returns, so the ordering is structural rather than resting only on the
+	// ticker's own interval being far slower (terminal_sandbox_sweeper.go's
+	// doc comment has the timing argument too, for the case this call is ever
+	// moved back above). Gated the same as the lifecycle reaper above (nothing
+	// to probe with no Runner), independent of autoStopInterval.
+	if run != nil {
+		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval)
 	}
 
 	// D28: re-apply decided `always`-scoped egress decisions onto their

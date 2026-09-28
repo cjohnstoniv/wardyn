@@ -494,39 +494,47 @@ var _ store.Pager = (*pagerSweepStore)(nil)
 // pin: given a Pager-implementing store, SweepTerminalSandboxesPage reads
 // exactly page.Limit runs (never the whole table) and only probes/sweeps the
 // orphans that page contains — the second page's orphan is untouched by a
-// call scoped to the first.
+// call scoped to the first. The first page also holds a terminal run with NO
+// SandboxRef (skipped, never probed), so swept (1) != pageLen (2) here — the
+// production reality, where an orphan is rare — which a pageLen that quietly
+// collapsed to swept would pass right through.
 func TestSweepTerminalSandboxesPage_BoundsToOnePageViaPager(t *testing.T) {
 	h := newHarness(t)
-	firstPage := sweepRun(types.RunCompleted, "sbx-page1")
-	secondPage := sweepRun(types.RunCompleted, "sbx-page2")
-	fake := &pagerSweepStore{sweepStore: sweepStore{runs: []types.AgentRun{firstPage, secondPage}}}
+	firstPageOrphan := sweepRun(types.RunCompleted, "sbx-page1")
+	firstPageSettled := sweepRun(types.RunFailed, "") // terminal, no ref: skipped, not swept
+	secondPageOrphan := sweepRun(types.RunCompleted, "sbx-page2")
+	fake := &pagerSweepStore{sweepStore: sweepStore{runs: []types.AgentRun{firstPageOrphan, firstPageSettled, secondPageOrphan}}}
 	rr := &sweepAliveRunner{fakeRunner: &fakeRunner{}}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = rr
 	cfg.Broker = h.broker
 	srv := New(cfg)
 
-	swept, pageLen, err := srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 1, Offset: 0})
+	swept, pageLen, err := srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 2, Offset: 0})
 	if err != nil {
 		t.Fatalf("sweep page: %v", err)
 	}
-	if pageLen != 1 {
-		t.Errorf("pageLen = %d, want 1 (Limit bounds the read)", pageLen)
+	if pageLen != 2 {
+		t.Errorf("pageLen = %d, want 2 (Limit bounds the read, independent of how many were swept)", pageLen)
 	}
 	if swept != 1 {
-		t.Errorf("swept = %d, want 1", swept)
+		t.Errorf("swept = %d, want 1 (only the orphan; the ref-less row is skipped, not swept)", swept)
 	}
 	if len(rr.stopped) != 1 || rr.stopped[0] != "sbx-page1" {
 		t.Errorf("StopSandbox calls = %v, want exactly [sbx-page1] — the second page's orphan must be untouched", rr.stopped)
 	}
 
 	// The second page reaches the orphan the first page's Limit excluded.
-	swept, pageLen, err = srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 1, Offset: 1})
+	// It comes back SHORT (1 run, Limit 2) — the wrap signal the ticker reads.
+	swept, pageLen, err = srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 2, Offset: 2})
 	if err != nil {
 		t.Fatalf("sweep page 2: %v", err)
 	}
-	if pageLen != 1 || swept != 1 {
-		t.Errorf("page 2: pageLen=%d swept=%d, want 1 and 1", pageLen, swept)
+	if pageLen != 1 {
+		t.Errorf("page 2: pageLen = %d, want 1 (short page — only one run left in the table)", pageLen)
+	}
+	if swept != 1 {
+		t.Errorf("page 2: swept = %d, want 1", swept)
 	}
 	if len(rr.stopped) != 2 || rr.stopped[1] != "sbx-page2" {
 		t.Errorf("StopSandbox calls = %v, want [sbx-page1 sbx-page2]", rr.stopped)
