@@ -228,14 +228,25 @@ function DefaultProviderField({
     );
   }
   const serving = servingProviders(providers, harness.id);
+  // A stored default that is not among the turned-on providers (turned off
+  // for an incident) is never hidden behind G1 or G2: the server refuses every
+  // run of this agent until another default is chosen (chooseModelProvider),
+  // so the row keeps the one control that gets out of that state.
+  const offDefault = !!row.default_provider && !serving.some((p) => p.id === row.default_provider);
   if (serving.length === 0) {
     return (
       <Field label={AGENTS.FIELD_DEFAULT_PROVIDER}>
-        <p className="text-body text-info">{AGENTS.NO_PROVIDER(harness.display)}</p>
+        {offDefault ? (
+          // Nothing is on to choose instead, so the list's own A7 line says
+          // what is true here (MODEL_PROVIDERS.OFF_STILL_DEFAULT).
+          <p className="text-body text-warning">{MODEL_PROVIDERS.OFF_STILL_DEFAULT(harness.display)}</p>
+        ) : (
+          <p className="text-body text-info">{AGENTS.NO_PROVIDER(harness.display)}</p>
+        )}
       </Field>
     );
   }
-  if (serving.length === 1) {
+  if (serving.length === 1 && !offDefault) {
     return (
       <Field label={AGENTS.FIELD_DEFAULT_PROVIDER}>
         <p className="text-body text-foreground">{AGENTS.ONLY_PROVIDER(providerName(serving[0]), harness.display)}</p>
@@ -244,8 +255,9 @@ function DefaultProviderField({
   }
   return (
     <Field label={AGENTS.FIELD_DEFAULT_PROVIDER} htmlFor={id} hint={AGENTS.DEFAULT_HINT}>
-      {/* A stored default that is off (or gone) is not an option, so the select
-          shows the placeholder until a serving provider is chosen. */}
+      {/* A stored default that is off is not an option, so the select shows
+          the placeholder until a turned-on provider is chosen — with one on,
+          too (the one-click switch out of an incident). */}
       <Select
         value={serving.some((p) => p.id === row.default_provider) ? row.default_provider : ""}
         disabled={!operator}

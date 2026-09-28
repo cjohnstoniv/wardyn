@@ -14,6 +14,7 @@ import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/api/model-providers";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { RAIL_PROVIDER } from "../../wardyn/copy/new-run-rail";
+import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab } from "./agents-tab";
@@ -489,6 +490,39 @@ describe("AgentsTab — the default model provider (G1–G4)", () => {
     const claude = await screen.findByTestId("agent-row-claude-code");
     expect(within(claude).getByText("Anthropic API key — the only provider Claude Code can use.")).toBeInTheDocument();
     expect(within(claude).queryByRole("combobox")).toBeNull();
+  });
+
+  // Review round 2: a stored default that is turned off is never hidden. The
+  // server refuses every run of the agent until another default is chosen, so
+  // the row keeps the select even with a single provider left on.
+  it("a stored default that is off, with one other provider on, keeps the select on the placeholder", async () => {
+    withProviders([{ ...GATEWAY, disabled: true }, ANTHROPIC_KEY]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"offone"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"offone2"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).queryByText(/the only provider/)).toBeNull();
+    const select = within(claude).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` });
+    expect(select).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
+    await pickDefault("Claude Code", "Anthropic API key");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.find((a: { id: string }) => a.id === "claude-code").default_provider).toBe("anthropic");
+  });
+
+  it("a stored default with every provider off reads the list's OFF_STILL_DEFAULT line, never G1", async () => {
+    withProviders([{ ...GATEWAY, disabled: true }, { ...ANTHROPIC_KEY, disabled: true }]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"offall"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).getByText(MODEL_PROVIDERS.OFF_STILL_DEFAULT("Claude Code"))).toBeInTheDocument();
+    expect(within(claude).queryByText(AGENTS.NO_PROVIDER("Claude Code"))).toBeNull();
   });
 
   it("G3 offers only turned-on providers, and a stored default that is off shows the placeholder", async () => {
