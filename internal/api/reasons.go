@@ -678,6 +678,29 @@ const (
 	reasonUIGatewayBindOriginNotConsole = "bind_origin_not_console"
 )
 
+// Device federation (devices_auth.go): the forwarder's own auth chain and
+// audit-ingest door. Most values here are already the exact strings
+// s.auditAuthFailedAs/auditEnrolFailure/auditIngestFailure wrote before #656
+// slice 3 put them on the wire too.
+const (
+	reasonDeviceStoreUnavailable     = "device_store_unavailable" // this deployment configures no device store (deviceAuth)
+	reasonMissingDeviceToken         = "missing_device_token"
+	reasonInvalidDeviceToken         = "invalid_device_token"
+	reasonDeviceLookupFailed         = "device_lookup_failed"         // reading the device row failed (transient)
+	reasonDeviceEnrolRateLimited     = "device_enrol_rate_limited"    // too many enrolment attempts from this address
+	reasonDeviceEnrolmentUnavailable = "device_enrolment_unavailable" // handleDeviceEnrol's own no-store case
+	reasonDeviceEnrolTokenRequired   = "device_enrol_token_required"  // the enrolment body named no token
+	reasonInvalidEnrolmentToken      = "invalid_enrolment_token"
+	reasonDeviceIngestInFlight       = "device_ingest_in_flight" // a push from this device is already being processed
+	reasonDeviceIngestInvalidBody    = "invalid_body"
+	reasonDeviceIngestBatchTooLarge  = "batch_too_large"
+	reasonDeviceIngestInvalidRow     = "invalid_row"
+	reasonDeviceIngestOrgRun         = "org_run"
+	reasonDeviceIngestChainMismatch  = "chain_mismatch"
+	// /api/v1/admin/devices/enrolment-tokens (devices.go).
+	reasonDeviceEnrolmentTokenNameInvalid = "device_enrolment_token_name_invalid"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

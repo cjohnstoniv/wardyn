@@ -74,7 +74,7 @@ func (s *Server) mountDeviceRoutes(r chi.Router) {
 func (s *Server) deviceStoreOr501(w http.ResponseWriter) (store.DeviceStore, bool) {
 	ds, ok := s.cfg.Store.(store.DeviceStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "device enrolment requires the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonDeviceEnrolmentUnavailable, "device enrolment requires the Postgres store backend")
 	}
 	return ds, ok
 }
@@ -94,7 +94,7 @@ func (s *Server) handleMintEnrolmentToken(w http.ResponseWriter, r *http.Request
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
-		writeError(w, http.StatusUnprocessableEntity, "name: required, at most 200 bytes, no control characters")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDeviceEnrolmentTokenNameInvalid, "name: required, at most 200 bytes, no control characters")
 		return
 	}
 	raw := newBearer(enrolmentTokenPrefix)
