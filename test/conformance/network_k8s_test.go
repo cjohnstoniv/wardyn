@@ -124,6 +124,9 @@ func testAgentCannotReachAnythingButTheProxy(t *testing.T, r runner.Runner, agen
 			Labels:           map[string]string{"wardyn.conformance": "true"},
 			// A LISTENING proxy: see testAgentCannotReachAPIServer's spec.
 			ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:9", RunToken: "conformance"},
+			// Small, because two runs are up at once: at the 2-CPU default the
+			// second one does not fit a hosted runner's one-node cluster.
+			Resources: runner.Resources{CPUMillis: 250, MemoryMiB: 128},
 		}
 		sb, err := r.CreateSandbox(ctx, spec)
 		if err != nil {
