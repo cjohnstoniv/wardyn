@@ -292,6 +292,44 @@ describe("WorkspaceDetailScreen — Start a run, reads the server's available_to
   });
 });
 
+// F1 (PR #1285 review): every WRITE response (promote-egress, set-requirements)
+// never goes through either GET stamper, so the server now omits the key
+// entirely rather than sending `false` — a pointer field with `omitempty`
+// (internal/types/workspace.go). This pins the console's OWN half of that
+// contract through the real write path: an operator who approves an observed
+// host must keep seeing Start a run enabled, since :366's `!operator &&` guard
+// was removed and workspaceUnavailableToCaller now reads this field for
+// everyone.
+describe("WorkspaceDetailScreen — Start a run survives a write response with no available_to_you key (F1)", () => {
+  it("stays enabled for an operator after promoting observed egress", async () => {
+    const rr: RecordResult = {
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    getWorkspaceMock.mockResolvedValue(ws({ record_results: { "build-test": rr } }));
+    // The write response carries no `available_to_you` key at all — exactly
+    // what the server's omitempty *bool serializes when nothing stamped it.
+    promoteRecordEgressMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    expect(await screen.findByRole("button", { name: /^start a run$/i })).toBeEnabled();
+
+    await user.click(await screen.findByRole("button", { name: /approve 1 observed host/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(promoteRecordEgressMock).toHaveBeenCalled());
+
+    expect(screen.getByRole("button", { name: /^start a run$/i })).toBeEnabled();
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+});
+
 describe("WorkspaceDetailScreen — image row: three honest variants, never a /build fetch to find out", () => {
   it("standard sandbox image: no base_image, nothing detected — no Rebuild action", async () => {
     getWorkspaceMock.mockResolvedValue(ws());

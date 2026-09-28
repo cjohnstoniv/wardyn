@@ -106,7 +106,8 @@ func (s *Server) workspaceAvailabilitySiteConfig(ctx context.Context) types.Site
 func (s *Server) availabilityStamper(ctx context.Context) func(types.Workspace) types.Workspace {
 	sc := s.workspaceAvailabilitySiteConfig(ctx)
 	return func(ws types.Workspace) types.Workspace {
-		ws.AvailableToYou = s.workspaceAvailableToCaller(ctx, sc, ws)
+		available := s.workspaceAvailableToCaller(ctx, sc, ws)
+		ws.AvailableToYou = &available
 		return ws
 	}
 }

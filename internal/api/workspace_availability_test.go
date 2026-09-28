@@ -130,6 +130,27 @@ func TestWorkspaceAvailableToCaller(t *testing.T) {
 			sources:       []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: admitOnRow}},
 			wantAvailable: false,
 		},
+		// F3 (#1250's own Done-when, pinned here rather than only by an
+		// explicit DENY grant above): a WIDENING kind's switch alone decides
+		// it when no grant names the row at all.
+		{
+			name: "git-provider capability enforced and not granted",
+			site: admitSite(),
+			build: func(uuid.UUID) *capStore {
+				return &capStore{enf: map[string]bool{capWorkspaceProvider: true}}
+			},
+			sources:       []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: admitOnRow}},
+			wantAvailable: false,
+		},
+		{
+			name: "no enforcement on the git-provider capability sees no change",
+			site: admitSite(),
+			build: func(uuid.UUID) *capStore {
+				return &capStore{}
+			},
+			sources:       []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: admitOnRow}},
+			wantAvailable: true,
+		},
 		{
 			name: "a model-provider pin the caller lacks, WITH a model-provider block, does not move the flag",
 			site: types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"))},
@@ -235,5 +256,70 @@ func TestWorkspaceAvailableToCaller_ModelProviderArmStaysClientSide(t *testing.T
 	if allowed := availPreflightAllowed(t, srv, ws.ID, session, "", false); allowed {
 		t.Errorf("an agent preflight was allowed — the denied model-provider pin should have refused it " +
 			"(available_to_you correctly said nothing about this; the client's own arm is what must show it)")
+	}
+}
+
+// TestListWorkspaces_AvailableToYouPerRow is F2: no committed test covered the
+// LIST path (GET /workspaces) at all — only the single-row GET was pinned. It
+// asserts the list stamps available_to_you per row, true for a row the caller
+// is granted and false for one they are not, for the SAME member in the SAME
+// response, and that the whole page resolves through one shared capBatch: the
+// three reads a batch memoizes for its life (ListCapabilityGrantsFor,
+// GetCapabilityEnforcement, ListCapabilityRestrictions) each run exactly once,
+// never once per row (handleListWorkspaces' own withCapBatch doc comment).
+func TestListWorkspaces_AvailableToYouPerRow(t *testing.T) {
+	available, unavailable := uuid.New(), uuid.New()
+	cs := &capStore{
+		// A per-VALUE restriction (no kind-wide switch): decide's step 3
+		// promotes a restricted value to enforced on its own, and only an
+		// allow naming the value gets in — the same shape
+		// TestWorkspaceAvailableToCaller's "named allow" case uses. This is
+		// also what exercises the restrictions read below: the kind-wide
+		// switch answering "on" would short-circuit it (capBatch.enforced only
+		// consults isRestricted when the switch itself is off).
+		restricted: map[string]map[string]bool{
+			capWorkspace: {available.String(): true, unavailable.String(): true},
+		},
+		grants: []types.CapabilityGrant{
+			grant(types.CapabilitySubjectUser, govMemberSub, capWorkspace, available.String(), types.CapabilityAllow),
+		},
+	}
+	ephemeral := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}}
+	wss := []types.Workspace{
+		{ID: available, Name: "avail-ws", Status: types.WorkspaceScanned, Sources: ephemeral},
+		{ID: unavailable, Name: "unavail-ws", Status: types.WorkspaceScanned, Sources: ephemeral},
+	}
+	srv, _ := integFixture(t, cs, nil, wss)
+	session := govSession(t, govMemberSub, []string{"eng"}, false)
+
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces", session, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /workspaces = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var rows []struct {
+		ID             uuid.UUID `json:"id"`
+		AvailableToYou *bool     `json:"available_to_you"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	byID := map[uuid.UUID]*bool{}
+	for _, row := range rows {
+		byID[row.ID] = row.AvailableToYou
+	}
+	if p := byID[available]; p == nil || !*p {
+		t.Errorf("the granted row's available_to_you = %v, want true", p)
+	}
+	if p := byID[unavailable]; p == nil || *p {
+		t.Errorf("the ungranted row's available_to_you = %v, want false", p)
+	}
+	if cs.grantsForReads != 1 {
+		t.Errorf("ListCapabilityGrantsFor read %d times, want 1 (one shared batch for the whole page)", cs.grantsForReads)
+	}
+	if cs.enfReads != 1 {
+		t.Errorf("GetCapabilityEnforcement read %d times, want 1", cs.enfReads)
+	}
+	if cs.restrictReads != 1 {
+		t.Errorf("ListCapabilityRestrictions read %d times, want 1", cs.restrictReads)
 	}
 }

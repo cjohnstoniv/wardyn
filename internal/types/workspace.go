@@ -270,7 +270,15 @@ type Workspace struct {
 	// so a plain member can see a kind-wide switch, a per-value "Available to:
 	// Only these" restriction, or a pinned git/model provider they lack refuse
 	// them, before Launch ever tries and the server has to say so.
-	AvailableToYou bool `json:"available_to_you"`
+	//
+	// A pointer with omitempty: only the two GET stampers set it, and every
+	// write response (requirements, promote-egress, reassign, create, update)
+	// hands back the Workspace the store gave it, which never went through
+	// either stamper. A plain bool would default to false there and every
+	// write would ship "available_to_you":false regardless of the truth — the
+	// console's own "absent means fall back" contract (wizard-types.ts) exists
+	// precisely to survive an omitted key; nil is what makes the key absent.
+	AvailableToYou *bool `json:"available_to_you,omitempty"`
 }
 
 // Integration kinds. An integration is a BASE COMPONENT extended by kind: a

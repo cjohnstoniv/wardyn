@@ -47,7 +47,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   capability, and the git-provider row its repo sources resolve to (the identical derivation the
   launch door's `denyUserWorkspaceProviders` uses). It deliberately excludes the model-provider pin,
   which the server itself only ever checks for a run that actually needs a model — that arm stays
-  exactly where #922 already put it, client-side and isAgent-gated. It is always `true` for an
+  exactly where #1249 already put it, client-side and isAgent-gated. It is always `true` for an
   operator, and it carries no restriction contents and no other caller's grants — one derived bit,
   never the "Only..." list itself. The New Run picker card, New Run's own Launch gate, the
   Workspaces list and a workspace's own "Start a run" now read it when present, falling back to the
