@@ -167,3 +167,89 @@ func TestPG_RoleMappings_UserType(t *testing.T) {
 		t.Fatalf("insert naming a missing type = %v, want ErrNotFound", err)
 	}
 }
+
+// TestPG_RoleMappings_UpsertClearsMigratedFromMember (#913): a write that
+// flips an existing row in place — the same upsert the People page's
+// "Choose a type" action sends — clears migration 0098's marker, even though
+// nothing in the store's own API ever sets it to true (only the migration's
+// backfill does; see internal/db's TestPG_RoleMappingsMarkMigratedFromMember).
+func TestPG_RoleMappings_UpsertClearsMigratedFromMember(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	value := "test-value-" + uuid.NewString()
+	id := uuid.New()
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO role_mappings (id, value, role, user_type, migrated_from_member, created_by)
+		 VALUES ($1, $2, 'user', 'standard', true, 'admin@example.com')`, id, value); err != nil {
+		t.Fatalf("seed a migrated row: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DeleteRoleMapping(ctx, id) })
+
+	before, err := st.ListRoleMappings(ctx)
+	if err != nil {
+		t.Fatalf("list before: %v", err)
+	}
+	if !findRoleMapping(before, value).MigratedFromMember {
+		t.Fatalf("seeded row does not carry the marker before any write")
+	}
+
+	saved, err := st.UpsertRoleMapping(ctx, roleMapping(value, "user"))
+	if err != nil {
+		t.Fatalf("re-add: %v", err)
+	}
+	if saved.MigratedFromMember {
+		t.Errorf("upsert return value still carries migrated_from_member")
+	}
+	after, err := st.ListRoleMappings(ctx)
+	if err != nil {
+		t.Fatalf("list after: %v", err)
+	}
+	if findRoleMapping(after, value).MigratedFromMember {
+		t.Errorf("stored row still carries migrated_from_member after picking a type")
+	}
+}
+
+// TestPG_RoleMappings_UpsertClearsMigratedFromMemberOnAdminFlip (L3): the
+// marker clears on ANY conflict-path write, including a flip to admin — a
+// deliberate decision (store_role_mappings.go's UpsertRoleMapping doc), not
+// only on a write that names a real type.
+func TestPG_RoleMappings_UpsertClearsMigratedFromMemberOnAdminFlip(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	value := "test-value-" + uuid.NewString()
+	id := uuid.New()
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO role_mappings (id, value, role, user_type, migrated_from_member, created_by)
+		 VALUES ($1, $2, 'user', 'standard', true, 'admin@example.com')`, id, value); err != nil {
+		t.Fatalf("seed a migrated row: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DeleteRoleMapping(ctx, id) })
+
+	saved, err := st.UpsertRoleMapping(ctx, roleMapping(value, "admin"))
+	if err != nil {
+		t.Fatalf("flip to admin: %v", err)
+	}
+	if saved.MigratedFromMember {
+		t.Errorf("upsert return value still carries migrated_from_member after a flip to admin")
+	}
+	all, err := st.ListRoleMappings(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if findRoleMapping(all, value).MigratedFromMember {
+		t.Errorf("stored row still carries migrated_from_member after a flip to admin")
+	}
+}
+
+func findRoleMapping(rows []types.RoleMapping, value string) types.RoleMapping {
+	for _, m := range rows {
+		if m.Value == value {
+			return m
+		}
+	}
+	return types.RoleMapping{}
+}

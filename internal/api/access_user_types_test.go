@@ -146,6 +146,53 @@ func TestAccess_GetNamesTheTypeOnEachRow(t *testing.T) {
 	}
 }
 
+// TestAccess_MigratedFromMemberRidesGetAndClearsOnWrite (#913): GET /access
+// carries the marker on a console row 0074's rename touched, never on a
+// plain console row or a chart row, and picking a real type for it (the same
+// upsert the People page's "Choose a type" action sends) clears it.
+func TestAccess_MigratedFromMemberRidesGetAndClearsOnWrite(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"wardyn.admin": oidc.RoleAdmin}, "", nil, nil)
+	st := &roleMapStore{userTypes: accessOrgTypes, rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "migrated-row", Role: oidc.RoleUser, MigratedFromMember: true},
+		{ID: uuid.New(), Value: "saved-row", Role: oidc.RoleUser},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]bool{}
+	for _, m := range resp.Mappings {
+		got[m.Value] = m.MigratedFromMember
+	}
+	if !got["migrated-row"] {
+		t.Errorf("migrated-row migrated_from_member = false, want true")
+	}
+	if got["saved-row"] {
+		t.Errorf("saved-row migrated_from_member = true, want false — it was never rewritten")
+	}
+	if got["wardyn.admin"] {
+		t.Errorf("chart row migrated_from_member = true, want false")
+	}
+
+	// Choosing a type for the migrated row (the same POST the People page's
+	// "Choose a type" action sends) clears the marker.
+	w = do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"migrated-row","role":"user","user_type":"analyst"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	for _, m := range st.rows {
+		if m.Value == "migrated-row" && m.MigratedFromMember {
+			t.Error("migrated_from_member survived a write that picked a real type")
+		}
+	}
+}
+
 // TestAccessRolePosture_DefaultTypeIsAChange: arm 1's users are on the
 // built-in type, so a default naming a custom type moves them; "standard"
 // spelled out is the same as "user".

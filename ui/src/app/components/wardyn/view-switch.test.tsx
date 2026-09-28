@@ -10,9 +10,13 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { health } from "../../lib/api/health";
 import { UnsavedGuardProvider, useUnsavedGuard } from "../../lib/use-unsaved-guard";
 import { UNSAVED_GUARD } from "./copy";
-import { ViewSwitch } from "./view-switch";
+import { ViewSwitch, UserViewDroppedNotice, UserViewEyebrow, type ViewUserType } from "./view-switch";
 import { currentView, viewTarget, type ConsoleView, type ViewAccess } from "./console-view";
-import { CONSOLE_VIEW } from "./copy/console-view";
+import { CONSOLE_VIEW, VIEW_DROPPED } from "./copy/console-view";
+
+const STANDARD: ViewUserType = { id: "standard", name: "Standard user" };
+const PM: ViewUserType = { id: "pm", name: "Portfolio manager" };
+const DEV: ViewUserType = { id: "dev", name: "Developer" };
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -27,14 +31,34 @@ function Dirty() {
   return null;
 }
 
-function mount(access: ViewAccess, view: ConsoleView, { dirty = false } = {}) {
+function mount(
+  access: ViewAccess,
+  view: ConsoleView,
+  {
+    dirty = false,
+    currentUserType,
+    preselectType,
+    userTypes = [],
+  }: {
+    dirty?: boolean;
+    currentUserType?: { id: string; name: string } | null;
+    preselectType?: string;
+    userTypes?: ViewUserType[];
+  } = {},
+) {
   const assign = vi.fn();
   vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
   render(
     <MemoryRouter initialEntries={[view === "admin" ? "/admin/runs" : "/runs"]}>
       <UnsavedGuardProvider>
         {dirty && <Dirty />}
-        <ViewSwitch access={access} view={view} />
+        <ViewSwitch
+          access={access}
+          view={view}
+          currentUserType={currentUserType}
+          preselectType={preselectType}
+          userTypes={userTypes}
+        />
         <Routes>
           <Route path="*" element={<Where />} />
         </Routes>
@@ -60,7 +84,9 @@ describe("ViewSwitch", () => {
     const { assign } = mount("session-admin", "admin");
     await userEvent.click(seg(CONSOLE_VIEW.USER));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(setMode).toHaveBeenCalledWith(true, false);
+    // #912: the plain toggle (no type picker here — this mount has no types)
+    // names no type, forwarded through as the explicit third argument.
+    expect(setMode).toHaveBeenCalledWith(true, false, undefined);
   });
 
   it("clicking the pressed segment does nothing", async () => {
@@ -97,6 +123,100 @@ describe("ViewSwitch", () => {
     expect(setMode).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: UNSAVED_GUARD.STAY }));
     expect(setMode).not.toHaveBeenCalled();
+  });
+});
+
+describe("ViewSwitch — the type picker (#912)", () => {
+  it("with two or more types, the User segment opens a menu; picking one enters as that type", async () => {
+    const setMode = vi.spyOn(health, "setMemberMode").mockResolvedValue(undefined);
+    const { assign } = mount("session-admin", "admin", { userTypes: [STANDARD, PM, DEV] });
+    await userEvent.click(seg(CONSOLE_VIEW.USER));
+    await userEvent.click(await screen.findByRole("menuitem", { name: DEV.name }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(setMode).toHaveBeenCalledWith(true, false, "dev");
+  });
+
+  it("picking the preselected type from Admin view still enters (not a dead click)", async () => {
+    // Pinning test: a controlled radio-style menu where the "checked" item
+    // never fires on re-selection would make the preselected item a dead
+    // click from here — the admin could never confirm the very choice the
+    // dropdown shows them first.
+    const setMode = vi.spyOn(health, "setMemberMode").mockResolvedValue(undefined);
+    const { assign } = mount("session-admin", "admin", { userTypes: [STANDARD, PM], preselectType: "pm" });
+    await userEvent.click(seg(CONSOLE_VIEW.USER));
+    await userEvent.click(await screen.findByRole("menuitem", { name: PM.name }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(setMode).toHaveBeenCalledWith(true, false, "pm");
+  });
+
+  it("reselecting the type already being viewed as is a no-op", async () => {
+    const setMode = vi.spyOn(health, "setMemberMode").mockResolvedValue(undefined);
+    mount("session-user", "user", { userTypes: [STANDARD, PM, DEV], currentUserType: { id: "pm", name: PM.name } });
+    await userEvent.click(seg(CONSOLE_VIEW.USER));
+    await userEvent.click(await screen.findByRole("menuitem", { name: PM.name }));
+    expect(setMode).not.toHaveBeenCalled();
+  });
+
+  it("with only the built-in type, the User segment stays the plain toggle — no menu", () => {
+    mount("session-user", "user", { userTypes: [STANDARD], currentUserType: { id: "standard", name: STANDARD.name } });
+    expect(seg(CONSOLE_VIEW.USER)).not.toHaveAttribute("aria-haspopup");
+  });
+});
+
+describe("UserViewEyebrow (#912)", () => {
+  it("renders nothing with only the built-in type", () => {
+    render(<UserViewEyebrow currentUserType={{ id: "standard", name: STANDARD.name }} userTypes={[STANDARD]} />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("names the current type and reopens the picker to change it", async () => {
+    const setMode = vi.spyOn(health, "setMemberMode").mockResolvedValue(undefined);
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    render(<UserViewEyebrow currentUserType={{ id: "pm", name: PM.name }} userTypes={[STANDARD, PM, DEV]} />);
+    const trigger = screen.getByRole("button", { name: CONSOLE_VIEW.EYEBROW_USER(PM.name) });
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByRole("menuitem", { name: DEV.name }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(setMode).toHaveBeenCalledWith(true, false, "dev");
+  });
+});
+
+describe("UserViewDroppedNotice (#912)", () => {
+  it("renders nothing without a drop", () => {
+    const { container } = render(<UserViewDroppedNotice access="session-admin" dropped={null} userTypes={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows the type's NAME, not its id, and offers a real way to choose another", async () => {
+    const setMode = vi.spyOn(health, "setMemberMode").mockResolvedValue(undefined);
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    render(
+      <UserViewDroppedNotice
+        access="session-admin"
+        dropped={{ user_type: "contractor", user_type_name: "Contractor" }}
+        userTypes={[STANDARD, PM]}
+      />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(VIEW_DROPPED.BODY("Contractor"));
+    expect(status).not.toHaveTextContent("contractor.");
+    await userEvent.click(screen.getByRole("button", { name: VIEW_DROPPED.CHOOSE_ANOTHER }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: PM.name }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(setMode).toHaveBeenCalledWith(true, false, "pm");
+  });
+
+  it("falls back to the id when no cached name is available", () => {
+    render(<UserViewDroppedNotice access="session-admin" dropped={{ user_type: "contractor" }} userTypes={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(VIEW_DROPPED.BODY("contractor"));
+  });
+
+  it("Stay in the Admin view dismisses it", async () => {
+    render(<UserViewDroppedNotice access="session-admin" dropped={{ user_type: "contractor" }} userTypes={[]} />);
+    await userEvent.click(screen.getByRole("button", { name: VIEW_DROPPED.STAY }));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });
 

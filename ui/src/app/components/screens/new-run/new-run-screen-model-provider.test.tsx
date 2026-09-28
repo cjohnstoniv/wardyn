@@ -300,6 +300,35 @@ describe("NewRunScreen — R6 (QC-4): no default among several candidates — La
   });
 });
 
+// #1052 — R5b: the server's own providers_ungranted fact (SetupHarnessTool),
+// end to end from /setup/status to the rail's NOT_GRANTED sentence and a
+// disabled Launch. No provider block reaches this test at all (model_providers
+// stays empty, as it always is for R5b — capVisible already narrowed it away)
+// — `harnesses` alone carries the signal.
+describe("NewRunScreen — R5b (#1052): providers_ungranted disables Launch", () => {
+  it("names NOT_GRANTED and disables Launch", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      providerStatus([], {
+        harnesses: [
+          {
+            id: "claude-code",
+            display: "Claude Code",
+            has_gateway: true,
+            has_login: true,
+            enabled: true,
+            providers_ungranted: true,
+          },
+        ],
+      }),
+    );
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    expect(await screen.findByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
+    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
+  });
+});
+
 // R6 rule (3): a workspace pin already answers "why wait" its own way (the
 // server refuses a pin it cannot serve, by name), so LAUNCH_HINT stays silent
 // whenever one is set — even a pin naming no candidate, which preselects

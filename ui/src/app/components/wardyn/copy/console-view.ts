@@ -10,9 +10,12 @@ export const CONSOLE_VIEW = {
   ADMIN: "Admin view",
   USER: "User view",
   SWITCH_FAILED: "Could not switch — try again.",
-  // The Admin view's sidebar eyebrow. The User view's "User view · {type} ▾"
-  // arrives with the type picker (UT-13 / UT-7a).
+  // The Admin view's sidebar eyebrow.
   EYEBROW_ADMIN: "Admin view",
+  // The User view's own eyebrow (UT-13 / UT-7a, #912), shown only when the
+  // org has more than one user type — an admin looking through {type} reopens
+  // the same picker from here without leaving the view.
+  EYEBROW_USER: (type: string) => `User view · ${type}`,
   TITLE_ADMIN: "Wardyn admin",
   TITLE_USER: "Wardyn",
   // Packet M-B (QM-7, modes-b.html): a link straight to the same object in
@@ -21,6 +24,18 @@ export const CONSOLE_VIEW = {
   // failure block or reauth card on the admin's own run (whose door is User
   // view only) all reuse this one string.
   OPEN_IN_USER: "Open in user view",
+} as const;
+
+// The deleted-type notice (UT-13, #912; packet B, owner-approved): an admin's
+// user view dropped back to Admin because the type they were looking through
+// was removed — read off /me's user_view_dropped. Frozen verbatim from
+// user-types-packet-b.html's "the type is removed" banner (heading, body,
+// Choose another type / Stay in the Admin view).
+export const VIEW_DROPPED = {
+  BODY: (type: string) => `The ${type} user type was removed, so you're back in the Admin view.`,
+  DETAIL: (type: string) => `Nothing you did as a ${type} is undone. Choose another type to keep looking through the user view.`,
+  CHOOSE_ANOTHER: "Choose another type",
+  STAY: "Stay in the Admin view",
 } as const;
 
 export const NAV = {

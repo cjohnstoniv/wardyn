@@ -143,6 +143,7 @@ var queryParamNotAnID = map[string]string{
 	"error":                     "OAuth error echo",
 	"error_description":         "OAuth error echo",
 	"phase":                     "ADO sign-in phase marker",
+	"prompt":                    "ADO sign-in: Microsoft's own prompt hint (adoRequestedPrompt), a closed set (\"\"/select_account) never forwarded on trust",
 	"scopes":                    "ADO sign-in: requested scopes, clamped to the admin's ceiling",
 	"capabilities":              "ADO sign-in: requested capabilities, clamped to the admin's ceiling",
 	"recheck":                   "setup status re-probe switch, honoured for operators only",

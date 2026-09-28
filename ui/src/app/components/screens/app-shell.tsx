@@ -60,7 +60,14 @@ import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
 import { appURL } from "../../lib/base-path";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
-import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
+import {
+  useShellView,
+  useViewResync,
+  UserViewDroppedNotice,
+  UserViewEyebrow,
+  ViewSwitch,
+  type ViewUserType,
+} from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
@@ -135,6 +142,19 @@ export interface ShellMeta {
   // field here comes from (operator-context.tsx's MeIdentity.userType).
   // Absent reads as null.
   userType?: UserTypeMeta | null;
+  /** #912 — the type the switch's dropdown preselects before the view is
+   *  entered (/me's user_view_preselect_type). "" means nothing to preselect. */
+  userViewPreselectType: string;
+  /** #912 (UT-13) — the type whose deletion turned this session's user view
+   *  off, until the next switch (/me's user_view_dropped). null otherwise. */
+  userViewDropped: { user_type: string; user_type_name?: string } | null;
+  /** #912 (H2) — /me's user_view_types: the org's user types, present only
+   *  for a caller whose STAMPED role is admin or security_admin (never a
+   *  real member). This is the switch/eyebrow/notice's ONLY source for the
+   *  type list — it must never call GET /user-types itself, which a clamped
+   *  in-view session cannot reach (securityOps). Empty for anyone who never
+   *  renders a picker. */
+  userViewTypes: ViewUserType[];
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
   /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
@@ -189,6 +209,9 @@ function identityFromMe(me: Me | null) {
     userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
     userDriveUnavailable: me?.user_drive_unavailable ?? "",
     userType: me?.user_type ?? null,
+    userViewPreselectType: me?.user_view_preselect_type ?? "",
+    userViewDropped: me?.user_view_dropped ?? null,
+    userViewTypes: me?.user_view_types ?? [],
     memberMode: me?.user_view ?? false,
     memberModeNoCredential: me?.user_view_no_credential ?? false,
     memberPreviewAvailable: me?.user_preview_available ?? false,
@@ -220,6 +243,9 @@ function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
     userType: null,
+    userViewPreselectType: "",
+    userViewDropped: null,
+    userViewTypes: [],
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
@@ -427,6 +453,14 @@ const ConfinementPostureBanner = React.lazy(() =>
 const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
+// #659 Q2 — same lazy rationale; mounted FIRST in the stack, ahead of every
+// deployment-wide band: it answers what the person just did (a redirect they
+// are actively watching for), one time, then clears itself from the URL —
+// distinct from the others, which restate a standing condition on every
+// visit.
+const AdoSignInBanner = React.lazy(() =>
+  import("../wardyn/ado-signin-banner").then((m) => ({ default: m.AdoSignInBanner })),
+);
 
 // #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
 // same entry-budget reason; the shell warms the chunk on mount, because by the
@@ -468,10 +502,21 @@ function SidebarNav({
     <>
       {/* Below sm the switch leaves the top bar for the top of this sheet, so
           New run and the avatar stay on screen (F7-F2). */}
-      {onNavigate && hasSwitch && <ViewSwitch access={access} view={view} onNavigate={onNavigate} className="mb-3 sm:hidden" />}
+      {onNavigate && hasSwitch && (
+        <ViewSwitch
+          access={access}
+          view={view}
+          onNavigate={onNavigate}
+          className="mb-3 sm:hidden"
+          currentUserType={meta.userType}
+          preselectType={meta.userViewPreselectType}
+          userTypes={meta.userViewTypes}
+        />
+      )}
       {view === "admin" && items.length > 0 && (
         <div className="label-eyebrow mb-2 px-2.5">{CONSOLE_VIEW.EYEBROW_ADMIN}</div>
       )}
+      {view === "user" && <UserViewEyebrow currentUserType={meta.userType} userTypes={meta.userViewTypes} />}
       <nav className="space-y-0.5">
         {items.map((item) => {
           const count =
@@ -675,6 +720,10 @@ export function AppShell({
           banners and not hidden in focus mode: it explains the refusals the
           others might be mistaken for. The plain User view has no band. */}
             <UserPreviewBanner active={meta.memberModeNoCredential} />
+            {/* #912 (UT-13): why this admin is back in the Admin view, with a
+                real way to pick another type — never hidden in focus mode,
+                same reasoning as the preview band above. */}
+            <UserViewDroppedNotice access={access} dropped={meta.userViewDropped} userTypes={meta.userViewTypes} />
             {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
           cannot paint over it: this banner is the only thing that separates a
           quiet fleet from a dead daemon, and a full-bleed terminal is exactly
@@ -747,6 +796,12 @@ export function AppShell({
           that arrives WITH its first sentence (as a lazy chunk does) announces
           nothing. The wrapper is here from the first paint; the chunk fills it. */}
             <div role="status">
+              {/* #659 Q2 — first in the stack: a one-time answer to a redirect
+              the person is actively watching for, not a standing deployment
+              condition like the bands below it. */}
+              <React.Suspense fallback={null}>
+                <AdoSignInBanner />
+              </React.Suspense>
               {/* §4.2 (M-3): each band is passed the session's resolved view
               (useShellView, not the raw URL) so a clamped admin who types an
               /admin/* path while still in the User view — the interstitial

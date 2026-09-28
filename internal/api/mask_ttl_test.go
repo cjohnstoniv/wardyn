@@ -67,8 +67,9 @@ func TestADOMintSites_LetTheAccessTokenGoAfterItsExpiry(t *testing.T) {
 	t.Run("sign-in callback whose store write is lost", func(t *testing.T) {
 		f := newADOFixture(t)
 		f.srv.cfg.Secrets = lostWriteSecrets{f.srv.cfg.Secrets.(*memSecrets)}
-		if w := f.capture(t, f.fake.Subject()); w.Code != http.StatusInternalServerError {
-			t.Fatalf("capture: status %d body %q, want 500", w.Code, w.Body.String())
+		// #659 Q2: redirects to the console's error path now, not a bare 500.
+		if w := f.capture(t, f.fake.Subject()); w.Code != http.StatusFound {
+			t.Fatalf("capture: status %d body %q, want a 302 back to the console", w.Code, w.Body.String())
 		}
 		snap := f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil)
 		i := slices.IndexFunc(snap, func(v []byte) bool { return !isAccess(f, string(v)) })

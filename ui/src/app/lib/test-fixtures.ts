@@ -59,6 +59,10 @@ export function providerStatus(
     deadline?: string;
     action?: string;
     sourceRunId?: string;
+    // #592 — this caller's own added_at/last_used_at for the row, absent
+    // (undefined) the same as a credential that was never stored.
+    addedAt?: string;
+    lastUsedAt?: string;
   }[],
   overrides: Partial<SetupStatus> = {},
 ): SetupStatus {
@@ -71,6 +75,8 @@ export function providerStatus(
         deadline: r.deadline,
         action: r.action,
         source_run_id: r.sourceRunId,
+        added_at: r.addedAt,
+        last_used_at: r.lastUsedAt,
       }),
     ),
     ...overrides,
