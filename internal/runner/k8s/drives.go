@@ -30,7 +30,7 @@ const (
 	// ephemeral exec container Exec adds. Static: one principal has at most one drive.
 	driveVolumeName = "drive"
 
-	// driveDirectfsAnnotation is the key applyDriveToPod stamps on runsc drive pods. Inert today:
+	// driveDirectfsAnnotation is the key applyDriveToPod stamps on runsc drive pods. It is inert today:
 	// runsc only honors a mount hint carrying `share`, `source` AND `type` together (this key sets
 	// none); the working remedy is the NODE flag --directfs=false (docs/OPERATIONS.md) — kept
 	// stamped as the right key if the hint is ever completed.
@@ -332,7 +332,7 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // FSGroup is managed-claim only: a fresh k8s_pvc belongs to ONE principal, so group-owning its root
 // to gid 1000 is safe. A SHARE (k8s_pvc_static) is an admin-precreated claim over an export with
 // several principals' files already on it, and fsGroup must NEVER be set there — the CSI NFS
-// driver's `fsGroupPolicy: File` lets Kubernetes re-own an NFS volume regardless of fstype, and
+// driver's `fsGroupPolicy: File` lets Kubernetes re-own an NFS volume regardless of fstype or access mode, and
 // OnRootMismatch only narrows WHEN, not WHAT: the first run against an export not already gid 1000
 // walks it and re-owns other people's files. Kind(), not a backend list, decides this — an unknown
 // backend reads as a SHARE, the fail-closed direction. FSGroupChangePolicy stays OnRootMismatch
