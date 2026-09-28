@@ -526,13 +526,39 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("an agent the roster turns off is not offered", func(t *testing.T) {
+	// review round 3, R3-1: a caller granted no provider at all is the case
+	// the omitzero fix targets — the block exists (this test's own site
+	// config), so the key is present as `[]`, distinct from no block at all.
+	t.Run("a member granted no provider at all still gets model_providers:[]", func(t *testing.T) {
+		none := &capStore{grants: []types.CapabilityGrant{
+			{SubjectType: types.CapabilitySubjectAll, Capability: capModelProvider, Value: "corp-gateway", Effect: types.CapabilityDeny},
+			{SubjectType: types.CapabilitySubjectAll, Capability: capModelProvider, Value: "bedrock-prod", Effect: types.CapabilityDeny},
+			{SubjectType: types.CapabilitySubjectAll, Capability: capModelProvider, Value: "anthropic", Effect: types.CapabilityDeny},
+		}}
+		w := doSSO(t, modelProvidersStatusSrv(t, site, none), http.MethodGet, "/api/v1/setup/status", member, "")
+		if !strings.Contains(w.Body.String(), `"model_providers":[]`) {
+			t.Errorf("a caller denied every provider should still carry model_providers:[]: %s", w.Body.String())
+		}
+		if got := statusModelProviders(t, w.Body.Bytes()); len(got) != 0 {
+			t.Errorf("a caller denied every provider was offered one: %+v", got)
+		}
+	})
+
+	// review round 3, R3-1: the block EXISTS here (ModelProviders is set), so
+	// model_providers is present as `[]` — never offered, but never absent
+	// either. `json:"model_providers,omitzero"` (setup.go) is what makes this
+	// distinguishable from TestSetupStatusNilBlockIsToday's "no block at all"
+	// case, which stays absent.
+	t.Run("an agent the roster turns off is not offered, but the key is present as []", func(t *testing.T) {
 		off := site
 		off.AgentProviders = agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, Disabled: true})
 		off.ModelProviders = providerBlock(keyProvider("anthropic", "claude-code"))
 		w := do(t, modelProvidersStatusSrv(t, off, &capStore{}), http.MethodGet, "/api/v1/setup/status", adminToken, "")
-		if strings.Contains(w.Body.String(), `"model_providers"`) {
-			t.Errorf("a provider serving only a turned-off agent was offered: %s", w.Body.String())
+		if !strings.Contains(w.Body.String(), `"model_providers":[]`) {
+			t.Errorf("a block with nothing offered should still carry model_providers:[]: %s", w.Body.String())
+		}
+		if got := statusModelProviders(t, w.Body.Bytes()); len(got) != 0 {
+			t.Errorf("a provider serving only a turned-off agent was offered: %+v", got)
 		}
 	})
 }

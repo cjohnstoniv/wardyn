@@ -615,8 +615,9 @@ func TestDenyMemberRequest_WorkspaceRefusedOnBothDoors(t *testing.T) {
 // denyUserRequest gates req.workspace_id, but an inline_policy naming an
 // onboarded repo URL reached referencedWorkspaces all the same — and with it
 // that workspace's admin-authored egress, secret grants and base image. The
-// entry is DROPPED, not refused, exactly as an ungranted egress host is:
-// Review names it, the audit records it, and the run still launches.
+// entry is REFUSED with the same named 403 req.workspace_id gives (#1259),
+// not dropped: a member must not reach through this smaller door what the
+// bigger one already refuses.
 func TestInlinePolicy_WorkspaceNarrowing(t *testing.T) {
 	const repo = "octocat/Hello-World"
 	ws := types.Workspace{
@@ -643,20 +644,17 @@ func TestInlinePolicy_WorkspaceNarrowing(t *testing.T) {
 		}
 	})
 
-	t.Run("switch on, nothing granted: dropped, and nothing folds from it", func(t *testing.T) {
+	t.Run("switch on, nothing granted: refused, not a smaller run", func(t *testing.T) {
 		h := srv(t, nil, map[string]bool{capWorkspace: true})
-		got, warns := resolveInline(t, h, authored)
-		if len(got.WorkspaceRepos) != 0 {
-			t.Fatalf("repos = %v, want none — an inline repo is not a way around the workspace grant", got.WorkspaceRepos)
+		w := httptest.NewRecorder()
+		r := memberRequest(t)
+		req := createRunRequest{Agent: "claude-code", InlinePolicy: &authored}
+		_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+		if ok {
+			t.Fatalf("resolveRunPolicy: ok = true, want refused — an inline repo is not a way around the workspace grant")
 		}
-		// The bypass itself: referencedWorkspaces over the RESOLVED spec is what
-		// applyWorkspaceRequirements folds egress/secret-grants/base-image from.
-		// Empty here means there is nothing left to fold.
-		if refs := h.srv.referencedWorkspaces(t.Context(), got); len(refs) != 0 {
-			t.Fatalf("referencedWorkspaces = %v, want none — the ungranted workspace still reaches the fold", refs)
-		}
-		if d := dropWarns(warns); len(d) != 1 || !strings.Contains(d[0], repo) {
-			t.Fatalf("drop warnings = %v, want one naming the dropped repo", d)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), ws.ID.String()) {
+			t.Fatalf("status/body = %d %q, want 403 naming the workspace", w.Code, w.Body.String())
 		}
 		if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_workspace"}) {
 			t.Fatalf("authz.denied reasons = %v, want [capability_workspace]", reasons)
@@ -690,8 +688,8 @@ func TestInlinePolicy_WorkspaceNarrowing(t *testing.T) {
 }
 
 // TestInlinePolicy_WorkspaceNarrowingIsSharedByBothDoors: launch and the
-// preflight dry-run resolve through the SAME chokepoint, so Review can never
-// preview a workspace the launch would drop.
+// preflight dry-run resolve through the SAME chokepoint, so a preflight names
+// the exact refusal launch would give (#1259) — never a quieter, smaller run.
 func TestInlinePolicy_WorkspaceNarrowingIsSharedByBothDoors(t *testing.T) {
 	const repo = "octocat/Hello-World"
 	ws := types.Workspace{
@@ -710,12 +708,12 @@ func TestInlinePolicy_WorkspaceNarrowingIsSharedByBothDoors(t *testing.T) {
 			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: repo, Target: "/work/repo"}},
 		}
 		req := createRunRequest{Agent: "claude-code", InlinePolicy: &spec}
-		got, _, warns, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, dryRun)
-		if !ok {
-			t.Fatalf("dryRun=%v: resolveRunPolicy refused: %d %s", dryRun, w.Code, w.Body.String())
+		_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, dryRun)
+		if ok {
+			t.Fatalf("dryRun=%v: resolveRunPolicy: ok = true, want refused on both doors", dryRun)
 		}
-		if len(got.WorkspaceRepos) != 0 || len(dropWarns(warns)) != 1 {
-			t.Fatalf("dryRun=%v: repos = %v, warns = %v; want the same drop on both doors", dryRun, got.WorkspaceRepos, warns)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), ws.ID.String()) {
+			t.Fatalf("dryRun=%v: status/body = %d %q, want 403 naming the workspace", dryRun, w.Code, w.Body.String())
 		}
 	}
 }

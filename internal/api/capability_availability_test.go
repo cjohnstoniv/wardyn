@@ -108,8 +108,9 @@ func TestAvailability_RestrictedAtEveryLaunchField(t *testing.T) {
 }
 
 // TestAvailability_RestrictedWorkspaceRepoIsDropped: the inline-policy seam
-// drops and proceeds, as it does for any ungranted workspace repo — the run
-// launches without the item, Review names it, and the drop is audited.
+// REFUSES a restricted-and-not-listed workspace repo with the same named 403
+// req.workspace_id gives (#1259) — it no longer drops the repo and launches a
+// smaller run. Name kept for the issue history; the behavior it pins flipped.
 func TestAvailability_RestrictedWorkspaceRepoIsDropped(t *testing.T) {
 	const repo = "octocat/Hello-World"
 	ws := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: repo}}}
@@ -122,7 +123,7 @@ func TestAvailability_RestrictedWorkspaceRepoIsDropped(t *testing.T) {
 		listType string
 		wantKept bool
 	}{
-		{"restricted to another type: dropped", utDev, false},
+		{"restricted to another type: refused", utDev, false},
 		{"restricted to this caller's type: kept", types.UserTypeStandard, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,15 +135,22 @@ func TestAvailability_RestrictedWorkspaceRepoIsDropped(t *testing.T) {
 				userTypes:  utKnown,
 			}
 			h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2}
-			got, warns := resolveInline(t, h, authored)
-			if kept := len(got.WorkspaceRepos) == 1; kept != tc.wantKept {
-				t.Fatalf("repos = %v, want kept=%v", got.WorkspaceRepos, tc.wantKept)
-			}
 			if tc.wantKept {
+				got, _ := resolveInline(t, h, authored)
+				if len(got.WorkspaceRepos) != 1 {
+					t.Fatalf("repos = %v, want kept", got.WorkspaceRepos)
+				}
 				return
 			}
-			if d := dropWarns(warns); len(d) != 1 || !strings.Contains(d[0], repo) {
-				t.Fatalf("drop warnings = %v, want one naming the dropped repo", d)
+			w := httptest.NewRecorder()
+			r := memberRequest(t)
+			req := createRunRequest{Agent: "claude-code", InlinePolicy: &authored}
+			_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+			if ok {
+				t.Fatalf("resolveRunPolicy: ok = true, want refused")
+			}
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), ws.ID.String()) {
+				t.Fatalf("status/body = %d %q, want 403 naming the workspace", w.Code, w.Body.String())
 			}
 			if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_workspace"}) {
 				t.Fatalf("authz.denied reasons = %v, want [capability_workspace]", reasons)

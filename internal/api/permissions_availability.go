@@ -8,6 +8,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -138,4 +140,35 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 			"restricted": v.Restricted,
 		})))
 	writeJSON(w, http.StatusOK, v)
+}
+
+// errUngrantedWorkspaceRepo is narrowUserInlinePolicy's signal (inline_policy.go)
+// that a workspace_repos entry named an onboarded workspace the caller does
+// not hold capWorkspace for (#1259) — a REFUSAL, not a capDrop, because
+// req.workspace_id already refuses the identical workspace with a named 403
+// (denyUserRequest) and this is the same door reached a second way. Distinct
+// from the plain errors that function otherwise returns (which boundUserSpec
+// 500s as a store failure) so the caller can tell the two apart and answer
+// 403 instead.
+type errUngrantedWorkspaceRepo struct {
+	repo, wsID string
+}
+
+func (e *errUngrantedWorkspaceRepo) Error() string {
+	return fmt.Sprintf("workspace %s (repo %q) is not granted to you", e.wsID, e.repo)
+}
+
+// refuseOrErrorCapabilityResolution answers boundUserSpec's (inline_policy.go)
+// narrowUserInlinePolicy error: an ungranted workspace_repos entry (#1259,
+// errUngrantedWorkspaceRepo) refuses with the same named 403 req.workspace_id
+// already gives; anything else is a genuine store failure and 500s exactly as
+// before. Always writes a response — the caller only needs to stop.
+func (s *Server) refuseOrErrorCapabilityResolution(w http.ResponseWriter, r *http.Request, cerr error) {
+	var refused *errUngrantedWorkspaceRepo
+	if errors.As(cerr, &refused) {
+		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityWorkspace, "runs.workspace",
+			"you are not granted workspace "+refused.wsID+" — ask an admin for access, or launch without a workspace"))
+		return
+	}
+	writeServerError(w, r, "resolve capability", cerr)
 }

@@ -325,6 +325,39 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/runs/new"));
   });
 
+  it("a stray ?owner=me in the User view still reads as first-run, not no-match", async () => {
+    // The User view forces owner=me server-side regardless of the URL, but
+    // the CLIENT'S OWN first-run/quiet checks must normalize it away too —
+    // otherwise Mine (meaningless here) reads as an active filter and an
+    // honestly-empty account shows "No runs match" instead of first-run.
+    listRunsFilteredMock.mockResolvedValue({ runs: [], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+    getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
+    renderScreen("user", "/runs?owner=me");
+    await screen.findByText("Runs you launch appear here");
+    expect(screen.queryByText("No runs match these filters.")).not.toBeInTheDocument();
+  });
+
+  it("group-by section ids never collide, even when two titles would slugify the same", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [
+        run({ id: "g1", task: "Fix: flaky test", state: "COMPLETED", ended_at: new Date().toISOString() }),
+        run({ id: "g2", task: "Fix flaky test", state: "COMPLETED", ended_at: new Date().toISOString() }),
+      ],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen(undefined, "/runs?group=title");
+    // Each title is its own one-run group, so the section heading and the
+    // row's own title link render the SAME text — role, not text, is what
+    // tells them apart.
+    await screen.findByRole("link", { name: "Fix: flaky test" });
+    await screen.findByRole("link", { name: "Fix flaky test" });
+    const headingIds = screen.getAllByRole("heading", { level: 2 }).map((h) => h.id);
+    expect(headingIds.length).toBe(2);
+    expect(new Set(headingIds).size).toBe(headingIds.length);
+  });
+
   it("'Earlier this week' expands on click and is aria-expanded", async () => {
     listRunsFilteredMock.mockResolvedValue({
       runs: [

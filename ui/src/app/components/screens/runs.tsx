@@ -14,6 +14,7 @@
 import * as React from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { FilterX, Hexagon } from "lucide-react";
+import { toast } from "sonner";
 import type { AgentRun, SetupStatus } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
 import { setup as setupApi } from "../../lib/api/setup";
@@ -31,14 +32,18 @@ import { RunsComposer } from "./runs/runs-composer";
 import { RunsFilterBar } from "./runs/runs-filter-bar";
 import { RunRowList } from "./runs/run-row";
 import {
+  applySavedViewOwner,
   DEFAULT_RUNS_FILTERS,
   parseRunsFilters,
+  runsFilterToServerOwner,
   runsFilterToServerStatus,
   runsFiltersAreDefault,
   serializeRunsFilters,
   type RunsFilterState,
 } from "./runs/runs-filters";
-import { isTopQuiet, sectionRuns, type RunSections } from "./runs/runs-model";
+import { isTopQuiet, nonAttentionRuns, sectionRuns, type RunSections } from "./runs/runs-model";
+import { groupRunsBy } from "./runs/runs-groups";
+import { BUILTIN_RUNS_VIEWS, loadSavedRunsViews, saveRunsView, type SavedRunsView } from "./runs/runs-saved-views";
 import {
   RUNS_AGED_WINDOW_LABEL,
   RUNS_INCLUDE_KILLED,
@@ -47,6 +52,7 @@ import {
   RUNS_SECTION,
   RUNS_SHOW_30,
   runsAgedNote,
+  runsViewSaved,
 } from "../wardyn/copy/runs-landing";
 
 const POLL_MS = 3000;
@@ -75,6 +81,13 @@ export function RunsScreen() {
   // not unmount the filter bar under it — see the render below.
   const [loadedOnce, setLoadedOnce] = React.useState(false);
   const [earlierOpen, setEarlierOpen] = React.useState(false);
+  // H-8: built-ins first, then whatever this browser has saved. Loaded once
+  // (localStorage is synchronous) and refreshed locally on Save — no fetch,
+  // no server round trip, per design.md §3.6.
+  const [savedViews, setSavedViews] = React.useState<SavedRunsView[]>(() => [
+    ...BUILTIN_RUNS_VIEWS,
+    ...loadSavedRunsViews(),
+  ]);
 
   // a slow response for an earlier keystroke's request must not
   // land after, and overwrite, a newer one's. Each call gets the next id;
@@ -85,6 +98,9 @@ export function RunsScreen() {
     return api
       .listRunsFiltered({
         view,
+        // Only meaningful in the Admin view (H-4) — the User view forces
+        // owner=me server-side regardless, so this never sends it there.
+        owner: adminView ? runsFilterToServerOwner(filters.scope) : undefined,
         status: runsFilterToServerStatus(filters.status),
         endedWithin: filters.endedWithin,
         includeKilled: filters.includeKilled,
@@ -105,7 +121,7 @@ export function RunsScreen() {
           throw err; // let load()'s own catch below turn this into "error"
         },
       );
-  }, [view, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q]);
+  }, [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q]);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -159,7 +175,16 @@ export function RunsScreen() {
     [runsList],
   );
 
-  const activeFilter = filters.q !== "" || filters.status !== "all" || filters.workspace !== "all";
+  // scope only ever narrows anything in the Admin view (H-4) — a stray
+  // ?owner=me surviving a view switch must not read as an active filter in
+  // the User view, which ignores it entirely (fetchRuns above never sends it
+  // there either).
+  const effectiveFilters = adminView ? filters : { ...filters, scope: "all" as const };
+  const activeFilter =
+    filters.q !== "" ||
+    filters.status !== "all" ||
+    filters.workspace !== "all" ||
+    effectiveFilters.scope !== "all";
   const nothingHidden = hiddenOlder + hiddenKilled === 0;
   // The true first-run state: this caller's OWN scoped fetch (server-scoped
   // by view/owner, unlike setup/status's has_runs, which is a bare
@@ -170,7 +195,7 @@ export function RunsScreen() {
   // filters, so a deliberate filter that matches nothing still reads as
   // "no match", never as first-run.
   const trueEmpty =
-    status === "ready" && runsList.length === 0 && nothingHidden && runsFiltersAreDefault(filters);
+    status === "ready" && runsList.length === 0 && nothingHidden && runsFiltersAreDefault(effectiveFilters);
   // the full-page skeleton is for the FIRST load only. A later
   // "loading" (a filter/search change re-running fetchRuns) is a refetch —
   // the filter bar (and its focused input) stays mounted; `refetching` below
@@ -179,7 +204,7 @@ export function RunsScreen() {
   const refetching = status === "loading" && loadedOnce;
   const noMatch = status === "ready" && !trueEmpty && runsList.length === 0 && (nothingHidden || activeFilter);
   const quiet =
-    status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(filters);
+    status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(effectiveFilters);
 
   // N counts every run the
   // caller owns, BEFORE filters and ageing (home-runs-1197-packet.html:672,
@@ -225,7 +250,21 @@ export function RunsScreen() {
         )
       ) : (
         <>
-          <RunsFilterBar filters={filters} workspaces={workspaceOptions} onChange={setFilters} />
+          <RunsFilterBar
+            filters={filters}
+            workspaces={workspaceOptions}
+            adminView={adminView}
+            currentSearch={searchParams.toString()}
+            savedViews={savedViews}
+            onChange={setFilters}
+            onSelectView={(search) =>
+              setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })
+            }
+            onSaveView={(name) => {
+              setSavedViews([...BUILTIN_RUNS_VIEWS, ...saveRunsView(name, searchParams.toString())]);
+              toast(runsViewSaved(name));
+            }}
+          />
 
           {refetching ? (
             <RunsLoadingSkeleton />
@@ -247,17 +286,33 @@ export function RunsScreen() {
               {quiet && <p className="rounded-xl border border-dashed border-border-strong px-3.5 py-2.5 text-sm text-muted-foreground">{RUNS_QUIET}</p>}
 
               <RunsSection title={adminView ? RUNS_SECTION.NEEDS_ADMIN : RUNS_SECTION.NEEDS} runs={sections.decide} />
-              <RunsSection title={RUNS_SECTION.RUNNING} runs={sections.running} />
-              <RunsSection title={RUNS_SECTION.ENDED_TODAY} runs={sections.endedToday} />
-              <RunsCollapsibleSection
-                title={RUNS_SECTION.EARLIER}
-                runs={sections.earlier}
-                open={earlierOpen}
-                onToggle={() => setEarlierOpen((o) => !o)}
-              />
-              {sections.older.map((bucket) => (
-                <RunsSection key={bucket.label} title={bucket.label} runs={bucket.runs} />
-              ))}
+              {/* H-3, Admin view only: owners' sign-ins and lost runs — the
+                  server never projects by=owner outside the Admin view, so
+                  this bucket is empty (and the section a no-op) in the User
+                  view regardless of this adminView gate. */}
+              {adminView && <RunsSection title={RUNS_SECTION.OWNER} runs={sections.waitingOwner} />}
+              {filters.group === "sections" ? (
+                <>
+                  <RunsSection title={RUNS_SECTION.RUNNING} runs={sections.running} />
+                  <RunsSection title={RUNS_SECTION.ENDED_TODAY} runs={sections.endedToday} />
+                  <RunsCollapsibleSection
+                    title={RUNS_SECTION.EARLIER}
+                    runs={sections.earlier}
+                    open={earlierOpen}
+                    onToggle={() => setEarlierOpen((o) => !o)}
+                  />
+                  {sections.older.map((bucket) => (
+                    <RunsSection key={bucket.label} title={bucket.label} runs={bucket.runs} />
+                  ))}
+                </>
+              ) : (
+                // H-6: Group by Workspace/Title replaces the time sections
+                // with one section per group — Needs you / Waiting on the
+                // owner above still show their own fixed sections either way.
+                groupRunsBy(nonAttentionRuns(runsList), filters.group).map((g) => (
+                  <RunsSection key={g.label} title={g.label} runs={g.runs} />
+                ))
+              )}
 
               <RunsAgedNote
                 older={hiddenOlder}
@@ -275,8 +330,13 @@ export function RunsScreen() {
 }
 
 function RunsSection({ title, runs }: { title: string; runs: AgentRun[] }) {
+  // React's own id, not a slug of `title` — Group by Workspace/Title (H-6)
+  // feeds arbitrary, caller-typed labels through here, and two different
+  // titles can slugify to the same string (or, for a non-Latin title, to the
+  // same empty one), which duplicated this section's own DOM id and left
+  // `aria-labelledby` resolving to the WRONG heading.
+  const id = React.useId();
   if (runs.length === 0) return null;
-  const id = `runs-sec-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section aria-labelledby={id}>
       <div className="mb-2 flex items-center gap-2">
@@ -305,8 +365,8 @@ function RunsCollapsibleSection({
   open: boolean;
   onToggle: () => void;
 }) {
+  const id = React.useId();
   if (runs.length === 0) return null;
-  const id = `runs-sec-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section aria-labelledby={id}>
       <button

@@ -308,10 +308,22 @@ export const DENIED = {
   // rule the grant must not appear to have lifted.
   ALWAYS_STILL_ADMIN: "Always is admin-only, even for a host you're granted.",
 
-  // New Run: workspace picker annotations. The list is NOT narrowed — visibility
-  // is not capability — so the ungranted rows say why they'll refuse.
+  // New Run: workspace picker annotation. The list is NOT narrowed — visibility
+  // is not capability — so every ungranted row still carries this chip.
   WORKSPACE_CHIP: "Not granted",
-  WORKSPACE_BODY: "A run against this workspace is refused at launch. Ask an admin to grant it to you.",
+
+  // #922 (UT-7c), the person side: an org workspace pinned to a model
+  // provider this caller's own filtered `/setup/status.model_providers` does
+  // not carry (available-to-prompt.md §7.4's "isn't available to you"
+  // family, the generic form). The console never learns the provider's own
+  // NAME for a value its own capability filtered away — MP-6a's
+  // capVisible(capModelProvider) drops the row whole, "so it reads exactly as
+  // a resource the deployment does not have" (#832) — so this names nothing,
+  // unlike the mock's own worked example, which had the row's name from an
+  // admin-only read. Reused for both the New Run picker's reason line
+  // (workspace-card.tsx) and the workspace's own surfaces (workspaces.tsx,
+  // workspace-detail.tsx).
+  WORKSPACE_NOT_AVAILABLE: "This workspace isn't available to you.",
 
   // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
   // are count-shaped copy for a preflight/Review surface Wardyn doesn't ship:

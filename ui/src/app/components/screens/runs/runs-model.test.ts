@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
-import { rowPresentation, sectionRuns, isTopQuiet } from "./runs-model";
+import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
@@ -220,6 +220,15 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
     expect(s.running.map((x) => x.id)).toEqual(["run-1"]);
   });
 
+  it("by=owner (reauth/ado_consent/lost, Admin view only) lands in waitingOwner, not decide or running", () => {
+    const reauth = run({ id: "w1", state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } });
+    const lost = run({ id: "w2", state: "RUNNING", attention: { kind: "lost", by: "owner", pending: 0 } });
+    const s = sectionRuns([reauth, lost], NOW);
+    expect(s.waitingOwner.map((r) => r.id)).toEqual(["w1", "w2"]);
+    expect(s.decide).toEqual([]);
+    expect(s.running).toEqual([]);
+  });
+
   // a lease-ended run (state still RUNNING, lost_reason "ended")
   // must land in the ENDED buckets, not Running — and its age is keyed on
   // lost_at (the lease end), not ended_at (absent) or updated_at.
@@ -236,8 +245,23 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
   });
 });
 
+describe("nonAttentionRuns — the flat list Group by Workspace/Title regroups (#1197 L4 H-6)", () => {
+  it("excludes decide and waitingOwner runs, keeps everything else in order", () => {
+    const decideRun = run({ id: "d1", attention: { kind: "approval", by: "you", pending: 1 } });
+    const ownerRun = run({ id: "w1", state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } });
+    const runningRun = run({ id: "r1", state: "RUNNING" });
+    const endedRun = run({ id: "e1", state: "COMPLETED", ended_at: new Date(NOW - 60_000).toISOString() });
+    const adminWaitRun = run({ state: "RUNNING", id: "a1", attention: { kind: "approval", by: "admin", pending: 1 } });
+    expect(nonAttentionRuns([decideRun, ownerRun, runningRun, endedRun, adminWaitRun]).map((r) => r.id)).toEqual([
+      "r1",
+      "e1",
+      "a1",
+    ]);
+  });
+});
+
 describe("isTopQuiet", () => {
-  it("true when decide and running are both empty, regardless of ended sections", () => {
+  it("true when decide, waitingOwner and running are all empty, regardless of ended sections", () => {
     const s = sectionRuns(
       [run({ id: "e1", state: "COMPLETED", ended_at: new Date(NOW - 60_000).toISOString() })],
       NOW,
@@ -247,6 +271,11 @@ describe("isTopQuiet", () => {
 
   it("false once anything needs you or is running", () => {
     const s = sectionRuns([run({ id: "r1", state: "RUNNING" })], NOW);
+    expect(isTopQuiet(s)).toBe(false);
+  });
+
+  it("false when only an owner's sign-in is waiting (#1197 L4 H-3) — that is not quiet either", () => {
+    const s = sectionRuns([run({ state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } })], NOW);
     expect(isTopQuiet(s)).toBe(false);
   });
 });
