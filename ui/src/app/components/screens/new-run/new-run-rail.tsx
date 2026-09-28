@@ -36,7 +36,7 @@ import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from 
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
@@ -95,6 +95,11 @@ interface RunRailProps {
      *  same sentence a second time. Optional so every other caller (this
      *  type's only other use is new-run-screen.tsx) is unaffected. */
     workspaceUnavailable?: boolean;
+    /** #214: a settled probe reports this host can build no barrier at
+     *  all — Launch disables for it (new-run-screen.tsx's own bit), and the
+     *  rail states the reason here, beside Launch, with a route to the step
+     *  that fixes it — never a tooltip on the disabled button. */
+    noBarrier?: boolean;
     error: string | null;
     /** Bumped on every failed launch (see use-launch.ts) so a repeated,
      *  identical failure remounts the alert region and is re-announced (#459). */
@@ -664,7 +669,7 @@ export function RunRail({
           ref={launchRef}
           type="button"
           className="flex-1"
-          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable}
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier}
           onClick={() => {
             autoOpened.current = false;
             void launch.onLaunch();
@@ -690,6 +695,20 @@ export function RunRail({
           launched yet. */}
       {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
+      )}
+      {/* #214 — the one control that genuinely cannot work says so beside
+          itself, not in a tooltip, with a route to the step that fixes it.
+          A separate line from `problem` above (never both: the Barrier
+          section's own TierPicker card already gives the detailed reason;
+          this is Launch's own, short pointer to the fix). */}
+      {launch.noBarrier && !launch.inFlight && (
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          {NO_BARRIER.LAUNCH_REASON}{" "}
+          <Link to={NO_BARRIER.ROUTE} className="font-medium text-info hover:underline">
+            {NO_BARRIER.CTA}
+          </Link>
+          .
+        </p>
       )}
 
       {preflight.error && (

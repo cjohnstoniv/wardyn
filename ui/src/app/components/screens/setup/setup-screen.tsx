@@ -19,7 +19,7 @@
 // below still dismisses the funnel's own "seen it" flag (setup-gate.ts), which
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import type {
   ConfinementClass,
@@ -53,7 +53,7 @@ import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
-import { SITE } from "../../wardyn/copy";
+import { NO_BARRIER, SITE } from "../../wardyn/copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   OPTIONAL_STEPS,
@@ -792,6 +792,26 @@ export function SetupScreen({
       }
     : undefined;
 
+  // #214 — Setup cannot finish on a host with no barrier: this is the one
+  // decision the maintainer was most warned about, and it is deliberate.
+  // `readiness.barrierReady` is the SAME fact the New Run rail's own
+  // no-barrier reason reads (lib/readiness.ts's deriveReadiness), so a
+  // person meets one sentence and one route wherever this blocks them.
+  const finishGate = !readiness.barrierReady
+    ? {
+        head: NO_BARRIER.FINISH_GATE_HEAD,
+        reason: (
+          <>
+            {NO_BARRIER.FINISH_GATE_REASON}{" "}
+            <Link to={NO_BARRIER.ROUTE} className="font-medium text-info hover:underline">
+              {NO_BARRIER.CTA}
+            </Link>
+            .
+          </>
+        ),
+      }
+    : undefined;
+
   return (
     <>
       <SetupLayout
@@ -819,6 +839,7 @@ export function SetupScreen({
         onSelect={selectStep}
         onFinish={finish}
         nextGate={nextGate}
+        finishGate={finishGate}
         backOverride={
           stepId === "corp_network" && corpTab === "egress"
             ? () => setCorpTab("proxy")

@@ -260,6 +260,34 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
   });
 
+  // #214 — Setup cannot finish on a host with no barrier: the SAME fact
+  // (readiness.barrierReady) that disables New Run's own Launch button also
+  // disables Finish setup, with the reason stated beside it and a route back
+  // to the Environment step — never a tooltip on the disabled button.
+  it("#214: Finish setup is disabled with a stated reason on a host with no barrier", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByRole("heading", { name: /pick your barrier/i });
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await screen.findByRole("heading", { name: /^network$/i });
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^next: review$/i }));
+    await screen.findByRole("heading", { name: /review readiness/i });
+
+    const finishButton = screen.getByRole("button", { name: /finish setup/i });
+    expect(finishButton).toBeDisabled();
+    expect(screen.getByText("Setup can't finish without a barrier.")).toBeInTheDocument();
+    expect(screen.getByText(/wardyn confines every run/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /set up a barrier/i })).toHaveAttribute(
+      "href",
+      "/setup?step=environment",
+    );
+  });
+
   // The same coverage the old linear walk gave each optional step — reached
   // from the rail now, since Next no longer passes through any of them.
   // M-6 (D5) moved every demo out of this funnel entirely (see

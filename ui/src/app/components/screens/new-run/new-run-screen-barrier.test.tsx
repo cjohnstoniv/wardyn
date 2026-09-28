@@ -59,7 +59,7 @@ vi.mock("../../../lib/capabilities", async () => {
 import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RUN } from "../../wardyn/copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -478,5 +478,31 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
     expect(screen.getByLabelText("Initial prompt (optional)")).toHaveValue("from the composer");
     expect(screen.queryByText(RUN.CLONE_NOTE)).toBeNull();
     expect(screen.queryByText(RUN.CLONE_CEILING_NOTE)).toBeNull();
+  });
+});
+
+// #214 — a SETTLED probe reporting zero classes (Docker reachable, nothing
+// installed): the host genuinely cannot build any barrier, so Launch itself
+// must be disabled, not just every tier — the one control that cannot work
+// must not be the one that looks ready. Distinct from the T-9 floor-only
+// case above (host HAS a tier; the run's own floor forbids all of them) —
+// that stays a policy choice, never a reason Launch can never work here.
+describe("NewRunScreen — #214: no barrier at all on this host disables Launch", () => {
+  it("disables Launch and states the reason with a route to the Environment step", async () => {
+    mockConfinementClasses = [];
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: NO_BARRIER.CTA });
+    expect(link).toHaveAttribute("href", NO_BARRIER.ROUTE);
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
+  });
+
+  it("a host WITH a barrier never shows the no-barrier reason, and Launch is not disabled by it", async () => {
+    mockConfinementClasses = ["CC1"];
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Has a barrier");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled());
+    expect(screen.queryByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeNull();
   });
 });

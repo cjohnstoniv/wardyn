@@ -45,3 +45,15 @@ export const RUN = {
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
 } as const;
 
+// #214 (mock approved 2026-09-20) — a host with no confinement class it can
+// enforce says so, rather than leaving Launch clickable for a run that can
+// only fail after the click. LAUNCH_REASON/FINISH_GATE_* are stated beside
+// the control they block, never in a tooltip.
+export const NO_BARRIER = {
+  CTA: "Set up a barrier",
+  ROUTE: "/setup?step=environment",
+  LAUNCH_REASON: "No barrier can be built on this host, so no run can be confined.",
+  FINISH_GATE_HEAD: "Setup can't finish without a barrier.",
+  FINISH_GATE_REASON: "Wardyn confines every run.",
+} as const;
+
