@@ -1227,6 +1227,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A long run's session recording now reaches the control plane while the run is still going
+  (#577).** `wardyn-rec` tails its own asciicast and uploads it in parts, every 24 hours or as soon
+  as 32 MiB is waiting (half the 64 MiB upload cap, leaving masking room to lengthen a part): each
+  part is the cast's header line followed by whole event lines, so each is a valid asciicast v2
+  document and no event is split between two masked uploads. Part 1 is the same request a short
+  run has always made; part 2 onward goes through the proxy's recording route as
+  `PUT /wardyn/v1/recordings/{run}/parts/{n}` and is stored beside it. The replay and the
+  Recordings list join the parts into one cast; a part whose header differs from part 1's (an
+  earlier cast of the same run) ends the join. A run past 64 MiB of terminal output used to lose
+  its whole recording to a 413 at exit, and a run lost before exit lost all of it; now at most the
+  span since the last part is lost. A `.log` fallback recording still uploads whole at exit. A
+  run's cast is stored as at most 2048 parts; a higher part is refused (413, audited
+  `recording.upload` with `reason: part_limit`) and not stored. Each upload's deadline now grows
+  with its size (20 seconds plus the body at 2 Mbit/s), so a full part is not held to 20 seconds.
+
 - **Console branding (#1125).** A super admin sets the organisation's name, how the product name
   reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an
   optional dark-mode pair (derived when unset), a logo (SVG or PNG, at most 512 KB) and an optional

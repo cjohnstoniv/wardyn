@@ -901,3 +901,18 @@ type Person struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
 }
+
+// RecordingMaxParts bounds how many parts one run's session recording may be
+// stored as (RL-12: wardyn-rec uploads a long run's cast every 24 h, or as soon
+// as half the 64 MiB per-upload cap is waiting). It exists for the reason that
+// cap does: a hostile sandbox must not grow its stored recording without bound,
+// and the Recordings list reads every part of a run.
+//
+// No existing limit bounds the honest part count: a governance profile may let
+// a run have no end, and the deployment's ephemeral disk ceiling is optional.
+// So this is a named ceiling, sized so an honest run does not reach it: 2048
+// parts is more than five and a half years of 24 h parts, or 64 GiB of
+// terminal output in 32 MiB parts, and bounds one run's store at 2048 uploads
+// of at most 64 MiB (128 GiB) and a replay or list render at 2048 reads. The
+// control plane refuses a higher part (413), and the proxy never forwards one.
+const RecordingMaxParts = 2048
