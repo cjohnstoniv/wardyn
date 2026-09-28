@@ -75,8 +75,14 @@ its hosts join the run's egress allowlist unconditionally, even under
 `allow_all_egress` (the proxy's credential injector does not honor allow-all, so
 the exact-host entry has to be there regardless), and a header-delivering
 integration authors one `api_key` grant per host through the ordinary proxy-side
-injection path. An operator with fifty integrations configured and a workspace
-that names none of them gets a run whose spec is byte-identical to having none.
+injection path — except on a host that serves a model (a model vendor's API, a
+configured gateway, the Bedrock hosts), where the credential is skipped and
+audited (`run.requirement.skip`, reason `model_host`): a model credential comes
+only from the run's model provider (0.8, #547). A `secret:<name>` requirement is
+skipped the same way, always — its grant was the agent's model host — so it
+grants nothing (`skipRequiredSecret`, `internal/api/runs_create_requirements.go`).
+An operator with fifty integrations configured and a workspace that names none of
+them gets a run whose spec is byte-identical to having none.
 
 That fold degrades silently by design — a workspace may state an
 `integration:<id>` requirement before the integration exists, and a missing one

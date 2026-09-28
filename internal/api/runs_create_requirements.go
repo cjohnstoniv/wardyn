@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -21,7 +20,8 @@ import (
 // sandbox.
 
 // requirementAuditEntry is one audit-worthy fact applyWorkspaceRequirements
-// produced (an auto-attached secret grant, or a non-empty egress addition).
+// produced (a non-empty egress addition, an integration injection, or a
+// credential it skipped).
 // applyWorkspaceRequirements itself never audits — the "fold" is separated from
 // "audit" (the create path emits the events once the
 // run id is minted) so preflight, which persists nothing, can call the SAME
@@ -29,7 +29,9 @@ import (
 type requirementAuditEntry struct {
 	action string
 	target string
-	data   map[string]any
+	// outcome is the audit row's outcome; "" is "success".
+	outcome string
+	data    map[string]any
 }
 
 // resolveWorkspaceSelections builds the per-workspace selection map
@@ -73,14 +75,11 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 //     (mirrors unionWorkspaceEgress's own unconditional append). Optional
 //     unions it ONLY when the run's selection lists the key in
 //     EnabledOptional.
-//   - secret:<NAME>  Required+operator_set mints the SAME api_key-style grant
-//     shape the pre-Integration applyWorkspaceCreds used for a workspace's
-//     api_key binding (git history: `git show ecc1903~1:internal/api/llmcred.go`,
-//     the pre-Integration api_key case), scoped to the run's agent's own
-//     model-provider host (applyRequiredSecretGrant). Required+scan_seeded
-//     NEVER auto-grants — see the TRUST BOUNDARY comment below. An optional
-//     secret follows the identical rule, gated additionally on the run's
-//     selection enabling the key.
+//   - secret:<NAME>  Grants nothing. It used to mint an api_key grant on the
+//     run's agent's model host from the named stored secret; model access is a
+//     model provider now, so an operator_set one is recorded as an audited skip
+//     (skipRequiredSecret) and a scan_seeded one is ignored, as before (the
+//     TRUST BOUNDARY comment below).
 //   - write:<path>   Resolves the SOURCE's effective writability onto every
 //     already-seeded mount at that path: Required defaults writable, Optional
 //     defaults read-only unless enabled — and the per-run ReadOnly selection
@@ -88,7 +87,7 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 //     applyWriteNarrowing).
 //   - integration:<id>  Unions the named integration's hosts into
 //     AllowedDomains and, when it delivers a credential by header, authors the
-//     proxy-side injection grant for each of them
+//     proxy-side injection grant for each of them that serves no model
 //     (applyIntegrationRequirement, integrations_run.go). This is the ONLY way
 //     an integration reaches a run: configuring one grants nothing by itself.
 //
@@ -174,10 +173,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				if req.Provenance != "operator_set" {
 					continue
 				}
-				if present == nil {
-					present = s.presentSecretNames(ctx)
-				}
-				if ev, ok := s.applyRequiredSecretGrant(present, spec, agent, name); ok {
+				if ev, ok := s.skipRequiredSecret(agent, name); ok {
 					events = append(events, ev)
 				}
 			case "integration":
@@ -198,9 +194,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					integrationRows = s.effectiveIntegrations(ctx, present)
 					integrationRowsLoaded = true
 				}
-				if ev, ok := s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name); ok {
-					events = append(events, ev)
-				}
+				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name)...)
 			case "write":
 				applyWriteNarrowing(spec, name, enabled, sel.ReadOnly)
 			}
@@ -228,48 +222,34 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 	return ws.Requirements
 }
 
-// applyRequiredSecretGrant mints the api_key-style grant an operator-declared
-// required (or enabled-optional) secret requirement promises, coupling it to
-// an exact egress allowlist entry — the SAME grant/injection/egress shape the
-// pre-Integration applyWorkspaceCreds used for a workspace's api_key binding
-// (git history: `git show ecc1903~1:internal/api/llmcred.go`,
-// pre-Integration api_key case), scoped to the run's AGENT's own
-// model-provider host (agentLLMProvider) — the only host this generic
-// requirement key has any deterministic binding to. ok=false — no grant, no
-// mutation — when: the agent has no LLM-provider convention (nothing to bind
-// to); a grant for that host is already proposed (never double-grant the same
-// host — whichever caller proposed it first wins, mirroring
-// applyIntegrationInjection); or the named secret is not actually
-// stored (an auto-mint grant with no resolvable secret would fail the proxy
-// CLOSED at startup — degrade silently to no-model-access instead of bricking
-// the run; compose_setup.go's checklist escalates the gap to blocking styling).
-func (s *Server) applyRequiredSecretGrant(present map[string]bool, spec *types.RunPolicySpec, agent, secretName string) (requirementAuditEntry, bool) {
+// reasonRequirementModelHost is the named reason a requirement's credential is
+// skipped rather than granted: the host it would land on serves a model, and a
+// model credential comes only from the run's model provider, on the run
+// owner's own credential. A `secret:` requirement ALWAYS lands there (its
+// grant was scoped to the agent's model host), so it never grants; an
+// integration requirement skips just those hosts. Granting either would hand
+// the run a stored secret — the operator's, on a member's run — as its model
+// key (#547).
+const reasonRequirementModelHost = "model_host"
+
+// requirementSkip is the audit entry for a requirement credential the fold
+// declined to grant, named by what it would have granted and why.
+func requirementSkip(target string, data map[string]any) requirementAuditEntry {
+	data["reason"] = reasonRequirementModelHost
+	return requirementAuditEntry{action: "run.requirement.skip", target: target, outcome: "denied", data: data}
+}
+
+// skipRequiredSecret is the whole of a `secret:` requirement's fold now: an
+// audited skip, never a grant. The key was only ever granted on the run's
+// agent's model host (agentLLMProvider — the one host a bare secret name had
+// any binding to), which is exactly the grant model providers replace. A
+// non-model agent had nothing to bind to and still has nothing to record.
+func (s *Server) skipRequiredSecret(agent, secretName string) (requirementAuditEntry, bool) {
 	p, ok := s.llmProviderFor(agent)
 	if !ok {
 		return requirementAuditEntry{}, false
 	}
-	if _, exists := apiKeyGrantForHost(spec, p.host); exists {
-		return requirementAuditEntry{}, false
-	}
-	if !present[secretName] {
-		return requirementAuditEntry{}, false
-	}
-	scope, _ := json.Marshal(map[string]string{
-		"host": p.host, "header": p.header, "format": p.format, "secret_name": secretName,
-	})
-	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
-		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
-	})
-	// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all:
-	// AllowedExactHost does not honor allow-all, so a grant whose host
-	// is missing from AllowedDomains fails the proxy injector closed at startup
-	// (zero egress) — e.g. a required operator_set secret on an allow_all_egress
-	// ceiling would otherwise brick every run granted it.
-	unionAllowedDomains(spec, []string{p.host})
-	return requirementAuditEntry{
-		action: "run.requirement.grant", target: secretName,
-		data: map[string]any{"secret_name": secretName, "host": p.host},
-	}, true
+	return requirementSkip(secretName, map[string]any{"secret_name": secretName, "host": p.host}), true
 }
 
 // applyWriteNarrowing resolves ONE write:<path> requirement's effective mount

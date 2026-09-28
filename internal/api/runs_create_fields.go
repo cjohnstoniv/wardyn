@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -122,7 +123,7 @@ func runFieldCharsAllowed(v string, multiline bool) bool {
 // the next lane to do.
 func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID, reqEvents []requirementAuditEntry) {
 	for _, ev := range reqEvents {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, "success", mustJSON(ev.data)))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, cmp.Or(ev.outcome, "success"), mustJSON(ev.data)))
 	}
 }
 

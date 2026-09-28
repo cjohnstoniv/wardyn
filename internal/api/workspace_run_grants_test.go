@@ -152,55 +152,12 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	}
 }
 
-// TestLaunchRecordRun_RequiredSecretRowRidesAlong: a workspace's required
-// secret: contract row must ride a record/verify session the same way it rides
-// a real run — the Verify carry card (step-requirements.tsx) promises "N
-// required secrets ride proxy-side", so launchRecordRun must not hand-roll
-// only the integration: case (requiredIntegrationIDs) and drop every secret:
-// row. Local-dir workspace (no repo source) isolates the assertion to exactly
-// the one grant the required secret produces — a repo source would also add
-// its own github_token clone grant.
-func TestLaunchRecordRun_RequiredSecretRowRidesAlong(t *testing.T) {
-	h := newHarness(t)
-	wsID := uuid.New()
-	ws := types.Workspace{
-		ID:      wsID,
-		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/work/acme"}},
-		Status:  types.WorkspaceScanned,
-		Requirements: map[string]types.WorkspaceRequirement{
-			"secret:acme-deploy-key": {Level: "required", Provenance: "operator_set"},
-		},
-	}
-	fake := &fkGrantStore{runs: map[uuid.UUID]types.AgentRun{}, importStateFake: importStateFake{ws: ws}}
-	cfg := baseTestConfig(h, fake)
-	cfg.Runner = &fakeRunner{}
-	cfg.Broker = h.broker
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-deploy-key": []byte("v")}}
-	srv := New(cfg)
-
-	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", ws, "build", "build", false)
-	if err != nil {
-		t.Fatalf("launchRecordRun on a workspace with a required secret row failed: %v", err)
-	}
-	kinds := fake.grantKinds()
-	if len(kinds) != 1 || kinds[0] != types.GrantAPIKey {
-		t.Fatalf("record run must persist exactly one api_key grant for the required secret row; got %v", kinds)
-	}
-	var scope struct {
-		SecretName string `json:"secret_name"`
-	}
-	if err := json.Unmarshal(fake.grants[0].Spec.Scope, &scope); err != nil {
-		t.Fatalf("decode grant scope: %v", err)
-	}
-	if scope.SecretName != "acme-deploy-key" {
-		t.Errorf("grant scope.secret_name = %q, want the required row's own secret (acme-deploy-key)", scope.SecretName)
-	}
-}
-
-// TestLaunchRecordRun_RequiredSecretIsAudited: the requirement grant a record
-// session mints writes the same audit row POST /runs writes for it, bound to
-// the session's run.
-func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
+// TestLaunchRecordRun_RequiredSecretIsSkippedAndAudited: a record/verify
+// session folds a workspace's requirements the same way a real run does, so a
+// required operator_set secret: row is not granted there either (#547) — its
+// grant was the model host's — and the session records the same audited skip
+// POST /runs records, bound to the session's run.
+func TestLaunchRecordRun_RequiredSecretIsSkippedAndAudited(t *testing.T) {
 	h := newHarness(t)
 	ws := types.Workspace{
 		ID:      uuid.New(),
@@ -223,12 +180,16 @@ func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launchRecordRun: %v", err)
 	}
-	rows := audit.find("run.requirement.grant")
-	if len(rows) != 1 {
-		t.Fatalf("record launch wrote %d run.requirement.grant rows; want 1", len(rows))
+	if kinds := fake.grantKinds(); len(kinds) != 0 {
+		t.Fatalf("record run persisted grants %v, want none — a secret: requirement grants nothing", kinds)
 	}
-	if rows[0].Target != "acme-deploy-key" || rows[0].RunID == nil || *rows[0].RunID != run.ID {
-		t.Errorf("audit row target=%q run=%v; want acme-deploy-key bound to run %s", rows[0].Target, rows[0].RunID, run.ID)
+	rows := audit.find("run.requirement.skip")
+	if len(rows) != 1 {
+		t.Fatalf("record launch wrote %d run.requirement.skip rows; want 1", len(rows))
+	}
+	if rows[0].Target != "acme-deploy-key" || rows[0].Outcome != "denied" || rows[0].RunID == nil || *rows[0].RunID != run.ID {
+		t.Errorf("audit row target=%q outcome=%q run=%v; want acme-deploy-key, denied, bound to run %s",
+			rows[0].Target, rows[0].Outcome, rows[0].RunID, run.ID)
 	}
 }
 

@@ -799,8 +799,8 @@ func runNeedsModelWarning(req createRunRequest) bool {
 func noModelAccessWarning(agent string, p llmProvider, managedClaudePresent bool) string {
 	msg := fmt.Sprintf(
 		"no model credential resolves for agent %q — this run will boot and fail on its first model call (it needs %s "+
-			"access via a %q secret, a bound workspace/integration credential, or Bedrock).",
-		agent, p.host, p.secret)
+			"access: set up a model provider for it under Settings → Model providers, and connect your own credential).",
+		agent, p.host)
 	if managedClaudePresent && agent != "claude-code" {
 		msg += " A Wardyn-managed Claude subscription is connected, but it credentials claude-code only — " +
 			"use --agent claude-code, or connect a credential for this agent."

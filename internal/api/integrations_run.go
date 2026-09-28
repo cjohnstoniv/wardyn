@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -63,11 +64,16 @@ import (
 // `present` is the caller's presence map — the SAME one `rows` was derived
 // from (applyWorkspaceRequirementsFor), owner-scoped on a request so a member's
 // own key both synthesises its row AND passes the stored-secret guard below.
-func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[string]bool, rows []integrationRow, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
+func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[string]bool, rows []integrationRow, spec *types.RunPolicySpec, id string) []requirementAuditEntry {
 	integ, found := resolveIntegrationRefFrom(rows, id)
 	if !found || integ.Disabled || len(integ.Egress) == 0 {
-		return requirementAuditEntry{}, false
+		return nil
 	}
+	// A host that serves a model never takes an integration's credential: a
+	// model credential comes only from the run's model provider. The host
+	// still opens; the credential is skipped, audited on its own row.
+	modelHosts := slices.DeleteFunc(slices.Clone(integ.Egress), func(h string) bool { return !s.isModelProviderRejectHost(h) })
+	var events []requirementAuditEntry
 	disabledCap := make(map[string]bool, len(integ.DisabledCapabilities))
 	for _, capID := range integ.DisabledCapabilities {
 		disabledCap[capID] = true
@@ -76,24 +82,27 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	if !disabledCap["egress_host"] {
 		addedEgress = unionAllowedDomains(spec, integ.Egress)
 	}
+	_, header, _, hasHeader := integ.HeaderSecret()
 	if !disabledCap["credential"] {
-		grantedHosts = applyIntegrationInjection(present, spec, integ)
+		grantedHosts = applyIntegrationInjection(present, spec, integ, modelHosts)
+		if hasHeader && len(modelHosts) > 0 {
+			events = append(events, requirementSkip(id, map[string]any{"integration_id": id, "hosts": modelHosts}))
+		}
 	}
 	if len(addedEgress) == 0 && len(grantedHosts) == 0 {
 		// Everything this row offers was already on the spec (another workspace
 		// requires the same integration, or a policy already listed its hosts),
 		// or both capabilities are switched off. Nothing changed, so there is
-		// nothing to audit.
-		return requirementAuditEntry{}, false
+		// nothing more to audit.
+		return events
 	}
-	_, header, _, _ := integ.HeaderSecret()
-	return requirementAuditEntry{
+	return append(events, requirementAuditEntry{
 		action: "run.requirement.inject", target: id,
 		data: map[string]any{
 			"integration_id": id, "added_domains": addedEgress,
 			"injected_hosts": grantedHosts, "header": header,
 		},
-	}, true
+	})
 }
 
 // applyIntegrationInjection authors the proxy-side credential grants for a
@@ -140,7 +149,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 //   - a host that already has an api_key grant is left alone — never
 //     double-grant a host, mirroring applyRequiredSecretGrant.
 //     Whichever caller proposed it first wins.
-func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration) []string {
+func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration, skip []string) []string {
 	// HeaderSecret is the row's proxy_header-delivered secret; an empty stored
 	// format is already materialized as "%s" (the raw secret IS the header
 	// value — the right default for a custom credential header like x-api-key
@@ -152,7 +161,7 @@ func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpe
 	}
 	var granted []string
 	for _, host := range integ.Egress {
-		if !bareExactHost(host) {
+		if !bareExactHost(host) || slices.Contains(skip, host) {
 			continue
 		}
 		if _, exists := apiKeyGrantForHost(spec, host); exists {

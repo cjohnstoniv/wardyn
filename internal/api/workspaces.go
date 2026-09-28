@@ -32,17 +32,22 @@ import (
 // llm_cred, which strict decoding then made unsettable from the SDK).
 type workspaceRequest = client.WorkspaceRequest
 
-// validateWorkspaceLLMCred checks an operator-supplied cred binding: a NAME
-// only — whether the named Integration actually exists/resolves is
-// resolveWorkspaceIntegration's job (llmcred.go), and whether the named
-// provider admits a run is enforceRunModelProvider's. nil, or empty refs
-// (clears the binding), is always valid.
+// llmCred400IntegrationRef refuses a workspace pin to an integration.
+const llmCred400IntegrationRef = "llm_cred.integration_ref no longer chooses a model credential: pin a model provider (llm_cred.provider_ref) instead"
+
+// validateWorkspaceLLMCred checks an operator-supplied cred binding: a
+// provider NAME only — whether the named provider admits a run is
+// enforceRunModelProvider's. nil, or empty refs (clears the binding), is
+// always valid.
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 	if c == nil {
 		return ""
 	}
-	if c.IntegrationRef != "" && !repoFieldSafe(c.IntegrationRef) {
-		return fmt.Sprintf(repoField400Charset, "llm_cred.integration_ref")
+	// An integration no longer chooses a model credential, so a pin to one is
+	// refused rather than stored inert. One stored before 0.8 stays for the
+	// conversion to model providers to read.
+	if c.IntegrationRef != "" {
+		return llmCred400IntegrationRef
 	}
 	if c.ProviderRef != "" && !modelProviderIDPattern.MatchString(c.ProviderRef) {
 		return fmt.Sprintf("llm_cred.provider_ref: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters", c.ProviderRef)

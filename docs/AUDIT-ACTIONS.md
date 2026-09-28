@@ -147,7 +147,7 @@ the same test checks every row of those tables.
 | `run.workspace.collide` | Launch refused because the workspace is already in use by another run | `other_runs` | `internal/api/runs.go#Server.warnWorkspaceCollision` | internal | — |
 | `run.requirement.allow` | A workspace-needs-scanner egress requirement is satisfied at launch | `added_domains`, `workspace_id` | `internal/api/runs_create_requirements.go#Server.applyWorkspaceRequirementsFor` | internal | — |
 | `run.requirement.inject` | A workspace-needs-scanner integration requirement is satisfied at launch | `header`, `injected_hosts`, `integration_id` | `internal/api/integrations_run.go#Server.applyIntegrationRequirement` | internal | — |
-| `run.requirement.grant` | A workspace-needs-scanner secret requirement is satisfied at launch | `host`, `secret_name` | `internal/api/runs_create_requirements.go#Server.applyRequiredSecretGrant` | internal | — |
+| `run.requirement.skip` | A workspace requirement's credential that would have landed on a host that serves a model is not granted (#547): a model credential comes only from the run's model provider. `outcome=denied`, `reason` `model_host`. A `secret:<name>` requirement always lands there (its grant was the agent's model host), so it is always skipped, naming `secret_name` and `host`; an integration requirement skips just those `hosts` and still opens them, naming `integration_id` | `host`, `hosts`, `integration_id`, `reason`, `secret_name` | `internal/api/runs_create_requirements.go#requirementSkip` | internal | — |
 
 ## Workspaces & sources
 
@@ -527,9 +527,10 @@ is `types.ActorSystem` and `Actor` is a fixed component name
   `omitempty`'d away on a given event (e.g. `error` only appears on a
   `failure` outcome).
 - Retired in 0.8 (#547), with the AI-kind integrations: `run.workspace_cred.resolve`
-  (an AI integration folded into a run's model access) and `authz.denied`'s
-  `capability_integration` reason. Neither is emitted any more; rows written before
-  the upgrade keep them.
+  (an AI integration folded into a run's model access), `run.requirement.grant` (a
+  `secret:` requirement's grant on the agent's model host — now `run.requirement.skip`)
+  and `authz.denied`'s `capability_integration` reason. None is emitted any more; rows
+  written before the upgrade keep them.
 - Two related documents cover ground already: `docs/OPERATIONS.md`'s "Every
   denial that isn't a 404" owns `authz.denied`'s `reason` vocabulary in full,
   and `docs/SSH.md`'s "Audit actions" owns the four `ssh.*` actions — both are

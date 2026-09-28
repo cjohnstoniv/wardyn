@@ -71,10 +71,16 @@ type grantView struct {
 // because the console does not render this field yet.
 func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant) []grantView {
 	out := make([]grantView, len(grants))
-	var inert []string
+	var inert, retired []string
 	for i, g := range grants {
 		out[i] = grantView{CapabilityGrant: g}
-		if canonical, err := canonicalGrantValue(g.Capability, g.Value); err != nil || canonical != g.Value {
+		switch canonical, err := canonicalGrantValue(g.Capability, g.Value); {
+		case !validCapabilityKind(g.Capability):
+			// A retired kind ("integration", 0.8): no door asks about it, and
+			// the write boundary refuses it, so re-saving is no remedy.
+			out[i].Inert = true
+			retired = append(retired, g.Capability+"="+g.Value)
+		case err != nil || canonical != g.Value:
 			out[i].Inert = true
 			inert = append(inert, g.Capability+"="+g.Value)
 		}
@@ -83,6 +89,11 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 		slog.WarnContext(r.Context(), "api: capability grants stored before the per-kind value rule can never match anything",
 			"grants", len(grants), "inert", len(inert), "values", strings.Join(inert, ", "),
 			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name")
+	}
+	if len(retired) > 0 {
+		slog.WarnContext(r.Context(), "api: capability grants of a retired kind can never match anything",
+			"grants", len(grants), "retired", len(retired), "values", strings.Join(retired, ", "),
+			"remedy", "delete each row through DELETE /api/v1/permissions/grants/{id} — the kind is retired and nothing asks about it")
 	}
 	return out
 }

@@ -470,6 +470,19 @@ the one they name, the one a workspace pins and the agent's default alike
 admin pin: every model credential is the person's own, so a pin is no admin
 grant of access, and a pin naming an ungranted provider
 refuses the run rather than falling through to another provider.
+Since #547 nothing admin-authored hands a run a model credential in the
+provider's place: a run's `integration_id` is refused, an AI-integration pin
+or site default grants nothing, and a workspace requirement never authors a
+grant on a host that serves a model — a `secret:<name>` requirement (whose
+grant was always the agent's model host) and an integration requirement's
+header credential on such a host are skipped and audited
+(`run.requirement.skip`, reason `model_host`; `skipRequiredSecret`,
+`applyIntegrationRequirement`). Under a provider block, dispatch also strips
+every model-host injection its arm did not author (`dropLegacyModelInjections`)
+before the arm adds its own, so no other grant can sit beside it. Until #549
+retires them, the operator-credential lanes that remain are the managed and
+host-mounted subscription, operator Bedrock config, and an `api_key` grant a
+run's own policy carries.
 `image` WIDENS — without both its switch on and an exact-ref grant a member cannot
 name a custom image at all. `devcontainer_repo` is deliberately not a kind and
 stays unconditionally admin-only: it executes attacker-authored build

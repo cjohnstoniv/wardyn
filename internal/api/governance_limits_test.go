@@ -602,10 +602,10 @@ func TestCeilingDeniedWorkspaceEgressWarning(t *testing.T) {
 // unguarded door.
 //
 // REFUSED, never silently dropped: a member who sees a 201 believes the
-// workspace is bound to the integration they named.
+// workspace is bound to the provider they named.
 func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
-	const body = `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`
+	const body = `{"name":"mine","llm_cred":{"provider_ref":"corp-openai"}}`
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
 		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), body)
@@ -634,7 +634,7 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if created.LLMCred == nil || created.LLMCred.IntegrationRef != "corp-openai" {
+	if created.LLMCred == nil || created.LLMCred.ProviderRef != "corp-openai" {
 		t.Errorf("llm_cred = %+v, want the operator's binding persisted", created.LLMCred)
 	}
 
@@ -751,6 +751,34 @@ func TestCapabilityAgentKind(t *testing.T) {
 			t.Fatalf("an agent-less request was refused by the agent kind: %s", w.Body.String())
 		}
 	})
+}
+
+// TestWorkspaceLLMCred_IntegrationRefRefused pins #547 on the workspace doors:
+// an integration no longer chooses a model credential, so a pin to one is
+// refused on create and on PUT /workspaces/{id}/llm-cred alike, never stored
+// inert.
+func TestWorkspaceLLMCred_IntegrationRefRefused(t *testing.T) {
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admin, `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), llmCred400IntegrationRef) {
+		t.Fatalf("create with integration_ref = %d %s, want 400 %q", w.Code, w.Body.String(), llmCred400IntegrationRef)
+	}
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admin, `{"name":"mine"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", w.Code, w.Body.String())
+	}
+	var ws types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &ws); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	w = doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+ws.ID.String()+"/llm-cred", admin, `{"integration_ref":"corp-openai"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), llmCred400IntegrationRef) {
+		t.Fatalf("PUT llm-cred with integration_ref = %d %s, want 400 %q", w.Code, w.Body.String(), llmCred400IntegrationRef)
+	}
+	if got, _ := st.GetWorkspace(context.Background(), ws.ID); got.LLMCred != nil && got.LLMCred.IntegrationRef != "" {
+		t.Errorf("stored llm_cred = %+v, want no integration pin", got.LLMCred)
+	}
 }
 
 // an AI-kind integration grants no model credential
