@@ -56,13 +56,14 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	raw := strings.TrimSpace(principalParam(r))
 	if raw == "" {
 		s.auditOwnerRefusal(r, "credential.erase", "", "blank_principal")
-		writeError(w, http.StatusBadRequest, "name the person whose credentials to erase")
+		writeErrorReason(w, http.StatusBadRequest, reasonCredentialErasePrincipalRequired, "name the person whose credentials to erase")
 		return
 	}
 	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
 	if refusal != "" {
-		s.auditOwnerRefusal(r, "credential.erase", raw, ownerRefusalReason(refusal))
-		writeError(w, http.StatusUnprocessableEntity, eraseRefusalMsg(refusal))
+		reason := ownerRefusalReason(refusal)
+		s.auditOwnerRefusal(r, "credential.erase", raw, reason)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
 	rep, err := secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)
@@ -80,7 +81,7 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(data, owner, known)))
 		if errors.Is(err, secretstore.ErrOperatorNamespace) {
-			writeError(w, http.StatusBadRequest, "that names the operator namespace, which is not a person's")
+			writeErrorReason(w, http.StatusBadRequest, reasonCredentialEraseOperatorNamespace, "that names the operator namespace, which is not a person's")
 			return
 		}
 		writeServerError(w, r, "erase credentials", err)

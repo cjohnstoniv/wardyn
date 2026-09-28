@@ -31,14 +31,26 @@ var strictRefusals bool
 // An unregistered reason fails closed: 500, never the 403 the door meant, so
 // the only way to ship a new reason is to register it (and document it, which
 // TestAuthzDeniedReasonsAreDocumented demands).
+//
+// The WIRE reason is d.WireReason when a door set one (AsIf, #656 slice 3),
+// else d.Reason itself — the audit row (recordRefusal, below) always uses
+// d.Reason unchanged either way, so a Hidden-effect door's true cause still
+// reaches the audit trail even while its response lies for privacy.
 func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision) bool {
 	ref, ok := authz.Lookup(d.Reason)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "internal error: unregistered refusal reason")
+		// The SAME generic fallback writeServerError uses (#656 slice 3): this
+		// is a programming error (a door used an unregistered reason), never a
+		// caller-facing one, so the wire says only "server-side, not yours".
+		writeErrorReason(w, http.StatusInternalServerError, reasonInternalError, "internal error: unregistered refusal reason")
 		s.recordRefusal(r.Context(), r, d)
 		return true
 	}
-	writeError(w, ref.Effect.Status(), cmp.Or(d.Sentence, ref.Sentence))
+	wireReason := d.Reason
+	if d.WireReason != "" {
+		wireReason = d.WireReason
+	}
+	writeErrorReason(w, ref.Effect.Status(), string(wireReason), cmp.Or(d.Sentence, ref.Sentence))
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}

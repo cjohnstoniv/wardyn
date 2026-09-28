@@ -70,7 +70,7 @@ func (s *Server) handleDirectorySearch(w http.ResponseWriter, r *http.Request) {
 	// read to the console as "no matches" — the wrong thing to render.
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if len([]rune(q)) < directory.MinQueryLen {
-		writeError(w, http.StatusBadRequest,
+		writeErrorReason(w, http.StatusBadRequest, reasonDirectorySearchQueryTooShort,
 			fmt.Sprintf("q must be at least %d characters", directory.MinQueryLen))
 		return
 	}
@@ -81,7 +81,7 @@ func (s *Server) handleDirectorySearch(w http.ResponseWriter, r *http.Request) {
 	if t := strings.TrimSpace(r.URL.Query().Get("type")); t != "" {
 		kind = directory.Kind(strings.ToLower(t))
 		if !kind.Valid() {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown type %q: want user, group, approle or any", t))
+			writeErrorReason(w, http.StatusBadRequest, reasonDirectorySearchUnknownType, fmt.Sprintf("unknown type %q: want user, group, approle or any", t))
 			return
 		}
 	}
@@ -92,7 +92,7 @@ func (s *Server) handleDirectorySearch(w http.ResponseWriter, r *http.Request) {
 	// should not cost a token either) and before the connector, which is the
 	// thing the bucket exists to protect.
 	if !s.dirLimiter.allow(principalFromRequest(r), s.cfg.Now()) {
-		writeError(w, http.StatusTooManyRequests, "too many directory searches; slow down")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonDirectorySearchRateLimited, "too many directory searches; slow down")
 		return
 	}
 
@@ -110,7 +110,7 @@ func (s *Server) handleDirectorySearch(w http.ResponseWriter, r *http.Request) {
 		// 500, deliberately NOT the 503 above: "broken" and "not configured"
 		// are different states and the console renders them differently — an
 		// error toast versus a plain text input.
-		writeError(w, http.StatusInternalServerError, "directory search failed")
+		writeErrorReason(w, http.StatusInternalServerError, reasonDirectorySearchFailed, "directory search failed")
 	default:
 		if entries == nil {
 			entries = []directory.Entry{}

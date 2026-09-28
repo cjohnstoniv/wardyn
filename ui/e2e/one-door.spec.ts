@@ -4,7 +4,7 @@
  */
 
 import type { Page, Route } from "@playwright/test";
-import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { BANNER, CLAUDE_DOOR, CRED_NOTICE, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "../src/app/components/wardyn/copy/door";
@@ -105,12 +105,14 @@ test.describe("one door — today's door, where the install has no model provide
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expectOneDoor(page, MODEL_ACCESS_BANNER.DIALOG_TITLE);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
+    await expandCard(page, "Workspace providers");
     await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
     await expect(page).toHaveURL(/\/admin\/providers$/);
     await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
@@ -157,9 +159,27 @@ test.describe("one door — keyed by provider (User view)", () => {
 
     await gotoConsole(page);
     await navToRoute(page, "/account");
-    // The card claims the door, so the strip's own line for this same
-    // provider is suppressed — one "Sign in to AWS" on the page, not two.
-    await page.getByTestId("model-connections-card").getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
+    // Settled on the real spliced data before reading any button count —
+    // the card's own collapsed summary is the signal (it derives from the
+    // same per-provider state the sign-in buttons do).
+    await expect(page.getByTestId("model-connections-card")).toContainText("Needs you");
+
+    // #1200 review R4-M1: collapsed by default, the card's row (and its
+    // claim) isn't mounted — so the STRIP is the one sign-in button on the
+    // page, never zero. The card must not hold the door for a button nobody
+    // can see.
+    const signInButtons = page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true });
+    const cardSignIn = page.getByTestId("model-connections-card").getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true });
+    await expect(cardSignIn).toHaveCount(0);
+    await expect(signInButtons).toHaveCount(1);
+
+    await expandCard(page, "Your model connections");
+    // Expanded, the card claims the door, so the strip's own line for this
+    // same provider is suppressed — one "Sign in to AWS" on the page, not
+    // two, and now it is the CARD's own button, not the strip's.
+    await expect(signInButtons).toHaveCount(1);
+    await expect(cardSignIn).toHaveCount(1);
+    await cardSignIn.click();
     const door = page.getByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
     await expect(door).toContainText("For Bedrock (prod)");
     await expect(door).toContainText(MODEL_ACCESS_BANNER.DIALOG_CLEANUP_NOTE);
@@ -307,6 +327,7 @@ test.describe("one door — keyed by provider (User view)", () => {
     const legacy = await stubSignInSandbox(page, "**/api/v1/setup/harness-login");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-subscription").click();
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     const door = page.getByRole("dialog", { name: CLAUDE_DOOR.TITLE });

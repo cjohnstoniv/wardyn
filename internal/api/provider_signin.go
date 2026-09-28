@@ -156,7 +156,7 @@ func (s *Server) mountProviderSignInRoutes(r chi.Router) {
 func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types.SiteConfig) (types.ModelProvider, harnessLogin, []string, bool) {
 	id := chi.URLParam(r, "id")
 	if sc.ModelProviders == nil {
-		writeError(w, http.StatusConflict, mpsNoBlock)
+		writeErrorReason(w, http.StatusConflict, reasonProviderSignInNoBlock, mpsNoBlock)
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	p, ok := modelProviderByID(sc.ModelProviders, id)
@@ -169,7 +169,7 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 		}
 	}
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf(mpcNotFound, id))
+		writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, fmt.Sprintf(mpcNotFound, id))
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	if s.denyUserCapability(w, r, capModelProvider, p.ID, "model_provider.sign_in", fmt.Sprintf(mpsNotGranted, p.ID)) {
@@ -181,10 +181,10 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 	hl, ok := harnessLoginByProvider(login)
 	switch {
 	case !ok:
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsTyped, p.ID))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonProviderSignInUntyped, fmt.Sprintf(mpsTyped, p.ID))
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	case p.Disabled:
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsOff, p.ID))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonProviderSignInDisabled, fmt.Sprintf(mpsOff, p.ID))
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	return p, hl, launchable, true
@@ -205,7 +205,7 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, mpsUnreadable)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonProviderSignInConfigUnreadable, mpsUnreadable)
 		return
 	}
 	p, hl, launchable, ok := s.signInProvider(w, r, sc)
@@ -215,7 +215,7 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	// After the authorization, as on the legacy door: a capture here would
 	// land on the previewing admin's own namespace.
 	if previewHidesOwnCredential(r.Context()) {
-		writeError(w, http.StatusConflict, mpsPreview)
+		writeErrorReason(w, http.StatusConflict, reasonProviderSignInPreviewBlocked, mpsPreview)
 		return
 	}
 	model, oneAccount := signInModel(p, launchable)
@@ -225,24 +225,24 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 		t.startURL, t.region = b.SSOStartURL, b.Region
 		t.pin = awsSSOPin{AccountID: b.SSOAccountID, RoleName: b.SSORoleName}
 		if t.region == "" || validateSSOStartURL(t.startURL) != nil {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsNoPortal, p.ID))
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonProviderSignInNoPortal, fmt.Sprintf(mpsNoPortal, p.ID))
 			return
 		}
 		// A pin outranks the model's account (bindCaptureToPin); unpinned, one
 		// session must serve every model the caller may run here.
 		if !oneAccount && !t.pin.set() {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsAccounts, p.ID))
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonProviderSignInAccountAmbiguous, fmt.Sprintf(mpsAccounts, p.ID))
 			return
 		}
 	} else if !claudeSignInImageResolves(r.Context(), s.cfg.AgentImages, s.cfg.Runner) {
-		writeError(w, http.StatusUnprocessableEntity, mpsNoImage)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonProviderSignInNoImage, mpsNoImage)
 		return
 	}
 	_, actor := actorFromRequest(r)
 	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, t)
 	if err != nil {
 		if errors.Is(err, errRecordCeilingLimit) {
-			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
+			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
 		writeServerError(w, r, "launch login sandbox", err)
@@ -273,12 +273,12 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	}
 	var body providerSignInCapture
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, mpsCaptureBody)
+		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
 		return
 	}
 	runID, err := uuid.Parse(body.RunID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, mpsCaptureBody)
+		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
 		return
 	}
 	token := strings.TrimSpace(body.Token)
@@ -288,7 +288,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, mpsUnreadable)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonProviderSignInConfigUnreadable, mpsUnreadable)
 		return
 	}
 	p, hl, _, ok := s.signInProvider(w, r, sc)
@@ -296,15 +296,15 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if hl.captureViaHelper {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsAWSByHelper, p.ID))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonProviderSignInAWSByHelper, fmt.Sprintf(mpsAWSByHelper, p.ID))
 		return
 	}
 	if previewHidesOwnCredential(r.Context()) {
-		writeError(w, http.StatusConflict, mpsPreview)
+		writeErrorReason(w, http.StatusConflict, reasonProviderSignInPreviewBlocked, mpsPreview)
 		return
 	}
 	if msg := harnessPasteRefusal(hl, token); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonHarnessPasteInvalid, msg)
 		return
 	}
 	if !s.ownProviderSignInRun(w, r, runID, hl, p, owner) {
@@ -337,7 +337,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 func (s *Server) ownProviderSignInRun(w http.ResponseWriter, r *http.Request, runID uuid.UUID, hl harnessLogin, p types.ModelProvider, owner string) bool {
 	run, err := s.cfg.Store.GetRun(r.Context(), runID)
 	if err != nil || run.Task != harnessLoginTask || run.Agent != hl.agent {
-		writeError(w, http.StatusConflict, fmt.Sprintf(mpsNotYourRun, p.ID))
+		writeErrorReason(w, http.StatusConflict, reasonProviderSignInNotYourRun, fmt.Sprintf(mpsNotYourRun, p.ID))
 		return false
 	}
 	stamp, err := s.loginRunStamp(r.Context(), runID)
@@ -346,15 +346,15 @@ func (s *Server) ownProviderSignInRun(w http.ResponseWriter, r *http.Request, ru
 		return false
 	}
 	if stamp.ModelProviderUID != p.UID || stamp.Owner != owner {
-		writeError(w, http.StatusConflict, fmt.Sprintf(mpsNotYourRun, p.ID))
+		writeErrorReason(w, http.StatusConflict, reasonProviderSignInNotYourRun, fmt.Sprintf(mpsNotYourRun, p.ID))
 		return false
 	}
 	if stamp.ModelProviderAddress != providerAddressDigest(p) {
-		writeError(w, http.StatusConflict, mpsCaptureChanged)
+		writeErrorReason(w, http.StatusConflict, reasonProviderSignInCaptureChanged, mpsCaptureChanged)
 		return false
 	}
 	if run.State == types.RunKilled {
-		writeError(w, http.StatusConflict, ssoTokenRunKilledRefusal)
+		writeErrorReason(w, http.StatusConflict, reasonCaptureRunKilled, ssoTokenRunKilledRefusal)
 		return false
 	}
 	return true
