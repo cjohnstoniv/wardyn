@@ -252,3 +252,61 @@ func TestPG_IntegrationRequirement_BedrockProviderRegionHost(t *testing.T) {
 	run, grants, injected := launchAsAlice(t, h, ws, `,"model_provider":"anthropic"`)
 	assertNothingOnHost(t, h, run, grants, injected, host)
 }
+
+// TestPG_DispatchStrip_SecondProviderHost pins the provider path's strip on the
+// full model-serving set: a DEFAULT-policy api_key grant (nothing the
+// requirement fold sees) that presents the operator's corp-llm-key on a second
+// provider row's host reaches dispatch, which drops it — audited — before the
+// chosen provider's arm authors its own, so it never reaches the proxy.
+func TestPG_DispatchStrip_SecondProviderHost(t *testing.T) {
+	const host = "llm.corp.example"
+	h, sec := newRunOwnerPGHarness(t)
+	h.srv.cfg.Runner = &fakeRunner{}
+	h.srv.cfg.Broker = h.broker
+	scope, _ := json.Marshal(map[string]string{"host": host, "header": "Authorization", "format": "Bearer %s", "secret_name": "corp-llm-key"})
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		AllowedDomains: []string{"api.anthropic.com", host}, MinConfinementClass: types.CC2,
+		EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600}},
+	}
+	ctx := context.Background()
+	if err := sec.Put(ctx, "corp-llm-key", []byte("sk-OPERATOR-gateway-0000000000")); err != nil {
+		t.Fatalf("seed operator key: %v", err)
+	}
+	w := do(t, h.srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+		`{"providers":[{"id":"anthropic","kind":"anthropic_api_key","harnesses":[{"harness":"claude-code"}]},`+
+			`{"id":"corp-gateway","kind":"custom_endpoint","base_url":"https://`+host+`","harnesses":[{"harness":"claude-code","path":"/anthropic"}]}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT /model-providers: %d: %s", w.Code, w.Body.String())
+	}
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	w = doSSO(t, h.srv, http.MethodPut, "/api/v1/model-providers/anthropic/credential", alice, `{"value":"sk-ant-alice-own-0000000000"}`)
+	if w.Code != http.StatusNoContent && w.Code != http.StatusOK {
+		t.Fatalf("PUT own credential: %d: %s", w.Code, w.Body.String())
+	}
+	ws, err := h.srv.cfg.Store.CreateWorkspace(ctx, types.Workspace{
+		ID: uuid.New(), Name: "plain", Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	run, grants, injected := launchAsAlice(t, h, ws, `,"model_provider":"anthropic"`)
+	if got := grantSecretOnHost(t, grants, host); len(got) != 1 || got[0] != "corp-llm-key" {
+		t.Fatalf("persisted grants on %s = %v, want the default policy's corp-llm-key — the strip must be what stops it", host, got)
+	}
+	for _, in := range injected {
+		if strings.HasPrefix(in, host+"=") {
+			t.Fatalf("dispatch handed the proxy the operator's key on the second provider's host: %v", injected)
+		}
+	}
+	var dropped bool
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "run.injection.drop" && ev.RunID != nil && *ev.RunID == run.ID &&
+			strings.Contains(string(ev.Data), host) && strings.Contains(string(ev.Data), "model_credential_not_provider_authored") {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Error("no run.injection.drop (model_credential_not_provider_authored) naming the host")
+	}
+}

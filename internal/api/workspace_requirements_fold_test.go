@@ -6,12 +6,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -439,5 +441,37 @@ func TestSetupWorkspaceSecretItems_ContractRequiredIsNeverBlocking(t *testing.T)
 		if want := "workspace acme-app's requirements contract"; it.RequiredBy != want {
 			t.Errorf("RequiredBy = %q, want %q", it.RequiredBy, want)
 		}
+	}
+}
+
+// unreadableSiteStore fails every site-config read.
+type unreadableSiteStore struct{ store.Store }
+
+func (unreadableSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("conn closed by peer")
+}
+
+// TestApplyIntegrationRequirement_UnreadableConfigFailsClosed: with the site
+// config unreadable, which hosts serve a model (the provider rows) is unknown,
+// so the fold grants the integration's credential on NO host and says why —
+// never falling back to the static set, which would miss a provider row's host.
+func TestApplyIntegrationRequirement_UnreadableConfigFailsClosed(t *testing.T) {
+	srv := New(Config{Store: unreadableSiteStore{}})
+	integ := feedIntegration()
+	rows := []integrationRow{{Integration: integ, Source: "stored"}}
+	spec := &types.RunPolicySpec{}
+	events := srv.applyIntegrationRequirement(context.Background(), map[string]bool{"artifactory-token": true}, rows, spec, integ.ID)
+	if len(spec.EligibleGrants) != 0 {
+		t.Fatalf("grants = %+v, want none with the provider rows unknown", spec.EligibleGrants)
+	}
+	var skip *requirementAuditEntry
+	for i := range events {
+		if events[i].action == "run.requirement.skip" {
+			skip = &events[i]
+		}
+	}
+	if skip == nil || skip.outcome != "denied" || skip.data["reason"] != reasonRequirementModelHostUnknown ||
+		!slices.Equal(skip.data["hosts"].([]string), integ.Egress) {
+		t.Fatalf("events = %+v, want a denied run.requirement.skip (model_host_unknown) naming every host", events)
 	}
 }

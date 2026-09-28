@@ -232,10 +232,14 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 // key (#547).
 const reasonRequirementModelHost = "model_host"
 
+// reasonRequirementModelHostUnknown is the skip when the site config could not
+// be read, so which hosts serve a model is unknown: every one is skipped.
+const reasonRequirementModelHostUnknown = "model_host_unknown"
+
 // requirementSkip is the audit entry for a requirement credential the fold
 // declined to grant, named by what it would have granted and why.
-func requirementSkip(target string, data map[string]any) requirementAuditEntry {
-	data["reason"] = reasonRequirementModelHost
+func requirementSkip(target, reason string, data map[string]any) requirementAuditEntry {
+	data["reason"] = reason
 	return requirementAuditEntry{action: "run.requirement.skip", target: target, outcome: "denied", data: data}
 }
 
@@ -249,7 +253,7 @@ func (s *Server) skipRequiredSecret(agent, secretName string) (requirementAuditE
 	if !ok {
 		return requirementAuditEntry{}, false
 	}
-	return requirementSkip(secretName, map[string]any{"secret_name": secretName, "host": p.host}), true
+	return requirementSkip(secretName, reasonRequirementModelHost, map[string]any{"secret_name": secretName, "host": p.host}), true
 }
 
 // applyWriteNarrowing resolves ONE write:<path> requirement's effective mount

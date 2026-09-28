@@ -71,14 +71,22 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	}
 	// A host that serves a model never takes an integration's credential: a
 	// model credential comes only from the run's model provider. The host
-	// still opens; the credential is skipped, audited on its own row.
+	// still opens; the credential is skipped, audited on its own row. A site
+	// config that cannot be read leaves the provider rows unknown, so every
+	// host is skipped (fail closed, as the write door answers 500).
+	reason := reasonRequirementModelHost
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
-		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			sc = got
+		got, err := s.cfg.Store.GetSiteConfig(ctx)
+		if err != nil {
+			reason = reasonRequirementModelHostUnknown
 		}
+		sc = got
 	}
 	serving := s.modelServingHosts(sc)
+	if reason == reasonRequirementModelHostUnknown {
+		serving = func(string) bool { return true }
+	}
 	modelHosts := slices.DeleteFunc(slices.Clone(integ.Egress), func(h string) bool { return !serving(h) })
 	var events []requirementAuditEntry
 	disabledCap := make(map[string]bool, len(integ.DisabledCapabilities))
@@ -93,7 +101,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	if !disabledCap["credential"] {
 		grantedHosts = applyIntegrationInjection(present, spec, integ, modelHosts)
 		if hasHeader && len(modelHosts) > 0 {
-			events = append(events, requirementSkip(id, map[string]any{"integration_id": id, "hosts": modelHosts}))
+			events = append(events, requirementSkip(id, reason, map[string]any{"integration_id": id, "hosts": modelHosts}))
 		}
 	}
 	if len(addedEgress) == 0 && len(grantedHosts) == 0 {
