@@ -12,21 +12,23 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
 // rrFlags is the minimum bootFlags buildRunnerFromFlags and componentsInfo
 // dereference. runnerTargetOverride is empty here — the unset default, i.e. no
 // override — and boot_runner_target_test.go sets it on its own flags.
 func rrFlags(runnerSel string) *bootFlags {
-	sel, cmap, img := runnerSel, "", "wardyn-proxy:test"
+	sel, cmap, img, probeImg := runnerSel, "", "wardyn-proxy:test", ""
 	id, sec, rec := "embedded", "pg", "pg" // the defaults; componentsInfo derefs them
 	target := ""
 	return &bootFlags{
-		runnerSel: &sel, runnerTargetOverride: &target, confinementMap: &cmap, proxyImage: &img,
+		runnerSel: &sel, runnerTargetOverride: &target, confinementMap: &cmap, proxyImage: &img, driveProbeImage: &probeImg,
 		identitySel: &id, secretStoreSel: &sec, recordingSel: &rec,
 	}
 }
@@ -58,12 +60,48 @@ func TestBuildRunnerFromFlags_UnknownFailsClosed(t *testing.T) {
 	}
 }
 
-// /healthz must report what recording ACTUALLY does, not what the flag says.
-// The stock Helm install sets WARDYN_RECORDING_STORE=off (persistence.enabled
-// =false by default; until 0.7.1 it was fs with an empty dir), which
-// recording.New resolves to a nil Store per its own "disabled" contract — but componentsInfo used to keep
-// echoing *f.recordingSel regardless, so /healthz advertised a live "fs" store
-// while every run silently recorded nothing.
+// TestBuildRunnerFromFlags_RecordFollowsRecordingStore is the #1113
+// boot-level pin: WARDYN_RECORDING_STORE (*f.recordingSel) must reach the
+// substrate's registration Deps.Record — the boundary a driver's register.go
+// reads to build its own Config.Record (internal/runner/k8s and
+// internal/runner/docker's buildConfig, each pinned separately by their own
+// register_test.go). A spy substrate captures the Deps buildRunnerFromFlags
+// actually passes, so this test needs no live cluster or daemon and holds
+// tag-free.
+func TestBuildRunnerFromFlags_RecordFollowsRecordingStore(t *testing.T) {
+	const spyName = "recordspy-1113"
+	spyErr := errors.New("recordspy: refuses to construct (captures Deps only)")
+	var got substrate.Deps
+	substrate.Register(spyName, func(d substrate.Deps) (substrate.Substrate, error) {
+		got = d
+		return nil, spyErr
+	})
+
+	for _, tt := range []struct {
+		store string
+		want  bool
+	}{
+		{"off", false},
+		{"pg", true},
+		{"fs", true},
+	} {
+		store := tt.store
+		f := rrFlags(spyName)
+		f.recordingSel = &store
+		if _, _, err := buildRunnerFromFlags(f, nil, nil); !errors.Is(err, spyErr) {
+			t.Fatalf("recording store %q: buildRunnerFromFlags error = %v, want the spy's refusal (proves the spy was actually reached)", store, err)
+		}
+		if got.Record != tt.want {
+			t.Errorf("recording store %q: Deps.Record = %v, want %v", store, got.Record, tt.want)
+		}
+	}
+}
+
+// /healthz must report what recording actually does, not what the flag says. The stock Helm install
+// sets WARDYN_RECORDING_STORE=off (persistence.enabled=false by default), which recording.New
+// resolves to a nil Store per its own "disabled" contract — so componentsInfo must not echo
+// *f.recordingSel, or /healthz advertises a live "fs" store while every run silently records
+// nothing.
 func TestComponentsInfo_RecordingReflectsActualStore(t *testing.T) {
 	f := rrFlags("none")
 	sel := "fs" // the stock Helm chart's pin (see deploy/helm/wardyn/templates/deployment.yaml)

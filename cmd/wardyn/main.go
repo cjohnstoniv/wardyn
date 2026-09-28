@@ -106,14 +106,14 @@ func exitCodeFor(err error) int {
 // cleartext: plain http:// to a NON-loopback wardynd puts the fleet-wide
 // credential on the wire on every request (and on the attach WebSocket, which
 // inherits the same --url). Advisory only, never a refusal — a TLS-terminating
-// reverse proxy or a CI-internal topology is legitimate; WARDYN_ALLOW_PLAINTEXT
+// reverse proxy or a CI-internal topology is legitimate; WARDYN_CLI_ALLOW_PLAINTEXT
 // silences it.
 //
 // ponytail: fourth inline loopback predicate in the tree (internal/api/http.go,
 // cmd/wardynd/main.go, internal/egress/proxy/policy.go) — all unexported and
 // server-side. Consolidate only if a fifth appears.
 func warnPlaintextToken(w io.Writer, rawURL, token string) {
-	if token == "" || cliutil.EnvBool("WARDYN_ALLOW_PLAINTEXT", false) {
+	if token == "" || cliutil.EnvBool("WARDYN_CLI_ALLOW_PLAINTEXT", false) {
 		return
 	}
 	u, err := url.Parse(rawURL)
@@ -125,7 +125,7 @@ func warnPlaintextToken(w io.Writer, rawURL, token string) {
 		return
 	}
 	fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
-		"use https://, or set WARDYN_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+		"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
 }
 
 func rootCmd() *cobra.Command {
@@ -136,7 +136,7 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "wardyn",
 		Short:         "Wardyn control-plane CLI",
-		Version:       version.Version,
+		Version:       version.String(),
 		SilenceErrors: true,
 		// SilenceUsage is deferred to PersistentPreRun so a structural USAGE
 		// error (unknown flag, unknown command, wrong arg count — all raised
@@ -189,6 +189,7 @@ func rootCmd() *cobra.Command {
 		policyCmd(client),
 		workspaceCmd(client),
 		sourceCmd(client),
+		driveCmd(client),
 		secretCmd(client),
 		attachCmd(client),
 		sshCmd(client),
@@ -198,6 +199,8 @@ func rootCmd() *cobra.Command {
 		setupCmd(client),
 		siteConfigCmd(client),
 		driveCmd(client),
+		presetCmd(client),
+		governanceCmd(client),
 		sessionsCmd(client),
 		deviceCmd(client),
 		supportBundleCmd(client),

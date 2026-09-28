@@ -8,12 +8,70 @@
 // effective set. Mirrors internal/api/permissions.go; every route is under
 // /api/v1 via wfetch.
 import type {
+  AccessUserType,
+  AvailabilityView,
   CapabilityGrant,
   CapabilityGrantInput,
+  CapabilitySubjectType,
   MeCapabilities,
   PermissionsSnapshot,
 } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+
+// The Explain grid (K4/AK-5, #739) — GET /permissions/explain's body. Each row
+// is one (kind, value) cell of the type editor's "What this type gets" grid
+// (user-types-design.md rev 4 §2.6). Mirrors internal/api/
+// capabilities_explain.go's explainResponse/capExplainRow exactly.
+export type ExplainState = "everyone" | "this_type" | "blocked" | "admins_only" | "not_available";
+
+export interface ExplainRow {
+  kind: string;
+  value: string;
+  state: ExplainState;
+  // The value is "Available to: Only these" — omitted when it isn't. A
+  // restricted value gets a row even when no grant names it.
+  restricted?: boolean;
+  // G-4: a non-secret display name the server can attach — a git provider's
+  // kind and organisation or host, or a model provider's own name — never an
+  // id or a secret. Omitted where the server can't name the row; the caller
+  // then falls back to a client-side name or the raw value.
+  label?: string;
+}
+
+export interface ExplainResponse {
+  subject_type: CapabilitySubjectType;
+  subject: string;
+  kinds_version: number;
+  rows: ExplainRow[];
+}
+
+// {kind}/{value} — the server takes the value as the REST of the path (an
+// image ref carries slashes, permissions_availability.go's availabilityTarget),
+// so each segment is encoded on its own rather than encodeURIComponent-ing the
+// whole value, which would turn a real "/" into "%2F" and 400 as a different
+// value than the one on screen. The characters a Go path never escapes
+// ($&+,:;=@) are sent bare: escaped, they set URL.RawPath, the router hands the
+// handler "%3A" instead of ":", and an image ref's tag reads as another value.
+// !'()* are escaped as Go escapes them, so the path is always Go's canonical
+// form and RawPath stays empty.
+//
+// An empty, "." or ".." segment is refused before any request: the router
+// cleans the path, so a value such as "../policy/<id>" (an image ref a person
+// can plant in the catalog) would read and write another resource's list.
+function availabilityPath(kind: string, value: string): string {
+  const segs = value.split("/");
+  if (segs.some((s) => s === "" || s === "." || s === "..")) {
+    throw new HttpError(400, `Invalid availability target: ${JSON.stringify(value)}`);
+  }
+  const encodedValue = segs
+    .map((s) =>
+      encodeURIComponent(s)
+        .replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())
+        .replace(/%(24|26|2B|2C|3A|3B|3D|40)/gi, (e) => decodeURIComponent(e)),
+    )
+    .join("/");
+  return `/permissions/availability/${encodeURIComponent(kind)}/${encodedValue}`;
+}
 
 // What an upsert actually did. The server distinguishes a genuinely new row
 // (201) from a re-grant that flipped an existing row's effect in place (200) —
@@ -70,6 +128,31 @@ export const permissions = {
     return (await asJson<Record<string, boolean> | null>(res)) ?? {};
   },
 
+  // GET /api/v1/permissions/availability/{kind}/{value} -> one resource's
+  // "Available to" state (the restricted bit + who is named). securityOps.
+  async getAvailability(kind: string, value: string): Promise<AvailabilityView> {
+    const res = await wfetch(availabilityPath(kind, value), { method: "GET" });
+    return asJson<AvailabilityView>(res);
+  },
+
+  // GET /api/v1/user-types -> every user type (securityOps), so an audience
+  // chip can name a type rather than show its id.
+  async listUserTypes(): Promise<AccessUserType[]> {
+    const res = await wfetch("/user-types", { method: "GET" });
+    return unwrapList<AccessUserType>((await asJson<{ user_types?: unknown }>(res)).user_types);
+  },
+
+  // PUT /api/v1/permissions/availability/{kind}/{value} -> the same view, bit
+  // flipped. Turning "Only…" on with nobody already listed is refused (400);
+  // the server's message is surfaced verbatim by the caller, never reworded.
+  async putAvailability(kind: string, value: string, restricted: boolean): Promise<AvailabilityView> {
+    const res = await wfetch(availabilityPath(kind, value), {
+      method: "PUT",
+      body: JSON.stringify({ restricted }),
+    });
+    return asJson<AvailabilityView>(res);
+  },
+
   // GET /api/v1/me/capabilities -> the caller's own grants + the enforcement
   // map + their group snapshot. Member-safe (not operatorOnly), which is what
   // makes the why-denied surfaces work for the people they are written for.
@@ -81,6 +164,30 @@ export const permissions = {
       enforcement: body.enforcement ?? {},
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
+    };
+  },
+
+  // GET /api/v1/permissions/explain?subject_type=&subject=&kinds= -> the
+  // Explain grid (#739) for one named subject — the User types screen asks
+  // for subject_type=user_type, whose subject is the type's id. securityOps,
+  // same tier as the rest of /permissions. `kinds` defaults server-side to
+  // every kind. A user or group subject's grid reads only rows naming that
+  // subject or `all`, never the person's groups or type. An unknown or
+  // malformed type id is a 400.
+  async explainCapabilities(
+    subjectType: CapabilitySubjectType,
+    subject: string,
+    kinds?: string[],
+  ): Promise<ExplainResponse> {
+    const params = new URLSearchParams({ subject_type: subjectType, subject });
+    if (kinds?.length) params.set("kinds", kinds.join(","));
+    const res = await wfetch(`/permissions/explain?${params.toString()}`, { method: "GET" });
+    const body = await asJson<Partial<ExplainResponse>>(res);
+    return {
+      subject_type: body.subject_type ?? subjectType,
+      subject: body.subject ?? subject,
+      kinds_version: body.kinds_version ?? 0,
+      rows: unwrapList<ExplainRow>(body.rows),
     };
   },
 };

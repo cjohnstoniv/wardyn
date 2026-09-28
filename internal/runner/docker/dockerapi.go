@@ -45,6 +45,9 @@ type dockerAPI interface {
 
 	NetworkCreate(ctx context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error)
 	NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
+	// NetworkInspect reads back the subnet the daemon picked for a per-run
+	// network (createRunNetwork).
+	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error)
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
 
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
@@ -53,6 +56,15 @@ type dockerAPI interface {
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	// ContainerAttach attaches to a created proxy's stdin, the one way its
+	// config reaches it (startWithConfig, #1176).
+	ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error)
+	// ContainerPause / ContainerUnpause back runner.Freezer (FreezeSandbox /
+	// ThawSandbox, RL-6): pause the agent's process in place — memory, disk and
+	// any established TCP connection keep their state — without stopping or
+	// removing it.
+	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
+	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 	// ContainerWait blocks until the container reaches condition and yields its
 	// exit code. Used by Wait for EXEC-LESS runtimes (krun microVMs), whose agent
 	// workload runs as the container's MAIN process rather than a docker exec.
@@ -81,11 +93,15 @@ type dockerAPI interface {
 
 	// VolumeInspect / VolumeCreate back MANAGED user drives (docker_volume):
 	// a per-person named volume, looked up by name and created on first use.
-	// The ONLY volume writes the driver makes — see driver_volumes.go for why
-	// no VolumeRemove sits beside them (reclaim is an operator command in v1,
-	// so nothing here may delete a member's persistent storage).
+	// VolumeRemove is the third and last one, and it is reached from exactly
+	// ONE caller — ReclaimDrive, the operator's explicit verb (runner.
+	// DriveReclaimer, #166). No teardown, no sweep and no run path may call
+	// it: a drive outlives every run that mounts it, so an automatic
+	// reclaim is a data-loss path, not a cleanup. See drive_reclaim.go for
+	// the identity check that runs before it and why force is never set.
 	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	VolumeCreate(ctx context.Context, options client.VolumeCreateOptions) (client.VolumeCreateResult, error)
+	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 }
 
 // the real client must implement our slice.

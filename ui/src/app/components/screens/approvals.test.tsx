@@ -10,6 +10,8 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
+import { aheadByHours } from "../../lib/test-clock";
+import { PUSH } from "../wardyn/copy/push";
 
 // HIGH fix (error handling): approve/deny were unguarded awaits. A rejected
 // deny() must NOT leave the dialog's confirm button spinning forever, must
@@ -31,6 +33,7 @@ vi.mock("sonner", () => ({
 let mockPendingKind: ApprovalRequest["kind"] = "credential";
 let mockPendingEmpty = false;
 let mockCancelledRow = false;
+let mockExpiredPushRow = false;
 // F5-F4: every listApprovals call rejects while true — simulates a transient
 // fetchAll() failure (Promise.all over the 5 states) without having to race
 // individual calls within one Promise.all.
@@ -60,7 +63,19 @@ vi.mock("../../lib/api/approvals", () => {
               requested_scope:
                 mockPendingKind === "credential_reauth"
                   ? { mechanism: "bedrock_sso", credential_source: "per_user", owner: "you@corp" }
-                  : { host: "api.example.com" },
+                  : mockPendingKind === "push_content"
+                    ? {
+                        repo: "github.com/acme/widgets",
+                        branch: "refs/heads/feature/x",
+                        acts_as: "github_token:11111111-1111-1111-1111-111111111111",
+                        paths: ["a.txt", "b.txt"],
+                        paths_total: 2,
+                        commits: ["deadbeef".repeat(5)],
+                        paths_digest: "a".repeat(64),
+                        acts_as_kind: "github_app",
+                        acts_as_label: "dana@acme.example",
+                      }
+                    : { host: "api.example.com" },
               state: "PENDING",
               requested_at: new Date().toISOString(),
             } satisfies ApprovalRequest,
@@ -80,6 +95,30 @@ vi.mock("../../lib/api/approvals", () => {
               requested_at: new Date().toISOString(),
               decided_at: new Date().toISOString(),
               decided_by: "system",
+            } satisfies ApprovalRequest,
+          ]);
+        }
+        // #181: a held push that timed out — the decided list's own
+        // push_content/EXPIRED special case (PUSH.TIMEOUT_BODY).
+        if (state === "EXPIRED" && mockExpiredPushRow) {
+          return Promise.resolve([
+            {
+              id: "apr_3",
+              run_id: "run_1",
+              kind: "push_content",
+              requested_scope: {
+                repo: "github.com/acme/widgets",
+                branch: "refs/heads/feature/x",
+                acts_as: "github_token:11111111-1111-1111-1111-111111111111",
+                paths: ["a.txt"],
+                paths_total: 1,
+                commits: ["deadbeef".repeat(5)],
+                paths_digest: "a".repeat(64),
+                acts_as_kind: "github_app",
+                acts_as_label: "dana@acme.example",
+              },
+              state: "EXPIRED",
+              requested_at: new Date().toISOString(),
             } satisfies ApprovalRequest,
           ]);
         }
@@ -131,6 +170,7 @@ import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/
 beforeEach(() => {
   mockRunState = "RUNNING";
   mockCancelledRow = false;
+  mockExpiredPushRow = false;
   mockFailAllLists = false;
   mockListDeferred = null;
 });
@@ -285,7 +325,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   });
 
   // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) decides
-  // ANY kind on ANY run — authorizeMemberDecision early-returns for
+  // ANY kind on ANY run — authorizeUserDecision early-returns for
   // isSecurityOperator (approvals.go:392) BEFORE both the kind check and the
   // egress_host capability leg. Gating this card on useOperator would refuse
   // them a decision the server would have honoured.
@@ -352,7 +392,7 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
 
   it("member: \"Approvals raised by your runs appear here.\"", async () => {
     render(
-      <RoleProvider role="member">
+      <RoleProvider role="user">
         <MemoryRouter>
           <ApprovalsScreen />
         </MemoryRouter>
@@ -375,7 +415,7 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
 
 // 0.6 pillar 2: the ONE member why-denied moment on this screen. A member may
 // decide an egress_domain approval on their own run — unless `egress_host` is
-// enforced and the host isn't granted to them (authorizeMemberDecision). The
+// enforced and the host isn't granted to them (authorizeUserDecision). The
 // copy is read from the canon, never retyped.
 describe("ApprovalsScreen — egress host not granted (member)", () => {
   beforeEach(() => {
@@ -389,7 +429,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
   function renderMember() {
     return render(
       <OperatorProvider operator={false} securityOperator={false}>
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <MemoryRouter>
             <ApprovalsScreen />
           </MemoryRouter>
@@ -426,7 +466,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
           capability: "egress_host",
           value: "*.example.com",
           effect: "allow",
-          created_at: "2026-08-01T00:00:00Z",
+          created_at: aheadByHours(-1),
         },
       ],
     };
@@ -514,7 +554,8 @@ describe("ApprovalsScreen ?tab=", () => {
 // went wrong" while the badge claims "1 pending". The tick heals status back
 // to "ready", paused only while the FOREGROUND load is in flight (audit.tsx
 // precedent) so a poll tick during the error state can still recover it.
-describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () => {
+describe("ApprovalsScreen — a poll tick heals a stuck error state", () => {
+  // ticket: F5-F4
   beforeEach(() => {
     mockPendingKind = "credential";
   });
@@ -562,7 +603,8 @@ describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () 
   });
 });
 
-describe("ApprovalsScreen — F5-F11: deciding refreshes silently, no skeleton flash", () => {
+describe("ApprovalsScreen — deciding refreshes silently, no skeleton flash", () => {
+  // ticket: F5-F11
   beforeEach(() => {
     mockPendingKind = "credential";
   });
@@ -607,7 +649,8 @@ describe("ApprovalsScreen — F5-F11: deciding refreshes silently, no skeleton f
 // dead control on a governance surface reads as "this is still yours to
 // answer". 0.7.2 cancels them server-side (types.ApprovalCancelled) and the
 // screen stops asking.
-describe("ApprovalsScreen — the run has ended (B4)", () => {
+describe("ApprovalsScreen — the run has ended", () => {
+  // ticket: B4
   it("offers no decision on a KILLED run, and says what happened instead", async () => {
     mockRunState = "KILLED";
     render(
@@ -657,7 +700,8 @@ describe("ApprovalsScreen — the run has ended (B4)", () => {
 // that quietly while "Reach api.example.com" read, to a human, like the one
 // connection in front of them. 0.7.2 says it out loud; the port-scoped
 // semantic is a 0.8 change at three places at once.
-describe("ApprovalsScreen — an egress approval says it is host-wide (P0.3)", () => {
+describe("ApprovalsScreen — an egress approval says it is host-wide", () => {
+  // ticket: P0.3
   it("states the host-wide scope on an egress_domain card", async () => {
     mockPendingKind = "egress_domain";
     render(
@@ -677,5 +721,99 @@ describe("ApprovalsScreen — an egress approval says it is host-wide (P0.3)", (
     );
     await screen.findByRole("button", { name: /^approve$/i });
     expect(screen.queryByText(APPROVAL.HOST_WIDE_NOTE)).toBeNull();
+  });
+});
+
+// #638 — a run opened FROM /admin/approvals stays in the Admin view: the plain
+// /runs/:id path is the User view's (the owner cockpit on a "url"-access
+// install, a refusal for an admin-only token). Both run links on the screen —
+// the pending card's "Open run" and the decided row's run id — go through
+// runPath; the User-view mount keeps /runs/:id.
+describe("ApprovalsScreen — run links stay in the view they are opened from (#638)", () => {
+  it("/admin/approvals: the pending card's Open run goes to /admin/runs/:id", async () => {
+    render(
+      <MemoryRouter initialEntries={["/admin/approvals"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const open = await screen.findByRole("link", { name: /open run/i });
+    expect(open).toHaveAttribute("href", "/admin/runs/run_1");
+  });
+
+  it("/admin/approvals: the decided row's run link goes to /admin/runs/:id", async () => {
+    mockCancelledRow = true;
+    render(
+      <MemoryRouter initialEntries={["/admin/approvals?tab=decided"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: "run_1" });
+    expect(link).toHaveAttribute("href", "/admin/runs/run_1");
+  });
+
+  it("negative control: /approvals keeps both links on /runs/:id", async () => {
+    mockCancelledRow = true;
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/approvals"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const open = await screen.findByRole("link", { name: /open run/i });
+    expect(open).toHaveAttribute("href", "/runs/run_1");
+    await user.click(screen.getByRole("tab", { name: /decided/i }));
+    const link = await screen.findByRole("link", { name: "run_1" });
+    expect(link).toHaveAttribute("href", "/runs/run_1");
+  });
+});
+
+// #181 — the held-push card on the standalone /approvals queue.
+describe("ApprovalsScreen — a held push (#181)", () => {
+  beforeEach(() => {
+    mockPendingKind = "push_content";
+    denyMock.mockReset();
+    approveMock.mockReset();
+  });
+
+  it("renders the push card (kind chip 'Push', repository, branch, acts-as-label) and Approve round-trips with no scope", async () => {
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const card = await screen.findByTestId("push-content-card");
+    expect(within(card).getByText(PUSH.CARD_TITLE)).toBeInTheDocument();
+    expect(within(card).getByText("github.com/acme/widgets")).toBeInTheDocument();
+    expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /^Approve$/ }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    // No ReasonDialog, no decision_scope — a literal 2-argument call.
+    expect(approveMock).toHaveBeenCalledWith("apr_1", "approved");
+  });
+
+  it("a member sees the full card but no Approve/Deny — admin-only, no ownership carve-out", async () => {
+    render(
+      <OperatorProvider operator={false} securityOperator={false}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    const card = await screen.findByTestId("push-content-card");
+    expect(within(card).queryByRole("button", { name: /^Approve$/ })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /^Deny$/ })).not.toBeInTheDocument();
+    expect(within(card).getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    // Still sees everything — "decides nothing" is not "sees nothing".
+    expect(within(card).getByText("github.com/acme/widgets")).toBeInTheDocument();
+  });
+
+  it("a timed-out push in the Decided tab reads PUSH.TIMEOUT_BODY", async () => {
+    mockExpiredPushRow = true;
+    render(
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(PUSH.TIMEOUT_BODY)).toBeInTheDocument();
   });
 });

@@ -23,15 +23,13 @@ type staleAuditStore struct {
 	hasGroupTier bool
 }
 
-func (staleAuditStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (staleAuditStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 func (s staleAuditStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.hasGroupTier, nil
 }
 
-// TestStaleSnapshotRefusalIsAudited is F227.
-//
 // docs/OPERATIONS.md's "Every denial that isn't a 404" makes authz.denied the
 // record of every member denial that is not a plain foreign-resource 404. The
 // groups_snapshot_stale 403 is member-reachable from six seams and produced
@@ -50,7 +48,7 @@ func TestStaleSnapshotRefusalIsAudited(t *testing.T) {
 		srv, rec := newSrv(t, true)
 		// A member whose group snapshot is NIL — the launch-side spelling of
 		// "the group tier was not evaluated".
-		member := ssoSession(t, "sub-stale-bob", "bob@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-stale-bob", "bob@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/policies/default", member, "")
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("GET /policies/default = %d, want 403; body=%s", w.Code, w.Body.String())
@@ -80,7 +78,7 @@ func TestStaleSnapshotRefusalIsAudited(t *testing.T) {
 			t.Fatalf("a member-reachable 403 produced NO authz.denied row (%d events recorded) — the denial "+
 				"stream is the operator's only view of who cannot use the product", len(rec.events))
 		}
-		// ONCE PER REQUEST, not once per seam: effectiveCeiling memoizes, so a
+		// Once per request, not once per seam: effectiveCeiling memoizes, so a
 		// create that asks three times is one denial, which is what an operator
 		// counting denials means.
 		if found != 1 {
@@ -96,7 +94,7 @@ func TestStaleSnapshotRefusalIsAudited(t *testing.T) {
 	// pre-upgrade session rather than signal.
 	t.Run("a deployment with no group-tier assignment writes no denial", func(t *testing.T) {
 		srv, rec := newSrv(t, false)
-		member := ssoSession(t, "sub-ok-bob", "ok@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-ok-bob", "ok@corp.example", oidc.RoleUser)
 		before := len(rec.events)
 		if w := doSSO(t, srv, http.MethodGet, "/api/v1/policies/default", member, ""); w.Code == http.StatusForbidden {
 			t.Fatalf("a member on a deployment with no group-tier assignment was refused; body=%s", w.Body.String())

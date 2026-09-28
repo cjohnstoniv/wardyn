@@ -40,7 +40,7 @@ the app is recorded**.
 | Enablement probe | `GET /healthz` → `ui_sandbox` block (mirrors the existing `ssh` block, `internal/api/sshgateway.go` `sshGatewayHealthz`) |
 | Declared apps | the run's **effective** policy `ui_apps`, read off the run payload (`GET /runs/{id}`) as a read-only denormalization — same pattern as `workspace_ids`. `AgentRun` carries only `policy_id` today, and an inline or default policy has no id to fetch, so the console must not resolve this through `GET /policies/{id}`. **D1.2 owns exposing it.** |
 | Ticket | existing `POST /runs/{id}/attach-ticket` (owner-or-admin, single-use, 30s TTL) |
-| Open | `window.open('<ui-origin>/__wardyn/enter?run=<run-id>&app=<name>&ticket=<t>', '_blank', 'noopener')` |
+| Open | a hidden, auto-submitted `POST <ui-origin>/__wardyn/enter` form (`target="_blank"`, `rel="noopener"`) with `run`/`app`/`ticket` as fields (#1220 — the ticket never lands in a URL); falls back to `window.open('<ui-origin>/__wardyn/enter?run=<run-id>&app=<name>&ticket=<t>', '_blank', 'noopener')` only against an older daemon that published no POST form |
 | Policies screen row | `ui/src/app/components/screens/policies.tsx` → `PolicyDetail`, read-only |
 
 The UI origin comes from the `ui_sandbox` healthz block, never from
@@ -80,10 +80,18 @@ row, not a UI tweak.
 
 1. Click **Open {app}** → button → `Opening…`, disabled.
 2. `POST /runs/{id}/attach-ticket` → single-use ticket.
-3. `window.open` the enter URL on the UI origin, `_blank`, `noopener`.
-4. Button returns to **Open {app}**. No polling, no embedded iframe, no
+3. When `/healthz` publishes `ui_sandbox.bind_url`, bind the ticket to this
+   browser (#1241): one `fetch(bind_url, {method: "POST", credentials:
+   "include", body: ticket=<t>})`, never through the API client. A refused bind
+   is S5 with "The UI-sandbox gateway did not accept this browser. The console
+   and the gateway must be served from the same site; an admin finds the exact
+   reason in the audit log (ui.authorize)."
+4. Submit a hidden form POSTing run/app/ticket to the enter endpoint on the UI
+   origin, `target="_blank"`, `rel="noopener"` — or, only against an older
+   daemon with no `enter_post_url`, `window.open` the GET enter URL instead.
+5. Button returns to **Open {app}**. No polling, no embedded iframe, no
    progress bar — the new tab is the feedback.
-5. Any failure in 2 or 3 → S5 under that row; the other rows are untouched.
+6. Any failure in 2, 3 or 4 → S5 under that row; the other rows are untouched.
 
 Never embed the app in this page — an `<iframe>` on the console origin is the
 exact attack the second listener exists to prevent.

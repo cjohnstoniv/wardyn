@@ -22,6 +22,7 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { HttpError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -51,10 +52,13 @@ import { cn } from "../ui/utils";
 import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { PageHeader } from "../wardyn/page-header";
+import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
+import { UNSAVED } from "../../lib/unsaved-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
 // internal/api/runs_policy.go) — a machine lane, never a member.
@@ -69,15 +73,58 @@ const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 // how a capability grant, a profile assignment and an allocation start
 // disagreeing about what "Everyone signed in" means. ONE home, beside the
 // control that renders it.
-export const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: string }[] = [
+//
+// UT-7a: the add forms now offer a user type too — the picker below renders a
+// closed <Select> of the org's types rather than free text (a type is a
+// bounded, admin-authored set, never something to spell out or search a
+// directory for). "all" stays excluded from PickableSubjectType-as-a-typed-in
+// value on purpose: it carries no subject text at all (SUBJECTS below still
+// lists it), so the type alone is `CapabilitySubjectType`.
+export type PickableSubjectType = CapabilitySubjectType;
+export const SUBJECTS: { value: PickableSubjectType; label: string; hint: string }[] = [
   { value: "user", label: PERM.SUBJECT_USER, hint: PERM.HINT_USER },
   { value: "group", label: PERM.SUBJECT_GROUP, hint: PERM.HINT_GROUP },
+  { value: "user_type", label: PERM.SUBJECT_USER_TYPE, hint: PERM.HINT_USER_TYPE },
   { value: "all", label: PERM.SUBJECT_ALL, hint: PERM.HINT_ALL },
 ];
+
+// The "Who" input for a user_type subject — a closed <Select> of the org's
+// types, never free text: a type is a bounded, admin-authored set (unlike a
+// user or a group, which the directory search assists but never enumerates).
+// Exported for the SAME reason Segmented/SUBJECTS are: the governance
+// assignments block and the drive allocations block need this exact control
+// too, and a third hand-rolled copy is how the three forms disagree about
+// what picking "a user type" looks like.
+export function UserTypeSubjectSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const { userTypes } = useUserTypes();
+  return (
+    <Select value={value} onValueChange={onChange} disabled={disabled || userTypes.length === 0}>
+      <SelectTrigger aria-label={PERM.FIELD_WHO}>
+        <SelectValue placeholder={PERM.SUBJECT_USER_TYPE} />
+      </SelectTrigger>
+      <SelectContent>
+        {userTypes.map((t) => (
+          <SelectItem key={t.id} value={t.id}>
+            {t.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
   user: PERM.SUBJECT_USER,
   group: PERM.SUBJECT_GROUP,
+  user_type: PERM.SUBJECT_USER_TYPE,
   all: PERM.SUBJECT_ALL,
 };
 
@@ -90,9 +137,19 @@ function kindLabel(capability: string): string {
 
 // Who a row names, for the remove/unassign confirmations. Structural on
 // purpose: a capability grant, a governance assignment and a drive allocation
-// are three different rows that all carry this one pair.
-export function subjectText(g: { subject_type: CapabilitySubjectType; subject: string }): string {
-  return g.subject_type === "all" ? PERM.SUBJECT_ALL : g.subject;
+// are three different rows that all carry this one pair. A user type reads by
+// its name (useUserTypeName), the name its picker offers, never its id.
+type SubjectRow = { subject_type: CapabilitySubjectType; subject: string };
+export function subjectText(g: SubjectRow, typeName: (id: string) => string = (id) => id): string {
+  if (g.subject_type === "all") return PERM.SUBJECT_ALL;
+  return g.subject_type === "user_type" ? typeName(g.subject) : g.subject;
+}
+
+// The same, in a row beside its SUBJECT_LABEL chip: a person or a group as
+// written (mono), a type by its human-chosen name (never mono).
+export function SubjectName({ g, typeName }: { g: SubjectRow; typeName: (id: string) => string }) {
+  if (g.subject_type === "all") return null;
+  return g.subject_type === "user_type" ? <span>{typeName(g.subject)}</span> : <Mono>{g.subject}</Mono>;
 }
 
 // A quiet standing fact in the header — not an alert. The doctrine and the
@@ -109,10 +166,20 @@ function Fact({ icon: Icon, children }: { icon: React.ElementType; children: Rea
 
 // A consequence note under a kind. `tone` carries the meaning: plain for the
 // advisory/posture facts, red for the two that bite (a deny with the switch
-// off, and enforcing with nothing granted).
-function Note({ tone = "plain", children }: { tone?: "plain" | "red"; children: React.ReactNode }) {
+// off, and enforcing with nothing granted) — and, with `role="alert"`, G-7's
+// refused-add sentence in the Add form.
+function Note({
+  tone = "plain",
+  role,
+  children,
+}: {
+  tone?: "plain" | "red";
+  role?: string;
+  children: React.ReactNode;
+}) {
   return (
     <p
+      role={role}
       className={cn(
         "mt-2 max-w-[78ch] rounded-lg px-3 py-2 text-xs leading-relaxed",
         tone === "red" ? "bg-danger-subtle text-danger" : "bg-muted text-muted-foreground",
@@ -137,7 +204,14 @@ export function Segmented<T extends string>({
   disabled,
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: {
+    value: T;
+    label: string;
+    /** #460 — this option's own draft differs from what loaded; renders the
+     *  dirty chip beside its label, the tab's own "title". Optional: only
+     *  providers-screen.tsx's Git/Storage/Agents options set it today. */
+    dirty?: boolean;
+  }[];
   onChange: (v: T) => void;
   disabled?: boolean;
 }) {
@@ -151,7 +225,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
-            "border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex items-center gap-1.5 border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
             value === o.value
               ? o.value === "deny"
                 ? "bg-danger-subtle font-medium text-danger"
@@ -160,6 +234,16 @@ export function Segmented<T extends string>({
           )}
         >
           {o.label}
+          {/* aria-hidden: the chip is a VISUAL echo of a fact already
+              announced elsewhere (the PageHeader chip, the beside-Save
+              marker) — folding its text into this button's accessible name
+              would silently break every exact-string `getByRole(...,
+              {name: o.label})` lookup the moment the tab it names is dirty. */}
+          {o.dirty && (
+            <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
+              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -175,6 +259,7 @@ export function PermissionsScreen() {
   // their own grants; they are audited, and they reach nothing that exemption
   // would give them.
   const securityOperator = useSecurityOperator();
+  const typeName = useUserTypeName();
   // `null` is the UNKNOWN state, and it exists on purpose: PermissionsSnapshot's
   // `enforcement` map encodes an absent key as "not enforced" (types/permissions.ts),
   // so a seed object of `{ grants: [], enforcement: {} }` is byte-identical to a
@@ -247,7 +332,7 @@ export function PermissionsScreen() {
 
   return (
     <div className="mx-auto max-w-[1120px] px-6 py-6">
-      <PageHeader title={PERM.TITLE} description={PERM.LEAD} />
+      <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
       <div className="space-y-2">
         <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
@@ -322,7 +407,7 @@ export function PermissionsScreen() {
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-2">
                         <Chip tone="neutral">{SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
-                        {g.subject_type !== "all" && <Mono>{g.subject}</Mono>}
+                        <SubjectName g={g} typeName={typeName} />
                       </span>
                     </TableCell>
                     <TableCell>{kindLabel(g.capability)}</TableCell>
@@ -392,7 +477,7 @@ export function PermissionsScreen() {
           <AlertDialogHeader>
             <AlertDialogTitle>{PERM.REMOVE}</AlertDialogTitle>
             <AlertDialogDescription>
-              {PERM.REMOVE_CONFIRM(toRemove ? subjectText(toRemove) : "")}
+              {PERM.REMOVE_CONFIRM(toRemove ? subjectText(toRemove, typeName) : "")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -401,7 +486,7 @@ export function PermissionsScreen() {
               className="bg-danger text-danger-foreground hover:bg-danger/90"
               onClick={(e) => {
                 e.preventDefault();
-                if (toRemove) removeGrant(toRemove);
+                if (toRemove) void removeGrant(toRemove);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}
@@ -523,16 +608,46 @@ function ConfirmEnforcement({
   );
 }
 
+// UT-7a (G-7): what the user types grid's per-family Add button fixes —
+// Who (this type) and Capability (the family), both read-only in the form.
+export interface FixedGrantSubject {
+  subjectType: PickableSubjectType;
+  subject: string;
+  /** The chip's trailing text (the type's name, not its id). */
+  subjectLabel: string;
+  kind: CapabilityKind;
+}
+
 // The add form. Wildcards are typed into Value, not a separate control — the
-// value field's label and hint are what change per kind.
-function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () => void }) {
-  const [subjectType, setSubjectType] = React.useState<CapabilitySubjectType>("user");
-  const [subject, setSubject] = React.useState("");
-  const [kind, setKind] = React.useState<CapabilityKind>("egress_host");
+// value field's label and hint are what change per kind. Exported for the user
+// types grid (G-7): `fixed` locks Who and Capability to the row that opened
+// it — Add writes the SAME grant row Permissions would, with the SAME
+// strings, including the type-deny wall warning below. `hideTitle` drops the
+// section's own heading and card chrome for a caller that supplies its own
+// (the grid's dialog title).
+export function AddGrantForm({
+  disabled,
+  onAdded,
+  fixed,
+  hideTitle,
+}: {
+  disabled: boolean;
+  onAdded: () => void;
+  fixed?: FixedGrantSubject;
+  hideTitle?: boolean;
+}) {
+  const [subjectType, setSubjectType] = React.useState<PickableSubjectType>(fixed?.subjectType ?? "user");
+  const [subject, setSubject] = React.useState(fixed?.subject ?? "");
+  const [kind, setKind] = React.useState<CapabilityKind>(fixed?.kind ?? "egress_host");
   const [value, setValue] = React.useState("");
   const [effect, setEffect] = React.useState<CapabilityEffect>("allow");
   const [saving, setSaving] = React.useState(false);
   const [duplicate, setDuplicate] = React.useState(false);
+  const [confirmWall, setConfirmWall] = React.useState(false);
+  // G-7's "Refused" state: the server's own sentence, in the form, verbatim —
+  // never a toast, so the caller never has to look away from the dialog they
+  // are still looking at (the dialog itself never closes on a refusal).
+  const [error, setError] = React.useState<string | null>(null);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -541,6 +656,7 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
   const submit = async () => {
     setSaving(true);
     setDuplicate(false);
+    setError(null);
     try {
       const res = await api.upsertGrant({
         subject_type: subjectType,
@@ -555,50 +671,71 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
       setValue("");
       onAdded();
     } catch (e) {
-      toast.error("Failed to add grant", { description: getErrorMessage(e) });
+      setError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setSaving(false);
     }
   };
 
-  return (
-    <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
-      <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
+  const body = (
+    <>
       <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Field label={PERM.FIELD_WHO} hint={whoHint}>
-          <div className="space-y-2">
-            <Segmented
-              value={subjectType}
-              onChange={(v) => setSubjectType(v)}
-              disabled={disabled}
-              options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
-            />
-            {subjectType !== "all" && (
-              <Input
-                aria-label={PERM.FIELD_WHO}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
+        <Field label={PERM.FIELD_WHO} hint={fixed ? undefined : whoHint}>
+          {fixed ? (
+            <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-input-background px-3 text-body">
+              <Chip tone="neutral">{SUBJECTS.find((s) => s.value === fixed.subjectType)?.label}</Chip>
+              <span>{fixed.subjectLabel}</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Segmented
+                value={subjectType}
+                onChange={(v) => {
+                  // Typed text is no type id, and a type id is no typed text:
+                  // carried across, it would post a subject nobody can see.
+                  if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                  setSubjectType(v);
+                }}
                 disabled={disabled}
-                className="font-mono"
-                autoComplete="off"
+                options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
               />
-            )}
-          </div>
+              {subjectType === "user_type" ? (
+                <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+              ) : (
+                subjectType !== "all" && (
+                  <Input
+                    aria-label={PERM.FIELD_WHO}
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    disabled={disabled}
+                    className="font-mono"
+                    autoComplete="off"
+                  />
+                )
+              )}
+            </div>
+          )}
         </Field>
 
         <Field label={PERM.FIELD_CAPABILITY} htmlFor="grant-capability">
-          <Select value={kind} onValueChange={(v) => setKind(v as CapabilityKind)} disabled={disabled}>
-            <SelectTrigger id="grant-capability">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CAPABILITY_KINDS.map((k) => (
-                <SelectItem key={k} value={k}>
-                  {KIND[k].label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {fixed ? (
+            <div className="flex h-9 items-center rounded-md border border-input bg-input-background px-3 text-body">
+              {KIND[fixed.kind].label}
+            </div>
+          ) : (
+            <Select value={kind} onValueChange={(v) => setKind(v as CapabilityKind)} disabled={disabled}>
+              <SelectTrigger id="grant-capability">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CAPABILITY_KINDS.map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {KIND[k].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </Field>
 
         <Field label={copy.valueLabel} htmlFor="grant-value" hint={copy.valueHint} required>
@@ -627,12 +764,52 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
         </Field>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button onClick={submit} disabled={disabled || saving || !ready}>
+        <Button
+          // A deny on a user type is a wall no person or group allow lifts —
+          // design §7 asks before writing one.
+          onClick={() => (effect === "deny" && subjectType === "user_type" ? setConfirmWall(true) : submit())}
+          disabled={disabled || saving || !ready}
+        >
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {PERM.ADD_CTA}
         </Button>
         {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
       </div>
+      {/* G-7's "Refused" state (packet §2): the server's own sentence, in the
+          form the caller is still looking at. The dialog never closes on it. */}
+      {error && (
+        <Note tone="red" role="alert">
+          {error}
+        </Note>
+      )}
+      <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{PERM.TYPE_DENY_TITLE}</AlertDialogTitle>
+            <AlertDialogDescription>{PERM.TYPE_DENY_BODY}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              onClick={() => {
+                setConfirmWall(false);
+                void submit();
+              }}
+            >
+              {PERM.ADD_CTA}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+
+  if (hideTitle) return body;
+  return (
+    <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
+      <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
+      {body}
     </section>
   );
 }

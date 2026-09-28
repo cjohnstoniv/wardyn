@@ -54,9 +54,37 @@ export const SIGNIN = {
   EMAIL_VERIFIED_ABSENT:
     "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so Wardyn can't confirm your email on its own. Ask your Wardyn admin to map your role by App Role or group instead.",
   ROLE_CHECK_UNAVAILABLE: "Couldn't check your access — try again, or ask your Wardyn admin.",
+  // 0.8 user types: the role map gives this person two types at the same
+  // priority (Wardyn never picks one), or a type that doesn't exist.
+  USER_TYPE_AMBIGUOUS:
+    "Your account matches two user types with the same priority, so Wardyn won't pick one. Ask your Wardyn admin to give one of them a higher priority.",
+  USER_TYPE_UNKNOWN:
+    "Your account maps to a user type that doesn't exist. Ask your Wardyn admin to create it or change the mapping.",
   OIDC_TRANSIENT:
     "Your identity provider didn't respond in time. This is usually temporary — try signing in again.",
   OIDC_CONFIG:
     "Sign-in with your identity provider failed. Try again; if it keeps happening, ask your Wardyn admin to check the sign-in configuration.",
   AUTH_FAILED: "Sign-in failed. Try again, or ask your Wardyn admin.",
 } as const;
+
+// #484 — the two pieces of the admin-written request-access help the sign-in
+// page needs. Moved here from people-access-copy.ts (bundle-split.test.ts's
+// budget, batch 08-7): that module is otherwise reached only through the
+// lazy People step, and sign-in.tsx pulling even one export off it dragged
+// the whole canon table — six big tables, none of them sign-in's own — into
+// the entry chunk. The People-step card's OWN strings (SIGNIN_HELP, the big
+// one) already live in access-posture-copy.ts for the same reason; only the
+// link label and the refusal set the sign-in page itself needs live here.
+//
+// The link's one fixed label (Q457-7), frozen in docs/design/admin-access-canon.md.
+export const SIGNIN_HELP_LINK_LABEL = "Request access";
+
+// Q457-6: the four auth_error codes (internal/auth/oidc's authError* consts)
+// that carry the admin's help — the refusals a person cannot clear alone.
+// Every other refusal (a timeout, a config error, the generic arm) gets none.
+export const SIGNIN_HELP_REFUSALS: ReadonlySet<string> = new Set([
+  "no_role",
+  "email_domain",
+  "claims_overage",
+  "email_verified_absent",
+]);

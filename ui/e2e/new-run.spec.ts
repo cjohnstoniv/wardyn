@@ -21,7 +21,7 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
@@ -96,8 +96,7 @@ test.describe("New run — one page", () => {
     await expect(page.getByText(/1[0-9] domains allowed/)).toBeVisible();
 
     // A broken document says so instead of deriving from nothing, and Launch
-    // stops rather than posting a body nobody can read. The title is filled
-    // first so the disable is the SPEC's doing, not the title rule's.
+    // stops rather than posting a body nobody can read.
     await page.getByLabel("Title").fill("e2e smoke");
     await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
     await spec.fill("{ not json");
@@ -143,9 +142,6 @@ test.describe("New run — one page", () => {
     await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
     await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "Saved policy" })).toBeVisible();
-    // The launch gate surfaces ONE problem at a time, earliest first — give
-    // the run a title so the policy problem is the displayed message.
-    await page.getByLabel("Title").fill("mode row e2e");
     // Nothing is picked yet, so Launch says what it is waiting for.
     await expect(page.getByText("Pick a saved policy, or write a custom one.")).toBeVisible();
 
@@ -161,16 +157,14 @@ test.describe("New run — one page", () => {
   // or fail on who ran it. It is pinned in new-run-screen.test.tsx instead,
   // where the SetupStatus is controlled.
 
-  // Every run is named: the title is the grouping key on the Runs board, so
-  // Launch stays disabled — and says why — until there is one.
-  test("Launch waits for a title, and says what it is waiting for", async ({ page }) => {
+  // #1197 L2: a title is no longer required to launch — the server never
+  // enforced one, only this screen did, and now the console default derives
+  // one from the task instead of refusing to launch without one.
+  test("Launch does not require a title", async ({ page }) => {
     await openNewRun(page);
     const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeDisabled();
-    await expect(page.getByText("Give this run a title.")).toBeVisible();
-
-    await page.getByLabel("Title").fill("e2e smoke");
     await expect(launch).toBeEnabled();
+    await expect(page.getByText("Give this run a title.")).toHaveCount(0);
   });
 
   test("launching creates a run and lands on its detail page", async ({ page }) => {
@@ -224,8 +218,9 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
 // all). The failure block no longer has its own clone button, so
 // `getByRole("button", { name: RUN.CLONE_CTA })` below resolves to exactly
 // one element (a second door would be a Playwright strict-mode violation).
-test.describe("New run — B4b clone from a killed run", () => {
-  test("clones task/agent/barrier from the killed run, and Launch enables once titled", async ({ page }) => {
+test.describe("New run — clone from a killed run", () => {
+  // ticket: B4b
+  test("clones task/agent/barrier from the killed run; Title tracks the cloned task", async ({ page }) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     // "e2e fixture 7" is the seeded backend's KILLED run (scripts/e2e-backend.sh)
     // — read its real facts rather than hardcode them, so this test tracks the
@@ -237,7 +232,7 @@ test.describe("New run — B4b clone from a killed run", () => {
 
     await gotoConsole(page);
     await page.getByText("e2e fixture 7").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Killed", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: RUN.CLONE_CTA }).click();
@@ -261,10 +256,13 @@ test.describe("New run — B4b clone from a killed run", () => {
       page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: barrierLabel }),
     ).toHaveAttribute("aria-checked", "true");
 
-    // Title does NOT clone (fixture 7 was seeded untitled) — Launch is
-    // withheld until one is given, exactly the fresh-wizard rule.
+    // Title does NOT clone verbatim (fixture 7 was seeded untitled) — but
+    // #1197 L2's prefill fills it from the cloned task, so Launch is already
+    // enabled with no title of the operator's own typed yet.
     const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeDisabled();
+    await expect(page.getByLabel("Title")).toHaveValue(source.task);
+    await expect(launch).toBeEnabled();
+    // Still editable — the operator's own title replaces the derived one.
     await page.getByLabel("Title").fill("cloned from fixture 7");
     await expect(launch).toBeEnabled();
   });
@@ -313,7 +311,7 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // F2-F7/F3-F1: a minimal rail runs ~490-520px (fits easily at 650px tall);
 // with a governance ceiling + a saved policy's tool_rules + 3 launch warnings
 // all showing at once (the member/warnings path) it runs ~700-730px — below
-// the fold at 1280x650 with no way to reach Launch/Open run. Spliced onto the
+// the fold at 1280x650 with no way to reach Launch. Spliced onto the
 // real GET /policies/default, GET /policies and POST /runs responses (the
 // same splice technique agents.spec.ts's own "201 carrying warnings" test
 // uses, for the same reason: this harness's admin-token caller is never
@@ -321,9 +319,10 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // the RAIL'S rendering of the combination, not the server-side clamping
 // itself (Go-tested). ui/new-run-rail.tsx's primitive-level
 // lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto (this lane) is what keeps
-// Launch/Open run reachable here.
+// Launch reachable here; #125 dropped the post-launch "Open run" hold this
+// used to also pin — a launch now navigates away in the same tick.
 test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
-  test("Launch, then Open run, stay in viewport with every rail section showing at once", async ({ page }) => {
+  test("Launch stays reachable with every rail section showing at once, and navigates straight to the run with its warnings", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 650 });
 
     const baseSpec = {
@@ -388,7 +387,8 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await page.getByRole("combobox", { name: "Saved policy" }).click();
     await page.getByRole("option", { name: "e2e rail-height policy" }).click();
     await expect(page.getByText("Tool rules", { exact: true })).toBeVisible();
-    // Launch is disabled with no title ("Give this run a title.") — fill one.
+    // A title isn't required to launch (#1197 L2) — filled anyway so the rail
+    // this test measures matches what an operator actually fills in.
     await page.getByLabel("Title").fill("e2e rail-height");
 
     // Reachable via scroll — not "fits with no scroll needed" (the rail is
@@ -410,16 +410,18 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
 
     await launch.click();
 
-    // Now all three warnings render too, and Open run replaces Launch — still
-    // reachable, which is the actual defect this lane's fix addresses.
+    // #125: a 2xx launch navigates straight to the run, in the same tick — no
+    // held rail to stay reachable in any more. All three warnings ride along
+    // as router state and render on the run page itself.
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
-    const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
-    await expect(openRun).toBeVisible();
-    await openRun.scrollIntoViewIfNeeded();
-    box = await openRun.boundingBox();
-    expect(box, "Open run boundingBox").not.toBeNull();
-    expect(box!.y, "Open run top edge").toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height, "Open run bottom edge").toBeLessThanOrEqual(650);
+    for (const w of [
+      "Egress narrowed to api.anthropic.com by member policy.",
+      "Confinement floor raised to CC2 by member policy.",
+      "Grant kind git_pat removed by member policy.",
+    ]) {
+      await expect(page.getByText(w)).toBeVisible();
+    }
   });
 });
 
@@ -691,6 +693,29 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await refuseLaunch(page, { error: refusal });
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e plain refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByText(refusal)).toBeVisible();
+    // #459: the refusal is an announced alert region, sr-only prefix + the
+    // server's own sentence, unchanged. No dialog opens here to aria-hide it.
+    await expect(page.getByRole("alert")).toContainText(RAIL.LAUNCH_ERROR_LABEL);
+    await expect(page.getByRole("alert")).toContainText(refusal);
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+  });
+
+  // #725/T-65 — a Codex launch refused for its OWN model_credential reason
+  // must not open "Sign in to AWS": that sign-in repairs the claude-code
+  // row alone, and this deployment's per_user claude-code row (perUserRow,
+  // above) is a DIFFERENT agent than the one that was actually refused.
+  test("a codex launch's model_credential refusal opens no AWS sign-in, on a deployment with a per_user claude-code row", async ({
+    page,
+  }) => {
+    await perUserRow(page);
+    await refuseLaunch(page, { error: refusal, reason: "model_credential" });
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e codex refusal");
+    await page.getByRole("combobox", { name: "Agent" }).click();
+    await page.getByRole("option", { name: "Codex CLI" }).click();
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page.getByText(refusal)).toBeVisible();
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);

@@ -141,9 +141,10 @@ test.describe("Add workspace dialog", () => {
   // content) — it only reproduces once Advanced is expanded (~910px), which
   // this test does. ui/dialog.tsx's primitive-level max-h-[calc(100dvh-2rem)]
   // + overflow-y-auto (this lane) is what keeps Add workspace reachable here.
-  test("F3-F8: 400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen", async ({
+  test("400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen", async ({
     page,
   }) => {
+    // ticket: F3-F8
     // gotoConsole waits on the DESKTOP sidebar link — below md that aside is
     // hidden entirely (md:flex), so the viewport switch has to come AFTER
     // landing, not before.
@@ -180,6 +181,14 @@ test.describe("Add workspace dialog", () => {
 // so the role is spliced the usual way and the OWNER is spliced onto the list
 // the console reads — that pair is exactly the member shape this fix is about.
 test.describe("Workspaces — a member deletes the row they own", () => {
+  test.afterEach(async ({ page }) => {
+    // #469 (CI-flake): the list's poll can still be inside the route handler
+    // below when the test ends, and closing the context disposes the response
+    // it is reading ("Response has been disposed"). Same teardown as
+    // setup-gate.spec.ts and people-access.spec.ts.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("their own row's Delete is live and lands; an operator-owned row stays parked", async ({ page }) => {
     const mine = uniqueName("mine");
     const created = await page.request.post("/api/v1/workspaces", {

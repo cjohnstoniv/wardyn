@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -56,7 +57,7 @@ var terminalGraceRoutes = []string{
 // jti, which is the record an auditor reads for "a token asked to outlive its
 // run". Running this gate in front of it would replace that row with a generic
 // one and buy nothing, because renew's own check is stricter on every axis.
-// Pinned by TestRenewU070_TerminalRunRefusedFailClosed.
+// Pinned by TestTerminalRunRefusedFailClosed.
 var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 
 // refuseTerminalRun is internalAuth's liveness half: the run whose token
@@ -105,7 +106,11 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			s.auditInternalDenied(r, claims, "run_not_found", "")
+			// 403, not 404: the caller already authenticated with claims.RunID's
+			// own signed token, so a missing run means ITS credential no longer
+			// names anything — an authorization failure, not a member guessing at
+			// a path a 404 would have to keep silent about.
+			s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "", "")
 			writeError(w, http.StatusForbidden, "run not found")
 			return false
 		}
@@ -121,14 +126,33 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		writeError(w, http.StatusServiceUnavailable, "read run failed; retry")
 		return false
 	}
-	if !isTerminalRunState(run.State) {
+	now := s.cfg.Now().UTC()
+	// Terminal first: a kept run keeps its lost mark when it is later killed or
+	// torn down, and a terminal run is refused as terminal whatever it was.
+	if isTerminalRunState(run.State) {
+		if internalUploadWithinGrace(r.URL.Path, run, now) {
+			return true
+		}
+		s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "run_state", string(run.State))
+		writeError(w, http.StatusForbidden, "run is terminal")
+		return false
+	}
+	if !runIsKept(run) {
 		return true
 	}
-	if internalUploadWithinGrace(r.URL.Path, run, s.cfg.Now().UTC()) {
+	// A kept run (ended by its lease, or lost to a reboot or an outage) is
+	// still RUNNING, but its proxy is stopped on purpose and only a revive
+	// gives it a new one, under a token of its own (#1176). The old token is
+	// not revoked, so it would verify until its TTL lapses: the stopped
+	// proxy's config still holds it. Refuse it here as renew already does, so
+	// no mint, injection or decision is answered for it. The tail uploads keep
+	// their grace, counted from the mark: the agent stops before its proxy,
+	// and its last cast races both.
+	if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LostAt, now) {
 		return true
 	}
-	s.auditInternalDenied(r, claims, "run_terminal", string(run.State))
-	writeError(w, http.StatusForbidden, "run is terminal")
+	s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
+	writeError(w, http.StatusForbidden, "run is lost")
 	return false
 }
 
@@ -167,18 +191,19 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // sandbox_ref bump for already-terminal rows); until then the window is
 // measured from the row's last write and says so.
 func internalUploadWithinGrace(path string, run types.AgentRun, now time.Time) bool {
-	if !pathHasAny(path, terminalGraceRoutes) {
+	return pathHasAny(path, terminalGraceRoutes) && uploadGraceOpen(run.UpdatedAt, now)
+}
+
+// uploadGraceOpen reports whether now is within terminalUploadGrace of since.
+// A clock that has not been set (a zero Now, or a zero since) must not
+// silently widen the window: Sub on a zero time is a very large positive
+// duration, so the comparison is written to fail closed on one rather than
+// open. A FUTURE since fails closed for the same reason (the age check is >= 0).
+func uploadGraceOpen(since, now time.Time) bool {
+	if since.IsZero() {
 		return false
 	}
-	// A clock that has not been set (a zero Now, or a run row with no
-	// UpdatedAt) must not silently widen the window: Sub on a zero time is a
-	// very large positive duration, so the comparison is written to fail closed
-	// on one rather than open. A FUTURE timestamp fails closed for the same
-	// reason (the age check below is >= 0).
-	if run.UpdatedAt.IsZero() {
-		return false
-	}
-	age := now.Sub(run.UpdatedAt)
+	age := now.Sub(since)
 	return age >= 0 && age <= terminalUploadGrace
 }
 
@@ -190,14 +215,14 @@ func internalUploadWithinGrace(path string, run types.AgentRun, now time.Time) b
 // datum rather than being concatenated into it: a SIEM rule is written against
 // the enum docs/OPERATIONS.md publishes, and `run_terminal:KILLED` is not a
 // member of that enum — `run_terminal` is, with `run_state` saying which
-// terminal state was found. runState is "" for the reasons that have none.
-func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason, runState string) {
-	data := map[string]any{"reason": reason, "actor": internalAuthActor}
-	if runState != "" {
-		data["run_state"] = runState
+// terminal state was found (and `run_kept` with `lost_reason`). key is "" for
+// the reasons that have no such datum.
+func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason authz.Reason, key, val string) {
+	d := authz.Deny(reason, r.URL.Path, "").OnRun(claims.RunID).With("actor", internalAuthActor)
+	if key != "" {
+		d = d.With(key, val)
 	}
-	ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"authz.denied", r.URL.Path, "denied", mustJSON(data))
+	ev := s.refusalEvent(r.Context(), types.ActorAgent, claims.SPIFFEID, r.Method, d)
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 }

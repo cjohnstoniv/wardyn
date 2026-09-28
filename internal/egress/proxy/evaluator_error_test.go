@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestEvaluatorErrorFailsClosed pins F142: evaluate() must treat an
+// TestEvaluatorErrorFailsClosed: evaluate() must treat an
 // egress.Evaluator error as a DENY under rule_source policy:evaluator-error.
 //
 // internal/egress/evaluator.go states it as a MUST and docs/UI-SANDBOXES.md

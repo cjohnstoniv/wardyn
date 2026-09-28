@@ -30,29 +30,22 @@ var ErrNotFound = errors.New("recording: not found")
 
 // Store is the recording persistence contract.
 //
-// SaveCast persists the asciicast bytestream from r under runID, replacing any
-// prior recording for that run. It must be safe for concurrent saves of
-// different runIDs.
+// SaveCast persists the asciicast bytestream from r under runID, replacing
+// any prior recording; safe for concurrent saves of different runIDs.
 //
-// SaveCastNamed persists the asciicast bytestream from r under a composite key
-// "<runID>~<suffix>" (e.g. an interactive attach session id), so an interactive
-// session recording does NOT clobber the batch run's cast (keyed by bare runID)
-// and concurrent/sequential attaches each get their own cast. The same path
-// guardrails (no traversal) apply to both runID and suffix. The composite key is
-// what OpenCast surfaces; the recording HTTP handler can serve it by that key.
-// Passing an empty suffix is equivalent to SaveCast.
+// SaveCastNamed persists under a composite key "<runID>~<suffix>" (e.g. an
+// interactive attach session id), so it does NOT clobber the batch run's
+// cast (keyed by bare runID). The same path guardrails apply to both runID
+// and suffix. Passing an empty suffix is equivalent to SaveCast.
 //
-// OpenCast returns a ReadCloser for the asciicast. The caller is responsible
-// for closing it. Returns ErrNotFound when no recording exists. The key is
-// either a bare runID (batch cast) or a "<runID>~<suffix>" composite.
+// OpenCast returns a ReadCloser for the asciicast (caller closes it);
+// ErrNotFound when no recording exists. The key is either a bare runID or a
+// "<runID>~<suffix>" composite.
 //
-// StatAndTail answers "does this key have a recording, how big is it, and what
-// are its last tailBytes" WITHOUT returning the whole payload — R4-F077's
-// server-side half of what used to be a full OpenCast + download per run just
-// to learn a size and a duration. tailBytes is clamped to size when the cast is
-// smaller; a caller wanting the duration parses the tail for the last output
-// event (internal/recording.LastOutputElapsed) rather than the whole document.
-// Returns ErrNotFound when no recording exists, on the same terms as OpenCast.
+// StatAndTail answers "does this key have a recording, how big is it, and
+// what are its last tailBytes" WITHOUT returning the whole payload.
+// tailBytes is clamped to size when the cast is smaller. Returns ErrNotFound
+// on the same terms as OpenCast.
 type Store interface {
 	SaveCast(ctx context.Context, runID string, r io.Reader) error
 	SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error
@@ -76,10 +69,9 @@ func CastKey(runID, suffix string) string {
 
 // validSuffix rejects a session suffix that could misaddress a cast: one
 // containing castSep would let a composite key collide with a DIFFERENT
-// run/suffix pair, and the rest are the same defensive set safeRunPath applies
-// to a runID. Shared by every Store implementation's SaveCastNamed (not just
-// FSStore's) so a suffix is accepted or rejected identically no matter which
-// backend WARDYN_RECORDING_STORE selects.
+// run/suffix pair. Shared by every Store implementation's SaveCastNamed so a
+// suffix is accepted or rejected identically no matter which backend
+// WARDYN_RECORDING_STORE selects.
 func validSuffix(suffix string) error {
 	if strings.ContainsAny(suffix, "/\\\x00"+castSep) || strings.Contains(suffix, "..") {
 		return errors.New("recording: invalid session suffix")
@@ -107,8 +99,7 @@ func NewFSStore(root string) (*FSStore, error) {
 // the runID and the composite key are checked by safeRunPath (fails closed on
 // any path-traversal attempt in either component).
 func (s *FSStore) SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error {
-	// Reject a suffix that could carry path separators / traversal up front, so
-	// the composite key cannot escape root even though safeRunPath re-checks.
+	// Reject a suffix carrying separators/traversal up front, before safeRunPath re-checks.
 	if err := validSuffix(suffix); err != nil {
 		return err
 	}
@@ -140,26 +131,22 @@ func (s *FSStore) SaveCast(_ context.Context, runID string, r io.Reader) error {
 		return err
 	}
 	if err := os.Rename(tmpName, dst); err != nil {
-		// The rename is the last step that can fail; without this unlink the
-		// store leaks its own .tmp-cast-* file (Sweep only sees it when retention is on).
+		// Without this unlink the store leaks its own .tmp-cast-* file.
 		_ = os.Remove(tmpName)
 		return err
 	}
 	return nil
 }
 
-// Sweep unlinks every cast (and every orphaned atomic-write temp file) directly
-// under root whose mtime is older than olderThan, returning how many files it
-// removed. It is deliberately NOT on the Store interface: retention is an
-// fs-storage concern, and an object-storage Store would use its bucket's own
-// lifecycle rules. Callers type-assert for it, so a store without retention is
-// visibly without retention rather than silently swept.
+// Sweep unlinks every cast (and every orphaned atomic-write temp file)
+// directly under root whose mtime is older than olderThan, returning how
+// many files it removed. Deliberately NOT on the Store interface: retention
+// is an fs-storage concern, so callers type-assert for it.
 //
-// Age is measured on ModTime, not birth time: the recordings directory is also
-// mounted into agent containers for wardyn-rec's -out-dir fallback, so a cast
-// may still be being appended to. mtime advances on every write, which is what
-// makes unlinking-by-age safe against an in-flight session — do not "improve"
-// this to birth time.
+// Age is measured on ModTime, not birth time: the recordings directory is
+// also mounted into agent containers for wardyn-rec's -out-dir fallback, so
+// a cast may still be being appended to, and mtime advances on every write —
+// do not "improve" this to birth time.
 func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	ents, err := os.ReadDir(s.root)
 	if err != nil {
@@ -173,8 +160,7 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 		if e.IsDir() || (!strings.HasSuffix(name, ".cast") && !strings.HasPrefix(name, ".tmp-cast-")) {
 			continue
 		}
-		// A stat error means the entry vanished under us (a concurrent sweep or
-		// an atomic rename); nothing to remove either way.
+		// A stat error means the entry vanished under us; nothing to remove.
 		info, ierr := e.Info()
 		if ierr != nil || !info.ModTime().Before(cutoff) {
 			continue
@@ -230,10 +216,8 @@ func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (i
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return size, nil, err
 	}
-	// LimitReader, not a bare ReadAll: the file may still be open for writes
-	// elsewhere (wardyn-rec's own upload, or a re-SaveCast) between the Stat
-	// above and this read, and an unbounded read would follow the file past
-	// the tail window this call promised.
+	// LimitReader, not a bare ReadAll: the file may still be written to
+	// elsewhere between the Stat above and this read.
 	tail, err := io.ReadAll(io.LimitReader(f, size-start))
 	if err != nil {
 		return size, nil, err
@@ -242,12 +226,9 @@ func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (i
 }
 
 // validKey rejects a cast key (a bare runID or a "<runID>~<suffix>" composite)
-// that no Store should accept. Shared by EVERY implementation, not just the
-// path-building one: the checks read as fs-specific but a divergence is a
-// correctness bug on its own — a key one backend stores and another rejects
-// means switching WARDYN_RECORDING_STORE silently changes which recordings
-// exist, and a raw NUL byte reaching Postgres surfaces as a driver error
-// instead of this message. recordingtest's conformance suite pins it for both.
+// that no Store should accept. Shared by EVERY implementation: a key one
+// backend stores and another rejects means switching WARDYN_RECORDING_STORE
+// silently changes which recordings exist.
 func validKey(key string) error {
 	if key == "" {
 		return errors.New("recording: empty run id")

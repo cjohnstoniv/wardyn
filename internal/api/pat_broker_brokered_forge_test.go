@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch (F216-R1) pins the two
+// TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch pins the two
 // halves of dispatch to ONE answer to "which PAT may this run use for this
 // forge?".
 //
@@ -38,7 +38,7 @@ func TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // composition only: no agent exec, no completion watcher
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		// A github_token grant for a repo on the brokered forge is what makes the
 		// run brokered for it (the same map confineGitBrokerEgress keys on).

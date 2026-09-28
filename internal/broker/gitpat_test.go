@@ -6,6 +6,8 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -71,6 +73,23 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
 }
 
 // For returns an owner-scoped view sharing the same backing maps as s — see
@@ -144,7 +163,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	secrets.m["wardyn-signing-key"] = []byte("super-secret-signing-key")
 	// Seeded so the reserved-name check (not missing-secret) is what fails closed.
 	secrets.m["wardyn-harness-anthropic-oauth"] = []byte("resident-oauth-blob")
-	// W12-B-1: the GitHub App credentials, SSH host key, and Bedrock bearer token
+	// The GitHub App credentials, SSH host key, and Bedrock bearer token
 	// must also be refused by the git_pat mint path even though they are NOT
 	// reserved at the api_key/injection sink (sinkReservedSecret) — see
 	// reservedBrokerSecretNames' doc comment.
@@ -153,6 +172,13 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	secrets.m["wardyn-ssh-host-key"] = []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nfake-host-key-material\n-----END OPENSSH PRIVATE KEY-----\n")
 	secrets.m["wardyn-ui-session-key"] = []byte("0123456789abcdef0123456789abcdef")
 	secrets.m["bedrock-api-key"] = []byte("bedrock-bearer-token-value")
+	// #1048: a per-person model-provider credential name (wardyn-provider-<uid>-key)
+	// must also be refused here — the mint chokepoint a git_pat grant naming one
+	// would otherwise cross into the sandbox as a git password. Today this is
+	// pinned only from internal/api (model_provider_credentials_test.go); this
+	// case puts the same pin next to reservedBrokerSecret's own implementation.
+	const providerKeySecret = providerSecretPrefix + "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70-key"
+	secrets.m[providerKeySecret] = []byte("sk-ant-planted-operator-key")
 
 	cases := []struct {
 		name string
@@ -163,10 +189,9 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		{"empty-secret-name", types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"gitlab.com"}`)}},
 		{"reserved-secret", gitPATSpec("gitlab.com", "wardyn-signing-key", "")},
 		{"reserved-harness-oauth", gitPATSpec("gitlab.com", "wardyn-harness-anthropic-oauth", "")},
-		// W12-B-1 regression: a git_pat grant must not resolve the GitHub App PEM
-		// private key (or its sibling platform-internal value-returning secrets)
-		// into the sandbox. Fails on base 6d76911 (reservedBrokerSecretNames
-		// omitted these names); passes once the map is widened.
+		// A git_pat grant must not resolve the GitHub App PEM private key (or
+		// its sibling platform-internal value-returning secrets) into the
+		// sandbox: reservedBrokerSecretNames covers these names.
 		{"reserved-github-app-key", gitPATSpec("github.com", "github-app-key", "")},
 		{"reserved-github-app-id", gitPATSpec("github.com", "github-app-id", "")},
 		{"reserved-ssh-host-key", gitPATSpec("github.com", "wardyn-ssh-host-key", "")},
@@ -175,6 +200,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		// forge wardyn_ui_sess for any run and any role.
 		{"reserved-ui-session-key", gitPATSpec("github.com", "wardyn-ui-session-key", "")},
 		{"reserved-bedrock-api-key", gitPATSpec("bedrock-runtime.us-east-1.amazonaws.com", "bedrock-api-key", "")},
+		{"reserved-provider-key", gitPATSpec("github.com", providerKeySecret, "")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -269,9 +295,9 @@ func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
 
 // TestMintOnApproval_MemberRunResolvesOwnerNamespace: an approval-gated
 // git_pat mint via mintOnApproval, with the run's CreatedBy passed as sub,
-// resolves the MEMBER's own secret row — not the operator's — closing the
-// residual ownerOf's doc comment used to name (a bare &identity.Claims{RunID}
-// with no Sub always fell back to the operator namespace on this path).
+// resolves the member's own secret row — not the operator's. A bare
+// &identity.Claims{RunID} with no Sub would fall back to the operator
+// namespace on this path.
 func TestMintOnApproval_MemberRunResolvesOwnerNamespace(t *testing.T) {
 	secrets := newMemSecrets()
 	secrets.m["shared-pat"] = []byte("operator-pat-value")

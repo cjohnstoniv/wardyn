@@ -23,7 +23,7 @@ type r3PlainStore struct {
 	store.Store
 }
 
-func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", nil
 }
 func (r3PlainStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
@@ -33,11 +33,15 @@ func (r3PlainStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGra
 func (r3PlainStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (r3PlainStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
+}
+
+func (r3PlainStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 func (r3PlainStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
 func (r3PlainStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -76,6 +80,12 @@ func (c *countingSecretStore) List(context.Context) ([]string, error) {
 	c.ownerList.Add(1)
 	return c.own[c.owner], nil
 }
+func (c *countingSecretStore) DeleteEverywhere(context.Context, []string) (int, error) {
+	return 0, nil
+}
+func (c *countingSecretStore) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
 func (c *countingSecretStore) For(owner string) secretstore.Store {
 	cp := *c
 	cp.owner = owner
@@ -110,14 +120,14 @@ func r3MemberPreflightBody(t *testing.T, n int) string {
 	return string(body)
 }
 
-// TestOwnedSecretReadsAreFlatInCallerInput is F067's growth law for the half
+// TestOwnedSecretReadsAreFlatInCallerInput is the growth law for the half
 // capBatch did not close.
 //
 // capBatch made the egress loop's store reads flat in len(allowed_domains) and
 // maxAllowedDomainsPerSpec capped that list — but the member pipeline's OTHER
 // caller-sized list, spec.eligible_grants, has no cap at all and buys an
 // UNMEMOIZED For(owner).List per grant at three separate sites
-// (filterMemberGrants' 6c own-key arm, narrowMemberInlinePolicy's ownership
+// (filterUserGrants' 6c own-key arm, narrowUserInlinePolicy's ownership
 // exemption, validateInlineSecretRefs' unknown-name arm). So "per-request cost
 // stays O(1) store reads regardless of body content" was still false: it just
 // moved lists.
@@ -143,7 +153,7 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 		})
 		cfg.Secrets = sec
 		srv := New(cfg)
-		member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, r3MemberPreflightBody(t, n))
 		if w.Code != http.StatusOK {
 			t.Fatalf("n=%d: preflight = %d, want 200; body=%s", n, w.Code, w.Body.String())
@@ -164,7 +174,7 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 	}
 }
 
-// TestMemberPipelineOwnedSecretReadsPerSite is F205's pin: the THREE sibling
+// TestMemberPipelineOwnedSecretReadsPerSite pins the THREE sibling
 // per-grant ownsSecret loops capBatch left standing, asserted one at a time.
 //
 // The end-to-end pin above proves the request installs a memo; this proves each
@@ -205,8 +215,8 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 	}
 
 	sites := map[string]func(t *testing.T, srv *Server, ctx context.Context, n int){
-		"filterMemberGrants": func(t *testing.T, srv *Server, ctx context.Context, n int) {
-			kept, _, code, err := srv.filterMemberGrants(ctx, "sub-gov-bob", []string{"api.anthropic.com"}, apiKeyGrants(n))
+		"filterUserGrants": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+			kept, _, code, err := srv.filterUserGrants(ctx, "sub-gov-bob", []string{"api.anthropic.com"}, apiKeyGrants(n))
 			if err != nil {
 				t.Fatalf("n=%d: code=%d %v", n, code, err)
 			}
@@ -214,9 +224,9 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 				t.Fatalf("n=%d: kept %d grants, want %d — a loop that stopped running proves nothing", n, len(kept), n)
 			}
 		},
-		"narrowMemberInlinePolicy": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+		"narrowUserInlinePolicy": func(t *testing.T, srv *Server, ctx context.Context, n int) {
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
-			if _, _, err := srv.narrowMemberInlinePolicy(ctx, "sub-gov-bob", &spec); err != nil {
+			if _, _, err := srv.narrowUserInlinePolicy(ctx, "sub-gov-bob", &spec); err != nil {
 				t.Fatalf("n=%d: %v", n, err)
 			}
 			if len(spec.EligibleGrants) != n {
@@ -225,7 +235,7 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 		},
 		"validateInlineSecretRefs": func(t *testing.T, srv *Server, ctx context.Context, n int) {
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
-			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", spec); err != nil {
+			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", "sub-gov-bob", spec); err != nil {
 				t.Fatalf("n=%d: code=%d %v", n, code, err)
 			}
 		},

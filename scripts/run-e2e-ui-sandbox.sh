@@ -8,13 +8,14 @@
 # image (deploy/images/vscode/), and drives the whole relay with a real HTTP
 # client against the SECOND origin:
 #
-#   - the full handoff: mint an attach ticket on the console origin -> GET
+#   - the full handoff: mint an attach ticket on the console origin -> bind it
+#     on the UI origin (a ticket this client never bound is refused) -> GET
 #     /__wardyn/enter on the UI origin -> the scoped wardyn_ui_sess cookie ->
 #     302 into /r/<run>/<app>/ -> code-server's own HTML comes back through the exec
 #     lane
 #   - the second origin IS a boundary: /__wardyn/enter 404s on the console
 #     listener (those routes exist only on the UI handler)
-#   - ui.auth / ui.start / ui.open / ui.close audit rows, and NO session.attach
+#   - ui.authorize / ui.start / ui.open / ui.close audit rows, and NO session.attach
 #     row (a relay session must never appear in the recording picker)
 #   - an undeclared app is refused 403 naming the ui_apps policy field, and the
 #     denial is audited
@@ -35,14 +36,13 @@
 # every exit path, success or failure — never touches any other stack.
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "run-e2e-ui-sandbox: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent UI-sandbox e2e (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
+  skip_lane "run-e2e-ui-sandbox: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent UI-sandbox e2e (skipping)."
+fi
 wardyn_pick_docker_host
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
@@ -162,9 +162,18 @@ api() {
 # mint_ticket RUN_ID -> prints the single-use ticket on stdout
 mint_ticket() {
   local rid="$1" st
-  st=$(api POST "/api/v1/runs/${rid}/attach-ticket")
+  st=$(api POST "/api/v1/runs/${rid}/attach/ticket")
   [[ "${st}" == "200" ]] || { fail "mint attach ticket for ${rid}: status ${st}: $(cat "${TMPDIR}/resp.json")"; return 1; }
   jq -r '.ticket' "${TMPDIR}/resp.json"
+}
+
+# bind_cookie TICKET -> prints the "name=value" binding cookie the gateway
+# sets for TICKET, sending what the console's own pre-enter fetch sends. Enter
+# refuses a ticket presented without it (#1241).
+bind_cookie() {
+  curl -sS -o /dev/null -D "${TMPDIR}/bind.h" -X POST "${UIBASE}/__wardyn/bind" \
+    -H "Sec-Fetch-Site: same-site" -H "Origin: ${BASE}" --data-urlencode "ticket=$1"
+  sed -n 's/^[Ss]et-[Cc]ookie: *\(wardyn_ui_bind_[^;]*\).*/\1/p' "${TMPDIR}/bind.h" | tr -d '\r' | head -1
 }
 
 # launch_run -> prints the run id; an idle interactive sandbox (never execs the
@@ -222,7 +231,14 @@ fi
 
 # ── 2. the full handoff: ticket -> enter -> cookie -> code-server HTML ───────
 TICKET="$(mint_ticket "${RUN_ID}")" || die "no ticket"
-code=$(curl -sS -o /dev/null -D "${TMPDIR}/enter.h" -w '%{http_code}' \
+code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=vscode&ticket=${TICKET}")
+if [[ "${code}" == "403" ]]; then
+  pass "unbound ticket: enter refuses a ticket this client never bound (403), without spending it"
+else
+  fail "unbound ticket: status ${code}, want 403"
+fi
+code=$(curl -sS -o /dev/null -D "${TMPDIR}/enter.h" -w '%{http_code}' -H "Cookie: $(bind_cookie "${TICKET}")" \
   "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=vscode&ticket=${TICKET}")
 UI_SESS="$(sed -n 's/.*[Ss]et-[Cc]ookie: *wardyn_ui_sess=\([^;]*\).*/\1/p' "${TMPDIR}/enter.h" | head -1)"
 loc="$(sed -n 's/^[Ll]ocation: *//p' "${TMPDIR}/enter.h" | tr -d '\r' | head -1)"
@@ -256,7 +272,7 @@ fi
 
 # ── 3. an undeclared app is refused, naming the policy field ────────────────
 TICKET="$(mint_ticket "${RUN_ID}")" || die "no ticket"
-code=$(curl -sS -o "${TMPDIR}/undeclared.json" -w '%{http_code}' \
+code=$(curl -sS -o "${TMPDIR}/undeclared.json" -w '%{http_code}' -H "Cookie: $(bind_cookie "${TICKET}")" \
   "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=grafana&ticket=${TICKET}")
 if [[ "${code}" == "403" ]] && grep -q "ui_apps" "${TMPDIR}/undeclared.json"; then
   pass "undeclared app: 403 naming ui_apps ($(jq -r '.error // .message // .' "${TMPDIR}/undeclared.json" 2>/dev/null | head -c 120))"
@@ -267,7 +283,7 @@ fi
 # ── 4. a foreign run's ticket, and a reused one ─────────────────────────────
 RUN_B_ID="$(launch_run)" || die "could not launch the second run"
 FOREIGN_TICKET="$(mint_ticket "${RUN_B_ID}")" || die "no foreign ticket"
-code=$(curl -sS -o "${TMPDIR}/foreign.json" -w '%{http_code}' \
+code=$(curl -sS -o "${TMPDIR}/foreign.json" -w '%{http_code}' -H "Cookie: $(bind_cookie "${FOREIGN_TICKET}")" \
   "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=vscode&ticket=${FOREIGN_TICKET}")
 if [[ "${code}" == "403" ]]; then
   pass "foreign ticket: a ticket minted for run ${RUN_B_ID} is refused 403 on run ${RUN_ID}"
@@ -275,8 +291,9 @@ else
   fail "foreign ticket: status ${code}, body $(cat "${TMPDIR}/foreign.json")"
 fi
 REUSE_TICKET="$(mint_ticket "${RUN_ID}")" || die "no ticket"
-curl -sS -o /dev/null "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=vscode&ticket=${REUSE_TICKET}"
-code=$(curl -sS -o "${TMPDIR}/reuse.json" -w '%{http_code}' \
+REUSE_BIND="$(bind_cookie "${REUSE_TICKET}")"
+curl -sS -o /dev/null -H "Cookie: ${REUSE_BIND}" "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=vscode&ticket=${REUSE_TICKET}"
+code=$(curl -sS -o "${TMPDIR}/reuse.json" -w '%{http_code}' -H "Cookie: ${REUSE_BIND}" \
   "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=vscode&ticket=${REUSE_TICKET}")
 if [[ "${code}" == "403" ]]; then
   pass "single-use ticket: the second redemption is refused 403"
@@ -330,7 +347,7 @@ done
 [[ "${echo_up}" -eq 1 ]] || fail "the in-sandbox echo responder never answered on 127.0.0.1:${ECHO_PORT}"
 
 TICKET="$(mint_ticket "${RUN_ID}")" || die "no ticket"
-curl -sS -o /dev/null -D "${TMPDIR}/enter-echo.h" "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=echo&ticket=${TICKET}"
+curl -sS -o /dev/null -D "${TMPDIR}/enter-echo.h" -H "Cookie: $(bind_cookie "${TICKET}")" "${UIBASE}/__wardyn/enter?run=${RUN_ID}&app=echo&ticket=${TICKET}"
 ECHO_SESS="$(sed -n 's/.*[Ss]et-[Cc]ookie: *wardyn_ui_sess=\([^;]*\).*/\1/p' "${TMPDIR}/enter-echo.h" | head -1)"
 [[ -n "${ECHO_SESS}" ]] || fail "no relay session cookie for the echo app"
 code=$(curl -sS -m 60 -o "${TMPDIR}/echo.txt" -D "${TMPDIR}/echo.h" -w '%{http_code}' \
@@ -399,7 +416,7 @@ fi
 # ── 7. the audit trail ──────────────────────────────────────────────────────
 api GET "/api/v1/audit?run_id=${RUN_ID}" >/dev/null
 cp "${TMPDIR}/resp.json" "${TMPDIR}/audit.json"
-for action in ui.auth ui.start ui.open ui.close; do
+for action in ui.authorize ui.start ui.open ui.close; do
   count="$(jq --arg a "${action}" '[.[] | select(.action==$a and .outcome=="success")] | length' "${TMPDIR}/audit.json")"
   if [[ "${count}" -ge 1 ]]; then
     pass "audit: ${count} successful ${action} row(s)"
@@ -407,11 +424,11 @@ for action in ui.auth ui.start ui.open ui.close; do
     fail "audit: no successful ${action} row found"
   fi
 done
-denied="$(jq '[.[] | select(.action=="ui.auth" and .outcome=="denied" and (.data.reason | test("not declared")))] | length' "${TMPDIR}/audit.json")"
+denied="$(jq '[.[] | select(.action=="ui.authorize" and .outcome=="denied" and (.data.reason | test("not declared")))] | length' "${TMPDIR}/audit.json")"
 if [[ "${denied}" -ge 1 ]]; then
-  pass "audit: the undeclared-app denial is recorded as ui.auth/denied"
+  pass "audit: the undeclared-app denial is recorded as ui.authorize/denied"
 else
-  fail "audit: no ui.auth denial row for the undeclared app"
+  fail "audit: no ui.authorize denial row for the undeclared app"
 fi
 attach="$(jq '[.[] | select(.action=="session.attach")] | length' "${TMPDIR}/audit.json")"
 if [[ "${attach}" -eq 0 ]]; then

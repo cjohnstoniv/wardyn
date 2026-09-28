@@ -227,13 +227,13 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 
 	t.Run("member without their own bearer", func(t *testing.T) {
 		s := bearerScopedServer(t, perUserOperatorBearer, "")
-		if b := s.setupBedrock(context.Background(), operatorPresent, memberScope()); b.BearerPresent {
+		if b := s.setupBedrock(context.Background(), operatorPresent, types.SiteConfig{}, memberScope()); b.BearerPresent {
 			t.Fatalf("BearerPresent=true off the OPERATOR's key — setup would grade ready for a member who has none")
 		}
 	})
 	t.Run("member with their own bearer", func(t *testing.T) {
 		s := bearerScopedServer(t, "", perUserMemberBearer)
-		b := s.setupBedrock(context.Background(), map[string]bool{}, memberScope())
+		b := s.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, memberScope())
 		if !b.BearerPresent {
 			t.Fatalf("BearerPresent=false over a bearer this member's runs really authenticate with")
 		}
@@ -243,7 +243,7 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 	})
 	t.Run("the operator's own shared read is unchanged", func(t *testing.T) {
 		s := bearerScopedServer(t, perUserOperatorBearer, "")
-		if b := s.setupBedrock(context.Background(), operatorPresent, awsSSOScope{}); !b.BearerPresent {
+		if b := s.setupBedrock(context.Background(), operatorPresent, types.SiteConfig{}, awsSSOScope{}); !b.BearerPresent {
 			t.Fatalf("BearerPresent=false for the operator under a shared scope — pre-#153 behaviour changed")
 		}
 	})
@@ -294,7 +294,7 @@ func TestSetupBedrock_PerUserReportsOnlyTheDeclaredLane(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			scope := awsSSOScopeFor(agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: tc.row,
 				CredentialSource: types.CredentialSourcePerUser}), "claude-code", "member-sub")
-			b := s.setupBedrock(context.Background(), map[string]bool{}, scope)
+			b := s.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, scope)
 			if b.SSOPresent != tc.wantSSO || b.BearerPresent != tc.wantBearr {
 				t.Fatalf("SSOPresent=%v BearerPresent=%v, want %v/%v — setup reports a lane dispatch does not select",
 					b.SSOPresent, b.BearerPresent, tc.wantSSO, tc.wantBearr)
@@ -335,12 +335,12 @@ func TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant(t *testing.T)
 		owned: map[string]map[string][]byte{"bob": {bedrockAPIKeySecret: []byte("bob-own-bearer-123")}}}
 	g := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{
 		"host": "api.openai.com", "secret_name": bedrockAPIKeySecret, "header": "X-Member-Chosen", "format": "%s"})}
-	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.openai.com"}, []types.GrantSpec{g})
+	kept, warns, code, err := h.srv.filterUserGrants(context.Background(), "bob", []string{"api.openai.com"}, []types.GrantSpec{g})
 	t.Logf("kept=%d warns=%v code=%d err=%v", len(kept), warns, code, err)
 	if len(kept) == 1 {
 		t.Errorf("member-authored bedrock-api-key grant to api.openai.com with a custom header was admitted")
 	}
-	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
 	t.Logf("validateInlineSecretRefs code=%d err=%v", code2, verr)
 }
 

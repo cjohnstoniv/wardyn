@@ -17,18 +17,10 @@ import (
 // revokeNote is the honest per-kind revocation story stamped on every
 // credential.revoke row: each kind gets a note true to what the cascade
 // actually does to it, never one GitHub-shaped sentence applied to all four.
-//
-// The github_token arm is scoped to RevokeRun ON PURPOSE (B11a-F1). Wardyn DOES
-// call DELETE /installation/token in two places — VerifyRefRuleset's probe
-// hand-back and discardMinted, the mint's discard door — but neither can ever
-// reach the credential this row is about: both surrender a token that was never
-// returned to the run, so "wardyn does not call it" would be false here. NOTHING
-// is actually invalidated by this cascade (F013) — the note is the only place
-// the audit trail says WHY, and it must not claim GitHub TTL semantics for an
-// operator-managed PAT that Wardyn cannot expire, down-scope, or deny (the
-// identity denylist stops further MINTS, not use of a secret the sandbox already
-// holds — see mintGitPAT/mintSSHKey in broker_mint_kinds.go, "the honesty ceiling
-// for this grant kind").
+// Nothing is actually invalidated by this cascade, and the note must not
+// claim GitHub TTL semantics for an operator-managed PAT that Wardyn cannot
+// expire, down-scope, or deny — the identity denylist stops further mints
+// only, not use of a secret the sandbox already holds.
 func revokeNote(kind string) string {
 	switch types.GrantKind(kind) {
 	case types.GrantGitHubToken:
@@ -43,32 +35,17 @@ func revokeNote(kind string) string {
 }
 
 // RevokeRun best-effort revokes credentials minted for a run, part of the
-// kill-switch cascade. Honest limitation: nothing here invalidates a credential
-// that was already handed out. GitHub App installation tokens are not revoked
-// individually before their (<=1h) expiry: GitHub's DELETE /installation/token
-// endpoint is real, but it can only be called by presenting the token itself,
-// and RevokeRun has only the jti. The token value is never PERSISTED (mintGitHub
-// returns it in Minted{Token: token}, broker.go), but in-memory copies DO exist
-// and none is addressable by jti or consulted here: mint() registers the bytes in
-// the run's mask corpus (b.maskReg.Add(caller.RunID, minted.Token), broker.go;
-// evicted by the RunSecretGrace sweep, runs_lifecycle.go) so PTY/asciicast
-// streams can mask them, and the proxy sidecar's brokered-credential path may
-// cache a minted token per grant for re-use within one clone. Neither is a
-// revocation handle — and a git_pat/ssh_key is an operator-managed secret Wardyn
-// never owned. We
-// therefore (a) audit each minted jti as a revoke with
-// outcome=success for the audit join, recording in the event data the per-KIND
-// story (revokeNote) rather than one GitHub-shaped sentence, and (b) rely on
-// identity revocation (identity.Provider.RevokeRun, called by the kill cascade)
-// to deny any further mints for the run.
+// kill-switch cascade. Honest limitation: nothing here invalidates a
+// credential already handed out — RevokeRun has only the jti, never the
+// token value, so it cannot call a revoke endpoint that needs the token
+// itself. It (a) audits each minted jti as a revoke with the per-kind story
+// (revokeNote), and (b) relies on identity.Provider.RevokeRun to deny further
+// mints for the run.
 //
-// The cascade enumerates what the run ACTUALLY minted (mintedCredentialsSQL:
-// credential.mint audit rows UNION the approvals burn), not just the approvals
-// whose minted_jti was burnt. Sourcing it from approvals alone would emit ZERO
-// rows for every auto-mintable grant (requires_approval=false creates no approval
-// row) and for the 2nd..Nth mint of a leased git_pat, while THREAT-MODEL.md
-// publishes step 4 of the kill cascade as "every minted credential for the run"
-// (F096/F122).
+// The cascade enumerates what the run ACTUALLY minted (credential.mint audit
+// rows UNION the approvals burn), not just approvals whose minted_jti was
+// burnt — approvals alone would miss every auto-mintable grant and the
+// 2nd..Nth mint of a leased git_pat.
 func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	minted, err := b.db.MintedCredentials(ctx, runID)
 	if err != nil {

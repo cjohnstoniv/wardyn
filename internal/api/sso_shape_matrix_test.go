@@ -22,11 +22,11 @@ import (
 // SAME chi.Walk-proven routeMatrix TestAuthzMatrix executes once.
 //
 // The shapes differ only in the three knobs the daemon reads at this layer —
-// the admin token, WARDYN_SSO_ONLY and WARDYN_MEMBER_MODE — so each is that
+// the admin token, WARDYN_SSO_ONLY and WARDYN_USER_DESKTOP — so each is that
 // config over the maximally-mounted matrix server. Which role a sign-in
 // DERIVES on each shape is the other half, pinned against the shipped config
 // files by internal/auth/oidc's TestShippedShapeRoleDerivation; the live role
-// walk (ui/e2e/live/sso-roles.spec.ts, via scripts/kind-sso-walk.sh and
+// walk (ui/e2e/walk/sso-roles.spec.ts, via scripts/kind-sso-walk.sh and
 // scripts/compose-sso-roles.sh) proves sign-in → role → console on each shape.
 //
 // member2 exists for cross-member isolation: it owns nothing, so every
@@ -43,8 +43,8 @@ func TestSSOShapeRoleMatrix(t *testing.T) {
 	cast := ssoShapeCast{
 		admin:   ssoPersona{name: "admin", role: oidc.RoleAdmin, operator: true, security: true, cookie: ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)},
 		sec:     ssoPersona{name: "security_admin", role: oidc.RoleSecurityAdmin, security: true, cookie: ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)},
-		member:  ssoPersona{name: "member", role: oidc.RoleMember, cookie: ssoSession(t, ssoShapeMemberSub, "member@corp.example", oidc.RoleMember)},
-		member2: ssoPersona{name: "member2", role: oidc.RoleMember, cookie: ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleMember)},
+		member:  ssoPersona{name: "member", role: oidc.RoleUser, cookie: ssoSession(t, ssoShapeMemberSub, "member@corp.example", oidc.RoleUser)},
+		member2: ssoPersona{name: "member2", role: oidc.RoleUser, cookie: ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleUser)},
 	}
 	for _, sh := range shapes {
 		t.Run(sh.name, func(t *testing.T) {
@@ -172,14 +172,29 @@ func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc class
 	if code := on(cast.member2); code != http.StatusNotFound {
 		t.Errorf("member2 on member's entity: %d, want 404", code)
 	}
-	if code := on(cast.admin); !reached(code) {
-		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", code)
+	// tierOwnerOnly (#1197 L2): no admin bypass AT ALL — a SUPER admin gets
+	// the SAME 404 a non-owner gets, unlike every other tier.
+	if adminCode := on(cast.admin); rc.ownerTier == tierOwnerOnly {
+		if adminCode != http.StatusNotFound {
+			t.Errorf("admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", adminCode)
+		}
+	} else if !reached(adminCode) {
+		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", adminCode)
 	}
 	code := on(cast.sec)
-	if rc.ownerTier == tierSuper && code != http.StatusNotFound {
-		t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
-	} else if rc.ownerTier == tierSecurity && !reached(code) {
-		t.Errorf("security_admin on a foreign tierSecurity entity: %d, want the handler's own answer", code)
+	switch rc.ownerTier {
+	case tierSuper:
+		if code != http.StatusNotFound {
+			t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
+		}
+	case tierSecurity:
+		if !reached(code) {
+			t.Errorf("security_admin on a foreign tierSecurity entity: %d, want the handler's own answer", code)
+		}
+	case tierOwnerOnly:
+		if code != http.StatusNotFound {
+			t.Errorf("security_admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", code)
+		}
 	}
 }
 

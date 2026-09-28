@@ -54,43 +54,25 @@ var errWorkspaceSourceTarget = errors.New("invalid workspace source target")
 // sources: each repo source clones (added to policy.WorkspaceRepos; the FIRST
 // also sets run.Repo, the run-row label); each local_dir source is
 // bind-mounted at its own target (falling back to the composer workspace
-// target when unset). An ephemeral source gets NO policy entry (a mkdir
-// inside the sandbox, not a mount/clone) — its target is collected into
-// ephemeralDirs instead, for the caller to surface as WARDYN_EPHEMERAL_DIRS at
-// dispatch, mirroring seedRequestWorkspace's identical handling for the
-// ordinary create-run path (runs_create.go).
-//
-// It returns every repo source's clone URL, in Sources order, for
-// workspaceSourceGrants — which today only auto-mints a clone credential for
-// the FIRST one (see launchRecordRun's call site); an additional repo source
-// needs its own pre-existing access until multi-repo grant minting is wired.
-//
-// Ordering (load-bearing): this is a PURE run/policy mutation, so it must run
-// BEFORE Store.CreateRun persists the row — whereas the clone grants must run
-// AFTER it, since credential_grants.run_id REFERENCES agent_runs(id) with an
-// immediate FK. One function cannot satisfy both orders, which is why the grant
-// half is split out.
+// target when unset). An ephemeral source gets NO policy entry — its target is
+// collected into ephemeralDirs, surfaced as WARDYN_EPHEMERAL_DIRS at dispatch,
+// as seedRequestWorkspace does for create-run. It returns every repo clone URL,
+// in Sources order, for workspaceSourceGrants, which auto-mints a credential
+// for the FIRST one only; extra repo sources need their own access.
+// Ordering (load-bearing): this PURE mutation runs BEFORE Store.CreateRun, while
+// the clone grants run AFTER it (credential_grants.run_id has an immediate FK
+// to agent_runs), which is why the grant half is split out.
 func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs, ephemeralDirs []string, err error) {
 	for _, src := range ws.Sources {
-		// Re-validated above the switch, so it covers repo, local_dir and
-		// ephemeral alike — the shape seedRequestWorkspace already has
-		// (runs_create.go). Validating only inside the EPHEMERAL arm would miss
-		// the branches that need it most: an ephemeral target is a
-		// mkdir, while a repo or local_dir target becomes a real clone or bind
-		// MOUNT, and nothing downstream re-imposes the rule for either. The
-		// composed record policy never goes through validatePolicySpec, and the
-		// driver's own gate is runner.ValidateMount -> ValidateTarget, which does
-		// NOT carry the reserved-drive rule (targetReservedForDrive is reached
-		// only from ValidateAuthoredTarget) — so /home/agent/drive would pass as an
-		// ordinary /home/agent path and become an operator bind mount at the one
-		// path the runner reserves for the user's own drive.
-		//
-		// A refusal, not a silent skip: buildRepoRecords otherwise drops a repo
-		// whose dest fails this same
-		// check with no error to the operator (runs_scm.go), so the session would
-		// start with a repo that never cloned and nothing said why. The same
-		// stored workspace already 422s on the ordinary create-run path; a
-		// workspace cannot be legal on one door and quietly broken on the other.
+		// Re-validated above the switch, so it covers repo, local_dir and ephemeral
+		// alike, as seedRequestWorkspace does. A repo or local_dir target becomes a real
+		// clone or bind MOUNT, and nothing downstream re-imposes the reserved-drive rule:
+		// the record policy skips validatePolicySpec, and runner.ValidateTarget lacks
+		// targetReservedForDrive (only ValidateAuthoredTarget has it), so
+		// /home/agent/drive would become an operator bind mount at the user's drive path.
+		// A refusal, not a silent skip: buildRepoRecords drops a repo whose dest fails
+		// this check with no error, and the same workspace already 422s on create-run —
+		// it cannot be legal on one door and quietly broken on the other.
 		if src.Target != "" {
 			if verr := runner.ValidateAuthoredTarget(src.Target); verr != nil {
 				return nil, nil, fmt.Errorf("%w: workspace %s source target: %v", errWorkspaceSourceTarget, ws.ID, verr)
@@ -157,25 +139,16 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 }
 
 // maybeGitHubReadGrant creates a read-only github_token grant for a github.com
-// clone URL (nil for any other host) — extracted from the scan launch's
-// private-repo clone support so launchRecordRun can reuse it too. A CreateGrant
-// failure is returned, never swallowed: the clone cannot authenticate without
-// the grant, so the launch must fail loudly rather than dispatch a sandbox
-// whose private-repo clone is guaranteed to 403.
+// clone URL (nil for any other host). A CreateGrant failure is returned, never
+// swallowed: without the grant the private-repo clone is guaranteed to 403.
 //
 // Scoped to the clone's own repo — the SAME key gitBrokerGrant uses for the
-// broker map, so the grant and the route it is reached through can never
-// disagree. Writing `"repos": []` would 502 at handleGitBroker: the real
-// minter refuses outright (githubMinter.MintInstallationToken: an
-// installation token is per-installation and the owner comes from the first
-// repo), so every scan/record clone of a GitHub HTTPS repo would fail the
-// moment a real GitHub App was configured. FakeGitHubMinter reproduces that
-// precondition, so a regression here is caught by test.
-//
-// A github.com URL with no derivable "<org>/<repo>" (a deeper path) yields NO
-// grant: there is nothing a token could be scoped to, and an unmintable grant is
-// worse than none — it also sets WARDYN_GITHUB_GRANT_ID, pointing the in-sandbox
-// helper at a mint that can only fail.
+// broker map. `"repos": []` would 502 at handleGitBroker: the real minter
+// (githubMinter.MintInstallationToken) takes the owner from the first repo and
+// refuses an empty list, and FakeGitHubMinter reproduces that precondition.
+// A github.com URL with no derivable "<org>/<repo>" yields NO grant: an
+// unmintable grant is worse than none, since WARDYN_GITHUB_GRANT_ID would point
+// the in-sandbox helper at a mint that can only fail.
 func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) (*uuid.UUID, error) {
 	repo := gitBrokerKey(cloneURL) // "" for non-github, non-HTTPS, or a non-repo path
 	if repo == "" {

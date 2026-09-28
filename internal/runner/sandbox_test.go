@@ -5,10 +5,18 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
+	"os/exec"
 	"slices"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 )
 
 func TestIsKnownNonVaultRuntime(t *testing.T) {
@@ -162,5 +170,86 @@ func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
 	}
 	if _, present := raw["trusted_ca_pem"]; present {
 		t.Errorf("trusted_ca_pem key present with an empty ProxyConfig.TrustedCAPEM, want absent (omitempty)")
+	}
+}
+
+// TestAgentIdleScript_ExitsOnSIGTERM pins #468: the idle main process must exit
+// promptly on TERM, with the usual signal exit code 143 (not 0 — a downstream
+// probe maps ExitCode==0 to RunCompleted, and an out-of-band container/pod
+// stop must still read as a kill, not success). `exec sleep infinity` fails
+// this (TERM kills it, not a clean exit), and as PID 1 it would ignore TERM
+// and sit out the full kill timeout.
+func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
+	cmd := exec.Command("sh", "-c", AgentIdleScript)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start idle script: %v", err)
+	}
+	// The trap exits without reaping the backgrounded sleep; kill the group.
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	time.Sleep(300 * time.Millisecond) // let the trap install
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("idle script on SIGTERM: %v, want *exec.ExitError with code 143", err)
+		}
+		if code := exitErr.ExitCode(); code != 143 {
+			t.Fatalf("idle script on SIGTERM: exit code %d, want 143", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle script did not exit within 2s of SIGTERM")
+	}
+}
+
+// TestBuildProxyConfig_Unattended: the flag reaches the sidecar's "unattended"
+// key, and a false one is omitted so an attended run's config is unchanged.
+func TestBuildProxyConfig_Unattended(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		b, err := BuildProxyConfig(uuid.New(), ProxyConfig{Unattended: want}, ProxyListenPort)
+		if err != nil {
+			t.Fatalf("BuildProxyConfig: %v", err)
+		}
+		if got := strings.Contains(string(b), `"unattended":true`); got != want {
+			t.Errorf("Unattended=%v marshals to %s", want, b)
+		}
+		if !want && strings.Contains(string(b), "unattended") {
+			t.Errorf("an attended run's config names the key: %s", b)
+		}
+	}
+}
+
+// TestBuildProxyConfig_CarriesControlPlaneCA: the ONE sealed config both
+// substrates deliver (docker env, k8s Secret) carries wardynd's internal CA, and
+// the sidecar's strict decoder accepts it with an https control plane — the
+// shape dispatch produces on every non-local install.
+func TestBuildProxyConfig_CarriesControlPlaneCA(t *testing.T) {
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		RunToken:          "tok",
+		ControlPlaneURL:   "https://wardynd:8443",
+		ControlPlaneCAPEM: string(ca.CertPEM),
+	}, ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(b)
+	if err != nil {
+		t.Fatalf("the sidecar must load dispatch's own config: %v", err)
+	}
+	if cfg.ControlPlaneCAPEM != string(ca.CertPEM) {
+		t.Fatal("control_plane_ca_pem did not reach the sidecar verbatim")
 	}
 }

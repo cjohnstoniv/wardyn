@@ -22,15 +22,11 @@ type PgxStore struct {
 // NewPgxStore wraps a pgx pool for use as the broker's db.
 func NewPgxStore(pool *pgxpool.Pool) *PgxStore { return &PgxStore{Pool: pool} }
 
-// BeginReadCommitted starts a real pgx transaction pinned to READ COMMITTED.
-//
-// SET TRANSACTION rather than pgx.TxOptions{IsoLevel: pgx.ReadCommitted}: it is
-// exactly equivalent as long as it is the FIRST statement of the transaction,
-// which it is here, and it keeps the broker's Tx seam (Querier + Commit/Rollback)
-// free of pgx option types that the in-memory fake would then have to model. A
-// failed SET rolls the half-open transaction back rather than handing the caller
-// a tx at the pool's isolation — fail closed: the audit chain's serialization
-// depends on this, so an unpinned tx must never be returned.
+// BeginReadCommitted starts a real pgx transaction pinned to READ COMMITTED via
+// SET TRANSACTION (must be the first statement) rather than pgx.TxOptions, so the
+// broker's Tx seam stays free of pgx-specific types. A failed SET rolls the
+// half-open tx back instead of returning one at the pool's isolation: the audit
+// chain's serialization depends on this, so an unpinned tx must never be returned.
 func (s *PgxStore) BeginReadCommitted(ctx context.Context) (Tx, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -44,28 +40,12 @@ func (s *PgxStore) BeginReadCommitted(ctx context.Context) (Tx, error) {
 }
 
 // mintedCredentialsSQL sources RevokeRun's cascade from what the run ACTUALLY
-// minted, not from what a human approved.
-//
-// The approvals half (`minted_jti`, written by mint()'s single-use burn) alone is
-// not sufficient: a grant with requires_approval=false creates NO approvals row
-// at all (MintForGrant routes straight to mint()), and under the B2 per-run
-// lease the burn is skipped on re-mints, so every auto-minted credential and
-// every 2nd..Nth leased jti would be invisible and get no credential.revoke row —
-// while THREAT-MODEL.md's kill cascade publishes step 4 as "every minted
-// credential for the run" (F096/F122). The audit half covers that: credential.mint
-// SUCCESS is written INSIDE the mint transaction (D29, insertAuditEventTx), so a
-// jti exists in audit_events for exactly the credentials that were actually
-// handed out.
-//
-// UNION (not UNION ALL) de-duplicates the approval-gated mint, which appears in
-// both halves. The approvals half is KEPT rather than replaced so runs whose mint
-// rows predate D29's in-tx audit write, or whose audit rows were pruned by
-// retention, still revoke-audit as they always did.
-//
-// The kind comes off credential_grants; the LEFT JOIN keeps a mint whose grant row
-// was deleted (kind "" — RevokeRun says so rather than guessing). grant_id is
-// matched as TEXT against the id cast to text so a malformed data->>'grant_id'
-// cannot abort the whole cascade with an invalid-uuid error.
+// minted, not from what a human approved: the approvals half (`minted_jti`)
+// alone misses auto-minted and re-minted (leased) credentials, so it is UNIONed
+// (deduped) with audit_events' credential.mint successes, which cover every
+// credential actually handed out. The LEFT JOIN keeps a mint whose grant row was
+// deleted (kind ""); grant_id is matched as TEXT so a malformed
+// data->>'grant_id' cannot abort the cascade with an invalid-uuid error.
 const mintedCredentialsSQL = `
 	SELECT minted_jti AS jti, COALESCE(g.spec->>'kind', '') AS kind
 	  FROM approvals a

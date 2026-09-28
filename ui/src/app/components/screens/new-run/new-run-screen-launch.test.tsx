@@ -53,7 +53,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   };
 });
 // The REAL rail with its props recorded — this file pins only what the screen hands it.
-const railProps: Array<{ launch: { credentialRefused: boolean } }> = [];
+const railProps: Array<{ launch: { credentialRefused: boolean; refusedProvider?: string } }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
   return {
@@ -105,7 +105,7 @@ import { ADO } from "../../../lib/ado-entra-copy";
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 // The Workspace card's drive block reads the shell's ONE GET /me off the
-// context (operator-context's UserDriveContext), not a fetch of its own — so a
+// context (operator-context's MeIdentity.userDrive), not a fetch of its own — so a
 // case states its /me body here, exactly as app-shell hands it down. The
 // default carries NEITHER /me drive bit: no allocation and no door, which is
 // what every case below except the drive ones is, and which must render as
@@ -349,15 +349,13 @@ describe("NewRunScreen — the unparseable barrier-class hint", () => {
   });
 });
 
-// §5c.8 — a run that launched WITH advisories.
-//
-// The screen must hold, not navigate on a timer: a timer would race every
-// other way off the screen (Esc and the ghost "Runs" button both land on
-// /runs, and a timer would then yank the member to the run), and it would
-// give a multi-line advisory a fixed beat nobody finishes reading. The
-// warnings stay listed and the primary button becomes "Open run", which is
-// the only thing that navigates.
-describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => {
+// #125 — a launch that answers 2xx always navigates, in the same tick. The
+// held "Open run" screen this replaced raced every other way off the screen
+// (Esc and the ghost "Runs" button both land on /runs, and a timer would then
+// yank the member to the run) and gave a multi-line advisory a fixed beat
+// nobody finishes reading. Any advisory `warnings[]` now ride the navigation
+// itself, as router state, for the run page to render (run-detail.test.tsx).
+describe("NewRunScreen — a 2xx launch always navigates, in the same tick", () => {
   async function launchWith(warnings?: string[]) {
     createRunMock.mockResolvedValue({ id: "run_9", warnings });
     renderScreen();
@@ -365,52 +363,37 @@ describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => 
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
   }
 
-  it("navigates immediately when the 201 carries no warnings", async () => {
+  // review defect 2: a `waitFor` here would pass even for a setTimeout-delayed
+  // or a doubled navigate — it just polls until it sees a matching call,
+  // however that call eventually landed. Asserting synchronously, right after
+  // the awaited click (createRunMock already resolves, so its continuation is
+  // flushed by the time `user.click` returns), is what actually pins "the
+  // same tick" and "exactly once" rather than merely "eventually, once or more".
+  it("navigates immediately when the 201 carries no warnings, with empty launchWarnings state — same tick, exactly once", async () => {
     await launchWith();
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_9"));
-    expect(screen.queryByRole("button", { name: AGENTS.OPEN_RUN_CTA })).toBeNull();
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", { state: { launchWarnings: [] } });
   });
 
-  it("lists the warnings and navigates NOWHERE until Open run is clicked", async () => {
+  it("navigates immediately WITH the 201's warnings, as router state — no held screen, same tick, exactly once", async () => {
     await launchWith([
       "egress_host: internal.example.com was dropped — not granted to you",
       "secret: DEPLOY_KEY was dropped — not granted to you",
     ]);
 
-    expect(await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeInTheDocument();
-    expect(
-      screen.getByText("egress_host: internal.example.com was dropped — not granted to you"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("secret: DEPLOY_KEY was dropped — not granted to you")).toBeInTheDocument();
-    // Launch is gone: the run is launched, and re-firing it is not the next move.
-    expect(screen.queryByRole("button", { name: /Launch run/ })).toBeNull();
-    expect(navigateMock).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: AGENTS.OPEN_RUN_CTA }));
-    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9");
-  });
-
-  // The load-bearing check: NOTHING is pending. Real timers here would only
-  // prove nothing fired within an arbitrary window, not that nothing was
-  // scheduled.
-  it("leaves no pending navigation behind — the member backs out and stays out", async () => {
-    await launchWith(["secret: DEPLOY_KEY was dropped — not granted to you"]);
-    await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE);
-
-    vi.useFakeTimers();
-    try {
-      // The ghost "Runs" button is a way out; nothing schedules a competing
-      // navigation.
-      fireEvent.click(screen.getByRole("button", { name: "Runs" }));
-      expect(navigateMock).toHaveBeenCalledWith("/runs");
-      navigateMock.mockReset();
-      // Ten seconds — long enough that any stray scheduled navigation would
-      // have fired.
-      vi.advanceTimersByTime(10_000);
-      expect(navigateMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", {
+      state: {
+        launchWarnings: [
+          "egress_host: internal.example.com was dropped — not granted to you",
+          "secret: DEPLOY_KEY was dropped — not granted to you",
+        ],
+      },
+    });
+    // Nothing named "Open run" exists any more — the form is gone with the
+    // navigation, not held behind it.
+    expect(screen.queryByRole("button", { name: "Open run" })).toBeNull();
+    expect(screen.queryByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeNull();
   });
 });
 
@@ -433,8 +416,18 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
 
     createRunMock.mockResolvedValueOnce({ id: "run_2" });
     await user.click(launch);
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_2"));
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith("/runs/run_2", { state: { launchWarnings: [] } }),
+    );
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+
+  // #543: the refusal's own provider travels with it — the door it opens.
+  it("a model_credential 422 naming a provider hands the rail that provider", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "add your token first", "model_credential", "", "corp-gateway"));
+    await user.click(await titled());
+    expect(await screen.findByText("add your token first")).toBeInTheDocument();
+    expect(lastRail().launch.refusedProvider).toBe("corp-gateway");
   });
 
   it("a 422 without a reason — a policy error — never sets it", async () => {
@@ -443,6 +436,25 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// #725/F4 — a network failure (the fetch itself never reached the server —
+// no HttpError, no body, no status) must never be read as "the run was
+// created but its sandbox did not start": on main, every refusal answers
+// BEFORE the run row is written (internal/api/runs_create_launch.go), so a
+// reason-less failure is precisely the case where no run may exist. The
+// rail must show the raw error and offer no "open the run" affordance.
+describe("NewRunScreen — a network failure never claims a run was created (F4)", () => {
+  it("createRun rejecting with TypeError('Failed to fetch') shows the raw error, opens nothing, and navigates nowhere", async () => {
+    createRunMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+
+    expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
+    expect(railProps[railProps.length - 1].launch.credentialRefused).toBe(false);
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -522,9 +534,10 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
   // Review finding F1: the org comes from the 422 body itself, so the dialog
   // names it even with NO preflight verdict ever having run (this screen
   // fires preflight on a debounce; a fast Launch click can beat it there).
-  it("F1: names the org from the 422 body, with no preflight verdict having run", async () => {
+  it("names the org from the 422 body, with no preflight verdict having run", async () => {
+    // ticket: F1
     createRunMock.mockRejectedValueOnce(
-      new HttpError(422, "git_credential: you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
+      new HttpError(422, "you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
     );
     const launch = await titled();
     await user.click(launch);
@@ -532,7 +545,8 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
     expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
   });
 
-  it("F8: confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+  it("confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+    // ticket: F8
     createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
     adoConnectMock.mockResolvedValueOnce(true);
     const launch = await titled();

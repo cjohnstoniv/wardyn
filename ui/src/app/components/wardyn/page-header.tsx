@@ -7,11 +7,16 @@ import * as React from "react";
 
 export function PageHeader({
   title,
+  titleBadge,
   description,
   actions,
   as: Heading = "h1",
 }: {
   title: string;
+  /** #460 review — a small status marker (the dirty chip) that belongs BESIDE
+   *  the title text itself, not off in the far-right `actions` slot (which
+   *  `justify-between`s away from it on any page wide enough to have both). */
+  titleBadge?: React.ReactNode;
   // ReactNode, not string: a frozen page lead may carry a mount target or an
   // env var that renders mono, and the mono span is applied at the CALL SITE
   // (the withMono precedent EmptyState.description already follows) rather than
@@ -27,7 +32,10 @@ export function PageHeader({
   return (
     <div className="mb-5 flex items-start justify-between gap-4">
       <div className="space-y-1">
-        <Heading className={`${size} leading-tight text-foreground`}>{title}</Heading>
+        <div className="flex items-center gap-2">
+          <Heading className={`${size} leading-tight text-foreground`}>{title}</Heading>
+          {titleBadge}
+        </div>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

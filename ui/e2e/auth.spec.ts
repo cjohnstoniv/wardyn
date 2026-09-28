@@ -4,9 +4,13 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { MEMBER_TOKEN, MEMBER_PRINCIPAL, consoleAPI } from "./fixtures";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/sign-in-copy";
+import { SESSION_ENDED_REASON } from "../src/app/lib/api/core";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "../src/app/lib/reauth-copy";
 
 // Auth / sign-in lane.
 //
@@ -106,9 +110,10 @@ test.describe("auth / sign-in gate", () => {
 
     // H1: the cold mount probe (no session ever established this tab) is
     // ALSO a 401 — onUnauthorized used to fire unconditionally, so this
-    // ordinary first-visit gate rendered "Your session ended…" to a human
-    // who never had one. No alert at all on this path.
+    // ordinary first-visit gate told a human who never had a session that it
+    // ended. No alert and no notice at all on this path.
     await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText(SESSION_ENDED_REASON)).toHaveCount(0);
   });
 
   test("the token field is password-typed and the submit button is disabled while empty", async ({ page }) => {
@@ -177,6 +182,26 @@ test.describe("auth / sign-in gate", () => {
     expect(await readToken(page)).toBe(GOOD_TOKEN);
   });
 
+  test("a per-person token works through the token field", async ({ page }) => {
+    await page.goto("/");
+    await signInToken(page).fill(MEMBER_TOKEN);
+    await useTokenButton(page).click();
+    await expect(runsNav(page)).toBeVisible();
+    await expect(signInToken(page)).toHaveCount(0);
+
+    for (const reload of [false, true]) {
+      if (reload) await page.reload();
+      await expect(runsNav(page)).toBeVisible();
+      const response = await consoleAPI(page, "GET", "/api/v1/me");
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text)).toMatchObject({
+        principal: MEMBER_PRINCIPAL, method: "token", role: "user",
+        operator: false, security_operator: false, user_type: { id: "standard" },
+      });
+      expect((await consoleAPI(page, "GET", "/api/v1/site-config")).status).toBe(403);
+    }
+  });
+
   test("reload keeps the session (a stored token boots straight into the console)", async ({ page }) => {
     // Seed the good token, then boot like a returning operator.
     await bootWithStoredToken(page, GOOD_TOKEN);
@@ -198,6 +223,10 @@ test.describe("auth / sign-in gate", () => {
 
     await expect(signInToken(page)).toBeVisible();
     await expect(runsNav(page)).toHaveCount(0);
+    // #483: a session this browser held, refused on load — said as an amber
+    // warning (role=status), never in the error box.
+    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED_REASON })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
   test("sign-out returns to the sign-in gate and clears the token (/auth/logout HIGH fix)", async ({ page }) => {
@@ -207,8 +236,8 @@ test.describe("auth / sign-in gate", () => {
 
     // Open the user menu (top-right trigger holds the principal + chevron) and
     // sign out. The trigger has no role="button" semantics distinct from the
-    // nav, so reach it via the principal label rendered inside it ("admin").
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    // nav, so reach it as the header's one menu trigger (the view switch sits beside it).
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await userMenuTrigger.click();
 
@@ -222,13 +251,15 @@ test.describe("auth / sign-in gate", () => {
 
     // The local admin token MUST be cleared so the next probe can't re-auth.
     expect(await readToken(page)).toBeNull();
+    // #483: a deliberate sign-out is not a session that ended — no notice.
+    await expect(page.getByText(SESSION_ENDED_REASON)).toHaveCount(0);
   });
 
   test("after sign-out a reload stays on the gate (token really gone)", async ({ page }) => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await userMenuTrigger.click();
     const signOut = page.getByRole("menuitem", { name: "Sign out" });
@@ -333,6 +364,67 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
   });
 });
 
+// #484 — the admin-written request-access help, published on the anonymous
+// /healthz and shown under the four refusals a person cannot clear alone.
+// /healthz is mocked at the network boundary, like the SSO-only specs above.
+test.describe("admin-written help under a sign-in refusal (#484)", () => {
+  const HELP_TEXT = `Ask in #it-helpdesk — it's "Wardyn access" you want. <b>not bold</b>`;
+  const HELP_URL = "https://it.corp.example/request";
+
+  async function mockHelp(page: Page): Promise<void> {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          sso: true,
+          token_login: true,
+          sign_in_help_text: HELP_TEXT,
+          sign_in_help_url: HELP_URL,
+        }),
+      }),
+    );
+  }
+
+  test("the no_role refusal shows Wardyn's sentence first, then the admin's text and Request access", async ({ page }) => {
+    await mockHelp(page);
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=no_role");
+
+    const alert = page.getByRole("alert");
+    await expect(alert.locator("..")).toMatchAriaSnapshot(`
+      - alert: ${JSON.stringify(SIGNIN.NO_ROLE)}
+      - paragraph: ${JSON.stringify(HELP_TEXT)}
+      - link "${SIGNIN_HELP_LINK_LABEL}":
+        - /url: ${HELP_URL}
+    `);
+    await expect(alert).toHaveText(SIGNIN.NO_ROLE);
+    const help = page.getByTestId("sign-in-help");
+    // Literal text: the markup in it is characters, never an element.
+    await expect(help.getByText(HELP_TEXT, { exact: true })).toBeVisible();
+    await expect(help.locator("b")).toHaveCount(0);
+    const link = help.getByRole("link", { name: SIGNIN_HELP_LINK_LABEL });
+    await expect(link).toHaveAttribute("href", HELP_URL);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    // Wardyn's own sentence stays first.
+    const [alertBox, helpBox] = await Promise.all([alert.boundingBox(), help.boundingBox()]);
+    expect(alertBox && helpBox && helpBox.y > alertBox.y).toBe(true);
+  });
+
+  test("a timeout refusal gets nothing extra", async ({ page }) => {
+    await mockHelp(page);
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=oidc_transient");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
+    await expect(page.getByTestId("sign-in-help")).toHaveCount(0);
+    await expect(page.getByText(HELP_TEXT)).toHaveCount(0);
+  });
+});
+
 // R4/F027 — a 5xx from the daemon is not a statement about the caller.
 //
 // probeAuth used to return a bare boolean, so a 500 on the mount probe was
@@ -348,7 +440,8 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("outage vs. rejection (R4/F027)", () => {
+test.describe("outage vs. rejection", () => {
+  // ticket: R4/F027
   test("a 5xx mount probe does not clear a stored token the daemon never rejected", async ({ page }) => {
     // The daemon is up enough to serve the console, but the runs list 500s —
     // a store outage, a rolling restart, a failing-over Postgres.
@@ -371,163 +464,172 @@ test.describe("outage vs. rejection (R4/F027)", () => {
   });
 
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
-    // /healthz is down for the gate's FIRST read only. The one-shot mount fetch
-    // this replaced read that as sso:false and never asked again.
-    let served = 0;
-    await page.route("**/healthz", async (route) => {
-      served += 1;
-      if (served === 1) return route.fulfill({ status: 503, body: "" });
-      return route.fallback();
-    });
+    // /healthz is down until `healthy` flips. The one-shot mount fetch this
+    // replaced read the outage as sso:false and never asked again.
+    //
+    // No request count: App.tsx polls /healthz itself (HEALTH_POLL_MS) in
+    // every auth state, so "served more than once" holds with the gate's own
+    // re-ask paused. What is pinned is the gate's own reads: the outage on
+    // screen first, then the recovery reaching the screen ONLY through the
+    // gate's poll. page.clock drives SSO_POLL_MS (sign-in.tsx) instead of a
+    // real 10s setInterval racing a loaded CI host.
+    await page.clock.install();
+    let healthy = false;
+    await page.route("**/healthz", (route) =>
+      healthy
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) })
+        : route.fulfill({ status: 503, body: "" }),
+    );
     await clearTokenInit(page);
     await page.goto("/");
-    // #457: the FIRST read is the outage, so the screen is honestly
-    // "checking" until the next poll (SSO_POLL_MS) lands the real answer —
-    // longer than the default assertion timeout covers.
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    // #457: no answer yet, so the gate is honestly "checking" and offers no door.
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
 
-    // What must NOT happen is the posture being frozen on the outage's
-    // answer — the gate has asked more than once.
-    await expect
-      .poll(() => served, { timeout: 30_000 })
-      .toBeGreaterThan(1);
+    // Only the gate's own unanswered reads (mount + two SSO_POLL_MS ticks)
+    // turn "checking" into "still checking" — so its mount read has landed on
+    // the outage before `healthy` flips below. runFor, not fastForward: the
+    // latter fires a due interval at most once.
+    await page.clock.runFor("00:21");
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.STILL_CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
+
+    // The daemon comes back. The posture must not stay frozen on the outage:
+    // one more SSO_POLL_MS tick and the gate offers the token door.
+    healthy = true;
+    await page.clock.fastForward("00:11");
+    await expect(signInToken(page)).toBeVisible();
   });
 });
 
 // R4/F116 — MID-SESSION EXPIRY, the one auth path no spec in either tier drove.
 //
-// wfetch routes every 401 to the module-level onUnauthorized handler, and
-// App.tsx wires that to setAuth("unauthed") — the sign-in gate. It is the
-// console's ONLY route back to a door the human can open once an SSO session
-// dies or an admin token is revoked mid-work; without it the operator keeps a
-// console that answers 401 to everything and never says why. Deleting the
-// handler call left the whole vitest suite green, and every spec above boots
-// EITHER already authenticated OR already rejected: none revokes a session that
-// the console has already accepted.
-//
-// DEFERRED (Docker down for the R4 fix wave — never run, never skipped):
-//   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
-//   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
-//   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("a session revoked mid-run (R4/F116)", () => {
-  test("a 401 arriving on an ALREADY-authenticated console returns to the sign-in gate", async ({
+// wfetch routes every 401 to the module-level onUnauthorized handler. Since
+// #483 a 401 on a console that WAS signed in keeps the page and opens the
+// "Sign in to continue" dialog over it — the console's only way back to a
+// door the human can open once an SSO session dies or an admin token is
+// revoked mid-work; without it the operator keeps a console that answers 401
+// to everything and never says why. Every other spec here boots EITHER already
+// authenticated OR already rejected: none revokes a session the console has
+// already accepted. The draft-keeping half is reauth-in-place.spec.ts.
+function revokeEverything(page: Page) {
+  return page.route("**/api/v1/**", (route) =>
+    route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
+  );
+}
+function reauthDialog(page: Page) {
+  return page.getByRole("dialog", { name: REAUTH_DIALOG.TITLE });
+}
+async function signInInDialog(page: Page) {
+  await reauthDialog(page).locator("#reauth-token").fill(GOOD_TOKEN);
+  await reauthDialog(page).getByRole("button", { name: REAUTH_BAR.CTA, exact: true }).click();
+}
+
+test.describe("a session revoked mid-run", () => {
+  // ticket: R4/F116, #483
+  test("a 401 arriving on an ALREADY-authenticated console opens the sign-in dialog over the page", async ({
     page,
   }) => {
-    // In, the ordinary way: a stored token the daemon accepts.
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    // Now the session dies underneath the console: every API call 401s from
-    // here on, exactly as it would after an SSO session expiry or a revoked
-    // token. /healthz is left alone — the daemon is up, it is this CALLER who
-    // is no longer welcome, and that is the distinction the gate must draw.
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "unauthorized" }),
-      }),
-    );
-
-    // The console's own polls (the attention badge, every 5 s) reach the 401
-    // on their own. This used to click the Runs nav to force one sooner — but
-    // the gate can replace the shell BETWEEN Playwright resolving that link
-    // and dispatching the click (a 401 from a poll, or from a boot request
-    // still in flight when the route landed), and the click then waits 30 s
-    // on a detached element. A race the test loses on a cold CI runner (6/6
-    // on 2026-09-11) and sometimes locally, on 0.7.0 itself. So the door is
-    // asserted directly, with room for one full poll period.
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
-    // …and the gate is a real door, not a dead end: the submit control is there
-    // to be used.
-    await expect(useTokenButton(page)).toBeVisible();
-  });
-
-  // X3-F7: the gate used to swap in a bare SignIn with no explanation and no
-  // way back — this pins both halves of the fix. reason renders in SignIn's
-  // own alert slot (the same box submitToken's own failures use), and
-  // re-authenticating returns to the SCREEN the 401 interrupted, not always
-  // to Runs.
-  test("a 401 while on another screen shows why, and re-auth returns to that screen (X3-F7)", async ({ page }) => {
-    await bootWithStoredToken(page, GOOD_TOKEN);
-    await expect(runsNav(page)).toBeVisible();
-
-    await page.getByRole("link", { name: /^Workspaces/ }).click();
-    await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
-
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "unauthorized" }),
-      }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("alert")).toContainText(/session ended/i);
-
-    // The session works again — re-authenticate.
-    await page.unroute("**/api/v1/**");
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
-
-    // Back on Workspaces, not dumped on Runs.
-    await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
+    // The session dies underneath the console. /healthz is left alone — the
+    // daemon is up, it is this CALLER who is no longer welcome. The board's
+    // own poll reaches the 401 on its own, so the door is asserted directly,
+    // with room for one full poll period.
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
+    // The page stayed: no full sign-in screen replaced it…
+    await expect(signInToken(page)).toHaveCount(0);
+    // …and the dialog is a real door, not a dead end.
+    await expect(reauthDialog(page).getByRole("button", { name: REAUTH_BAR.CTA, exact: true })).toBeVisible();
   });
 });
 
-// M2: the plan's own X3-F7 row says "restore the path after re-auth
-// (fallback /runs on 403)" — the captured path belongs to whoever was
-// signed in BEFORE, not necessarily whoever signs back in on this tab.
-test.describe("the restored path is checked against the re-authenticated role (M2)", () => {
-  test("a member re-authenticating over an admin's captured operator-only path lands on Runs, not a dead end", async ({ page }) => {
+// M2: the page belongs to whoever was signed in BEFORE — the same person
+// with a narrower role is told so and taken to Runs (owner decision Q457-9).
+test.describe("the page is checked against the re-authenticated role", () => {
+  // ticket: M2, #483
+  test("a member signing back in over an admin-only page is told so and taken to Runs", async ({ page }) => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
-
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
 
-    // Re-authenticate as a MEMBER (the harness's bearer token is always
-    // admin server-side — splice GET /me the same way mockMemberRole does
-    // for every other member-render spec).
+    // Back as a MEMBER (the harness's bearer token is always admin
+    // server-side — splice GET /me the same way mockMemberRole does).
     await page.unroute("**/api/v1/**");
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.role = "member";
+      json.role = "user";
       json.operator = false;
       json.security_operator = false;
       await route.fulfill({ response, json });
     });
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
+    await signInInDialog(page);
 
-    // /drives has no member surface at all — landed on Runs instead of a
-    // bare 403 or a route this identity can't even reach.
-    await expect(runsNav(page)).toBeVisible();
+    await expect(reauthDialog(page).getByText(REAUTH_DIALOG.ROLE_CHANGED_BODY)).toBeVisible();
+    await reauthDialog(page).getByRole("button", { name: REAUTH_DRAFT.GO_TO_RUNS }).click();
     await expect(page).toHaveURL(/\/runs$/);
+    await expect(reauthDialog(page)).toHaveCount(0);
   });
 
-  test("neg: the SAME role re-authenticating restores to the captured operator-only path", async ({ page }) => {
+  test("neg: the SAME role signing back in stays on the page", async ({ page }) => {
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+    await page.goto("/admin/drives");
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
+    await page.unroute("**/api/v1/**");
+    await signInInDialog(page);
+
+    await expect(reauthDialog(page)).toHaveCount(0);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+  });
+
+  // T-25 (P2-5's sibling gap): roleCanReach's OPERATOR_ONLY_PREFIXES
+  // (App.tsx) once named /drives, which would have bounced a security admin
+  // here to Runs exactly like the member case above — the wrong answer, since
+  // a security admin manages Drives' grants and preview (securityOps,
+  // admin-member-modes-design.md §2 comment). Only /admin/providers is
+  // operator-only now; this pins the OTHER admin tier through the same
+  // captured-path door the "neg" case above proves for a plain admin.
+  test("a security admin re-authenticating over their own captured /admin/drives path is restored, not bounced to Runs", async ({ page }) => {
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.role = "security_admin";
+      json.operator = false;
+      json.security_operator = true;
+      await route.fulfill({ response, json });
+    });
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    // Same trigger as the "neg" case above (revokeEverything): the console is
+    // already authed, so this stays the in-place reauth DIALOG, not the full
+    // sign-in gate — the wrong locators here (signInToken/useTokenButton, the
+    // gate's own) made this test wait on a screen that never replaces the
+    // page, timing out even though the dialog was up the whole time.
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
 
+    // Drops only the 401 handler: the /me splice above still answers the re-auth.
     await page.unroute("**/api/v1/**");
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
+    await signInInDialog(page);
 
+    await expect(reauthDialog(page)).toHaveCount(0);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
   });
 });
@@ -542,7 +644,8 @@ test.describe("the restored path is checked against the re-authenticated role (M
 // the FULL admin nav off a guess, indistinguishable from an authz breach.
 // identityResolved now gates the nav directly: settled-but-unknown renders
 // NEITHER nav set, and the banner below is the whole page.
-test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+test.describe("settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+  // ticket: B1
   test("a 500 on /me shows the identity-unknown banner, no admin nav and no member nav", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
@@ -575,10 +678,10 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     await expect(banner).toHaveCount(0);
   });
   // VL-26 (V1 lens D): the gate is the ROUTE SHELL, not the nav. A person who
-  // types /settings (or any admin route) while /me is refused gets the same
-  // banner and no screen — before the fix the nav was hidden but the route
-  // still painted operator controls off the fail-open context default.
-  test("a 500 on /me shows the banner on /settings and /governance — no screen paints for an unknown identity", async ({ page }) => {
+  // types /admin/settings (or any admin route) while /me is refused gets the
+  // same banner and no screen — before the fix the nav was hidden but the
+  // route still painted operator controls off the fail-open context default.
+  test("a 500 on /me shows the banner on /admin/settings and /admin/governance — no screen paints for an unknown identity", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
       if (!meFailing) return route.fallback();
@@ -586,7 +689,7 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     });
     await bootWithStoredToken(page, GOOD_TOKEN);
 
-    for (const path of ["/settings", "/governance"]) {
+    for (const path of ["/admin/settings", "/admin/governance"]) {
       await page.goto(path);
       await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Settings" })).toHaveCount(0);
@@ -607,7 +710,8 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
 // throws), and the local admin token is always dropped either way — the
 // question this answers is whether the SERVER-side OIDC session might still
 // be live, which matters on a shared machine.
-test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => {
+test.describe("a failed sign-out is surfaced, not swallowed", () => {
+  // ticket: R4-F107
   test("POST /auth/logout failing still drops the local session, but toasts that the server wasn't confirmed", async ({
     page,
   }) => {
@@ -618,7 +722,7 @@ test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => 
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
     );
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await userMenuTrigger.click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
 

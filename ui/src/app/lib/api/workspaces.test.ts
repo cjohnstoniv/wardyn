@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { workspaces } from "./workspaces";
 import type { Workspace } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // Workspace CRUD + scan client — mirrors the secrets/policies client methods
 // (listX/createX/updateX/deleteX + unwrapList). Only the wire shape and paths
@@ -27,8 +28,8 @@ describe("workspace client methods", () => {
     kind: "local_dir",
     source: "/home/me/payments",
     status: "pending_scan",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
   };
 
   it("listWorkspaces() GETs /workspaces and unwraps a bare array", async () => {
@@ -198,5 +199,59 @@ describe("workspace client methods", () => {
       confinement_class: "CC3",
       warnings: ["masking caveat text"],
     });
+  });
+
+  it.each([
+    ["buildWorkspace", "/build", "POST", { state: "building" }],
+    ["getWorkspaceBuild", "/build", "GET", { state: "done", image: "image-1", log: ["built"] }],
+    ["getWorkspace", "", "GET", ws],
+  ] as const)("%s encodes the workspace ID and returns the server state", async (method, suffix, verb, body) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body)));
+    await expect(workspaces[method]("ws/id ?")).resolves.toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/workspaces/ws%2Fid%20%3F${suffix}`, expect.objectContaining({ method: verb }));
+  });
+
+  it("getWorkspace distinguishes missing workspaces from service failures", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    await expect(workspaces.getWorkspace("missing")).resolves.toBeUndefined();
+    fetchMock.mockResolvedValueOnce(new Response("upstream unavailable", { status: 503 }));
+    await expect(workspaces.getWorkspace("ws-1")).rejects.toMatchObject({ status: 503, message: "upstream unavailable" });
+  });
+
+  it.each([
+    ["setApprovedEgress", "approved-egress"],
+    ["setDeniedEgress", "denied-egress"],
+  ] as const)("%s replaces the complete domains list", async (method, suffix) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(ws)));
+    await expect(workspaces[method]("ws/id ?", ["api.example.com"])).resolves.toEqual(ws);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/workspaces/ws%2Fid%20%3F/${suffix}`, expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ domains: ["api.example.com"] }),
+    }));
+  });
+
+  it("promoteRecordEgress encodes both IDs and sends only the selected hosts", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(ws)));
+    await expect(workspaces.promoteRecordEgress("ws/id", "build/test ?", ["api.example.com"])).resolves.toEqual(ws);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/workspaces/ws%2Fid/record/build%2Ftest%20%3F/promote-egress", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ hosts: ["api.example.com"] }),
+    }));
+  });
+
+  it.each([409, 422, 503])("recordTask returns an actionable %s refusal without claiming a run", async (status) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "recording refused" }), { status }));
+    await expect(workspaces.recordTask("ws/id", "verify", true)).resolves.toEqual({ ok: false, status, detail: "recording refused" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/workspaces/ws%2Fid/record", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ name: "verify", confined: true }),
+    }));
+  });
+
+  it("recordTask throws on an unexpected non-JSON failure", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("upstream unavailable", { status: 502 }));
+    await expect(workspaces.recordTask("ws-1", "build")).rejects.toMatchObject({ status: 502, message: "upstream unavailable" });
+  });
+
+  it("deleteWorkspace preserves a refusal instead of treating it as absent", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "workspace has live runs" }), { status: 409 }));
+    await expect(workspaces.deleteWorkspace("ws-1")).rejects.toMatchObject({ status: 409, message: "workspace has live runs" });
   });
 });

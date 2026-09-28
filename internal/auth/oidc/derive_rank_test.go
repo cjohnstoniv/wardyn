@@ -27,7 +27,7 @@ func TestDeriveRoleHighestWins(t *testing.T) {
 	roleMap := map[string]string{
 		"wardyn.admin":    oidc.RoleAdmin,
 		"wardyn.security": oidc.RoleSecurityAdmin,
-		"eng-team":        oidc.RoleMember,
+		"eng-team":        oidc.RoleUser,
 	}
 	for _, tc := range []struct {
 		name           string
@@ -58,7 +58,7 @@ func TestDeriveRoleHighestWins(t *testing.T) {
 
 		// A lone match of each tier still resolves to itself.
 		{"lone security_admin match", []string{"Wardyn.Security"}, nil, "", nil, oidc.RoleSecurityAdmin},
-		{"lone member match", []string{"eng-team"}, nil, "", nil, oidc.RoleMember},
+		{"lone member match", []string{"eng-team"}, nil, "", nil, oidc.RoleUser},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, _, ok := oidc.DeriveRoleForTest(tc.roles, tc.groups, tc.email, roleMap, tc.operatorEmails, "")
@@ -78,7 +78,7 @@ func TestDeriveRoleHighestWins(t *testing.T) {
 func TestDeriveRoleSecurityAdminProvenance(t *testing.T) {
 	roleMap := map[string]string{
 		"wardyn.security": oidc.RoleSecurityAdmin,
-		"eng-team":        oidc.RoleMember,
+		"eng-team":        oidc.RoleUser,
 	}
 	role, matches, ok := oidc.DeriveRoleForTest([]string{"Wardyn.Security"}, []string{"eng-team"}, "", roleMap, nil, "")
 	if !ok || role != oidc.RoleSecurityAdmin {
@@ -95,7 +95,7 @@ func TestDeriveRoleSecurityAdminProvenance(t *testing.T) {
 			if m.Value != "Wardyn.Security" {
 				t.Fatalf("match value = %q, want the literal claim %q", m.Value, "Wardyn.Security")
 			}
-		case oidc.RoleMember:
+		case oidc.RoleUser:
 			wantMember = true
 		default:
 			t.Fatalf("match carries role %q, want the row's own role", m.Role)
@@ -119,7 +119,7 @@ func TestDeriveRoleArm1UntouchedBySecurityAdmin(t *testing.T) {
 	}{
 		{"no map, no allowlist: everyone is admin", "dev@corp.example", nil, oidc.RoleAdmin},
 		{"no map, listed email: admin", "ops@corp.example", []string{"ops@corp.example"}, oidc.RoleAdmin},
-		{"no map, unlisted email: member", "dev@corp.example", []string{"ops@corp.example"}, oidc.RoleMember},
+		{"no map, unlisted email: member", "dev@corp.example", []string{"ops@corp.example"}, oidc.RoleUser},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// A security_admin-shaped claim is present in every case and must
@@ -140,14 +140,15 @@ func TestDeriveRoleArm1UntouchedBySecurityAdmin(t *testing.T) {
 
 // TestDeriveRoleUnknownMapValueIsInert: a value that is not a valid role
 // contributes nothing to the fold AND produces no Match — the exhaustive-case
-// behavior of the pre-0.7 switch, now expressed as a ValidRole guard. Without
+// behavior of the pre-0.7 switch, now expressed as a SplitMappingTarget guard
+// (a lowercase slug would be a user type id, so the garbage here is not one). Without
 // it, a garbage row would rank 0 yet still appear in the provenance list as if
 // it had been consulted.
 func TestDeriveRoleUnknownMapValueIsInert(t *testing.T) {
-	roleMap := map[string]string{"eng-team": oidc.RoleMember, "weird": "superadmin"}
+	roleMap := map[string]string{"eng-team": oidc.RoleUser, "weird": "Super_Admin"}
 	role, matches, ok := oidc.DeriveRoleForTest([]string{"weird"}, []string{"eng-team"}, "", roleMap, nil, "")
-	if !ok || role != oidc.RoleMember {
-		t.Fatalf("role = %q ok=%v, want %q true", role, ok, oidc.RoleMember)
+	if !ok || role != oidc.RoleUser {
+		t.Fatalf("role = %q ok=%v, want %q true", role, ok, oidc.RoleUser)
 	}
 	if slices.ContainsFunc(matches, func(m oidc.Match) bool { return m.Value == "weird" }) {
 		t.Fatalf("an invalid role value produced a Match: %+v", matches)
@@ -161,15 +162,15 @@ func TestDeriveRoleUnknownMapValueIsInert(t *testing.T) {
 // (cmd/wardynd's validDefaultRole), never this function.
 func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 	roleMap := map[string]string{"wardyn.security": oidc.RoleSecurityAdmin}
-	if role, _, ok := oidc.DeriveRoleForTest(nil, []string{"eng-team"}, "", roleMap, nil, oidc.RoleMember); !ok || role != oidc.RoleMember {
-		t.Fatalf("no-match with a default = %q/%v, want member/true", role, ok)
+	if role, _, ok := oidc.DeriveRoleForTest(nil, []string{"eng-team"}, "", roleMap, nil, oidc.RoleUser); !ok || role != oidc.RoleUser {
+		t.Fatalf("no-match with a default = %q/%v, want user/true", role, ok)
 	}
 	if role, _, ok := oidc.DeriveRoleForTest(nil, []string{"eng-team"}, "", roleMap, nil, ""); ok {
 		t.Fatalf("no-match with no default = %q/%v, want deny", role, ok)
 	}
 }
 
-// TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03 pins the exact hazard the
+// TestDeriveRoleComposeDefaultDeniesUnlistedLogin pins the exact hazard the
 // blind review (R-03) caught before it shipped: giving WARDYN_OIDC_ROLE_MAP a
 // RUNTIME `:-` default on the compose stack — demo@wardyn.local=admin,
 // member@wardyn.local=member — would have applied to every EXISTING deployment
@@ -184,18 +185,19 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 // than as a docker-compose.yaml runtime default; this test pins the underlying
 // deriveRole behavior directly against the literal string, so the hazard stays
 // provable even if the shape of the fix changes later.
-func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
-	const composeDefault = "demo@wardyn.local=admin,member@wardyn.local=member"
+func TestDeriveRoleComposeDefaultDeniesUnlistedLogin(t *testing.T) {
+	// ticket: R03
+	const composeDefault = "demo@wardyn.local=admin,member@wardyn.local=user"
 	roleMap, err := oidc.ParseRoleMap(composeDefault)
 	if err != nil {
 		t.Fatalf("ParseRoleMap(%q): %v", composeDefault, err)
 	}
 
-	// (a) An allowlist-only deployment: today bob@corp.com is a MEMBER with a
+	// (a) An allowlist-only deployment: bob@corp.com is a member with a
 	// working login via arm 1's legacy-allowlist branch (alice is admin,
 	// everyone else who signs in is a member). Under the compose default, bob
 	// matches neither the chart map nor the allowlist, and no DefaultRole is
-	// set — the login that used to succeed is now denied.
+	// set — so the same login is denied.
 	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "bob@corp.com", roleMap, []string{"alice@corp.com"}, ""); ok {
 		t.Fatalf("bob@corp.com resolved to %q under the compose default role map — want deny (ok=false); this is the allowlist-only lockout R-03 exists to prevent", role)
 	}
@@ -213,8 +215,8 @@ func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
 	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "demo@wardyn.local", roleMap, nil, ""); !ok || role != oidc.RoleAdmin {
 		t.Fatalf("demo@wardyn.local = %q/%v, want admin/true", role, ok)
 	}
-	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "member@wardyn.local", roleMap, nil, ""); !ok || role != oidc.RoleMember {
-		t.Fatalf("member@wardyn.local = %q/%v, want member/true", role, ok)
+	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "member@wardyn.local", roleMap, nil, ""); !ok || role != oidc.RoleUser {
+		t.Fatalf("member@wardyn.local = %q/%v, want user/true", role, ok)
 	}
 }
 
@@ -224,14 +226,14 @@ func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
 // typo must name all three, or an operator reading it concludes the value they
 // just used does not exist.
 func TestParseRoleMapAcceptsSecurityAdmin(t *testing.T) {
-	m, err := oidc.ParseRoleMap("Wardyn.Admin=admin,Wardyn.Security=security_admin,eng-team=member")
+	m, err := oidc.ParseRoleMap("Wardyn.Admin=admin,Wardyn.Security=security_admin,eng-team=user")
 	if err != nil {
 		t.Fatalf("ParseRoleMap rejected security_admin: %v", err)
 	}
 	if m["wardyn.security"] != oidc.RoleSecurityAdmin {
 		t.Fatalf("parsed map = %v, want wardyn.security => %q", m, oidc.RoleSecurityAdmin)
 	}
-	_, err = oidc.ParseRoleMap("x=superadmin")
+	_, err = oidc.ParseRoleMap("x=Super_Admin")
 	if err == nil {
 		t.Fatal("ParseRoleMap accepted an invalid role")
 	}

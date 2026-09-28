@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,12 +31,33 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// sshHandshakeTimeoutNS bounds ONLY the pre-auth handshake (net.Conn deadline,
+// cleared once ssh.NewServerConn succeeds) — NewServerConn otherwise blocks
+// with no default timeout, and a slowloris against wardynd's pre-auth
+// listener is a containment incident, not a nuisance.
+//
+// An atomic.Int64 of nanoseconds (not a const) purely so a test can shrink it
+// instead of waiting out the real 15s to exercise the "the deadline actually
+// closes it" path, without racing the background connection goroutine
+// (sshGo) that reads it concurrently with the test's own cleanup — see
+// TestSSHHandshakeTimeout_ProductionValueUnchanged for the guard that the
+// production default itself is untouched. sshHandshakeTimeout/setSSHHandshakeTimeout
+// wrap it so call sites read like the old time.Duration var.
+var sshHandshakeTimeoutNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(15 * time.Second))
+	return &v
+}()
+
+func sshHandshakeTimeout() time.Duration {
+	return time.Duration(sshHandshakeTimeoutNS.Load())
+}
+
+func setSSHHandshakeTimeout(d time.Duration) (prev time.Duration) {
+	return time.Duration(sshHandshakeTimeoutNS.Swap(int64(d)))
+}
+
 const (
-	// sshHandshakeTimeout bounds ONLY the pre-auth handshake (net.Conn deadline,
-	// cleared once ssh.NewServerConn succeeds) — NewServerConn otherwise blocks
-	// with no default timeout, and a slowloris against wardynd's pre-auth
-	// listener is a containment incident, not a nuisance.
-	sshHandshakeTimeout = 15 * time.Second
 	// sshMaxAuthTries bounds per-connection auth attempts. Set explicitly
 	// (rather than relying on ssh.ServerConfig's own default-when-zero of 6)
 	// so the bound is self-documenting here, not implicit in a zero value.
@@ -159,7 +181,7 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 		PublicKeyCallback: s.sshAuth,
 		// VerifiedPublicKeyCallback runs ONLY after golang.org/x/crypto/ssh has
 		// verified a real signature over the offered key (see sshVerifiedAuth's
-		// doc) — this is where ssh.auth success is now audited, not sshAuth.
+		// doc) — this is where ssh.authenticate success is now audited, not sshAuth.
 		VerifiedPublicKeyCallback: s.sshVerifiedAuth,
 		MaxAuthTries:              sshMaxAuthTries,
 	}
@@ -188,9 +210,10 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // sshAuth is the gateway's auth+authz DECISION (ServerConfig's
 // PublicKeyCallback): registered public keys only, OWNER-OR-ADMIN
 // authorization — run.CreatedBy == the key's principal, OR the key's own
-// stored role is oidc.RoleAdmin. Username = the target run's UUID
-// (conn.User()) — SSH has no cookie, so the run id IS the addressing the
-// client supplies, the same way `ssh host` names a machine.
+// stored role is oidc.RoleAdmin and it is not capped (migration 0070).
+// Username = the target run's UUID (conn.User()) — SSH has no cookie, so the
+// run id IS the addressing the client supplies, the same way `ssh host` names
+// a machine.
 //
 // The admin override reads the key's ROLE COLUMN (migration 0043), stamped at
 // REGISTRATION time by handleAddSSHKey and REFRESHED on every OIDC login for
@@ -205,10 +228,10 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // (DELETE /api/v1/me/ssh-keys/{fingerprint}) or re-registered. The ceiling is
 // stated in docs/SSH.md §Bounds, OPERATIONS.md and THREAT-MODEL.md's SSH
 // gateway residual — it is the documented shape of the feature, not an
-// oversight. An override is recorded as such: the ssh.auth success event
+// oversight. An override is recorded as such: the ssh.authenticate success event
 // carries override:true whenever the owner check did not match.
 //
-// Every REJECTION is audited under ssh.auth right here — including an
+// Every REJECTION is audited under ssh.authenticate right here — including an
 // unknown key or an unparseable/unknown run id — so a scan against the
 // gateway leaves a trail. SUCCESS is deliberately NOT audited here:
 // golang.org/x/crypto/ssh calls PublicKeyCallback on the UNSIGNED "query"
@@ -216,7 +239,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // signed attempt this callback still runs BEFORE the signature is verified —
 // so a caller who merely KNOWS a victim's registered public key (never the
 // matching private key) could reach this function, get approved, and —
-// before this fix — walk away with a forged ssh.auth success row attributed
+// before this fix — walk away with a forged ssh.authenticate success row attributed
 // to that victim, having proven nothing. The *ssh.Permissions returned on
 // approval here are therefore PROVISIONAL; sshVerifiedAuth
 // (VerifiedPublicKeyCallback) records the success audit, and the ssh package
@@ -253,46 +276,54 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "stored key mismatch")
 		return nil, errors.New("ssh: unknown key")
 	}
+	if reason := s.sshKeyRevocationRefusal(ctx, rec); reason != "" {
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
+		return nil, errors.New("ssh: key is no longer authorized")
+	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unknown run")
 		return nil, errors.New("ssh: unknown run")
 	}
 	override := run.CreatedBy != rec.Principal
-	if override && rec.Role != oidc.RoleAdmin {
-		// The key itself is genuine (owned by rec.Principal) — just not
-		// authorized for THIS run, and not an admin key either — so, unlike
-		// the other failures above, a real principal is known here and worth
-		// recording instead of "unknown".
-		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "not the run owner")
-		return nil, errors.New("ssh: not authorized for this run")
-	}
-	if override && !sshRoleFresh(rec.RoleCheckedAt, s.cfg.Now(), s.cfg.SSHRoleTTL) {
-		// role==admin, but the stamp backing that is older than SSHRoleTTL (or
-		// was never checked at all — nil, a pre-0.6-upgrade key). This is the
-		// bounded-stale re-check (migration 0046): unlike the "not the run
-		// owner" branch above, the key genuinely IS admin-tier — the refusal
-		// is purely about how long ago that was last confirmed, so it gets its
-		// own reason string rather than reusing "not the run owner".
-		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "admin override stale (role not re-checked within WARDYN_SSH_ROLE_TTL)")
-		return nil, errors.New("ssh: not authorized for this run")
+	if override {
+		if reason := s.sshOverrideRefusal(rec); reason != "" {
+			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
+			return nil, errors.New("ssh: not authorized for this run")
+		}
 	}
 
 	// Provisional approval ONLY — no success audit here, see the function doc:
 	// the client has not yet proven it holds the private key for this offer.
-	// sshVerifiedAuth records ssh.auth success, and only after
+	// sshVerifiedAuth records ssh.authenticate success, and only after
 	// ssh.ServerConfig has verified a real signature over this key. The
 	// override verdict rides along in Extensions for the same reason principal
 	// and run_id do: it was resolved from store state HERE, and the verified
 	// callback that writes the audit must not re-derive it.
 	ext := map[string]string{
-		"principal": rec.Principal,
-		"run_id":    runID.String(),
+		"principal":       rec.Principal,
+		"run_id":          runID.String(),
+		"key_fingerprint": fp,
+		"key_created_at":  rec.CreatedAt.Format(time.RFC3339Nano),
 	}
 	if override {
 		ext["override"] = "true"
 	}
 	return &ssh.Permissions{Extensions: ext}, nil
+}
+
+func (s *Server) sshOverrideRefusal(key types.SSHPublicKey) string {
+	// Check the permanent user-view cap before role, so both doors explain it.
+	if key.Capped {
+		return "capped key (registered in the user view): no admin override"
+	}
+	if key.Role != oidc.RoleAdmin {
+		return "not the run owner"
+	}
+	if !sshRoleFresh(key.RoleCheckedAt, s.cfg.Now(), s.cfg.SSHRoleTTL) {
+		return "admin override stale (role not re-checked within WARDYN_SSH_ROLE_TTL)"
+	}
+	return ""
 }
 
 // sshRoleFresh reports whether checkedAt is within ttl of now — the
@@ -306,7 +337,7 @@ func sshRoleFresh(checkedAt *time.Time, now time.Time, ttl time.Duration) bool {
 }
 
 func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {
-	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.auth", fingerprint, "failure",
+	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.authenticate", fingerprint, "failure",
 		mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
@@ -344,7 +375,7 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 	if perms.Extensions["override"] == "true" {
 		data = mustJSON(map[string]any{"override": true})
 	}
-	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.auth", ssh.FingerprintSHA256(key), "success", data)
+	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.authenticate", ssh.FingerprintSHA256(key), "success", data)
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
 	return perms, nil
@@ -358,7 +389,7 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 // handler outlives its connection.
 func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig) {
 	defer nc.Close()
-	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout))
+	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout()))
 
 	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
@@ -389,6 +420,16 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	defer cancel()
 
 	for newCh := range chans {
+		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {
+			if reason := s.sshCurrentKey(connCtx, sconn.Permissions); reason != "" {
+				s.recordAudit(connCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
+					sconn.Permissions.Extensions["key_fingerprint"], "failure", mustJSON(map[string]any{
+						"channel_type": newCh.ChannelType(), "reason": reason,
+					})))
+				_ = newCh.Reject(ssh.Prohibited, "SSH key is no longer authorized")
+				continue
+			}
+		}
 		switch newCh.ChannelType() {
 		// "session" (shell/exec/sftp) and "direct-tcpip" (-L forwards) share
 		// ONE per-run cap (sshAcquireSession/maxSSHSessionsPerRun) — a single
@@ -430,6 +471,54 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	}
 }
 
+func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions) string {
+	ctx, cancel := context.WithTimeout(ctx, sshAuthTimeout)
+	defer cancel()
+	fp := permissions.Extensions["key_fingerprint"]
+	key, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
+	if err != nil {
+		return "SSH key lookup failed"
+	}
+	// Bind this connection to the original registration as well as its key:
+	// deleting and registering the same public key must not revive an old connection.
+	if fp == "" || key.Fingerprint != fp || key.Principal != permissions.Extensions["principal"] ||
+		key.CreatedAt.Format(time.RFC3339Nano) != permissions.Extensions["key_created_at"] {
+		return "SSH key registration changed"
+	}
+	public, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key.PublicKey))
+	if err != nil || public == nil || ssh.FingerprintSHA256(public) != fp {
+		return "SSH key material changed"
+	}
+	if reason := s.sshKeyRevocationRefusal(ctx, key); reason != "" {
+		return reason
+	}
+	if permissions.Extensions["override"] == "true" {
+		return s.sshOverrideRefusal(key)
+	}
+	return ""
+}
+
+func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPublicKey) string {
+	// A key stored under a reserved principal (an IdP sub spelled like one,
+	// before #1162) would own that identity's runs. SSO only: without it every
+	// key is legitimately under admin-token or the local seat.
+	if s.cfg.OIDC != nil && s.isReservedPrincipal(key.Principal) {
+		return "SSH key registered under a reserved principal"
+	}
+	if s.cfg.SessionRevocations == nil {
+		return ""
+	}
+	// SSH rows carry the subject, so email revocation also stamps its resolved subject.
+	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, key.Principal, "", key.CreatedAt)
+	if err != nil {
+		return "SSH session cutoff lookup failed"
+	}
+	if revoked {
+		return "SSH key predates session revocation"
+	}
+	return ""
+}
+
 // sshAuditChannelRejected records a per-run channel-cap refusal.
 //
 // Neither rejection site audited before 0.7: the client saw ResourceShortage
@@ -445,7 +534,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 // "session" refusal and a "direct-tcpip" refusal drawing on one counter is the
 // property being recorded.
 func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, principal, channelType string) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel_rejected",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
 		runID.String(), "failure", mustJSON(map[string]any{
 			"channel_type": channelType,
 			"reason":       "per-run concurrent channel cap",
@@ -496,7 +585,7 @@ func (s *Server) sshReleaseSession(runID uuid.UUID) {
 // immediately and surface it however fits their channel's lifecycle stage
 // (sendChannelError on an already-accepted channel, NewChannel.Reject
 // otherwise).
-func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID) (types.AgentRun, string) {
+func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, string) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, "no runner configured; ssh unavailable"
 	}
@@ -506,6 +595,15 @@ func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID) (types.AgentR
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return types.AgentRun{}, "run is not RUNNING; ssh unavailable (state=" + string(run.State) + ")"
+	}
+	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	if runIsKept(run) {
+		return types.AgentRun{}, "run has ended; ssh unavailable"
+	}
+	// Every ssh channel execs into the sandbox, which the daemon refuses while
+	// it is paused: a person connecting is presence, so thaw it (run_pause.go).
+	if err := s.thawForExec(ctx, run, types.ActorHuman, principal, "presence"); err != nil {
+		return types.AgentRun{}, "run is paused and could not be resumed; try again"
 	}
 	return run, ""
 }

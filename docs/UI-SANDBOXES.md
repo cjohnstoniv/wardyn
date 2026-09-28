@@ -178,28 +178,81 @@ Your own image serves an app the same way — see
 
 ## 3. Open an app
 
-Two calls: mint a single-use attach ticket (the **same** ticket the browser
-terminal uses — there is no second ticket type), then `GET` the enter URL on
-the UI origin.
+Three calls: mint a single-use attach ticket (the **same** ticket the browser
+terminal uses — there is no second ticket type), **bind** it to the browser
+that will use it, then hand it to the enter endpoint on the UI origin — as a
+`POST` form field (preferred: the ticket never lands in a URL, browser history,
+or a reverse-proxy access log) or, for compatibility, as a `GET` query string.
 
 ```sh
-TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach-ticket" \
+TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
-xdg-open "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
+
+# Bind: what the console's own fetch sends. The binding cookie lands in the jar.
+curl -sf -c jar -X POST "$UI_ORIGIN/__wardyn/bind" \
+  -H "Sec-Fetch-Site: same-site" -H "Origin: $WARDYN_URL" --data-urlencode "ticket=$TICKET"
+
+# Preferred: POST, form body — the ticket never appears in a URL.
+curl -sf -b jar -X POST "$UI_ORIGIN/__wardyn/enter" \
+  --data-urlencode "run=$RUN_ID" --data-urlencode app=vscode --data-urlencode "ticket=$TICKET"
+
+# Compatibility: GET, query string (still needs the binding cookie).
+curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
 ```
 
-`/healthz` publishes the exact form as `ui_sandbox.enter_url_template`, with
-`{run}`, `{app}` and `{ticket}` placeholders. Read the origin from there rather
-than composing it — it is deliberately not the console's.
+`/healthz` publishes both forms: `ui_sandbox.enter_post_url` is the endpoint
+with **no query string at all** (`run`/`app`/`ticket` go in the
+`application/x-www-form-urlencoded` body instead), and
+`ui_sandbox.enter_url_template` is the `GET` form, with `{run}`, `{app}` and
+`{ticket}` placeholders; `ui_sandbox.bind_url` is the bind step. Read the
+origin from one of these rather than
+composing it — it is deliberately not the console's. A ticket in the query
+string on a `POST` is refused outright (no mixed mode): exactly one of the two
+forms is honored per request.
 
-The enter endpoint consumes the ticket and then **re-checks everything the
-ticket cannot prove on its own** against freshly-loaded state: owner-or-admin
-for this run, the run still `RUNNING` with a sandbox, and the app actually
-declared in the run's **effective** policy. Only then does it set the relay
-cookie — `wardyn_ui_sess`, `HttpOnly`, `SameSite=Lax`,
-`Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL` (default 8h) — and
-`302` to `/r/<run-id>/<app><path>`. Every later request rides that cookie, and
-nothing else on this listener authenticates anything.
+Both forms run the **same** consume-then-re-check path: the ticket is consumed,
+then everything it cannot prove on its own is re-checked against
+freshly-loaded state — owner-or-admin for this run, the run still `RUNNING`
+with a sandbox, and the app actually declared in the run's **effective**
+policy. Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
+`SameSite=Lax`, `Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL`
+(default 8h) — and redirects to `/r/<run-id>/<app><path>` (`303` for `POST`,
+`302` for `GET`, so a `POST` redirect is never silently replayed as a `GET`).
+Every later request rides that cookie, and nothing else on this listener
+authenticates anything.
+
+**CSRF.** The ticket stops a page that does not hold a freshly-minted,
+still-valid ticket for THIS run from forging a session for someone ELSE's run:
+it is single-use, ~30s-TTL, and bound to one run and one principal, mintable
+only through an already-authenticated call to
+`POST /runs/{id}/attach/ticket`.
+
+The ticket alone would not stop **login CSRF**: a user minting a ticket for
+their OWN run and pushing a victim's browser through the enter hand-off, by a
+link or an auto-submitted form, onto a session for the attacker's app. The
+**browser binding** stops that. Before the enter, the console `POST`s the ticket
+to `/__wardyn/bind` on the UI origin with one credentialed fetch, and the
+gateway answers with an `HttpOnly`, `SameSite=Strict`,
+`Path=/__wardyn/enter` cookie, `wardyn_ui_bind_<id>`, valid for 30 seconds,
+whose value is an HMAC of the ticket under the gateway's session key. Enter
+refuses a ticket that arrives without its binding cookie with the same `403`
+as a bad ticket and a `ui.authorize` / `denied` audit row
+(`reason: "ticket not bound to this browser"`), before the ticket is spent,
+and clears the binding it uses. The bind itself answers only the console:
+the browser must label the fetch `Sec-Fetch-Site: same-site` (an attacker's
+page is `cross-site`, a relayed app is `same-origin`), and with SSO its
+`Origin` must be the console's own origin (scheme and host) from
+`WARDYN_OIDC_REDIRECT_URL`. A refused bind is audited as `ui.authorize` /
+`denied` with `reason` `bind_not_same_site` or `bind_origin_not_console` plus
+the `sec_fetch_site` and `origin` the browser sent, since the console itself can
+only report that the gateway did not accept it.
+
+The binding needs the console and the UI origin to be **the same site** (one
+registrable domain, one scheme), e.g. `wardyn.example.com` and
+`run-<id>.ui.example.com`, or `localhost:8080` and `localhost:8081`. A
+cross-site console cannot set a first-party cookie on the gateway at all, and
+**Open** then fails with the console's own error. `localhost` and `127.0.0.1`
+are different sites.
 
 **One session per app, per run.** The app is in the path and the cookie is
 scoped to it, so a run that declares several `ui_apps` can have them all open at
@@ -210,8 +263,13 @@ so the log says which app a human actually opened.
 ### From the console
 
 The run detail page's **UI apps** lane is the affordance for this flow: one row
-per declared app, and an **Open** button that mints the ticket and opens the
-app in a new tab. Its states and strings are frozen in
+per declared app, and an **Open** button that mints the ticket, binds it
+(`ui_sandbox.bind_url`), then submits a hidden auto-submitted `POST` form
+(built from `ui_sandbox.enter_post_url`) that opens the app in a new tab — the
+ticket never touches this page's URL either. The console's CSP names the bind
+URL itself in `connect-src`, not the UI origin, so no other request to the
+gateway is allowed from the console page.
+Its states and strings are frozen in
 [design/ui-sandboxes-prompt.md](design/ui-sandboxes-prompt.md). The app is
 never embedded in the console page — an `<iframe>` on the console origin is
 precisely what the second listener exists to prevent.
@@ -223,7 +281,8 @@ precisely what the second listener exists to prevent.
 | `WARDYN_UI_SANDBOX_LISTEN` | the gateway's own address, e.g. `:8081` — never `WARDYN_LISTEN`'s |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | the externally-reachable base URL, e.g. `https://wardyn-ui.example.com` (advisory copy; unset falls back to the raw bind address and warns) |
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | how long a relay session stays usable, default `8h` — the relay's sibling of `WARDYN_SSH_ROLE_TTL`. Shortening it binds the cookies already in browsers |
-| `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below |
+| `WARDYN_UI_SANDBOX_STRIP_COOKIES` | optional inbound cookie policy: `allow:<names>` forwards only those cookies to the app, `deny:<names>` strips them (comma-separated, `prefix*` for a prefix). Unset forwards every cookie except `wardyn_*`. Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
+| `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. Put `{run}` in the first host label: the console's CSP turns that label into a wildcard |
 
 **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
 `-tls-key` as the console, so a distinct hostname needs a certificate that
@@ -294,7 +353,7 @@ recorded is that a session *happened*, in the append-only audit log:
 
 | Action | When | Data |
 |---|---|---|
-| `ui.auth` | every enter — success and every denial | app, port; or the denial reason |
+| `ui.authorize` | every enter — success and every denial | app, port; or the denial reason |
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
@@ -316,8 +375,8 @@ sandbox-authored JavaScript. Every cookie failure — absent, malformed, forged,
 expired — answers the same 403, so there is no oracle to probe.
 
 **Ticket.** Single-use, 30s TTL, owner-or-admin at mint
-(`POST /runs/{id}/attach-ticket`). A stale or already-redeemed ticket is a 403
-with a `ui.auth` denial in the log.
+(`POST /runs/{id}/attach/ticket`). A stale or already-redeemed ticket is a 403
+with a `ui.authorize` denial in the log.
 
 **Only declared ports.** The port is captured from the effective policy when
 the ticket is redeemed and lives in the signed cookie, so no later request can
@@ -350,13 +409,50 @@ Two things that check does **not** catch, by design:
 And a connection already established (a relayed WebSocket) keeps working until
 it closes: killing the run is what ends an in-flight session, the same bound
 attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
-`ui.auth` / `denied` row naming the reason.
+`ui.authorize` / `denied` row naming the reason.
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
 hostname would otherwise hand console cookies to sandbox code: every forwarded
-request has **all `wardyn_*` cookies**, `Authorization`, `Proxy-Authorization`
+request has **all `wardyn_*` cookies** (their `__Host-` and `__Secure-`
+spellings included), `Authorization`, `Proxy-Authorization`
 and any `?ticket` stripped, and every response has `Set-Cookie: wardyn_*`
-dropped (cookie tossing). `X-Forwarded-*` is removed and deliberately not
+dropped (cookie tossing), on a `1xx` as well as the final response. Every
+other cookie is forwarded by default. If the relay host sits under a parent
+domain other applications share, the browser also sends their `Domain=`
+cookies here, and the `Cookie` header does not say which host set a cookie:
+set `WARDYN_UI_SANDBOX_STRIP_COOKIES` to `allow:<the app's cookie names>` so
+only those reach the app, or to `deny:<names>` to strip known ones.
+`allow:__Host-*` is the one choice the browser itself guarantees host-only: it
+refuses to store a `__Host-` cookie that carries `Domain=`, so no sibling can
+set one here. The other direction needs no setting: a `Set-Cookie` from the app
+that carries a `Domain` attribute is always dropped, so the app's server cannot
+plant a cookie on sibling hosts, and so is one with no name (a browser would
+send its value back verbatim, e.g. as a forged `wardyn_ui_sess`).
+
+**Service workers stay inside their app.** A relayed app may register a
+service worker, but never one that controls more than its own app. The
+browser caps a worker's scope at its script's directory, which through the
+relay is always inside `/r/<run-id>/<app>/`, unless the script's response
+carries `Service-Worker-Allowed`. The relay removes that header from every
+response, and on the worker-script fetch itself (the browser sends
+`Service-Worker: script`) sets it to the app's own prefix. So an editor that
+registers its worker at its own root keeps working, while no app can register
+one at `/`, over the enter path, or over another run's or app's prefix. A
+worker there would see every later request to the shared origin in path mode.
+
+**Both controls act on HTTP headers only.** The relayed page is the sandbox's
+own JavaScript on the relay origin: `document.cookie` can still set a
+`Domain=<parent>` cookie and read every non-HttpOnly cookie a sibling host set
+for the parent domain, so the policy keeps only **HttpOnly** sibling cookies
+away from the app. The real bound is the relay host's registrable domain, and
+because the enter binding needs the console and the relay on one site, that
+domain is the console's too. Keep nothing else whose non-HttpOnly cookies matter
+on it. The console's own cookies (`wardyn_session`, `wardyn_oidc_state`,
+`wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-` prefix, so a relayed
+page can plant a `Domain=` cookie of the same name, which the console reads
+whenever the browser holds no live one of its own (signed out, expired, or
+mid-login): login CSRF onto the console, open as #1258. Host mode keeps each run on a host
+of its own under that site. `X-Forwarded-*` is removed and deliberately not
 re-added — the sandbox has no business learning the operator's IP — and every
 gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
 ticket cannot leak to whatever the app links to.
@@ -387,8 +483,12 @@ editor is not idle and the reaper must not stop the run under them.
 
 **Shared origin.** In path mode (no origin template) every run's apps share one
 origin, separated by the path-scoped cookie. That is a real residual, published
-in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 — set
-`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` where wildcard DNS is available.
+in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5: one of a human's
+relayed apps can script another of that same human's apps. The browser
+binding and the service-worker cap keep another user's app out of that origin
+in your browser, but host mode is the boundary the browser itself enforces —
+set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` for any install with more than one
+user, wherever wildcard DNS is available.
 
 ## Native clients (exploratory)
 
@@ -450,7 +550,7 @@ over a `runner.ExecSession`, so the standard library handles the WebSocket
 `101` upgrade code-server needs without a second protocol implementation.
 Policy validation is `validateUIApps` (`internal/api/policy.go`), applied
 wherever a policy enters — stored, inline, or `WARDYN_DEFAULT_POLICY`. A run's
-declared apps are resolved from the `run.policy.effective` audit envelope, not
+declared apps are resolved from the `run.policy.resolve` audit envelope, not
 from `policy_id`: an inline or default policy has no row to fetch, and
 resolving through the id would hand an inline-policy run the default policy's
 apps.

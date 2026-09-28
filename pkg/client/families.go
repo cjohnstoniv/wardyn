@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"reflect"
 
 	"github.com/google/uuid"
 
@@ -310,13 +312,39 @@ func (c *Client) RevokeDevice(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), nil, nil)
 }
 
+// ListSSHKeysPage is ListSSHKeys plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See client.go's package doc's "# Pagination".
+func (c *Client) ListSSHKeysPage(ctx context.Context, opts ...ListOpts) (keys []types.SSHPublicKey, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/me/ssh-keys", opts), nil, &keys, &hdr)
+	return keys, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
+// ListDeviceEnrolmentTokens returns every enrolment token still redeemable —
+// minted, not yet redeemed, revoked or expired — newest first, never the token
+// itself (admin or security_admin). GET /api/v1/admin/devices/enrolment-tokens.
+func (c *Client) ListDeviceEnrolmentTokens(ctx context.Context) ([]DeviceEnrolmentToken, error) {
+	var out []DeviceEnrolmentToken
+	err := c.do(ctx, http.MethodGet, "/api/v1/admin/devices/enrolment-tokens", nil, &out)
+	return out, err
+}
+
+// RevokeDeviceEnrolmentToken cancels a token that has not been redeemed yet, so
+// no laptop can trade it for a device credential (admin or security_admin). 404
+// for one already redeemed, revoked, expired or unknown.
+// DELETE /api/v1/admin/devices/enrolment-tokens/{id}.
+func (c *Client) RevokeDeviceEnrolmentToken(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/enrolment-tokens/"+id.String(), nil, nil)
+}
+
 // ListSSHKeys returns the caller's own registered SSH gateway keys — the
 // gateway's entire trust root (docs/SSH.md §1). There is no admin view of
-// another principal's keys. GET /api/v1/me/ssh-keys.
-func (c *Client) ListSSHKeys(ctx context.Context) ([]types.SSHPublicKey, error) {
-	var out []types.SSHPublicKey
-	err := c.do(ctx, http.MethodGet, "/api/v1/me/ssh-keys", nil, &out)
-	return out, err
+// another principal's keys. Pass a ListOpts to page; prefer ListSSHKeysPage,
+// which also returns the server's truncation signal. GET /api/v1/me/ssh-keys.
+func (c *Client) ListSSHKeys(ctx context.Context, opts ...ListOpts) ([]types.SSHPublicKey, error) {
+	keys, _, err := c.ListSSHKeysPage(ctx, opts...)
+	return keys, err
 }
 
 // AddSSHKey registers one authorized_keys line under the caller's own
@@ -329,6 +357,16 @@ func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.S
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
 		map[string]string{"name": name, "public_key": publicKey}, &out)
 	return out, err
+}
+
+// DeleteSSHKey removes one of the caller's own registered SSH gateway keys.
+// fp is ssh.FingerprintSHA256's raw form, which routinely contains '/' — it
+// is percent-encoded here, matching the server's decode
+// (handleDeleteSSHKey). Deleting a fingerprint registered by someone else
+// (or one that never existed) 404s the same way — no existence leak across
+// principals. DELETE /api/v1/me/ssh-keys/{fingerprint}.
+func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
 // RunFileStat is one changed file in a RunFiles listing.
@@ -427,10 +465,10 @@ type DriveGrantRequest struct {
 }
 
 // DrivesDocument is GET /drives's body and ApplyDrives's parameter: every
-// registered drive, a bounded page of allocations, and the deployment facts
-// an operator cannot derive from the rows alone (whether host_path drives are
-// even authorable here, which substrate this deployment dispatches to, and
-// whether the org switch is off). `wardyn drive get` prints this verbatim;
+// registered drive, every allocation (GetDrives reads every page), and the
+// deployment facts an operator cannot derive from the rows alone (whether
+// host_path drives are even authorable here, which substrate this deployment
+// dispatches to, and whether the org switch is off). `wardyn drive get` prints this verbatim;
 // ApplyDrives strict-decodes it back — HostRootsConfigured, RunnerTarget,
 // Disabled and GrantTotal are read-only and ignored on write.
 type DrivesDocument struct {
@@ -442,12 +480,38 @@ type DrivesDocument struct {
 	GrantTotal          int                 `json:"grant_total"`
 }
 
-// GetDrives returns every registered drive and a bounded page of allocations.
-// GET /api/v1/drives.
+// GetDrives returns every registered drive and EVERY allocation. GET
+// /api/v1/drives serves allocations one page at a time (X-Wardyn-Truncated),
+// so this reads ?offset= until the flag clears, and then refuses a result
+// whose allocation count is not the server's grant_total: a document that
+// silently dropped allocations would, fed back to ApplyDrives, restore a
+// partial set.
 func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
-	var out DrivesDocument
-	err := c.do(ctx, http.MethodGet, "/api/v1/drives", nil, &out)
-	return out, err
+	grants := []UserDriveGrant{}
+	for {
+		var page DrivesDocument
+		var hdr http.Header
+		path := appendListOpts("/api/v1/drives", []ListOpts{{Offset: len(grants)}})
+		if err := c.do(ctx, http.MethodGet, path, nil, &page, &hdr); err != nil {
+			return DrivesDocument{}, err
+		}
+		grants = append(grants, page.Grants...)
+		more := hdr.Get("X-Wardyn-Truncated") == "true"
+		// Past grant_total, or no progress, is a server not paging the way this
+		// loop reads it; stopping there is what bounds the loop.
+		if len(grants) > page.GrantTotal || more && len(page.Grants) == 0 {
+			return DrivesDocument{}, fmt.Errorf("drives: the server's allocation pages do not add up (%d read, %d reported); retry",
+				len(grants), page.GrantTotal)
+		}
+		if !more {
+			if len(grants) != page.GrantTotal {
+				return DrivesDocument{}, fmt.Errorf("drives: read %d allocations but the server reports %d; allocations changed while being read, retry",
+					len(grants), page.GrantTotal)
+			}
+			page.Grants = grants
+			return page, nil
+		}
+	}
 }
 
 // ApplyDrives upserts every drive and grant doc names, over the existing
@@ -509,4 +573,214 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 		doc.Grants[i] = saved
 	}
 	return c.GetDrives(ctx)
+}
+
+// ── Governance (migration 0052) ─────────────────────────────────────────────
+
+// GovernanceProfileRequest is the POST /governance/profiles / PUT
+// /governance/profiles/{id} body — one named ceiling. ID/CreatedAt/UpdatedAt/
+// CreatedBy are never accepted from the wire, matching DriveRequest: the id
+// comes from the path (an update) or the server (a create), and provenance is
+// always server-assigned.
+type GovernanceProfileRequest struct {
+	Name    string           `json:"name"`
+	Ceiling RunPolicySpec    `json:"ceiling"`
+	Limits  GovernanceLimits `json:"limits"`
+}
+
+// GovernanceProfileResponse is a profile write's body: the saved profile plus
+// any omission warnings the write raised (a ceiling grant the deployment no
+// longer provisions — see internal/api/governance.go's reintersect note).
+type GovernanceProfileResponse struct {
+	Profile  GovernanceProfile `json:"profile"`
+	Warnings []string          `json:"warnings,omitempty"`
+}
+
+// GovernanceAssignmentRequest is POST /governance/assignments's body. There is
+// no PUT for an assignment: the natural key (subject_type, subject) upserts,
+// repointing an existing binding rather than accumulating a second one, the
+// same shape DriveGrantRequest already takes for a drive allocation.
+type GovernanceAssignmentRequest struct {
+	SubjectType CapabilitySubjectType `json:"subject_type"`
+	Subject     string                `json:"subject"`
+	ProfileID   uuid.UUID             `json:"profile_id"`
+	Priority    int                   `json:"priority"`
+}
+
+// GovernanceDocument is GET /governance's body and ApplyGovernance's
+// parameter: every profile plus every assignment. `wardyn governance get`
+// prints this verbatim; ApplyGovernance strict-decodes it back.
+type GovernanceDocument struct {
+	Profiles    []GovernanceProfile    `json:"profiles"`
+	Assignments []GovernanceAssignment `json:"assignments"`
+}
+
+// GetGovernance returns every governance profile and assignment. GET
+// /api/v1/governance.
+func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) {
+	var out GovernanceDocument
+	err := c.do(ctx, http.MethodGet, "/api/v1/governance", nil, &out)
+	return out, err
+}
+
+// governanceAssignmentKey is the natural key ApplyGovernance and
+// handleUpsertGovernanceAssignment both upsert an assignment by.
+func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) string {
+	return string(subjectType) + "\x00" + subject
+}
+
+// governanceProfileUnchanged reports whether writing p over existing would
+// change nothing observable — the check ApplyGovernance runs before every
+// profile write so a `get | apply` round trip on an unchanged install issues
+// ZERO writes and records ZERO audit rows, rather than re-asserting every
+// profile's content on every apply (#1108's stated no-op contract; stricter
+// than ApplyDrives, which always re-PUTs/re-POSTs).
+func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
+	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits)
+}
+
+// ApplyGovernance upserts every profile and assignment doc names, over the
+// existing POST /governance/profiles, PUT /governance/profiles/{id} and POST
+// /governance/assignments routes — there is no bulk-write route, and none is
+// added.
+//
+// A PROFILE is routed BY NAME, not by id — the divergence from ApplyDrives,
+// and the reason is Name's role server-side: it is the UNIQUE human handle an
+// admin actually authors and assigns by (governance.go's own words), while a
+// drive's id is what GetDrives/ApplyDrives round-trip on. Upserting by id
+// would make a hand-maintained, version-controlled governance.json (written
+// once, with no ids, and re-applied against the same install repeatedly) fail
+// its second apply with a 409 name conflict — the exact "config lives in git
+// next to the rest of the install" workflow #1108 exists for. So ApplyGovernance
+// reads the CURRENT state first, and: a doc profile whose Name matches an
+// existing one is PUT to that existing row's real id (rename is therefore not
+// expressible through apply — Name IS the identity a file's entries are
+// matched against); a Name with no existing match is POSTed fresh. Either way,
+// a profile whose Ceiling and Limits are BYTE-IDENTICAL to what is already
+// stored is skipped entirely (governanceProfileUnchanged) — the no-op
+// contract's other half, since the server audits every profile write
+// unconditionally.
+//
+// An ASSIGNMENT carries no id on write (server-assigned, same as
+// DriveGrantRequest), and is upserted purely by its own natural key
+// (subject_type, subject) — skipped, the same way, when the existing row
+// already names the same profile at the same priority. Its ProfileID is
+// resolved against the SAME apply's own profile list before being sent: an id
+// in doc.Assignments naming one of doc.Profiles's ORIGINAL (pre-write) ids is
+// translated to that profile's real post-write id, so a document produced by
+// GetGovernance against a POPULATED install reproduces both profiles and
+// assignments when applied to an EMPTY one, even though the empty install
+// mints entirely new profile ids. An assignment whose ProfileID names no
+// profile in this same doc is sent exactly as given, trusting it as an
+// already-real id on the target (the case for an assignments-only file, or one
+// applied twice against the SAME install).
+//
+// prune, when true, additionally DELETES every server-side profile or
+// assignment doc does not name (assignments first, since a profile still
+// referenced by a to-be-pruned assignment fails the FK restrict). Without it —
+// the default — nothing present server-side but absent from doc is touched,
+// matching drive apply's own "nothing the file omits is touched" rule.
+//
+// Every write's saved row replaces the caller's copy of doc in place, so a
+// partial failure (returned as the second value) leaves doc's earlier entries
+// holding what was actually persisted. On success, the returned document is a
+// fresh GetGovernance — the authoritative post-write state.
+func (c *Client) ApplyGovernance(ctx context.Context, doc GovernanceDocument, prune bool) (GovernanceDocument, error) {
+	current, err := c.GetGovernance(ctx)
+	if err != nil {
+		return GovernanceDocument{}, fmt.Errorf("read current governance state: %w", err)
+	}
+	profileByName := make(map[string]GovernanceProfile, len(current.Profiles))
+	for _, p := range current.Profiles {
+		profileByName[p.Name] = p
+	}
+	assignmentByKey := make(map[string]GovernanceAssignment, len(current.Assignments))
+	for _, a := range current.Assignments {
+		assignmentByKey[governanceAssignmentKey(a.SubjectType, a.Subject)] = a
+	}
+
+	// fileIDToName/nameToRealID translate an assignment's ProfileID from
+	// "whatever id this SAME file's profile entry carried" to "the id that
+	// profile actually holds on THIS server" — see the doc comment above.
+	fileIDToName := make(map[uuid.UUID]string, len(doc.Profiles))
+	nameToRealID := make(map[string]uuid.UUID, len(doc.Profiles))
+
+	for i, p := range doc.Profiles {
+		saved := p
+		if existing, ok := profileByName[p.Name]; ok && governanceProfileUnchanged(existing, p) {
+			saved = existing
+		} else {
+			req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits}
+			var resp GovernanceProfileResponse
+			var werr error
+			if ok {
+				werr = c.do(ctx, http.MethodPut, "/api/v1/governance/profiles/"+existing.ID.String(), req, &resp)
+			} else {
+				werr = c.do(ctx, http.MethodPost, "/api/v1/governance/profiles", req, &resp)
+			}
+			if werr != nil {
+				return GovernanceDocument{}, fmt.Errorf("apply governance profile %q: %w", p.Name, werr)
+			}
+			saved = resp.Profile
+		}
+		doc.Profiles[i] = saved
+		if p.ID != uuid.Nil {
+			fileIDToName[p.ID] = p.Name
+		}
+		nameToRealID[p.Name] = saved.ID
+	}
+
+	for i, a := range doc.Assignments {
+		if name, ok := fileIDToName[a.ProfileID]; ok {
+			if real, ok := nameToRealID[name]; ok {
+				a.ProfileID = real
+			}
+		}
+		key := governanceAssignmentKey(a.SubjectType, a.Subject)
+		if existing, ok := assignmentByKey[key]; ok &&
+			existing.ProfileID == a.ProfileID && existing.Priority == a.Priority {
+			doc.Assignments[i] = existing
+			continue
+		}
+		req := GovernanceAssignmentRequest{
+			SubjectType: a.SubjectType, Subject: a.Subject,
+			ProfileID: a.ProfileID, Priority: a.Priority,
+		}
+		var saved GovernanceAssignment
+		if err := c.do(ctx, http.MethodPost, "/api/v1/governance/assignments", req, &saved); err != nil {
+			return GovernanceDocument{}, fmt.Errorf("apply governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
+		}
+		doc.Assignments[i] = saved
+	}
+
+	if prune {
+		keepAssignment := make(map[string]bool, len(doc.Assignments))
+		for _, a := range doc.Assignments {
+			keepAssignment[governanceAssignmentKey(a.SubjectType, a.Subject)] = true
+		}
+		// Assignments before profiles: a profile doc drops still fails the FK
+		// restrict while a stale assignment of it survives.
+		for _, a := range current.Assignments {
+			if keepAssignment[governanceAssignmentKey(a.SubjectType, a.Subject)] {
+				continue
+			}
+			if err := c.do(ctx, http.MethodDelete, "/api/v1/governance/assignments/"+a.ID.String(), nil, nil); err != nil {
+				return GovernanceDocument{}, fmt.Errorf("prune governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
+			}
+		}
+		keepProfile := make(map[string]bool, len(doc.Profiles))
+		for _, p := range doc.Profiles {
+			keepProfile[p.Name] = true
+		}
+		for _, p := range current.Profiles {
+			if keepProfile[p.Name] {
+				continue
+			}
+			if err := c.do(ctx, http.MethodDelete, "/api/v1/governance/profiles/"+p.ID.String(), nil, nil); err != nil {
+				return GovernanceDocument{}, fmt.Errorf("prune governance profile %q: %w", p.Name, err)
+			}
+		}
+	}
+
+	return c.GetGovernance(ctx)
 }

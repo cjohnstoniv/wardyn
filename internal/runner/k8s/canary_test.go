@@ -120,8 +120,8 @@ func TestNewWithClient_CanaryIndeterminate_RefusesBoot(t *testing.T) {
 	}
 }
 
-// TestNewWithClient_CanaryPhaseBUnexpectedExitCode_Indeterminate is the M1
-// regression test: the -egress-canary flag only ever exits 0 or 1 (see
+// TestNewWithClient_CanaryPhaseBUnexpectedExitCode_Indeterminate: the
+// -egress-canary flag only ever exits 0 or 1 (see
 // cmd/wardyn-proxy/main.go); any OTHER exit code (128, a StartError shape,
 // is used here) must never be read as "enforced" or "unenforced" — it is
 // indeterminate, same as any other non-network failure.
@@ -138,7 +138,7 @@ func TestNewWithClient_CanaryPhaseBUnexpectedExitCode_Indeterminate(t *testing.T
 	}
 }
 
-// TestNewWithClient_CanaryNetPolScopedToSuffix is the M2 regression test:
+// TestNewWithClient_CanaryNetPolScopedToSuffix:
 // the deny-all netpol's PodSelector (and the canary pod's own labels) must
 // carry a per-invocation unique label (labelRun, reusing that key with the
 // canary's own suffix as the value), so two wardynd instances booting
@@ -347,7 +347,7 @@ func TestApiserverHostPort_ParsesSchemeHost(t *testing.T) {
 }
 
 // TestNewWithClient_CanaryPodDisablesServiceLinks is the canary's share of
-// B9-F7: the canary runs the wardyn-proxy image with one job — dial the
+// the canary runs the wardyn-proxy image with one job — dial the
 // apiserver host:port it was handed — and reads no environment at all. Leaving
 // enableServiceLinks at its default true would put every Service in the
 // operator's namespace into its env for nothing, and would drift the one pod

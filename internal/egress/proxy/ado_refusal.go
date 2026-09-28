@@ -3,25 +3,21 @@
 
 package proxy
 
-// How Azure DevOps refuses a request the proxy forwarded, and how that refusal
-// reaches the run. Measured against the live service (F-LIVE-7), three shapes
-// can be told apart, and a fourth cannot be split:
+// How Azure DevOps refuses a request the proxy forwarded, and how that
+// refusal reaches the run. Three shapes can be told apart:
 //
-//   - 203 with a text/html sign-in page: no credential Azure DevOps could read
-//     reached it at all. A client that takes 203 as success parses HTML as
-//     JSON, so on the REST door this one answer is rewritten into a 401.
+//   - 203 with a text/html sign-in page: no credential reached Azure DevOps
+//     at all. On the REST door this is rewritten into a 401 so a client that
+//     takes 203 as success doesn't parse HTML as JSON.
 //   - 403 or 404 WITH an X-VSS-UserData header: the credential authenticated
 //     (the header appears only once an identity is established) and the
 //     identity is not permitted.
-//   - 401: the credential was refused. A token missing the scope, an expired
-//     token and a revoked token all answer the same empty 401, so the message
-//     names all three and never claims a scope problem it cannot prove.
+//   - 401: the credential was refused. A missing scope, an expired token and
+//     a revoked token all answer the same empty 401, so the message names
+//     all three and never claims a scope problem it cannot prove.
 //
-// Each class is recorded as an allow — Wardyn forwarded the request; nothing in
-// its policy refused it — under a rule source naming the class, written after
-// the lane's own forwarding row. No message or log line carries credential
-// bytes: every message is built from fixed sentences, the host, the escaped
-// request path and the status code.
+// Each class is recorded as an allow — Wardyn forwarded the request; nothing
+// in its policy refused it. No message or log line carries credential bytes.
 
 import (
 	"encoding/json"
@@ -73,15 +69,24 @@ func classifyADOUpstream(resp *http.Response) adoUpstreamClass {
 
 // ruleSource is the class's decision-log rule source on the REST or git door.
 func (c adoUpstreamClass) ruleSource(git bool) string {
-	src := map[adoUpstreamClass][2]string{
-		adoUpstreamNotSignedIn: {ruleSourceADOUpstreamNotSignedIn, ruleSourceADOGitUpstreamNotSignedIn},
-		adoUpstreamRefused:     {ruleSourceADOUpstreamRefused, ruleSourceADOGitUpstreamRefused},
-		adoUpstreamNoAccess:    {ruleSourceADOUpstreamNoAccess, ruleSourceADOGitUpstreamNoAccess},
-	}[c]
-	if git {
-		return src[1]
+	switch c {
+	case adoUpstreamNotSignedIn:
+		if git {
+			return ruleSourceADOGitUpstreamNotSignedIn
+		}
+		return ruleSourceADOUpstreamNotSignedIn
+	case adoUpstreamRefused:
+		if git {
+			return ruleSourceADOGitUpstreamRefused
+		}
+		return ruleSourceADOUpstreamRefused
+	case adoUpstreamNoAccess:
+		if git {
+			return ruleSourceADOGitUpstreamNoAccess
+		}
+		return ruleSourceADOUpstreamNoAccess
 	}
-	return src[0]
+	return ""
 }
 
 // message is the run-facing sentence for the class. target is host plus the
@@ -106,10 +111,9 @@ func (p *Proxy) noteADOUpstream(r *http.Request, host string, port int, c adoUps
 }
 
 // relayUpstream is forwardInspectedLLM's response tail. On the Azure DevOps
-// REST door it classifies the answer: the body of a 401, 403 or 404 passes
-// through unchanged, with the sentence beside it in X-Wardyn-Egress-Detail; a
-// 203 sign-in page is answered as a 401 in Azure DevOps' own error shape, so no
-// client reads HTML as a successful answer. Every other lane relays as before.
+// REST door it classifies the answer: a 401/403/404 body passes through
+// unchanged with the sentence in X-Wardyn-Egress-Detail; a 203 sign-in page
+// is answered as a 401 in Azure DevOps' own error shape.
 func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource string) {
 	c := adoUpstreamOK
 	if ruleSource == ruleSourceADO {
@@ -142,7 +146,8 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 
 // refuseADOGitUpstream answers git, in git's own terms, when Azure DevOps
 // refused a brokered git request, and reports whether it did. A relayed 401
-// would make git prompt for a username; a relayed 203 page is not a git answer.
+// would make git prompt for a username; a relayed 203 page is not a git
+// answer. Port is 443 because the brokered git lane always dials :443.
 func (p *Proxy) refuseADOGitUpstream(w http.ResponseWriter, r *http.Request, host, rest string, push *adoGitPush, resp *http.Response) bool {
 	c := classifyADOUpstream(resp)
 	if c == adoUpstreamOK {

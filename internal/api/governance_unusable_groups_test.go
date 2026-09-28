@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// TestCeilingResolvesOnTheAnswerableIdentityOnly is F349.
-//
 // resolveEffectiveCeiling's stale arm carries the rule as a comment: "The
 // unusable half must not be MATCHED against. Passing a truncated list would
 // still let a surviving group's row win, which is not wrong on its own — but it
@@ -38,7 +36,7 @@ func TestCeilingResolvesOnTheAnswerableIdentityOnly(t *testing.T) {
 	t.Run("the unusable-groups resolve asks on users alone", func(t *testing.T) {
 		st := &driveStore{}
 		srv := driveServer(st)
-		if _, err := srv.ceilingWithUnusableGroups(context.Background(), users, governanceCeiling{}); err != nil {
+		if _, err := srv.ceilingWithUnusableGroups(context.Background(), users, "", governanceCeiling{}); err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
 		if len(st.sawGovUsers) == 0 {

@@ -10,8 +10,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestManagedTemplateWriteAndResolveAgree is F158's structural half, and it is
-// the check the finding says would have caught the change that caused it: the
+// TestManagedTemplateWriteAndResolveAgree is the structural half, and it is
+// the check that would have caught the change that caused the defect: the
 // managed non-hash rule was WIDENED at the write boundary and the resolver's
 // defence-in-depth copy was left matching email_local alone, so a managed drive
 // templated on `sub` was refused on write and still mounted — publishing the
@@ -34,7 +34,7 @@ func TestManagedTemplateWriteAndResolveAgree(t *testing.T) {
 		for _, tmpl := range types.HomeTemplates {
 			name := string(backend) + "/" + string(tmpl)
 			t.Run(name, func(t *testing.T) {
-				// THE WRITE BOUNDARY's answer, taken from the shared predicate
+				// The write boundary's answer, taken from the shared predicate
 				// rather than from ValidateUserDrive's whole-row validation —
 				// the row also has to satisfy size/reclaim/host-root rules that
 				// have nothing to do with this question.

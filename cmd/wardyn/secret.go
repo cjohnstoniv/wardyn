@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -32,7 +33,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			// path for every platform secret (SSH private keys, git PATs, LLM API
 			// keys, Bedrock credentials). Same call `subscription connect` makes.
 			if isTerminal(os.Stdin) {
-				fmt.Fprintf(os.Stderr, "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
+				fmt.Fprintf(cmd.ErrOrStderr(), "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
 			}
 			v, err := readSecretValue(cmd.InOrStdin())
 			if err != nil {
@@ -44,7 +45,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			if err := client().SetSecret(cmd.Context(), args[0], v); err != nil {
 				return err
 			}
-			fmt.Printf("secret %q stored\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "secret %q stored\n", args[0])
 			return nil
 		},
 	}
@@ -56,20 +57,22 @@ func secretCmd(client clientFn) *cobra.Command {
 		Short:   "List secret names (never values)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			names, err := client().ListSecrets(cmd.Context())
+			names, mine, err := client().ListSecretsScoped(cmd.Context())
 			if err != nil {
 				return err
 			}
 			if asJSON {
-				return emitJSON(names)
+				// The server's object shape, not a flattened array: `names` and
+				// `mine` are independent lists (see ListSecretsScoped) and a
+				// member's own secrets would otherwise be indistinguishable from
+				// the operator-owned ones they can also see.
+				return emitJSON(cmd.OutOrStdout(), map[string]any{"names": names, "mine": mine})
 			}
-			for _, n := range names {
-				fmt.Println(n)
-			}
+			printSecretScopes(cmd.OutOrStdout(), names, mine)
 			return nil
 		},
 	}
-	list.Flags().BoolVar(&asJSON, "json", false, "emit the names as a JSON array")
+	list.Flags().BoolVar(&asJSON, "json", false, "emit {\"names\":[...],\"mine\":[...]} (the server's shape)")
 
 	del := &cobra.Command{
 		Use:     "delete <name>",
@@ -80,7 +83,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			if err := client().DeleteSecret(cmd.Context(), args[0]); err != nil {
 				return err
 			}
-			fmt.Printf("secret %q deleted\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "secret %q deleted\n", args[0])
 			return nil
 		},
 	}
@@ -109,6 +112,38 @@ func readSecretValue(r io.Reader) (string, error) {
 		s = strings.TrimSuffix(s, "\r")
 	}
 	return s, nil
+}
+
+// printSecretScopes prints the union of names and mine, one per line, each
+// marked with the namespace(s) it appears in. For an operator caller the two
+// lists are identical (server-side invariant: mine == names), so every line
+// reads "(operator, mine)"; for a member they are normally disjoint — the
+// operator-owned names a grant pairs with vs. the member's own rows — so
+// each line reads one or the other. The two lists are combined here (rather
+// than printed as two blocks) so the output stays a flat, greppable list of
+// names either way.
+func printSecretScopes(w io.Writer, names, mine []string) {
+	isMine := make(map[string]bool, len(mine))
+	for _, n := range mine {
+		isMine[n] = true
+	}
+	seen := make(map[string]bool, len(names)+len(mine))
+	all := append(append([]string{}, names...), mine...)
+	slices.Sort(all)
+	for _, n := range all {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		scopes := "operator"
+		switch {
+		case isMine[n] && slices.Contains(names, n):
+			scopes = "operator, mine"
+		case isMine[n]:
+			scopes = "mine"
+		}
+		fmt.Fprintf(w, "%s\t(%s)\n", n, scopes)
+	}
 }
 
 func isTerminal(f *os.File) bool {

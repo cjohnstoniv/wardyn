@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Pagination: the Page window, the Pager capability interface, the shared
-// row-collect helper, and PG's paged read methods. Split from store.go along
-// the read-surface seam — the plain unbounded List* wrappers stay next to their
-// tables in store.go and delegate here with an empty Page. See Pager's doc for
-// why this is NOT part of Store.
+// row-collect helper, and PG's paged read methods; the unbounded List*
+// wrappers in store.go delegate here with an empty Page. See Pager's doc for
+// why this is not part of Store.
 
 package store
 
@@ -23,22 +22,19 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Page bounds a List query to Limit rows after skipping Offset, ordered by the
-// query's own ORDER BY. A zero or negative Limit means UNBOUNDED — the historical
-// List* behaviour the internal callers depend on (ReconcileOnBoot's stranded-run
-// scan, the create-run workspace-collision scan, the approval fan-out) all need
-// the whole table, so they call the plain List* wrappers below. The public read
-// handlers pass an explicit Limit (capped by api.parseListPage) via the *Page
-// methods so an external client can never pull down an unbounded payload.
+// Page bounds a List query to Limit rows after Offset, ordered by the
+// query's own ORDER BY. Limit<=0 means unbounded — used by internal callers
+// that need the whole table; public read handlers always pass an explicit
+// Limit (capped by api.parseListPage).
 type Page struct {
 	Limit  int
 	Offset int
 }
 
-// appendTo renders " LIMIT $n [OFFSET $n+1]" onto q using positional args
-// starting after the len(args) already bound, and returns the grown query plus
-// args. Limit<=0 emits nothing (unbounded); OFFSET is emitted only when positive
-// (offset-without-limit is meaningless for these fully-ordered feeds).
+// appendTo appends " LIMIT $n [OFFSET $n+1]" to q using positional args after
+// those already bound. Limit<=0 emits nothing (unbounded); OFFSET is emitted
+// only when positive (offset-without-limit is meaningless for these
+// fully-ordered feeds).
 func (p Page) appendTo(q string, args []any) (string, []any) {
 	if p.Limit <= 0 {
 		return q, args
@@ -52,11 +48,9 @@ func (p Page) appendTo(q string, args []any) (string, []any) {
 	return q, args
 }
 
-// collect runs q and scans every row with scan. verb/noun name the operation in
-// the wrapped errors ("store: <verb> <noun>" on the query, "store: iterate
-// <noun>" on iteration). pgx.CollectRows seeds the result with []T{} and closes
-// rows itself, so the "empty, never nil" List* contract (the API's `[]`-not-
-// `null` JSON) comes from the driver rather than being re-derived per call site.
+// collect runs q and scans every row with scan, wrapping errors as
+// "store: <verb> <noun>" (query) or "store: iterate <noun>" (scan). Always
+// returns []T{}, never nil, matching the API's empty-array JSON contract.
 func collect[T any](ctx context.Context, pool *pgxpool.Pool, verb, noun, q string, args []any, scan func(pgx.Row) (T, error)) ([]T, error) {
 	rows, err := pool.Query(ctx, q, args...)
 	if err != nil {
@@ -69,12 +63,11 @@ func collect[T any](ctx context.Context, pool *pgxpool.Pool, verb, noun, q strin
 	return out, nil
 }
 
-// Pager is the paginated read surface. It is deliberately NOT part of the Store
-// interface: the control plane has many test doubles that embed store.Store and
-// override a handful of methods, and widening Store would silently route their
-// list calls to the embedded nil interface. Handlers type-assert s.cfg.Store to
-// Pager and fall back to the unbounded List* + in-Go windowing when a store (a
-// test fake) does not implement it. Production always uses PG, which does.
+// Pager is the paginated read surface, deliberately excluded from Store:
+// widening Store would silently route a test double's embedded-but-not-
+// overridden methods to it. Handlers type-assert for Pager and fall back to
+// unbounded List* + in-Go windowing when a store doesn't implement it; PG
+// always does.
 type Pager interface {
 	ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error)
 	ListPoliciesPage(ctx context.Context, p Page) ([]types.RunPolicy, error)
@@ -82,70 +75,45 @@ type Pager interface {
 	ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
 	QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.AuditEvent, error)
 	QueryRecentAuditEventsPage(ctx context.Context, p Page) ([]types.AuditEvent, error)
-	// QueryAuditEventsFilteredPage serves a NARROWED audit read (time range,
-	// action, outcome, actor type); see AuditFilter in auditfilter.go. An
-	// unfiltered read still uses the two methods above.
+	// QueryAuditEventsFilteredPage serves a narrowed audit read (time range,
+	// action, outcome, actor type); see AuditFilter in auditfilter.go.
 	QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error)
-	// ListUserDriveGrantsPage serves the drives console's allocation table. It
-	// is here for the reason the six above are: one row per SUBJECT means this
-	// table's size IS the deployment's headcount, and its ORDER BY has no index,
-	// so unbounded it sorts every allocation on every load of one admin screen.
+	// ListUserDriveGrantsPage serves the drives console's allocation table;
+	// its ORDER BY has no index, so unbounded it sorts every allocation on
+	// every load of the admin screen.
 	ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDriveGrant, error)
 }
 
-// Compile-time assertion: PG satisfies Pager (the paginated read surface).
 var _ Pager = PG{}
 
-// RunsByCreatorPager is the ownership-scoped analogue of Pager.ListRunsPage: a
-// member's GET /runs is scoped to created_by = the caller (internal/api's
-// isOperator decides who is a member). Kept OUT of Pager for the same reason
-// Pager is kept out of Store (widening either silently reroutes a test fake's
-// embedded-but-not-overridden method to the wrong behavior) — AND for a second,
-// stronger reason specific to this one: Pager's own absence falls back to a
-// SAFE fetch-all + in-Go window (nothing is scoped, so an unscoped fallback
-// changes nothing). This interface's absence must never fall back that way — an
-// unscoped list IS the vulnerability for a member — so the api-layer call site
-// fails closed (a clear 500) when a store does not implement it, rather than
-// silently serving every run.
+// RunsByCreatorPager is the ownership-scoped analogue of Pager.ListRunsPage:
+// a member's GET /runs is scoped to created_by = the caller. Unlike Pager, an
+// absent implementation must fail closed (500), not fall back to the
+// unscoped list — an unscoped list IS the vulnerability here.
 type RunsByCreatorPager interface {
 	ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error)
 }
 
-// Compile-time assertion: PG satisfies RunsByCreatorPager.
 var _ RunsByCreatorPager = PG{}
 
-// ActiveRunsByCreatorReader answers the ONE question a new sign-in asks before
-// it launches: which of THIS person's runs of this lane are still live, so the
-// supersede can end them (supersedeCallerLoginRuns, internal/api).
+// ActiveRunsByCreatorReader answers which of a person's runs of one
+// task+agent are still non-terminal, so a new sign-in's supersede
+// (supersedeCallerLoginRuns) can end them. Its absence has no fallback; PG
+// implements it in production.
 //
-// A capability interface for ActiveRunsAtPathReader's reasons, and answered the
-// same way — a WHERE clause, not a window — but its ABSENCE is handled
-// differently from either neighbour: the api-layer call site (liveLoginRunsBy)
-// takes NO fallback at all. It does not widen anything the way an unscoped list
-// would (RunsByCreatorPager's fail-closed case), and it does not fall back to
-// the unbounded ListRuns the way ActiveRunsAtPathReader does, because this runs
-// on a route every store-less embedding drives and the scan would read a whole
-// run table to find at most one row. A store without this method simply does
-// not supersede; PG is the production store and implements it, and the capture
-// upload's own KILLED guard is the belt.
-//
-// task and agent, not "provider": a run row carries no provider column (the
-// provider lives in the harness.login.started audit datum), and task+agent is
-// what actually separates one lane's login box from another's.
+// task and agent, not "provider": a run row carries no provider column (it
+// lives in the harness.login.start audit datum).
 type ActiveRunsByCreatorReader interface {
 	ActiveRunsByCreator(ctx context.Context, createdBy, task, agent string) ([]types.AgentRun, error)
 }
 
-// Compile-time assertion: PG satisfies ActiveRunsByCreatorReader.
 var _ ActiveRunsByCreatorReader = PG{}
 
 // ActiveRunsByCreator returns createdBy's non-terminal runs of one task+agent.
 //
-// The state predicate is the POSITIVE list (types.NonTerminalRunStates), the
-// choice CountActiveRunsBy and ActiveRunsAtWorkspacePath both make and for the
-// same reason: a state added to the enum and forgotten here merely misses a
-// supersede, while `NOT IN (terminal)` would hand a newly-added TERMINAL state
-// to the kill cascade.
+// Uses the POSITIVE state list (types.NonTerminalRunStates): a state added to
+// the enum and forgotten here merely misses a supersede, whereas
+// `NOT IN (terminal)` would hand a new terminal state to the kill cascade.
 //
 // ponytail: no new index. agent_runs_created_by_idx already indexes the
 // selective column and one person owns few runs; a composite is the upgrade if
@@ -161,94 +129,70 @@ func (s PG) ActiveRunsByCreator(ctx context.Context, createdBy, task, agent stri
 	return collect(ctx, s.Pool, "list", "active runs by creator", q, []any{createdBy, task, agent, states}, scanRun)
 }
 
-// LoginLocker serializes ONE person's sign-in launches, and the credential
+// LoginLocker serializes one person's sign-in launches, and the credential
 // capture that follows one, against every other replica — the piece the
 // deterministic tie-break in api.supersedeOlderLoginRuns could not supply.
 //
-// A capability interface for ActiveRunsByCreatorReader's reasons (widening
-// Store would make every double and embedding in the tree implement a lock they
-// are not about), and its ABSENCE is handled the same way that neighbour's is:
-// the call site takes NO fallback and proceeds UNLOCKED. That is deliberate
-// and it is the whole failure model — a store that cannot lock is exactly as
-// serialized as 0.7.8 was, which is to say not at all, and nobody is refused a
-// sign-in over it. PG is the production store and implements it.
+// Its absence falls back UNLOCKED (a store that cannot lock is exactly as
+// serialized as 0.7.8 was); PG implements it in production.
 //
-// Keyed by ACTOR — the login run's creator — not by the credential scope: under
-// the `shared` roster every sign-in resolves to the same empty scope owner, so
-// a scope-keyed lock would serialize the whole deployment while serializing the
-// one thing it needs to (one person's two launches) no better.
+// Keyed by ACTOR, not credential scope: under the `shared` roster every
+// sign-in resolves to the same empty scope owner, so a scope-keyed lock would
+// serialize the whole deployment without serializing what it needs to.
 type LoginLocker interface {
 	LockLoginSupersede(ctx context.Context, actor string) (release func(), err error)
 }
 
-// Compile-time assertion: PG satisfies LoginLocker.
 var _ LoginLocker = PG{}
 
-// LockLoginSupersede holds db.LoginSupersedeLockClass keyed to actor for up to
-// db.LoginSupersedeLockWait. Session-scoped, not transaction-scoped: the work it
-// guards is several independent statements (two supersede passes around a run
-// insert) and, on the capture path, a read-modify-write in a LATER request.
+// ErrLoginLockNoCapacity is the one LockLoginSupersede error a caller may
+// proceed unlocked on (the pool cannot spare a connection); any other error
+// means the caller should refuse.
+var ErrLoginLockNoCapacity = db.ErrAdvisoryLockNoCapacity
+
+// LockLoginSupersede holds db.LoginSupersedeLockClass keyed to actor for up
+// to db.LoginSupersedeLockWait. Session-scoped, not transaction-scoped: it
+// guards several independent statements, including a later read-modify-write
+// on the capture path.
 //
-// It borrows from THIS pool — the request-serving one — so the cost is stated
-// where an operator sizing pool_max_conns can find it: one connection for the
-// duration of one hold, at most one per process at a time, and none at all
-// when the pool cannot spare two (db.AdvisoryLockKeyed). An error means the
-// lock was not taken and the caller proceeds unlocked.
+// Borrows one connection from this pool for the hold's duration; see
+// ErrLoginLockNoCapacity for the one error a caller may proceed on.
 func (s PG) LockLoginSupersede(ctx context.Context, actor string) (func(), error) {
 	return db.AdvisoryLockKeyed(ctx, s.Pool, db.LoginSupersedeLockClass, loginLockObject(actor), db.LoginSupersedeLockWait)
 }
 
-// loginLockObject folds an actor string into the objid half of the key, in ONE
-// place so the launch and the capture can never disagree about which lock a
-// person's sign-in takes.
+// loginLockObject folds an actor string into the key's objid half, in one
+// place so launch and capture agree on which lock a sign-in takes.
 //
-// crc32, deliberately not a cryptographic digest: nothing here is a secret or a
-// capability, and a COLLISION is harmless by construction — two people whose
-// actor strings collide merely take the same lock and over-serialize each
-// other's sign-ins by a few statements. It is not a correctness risk, only a
-// contention one, and one nobody will ever measure.
+// crc32, not cryptographic: a collision is harmless, merely over-serializing
+// two colliding actors' sign-ins.
 func loginLockObject(actor string) int32 {
 	return int32(crc32.ChecksumIEEE([]byte(actor)))
 }
 
-// ActiveRunsAtPathReader answers ONE question the create path asks on every run:
-// which OTHER non-terminal runs already operate on this host workspace path.
+// ActiveRunsAtPathReader answers which OTHER non-terminal runs already
+// operate on one host workspace path, checked on every run create.
 //
-// It is a capability interface for Pager's reason, and it is separate from
-// Pager for RunsByCreatorPager's: this one is answered by a WHERE clause rather
-// than a window, so a store that does not implement it cannot be served by
-// windowing the unbounded list. The api-layer call site falls back to the
-// unbounded ListRuns + an in-Go filter, which is what it did before this
-// existed — SAFE here, unlike the ownership-scoped list, because the answer is
-// identical either way and the fallback is merely slower.
-//
-// It exists because, without it, finding the handful of runs sharing one path
-// means loading EVERY run in the deployment — a Seq Scan plus a full sort of
-// agent_runs, on every single run create, over a table nothing prunes and no
-// retention policy bounds. The warning is advisory and never blocks a launch,
-// so sorting a deployment's whole run history is not worth paying for a
-// sentence that is usually not printed.
+// Its absence falls back to the unbounded ListRuns + an in-Go filter — SAFE
+// (same answer, merely slower) because the warning is advisory and never
+// blocks a launch.
 type ActiveRunsAtPathReader interface {
 	ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error)
 }
 
-// Compile-time assertion: PG satisfies ActiveRunsAtPathReader.
 var _ ActiveRunsAtPathReader = PG{}
 
 // ActiveRunsAtWorkspacePath returns the non-terminal runs bound to one host
 // workspace path.
 //
-// The state predicate is the POSITIVE list (types.NonTerminalRunStates), the
-// same choice CountActiveRunsBy makes and for the same reason: a state added to
-// the enum and forgotten there merely under-warns, while `NOT IN (terminal)`
-// would treat a newly-added TERMINAL state as active and warn about a
-// collision with a run that finished.
+// Uses the POSITIVE state list (types.NonTerminalRunStates), same reasoning
+// as ActiveRunsByCreator: a forgotten new state merely under-warns rather
+// than mis-treating it as active.
 //
 // ponytail: no new index. workspace_path is selective and the state filter is a
 // cheap check over the rows that match it; a composite (workspace_path, state)
 // index is the upgrade if a deployment ever has enough runs on ONE path to
-// notice. What this replaces was not an index problem — it was reading the
-// whole table.
+// notice.
 func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
@@ -270,36 +214,25 @@ func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page)
 }
 
 // ApprovalsByRunCreatorPager is the ownership-scoped analogue of
-// Pager.ListApprovalsPage: a member's GET /approvals (no ?run_id=) is scoped to
-// approvals raised on runs THEY created. Approvals carry no created_by of their
-// own (they belong to a run, not a human directly), so this JOINs agent_runs.
-// Same fail-closed contract as RunsByCreatorPager — an absent implementation
-// must never fall back to the unscoped list.
-//
-// api.Config.Approvals is wardynd's approvalService wrapper
-// (cmd/wardynd/adapters.go), not a bare store.PG, so it needs its own
-// delegation method for this to be reachable in production — it has one, and
-// asserts the interface, so a member's unscoped GET /approvals is served from
-// the store rather than the api-layer fail-closed fallback.
+// Pager.ListApprovalsPage: a member's GET /approvals (no ?run_id=) is scoped
+// to approvals on runs THEY created, via a JOIN on agent_runs (approvals
+// carry no created_by of their own). Same fail-closed contract as
+// RunsByCreatorPager: an absent implementation must never fall back to the
+// unscoped list.
 type ApprovalsByRunCreatorPager interface {
 	ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
 }
 
-// Compile-time assertion: PG satisfies ApprovalsByRunCreatorPager.
 var _ ApprovalsByRunCreatorPager = PG{}
 
 // ListApprovalsPageByRunCreator is ListApprovalsPage narrowed to approvals on
-// runs createdBy owns, via a JOIN on agent_runs (approvals has no created_by of
-// its own). Same state filter and ordering as ListApprovalsPage.
+// runs createdBy owns, via a JOIN on agent_runs (approvals has no created_by
+// of its own). Same state filter and ordering as ListApprovalsPage.
 func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
-	// approvalCols SPLICED, not a thirteenth copy of the column list. This was
-	// the one approvals reader that hand-wrote its columns — because the JOIN
-	// form needed every one of them prefixed `a.` — and scanApproval is shared,
-	// so the next column APPENDED to approvalCols (the documented way to add
-	// one) would land in every admin path and not in this one: the MEMBER's
-	// unscoped GET /approvals alone 500s on scan arity, with every gate green.
-	// The semi-join reaches the same rows with no alias to prefix, so the const
-	// goes in verbatim and there is nothing left to keep in step by hand.
+	// approvalCols spliced verbatim (not hand-copied): the semi-join needs no
+	// `a.` alias prefix, so a column appended to approvalCols stays in sync
+	// here automatically — a hand-copy would silently drift and 500 only on
+	// this member path.
 	q := `
 		SELECT ` + approvalCols + `
 		FROM approvals
@@ -315,28 +248,18 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 }
 
 // ApprovalsByRunPager is Pager.ListApprovalsPage narrowed to ONE run — the
-// ?run_id= shape of GET /api/v1/approvals, which the CLI and the console's run
-// detail page poll. A capability interface for Pager's reason.
+// ?run_id= shape of GET /api/v1/approvals. Without it, a run-scoped poll
+// falls back to fetching every approval the deployment has ever written and
+// filtering in Go, a cost that grows with deployment age since decided rows
+// are never deleted.
 //
-// It exists because a run-scoped request with no dedicated reader falls to the
-// fetch-all branch: Approvals.List -> store.ListApprovals ->
-// ListApprovalsPage(ctx, state, Page{}) -> a Page with Limit<=0, which emits
-// NO LIMIT clause at all. One run-scoped poll therefore materialises EVERY
-// approval row the deployment has ever written, in Go, and discards all but
-// one run's. Decided rows are never deleted, so that read grows with
-// deployment age — the same cost ListApprovalsPage already removes for the
-// unfiltered list.
-//
-// Same fail-safe contract as Pager (NOT ApprovalsByRunCreatorPager's fail-CLOSED
-// one): an absent implementation falls back to the fetch-all + in-Go filter,
-// which returns the identical rows and is merely slower. Ownership scoping is
-// decided BEFORE this is reached (getRunAuthorized), so the fallback is not a
-// privilege question.
+// Fail-safe like Pager (not fail-closed like ApprovalsByRunCreatorPager):
+// ownership scoping happens before this is reached (getRunAuthorized), so the
+// fallback is a performance question, not a privilege one.
 type ApprovalsByRunPager interface {
 	ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
 }
 
-// Compile-time assertion: PG satisfies ApprovalsByRunPager.
 var _ ApprovalsByRunPager = PG{}
 
 // ListApprovalsPageByRun is ListApprovalsPage narrowed to one run, same state
@@ -385,26 +308,23 @@ func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, 
 	if err != nil {
 		return nil, err
 	}
-	// Bulk hydrate: ONE sources query for the union across the whole page —
-	// referencedWorkspaces full-lists on run-create/preflight, so per-row
-	// hydration would multiply a hot path.
+	// Bulk hydrate in one query across the page; per-row hydration would
+	// multiply a hot path (referencedWorkspaces full-lists on
+	// run-create/preflight).
 	return s.hydrateAll(ctx, wss)
 }
 
 // WorkspacesByOwnerPager is the ownership-scoped analogue of
-// Pager.ListWorkspacesPage: a MEMBER's GET /workspaces sees their OWN owned rows
-// plus the operator-owned ones (owned_by = ”), never another member's.
+// Pager.ListWorkspacesPage: a member's GET /workspaces sees their own owned
+// rows plus the operator-owned ones (owned_by = ”), never another member's.
 //
-// Unlike RunsByCreatorPager, an absent implementation here is NOT a
-// fail-closed case: the api-layer fallback fetches all and applies the SAME
-// owned_by filter in Go before windowing, so the scoping still holds — only the
-// LIMIT/OFFSET moves out of the database. Kept out of Pager for the usual
-// reason (a test fake embedding Store must not silently inherit it).
+// Unlike RunsByCreatorPager, an absent implementation is not fail-closed: the
+// api-layer fallback applies the same owned_by filter in Go before windowing,
+// so scoping still holds.
 type WorkspacesByOwnerPager interface {
 	ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page) ([]types.Workspace, error)
 }
 
-// Compile-time assertion: PG satisfies WorkspacesByOwnerPager.
 var _ WorkspacesByOwnerPager = PG{}
 
 // ListWorkspacesPageForOwner is ListWorkspacesPage narrowed to what one member
@@ -420,6 +340,81 @@ func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page
 		return nil, err
 	}
 	return s.hydrateAll(ctx, wss)
+}
+
+// GrantsByRunPager is the scoped analogue of Pager for GET /runs/{id}/grants:
+// ListGrantsByRun is already WHERE run_id=$1, so an absent implementation is
+// safe (not fail-closed) — the fallback windows the same scoped rows in Go.
+type GrantsByRunPager interface {
+	ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error)
+}
+
+var _ GrantsByRunPager = PG{}
+
+// ListGrantsByRunPage is ListGrantsByRun bounded by p.
+func (s PG) ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error) {
+	q, args := p.appendTo(`SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`, []any{runID})
+	return collect(ctx, s.Pool, "list", "grants", q, args, scanGrant)
+}
+
+// SSHKeysByPrincipalPager is the scoped analogue of Pager for GET
+// /me/ssh-keys. Same safe-fallback posture as GrantsByRunPager: the existing
+// ListSSHKeysByPrincipal is already WHERE principal=$1.
+type SSHKeysByPrincipalPager interface {
+	ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error)
+}
+
+var _ SSHKeysByPrincipalPager = PG{}
+
+// ListSSHKeysByPrincipalPage is ListSSHKeysByPrincipal bounded by p.
+func (s PG) ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error) {
+	q, args := p.appendTo(`SELECT `+sshKeyCols+` FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC, fingerprint`, []any{principal})
+	return collect(ctx, s.Pool, "list", "ssh keys", q, args, scanSSHKey)
+}
+
+// APITokensByPrincipalPager is the scoped analogue of Pager for GET
+// /me/tokens. Same safe-fallback posture as GrantsByRunPager: the existing
+// ListAPITokensByPrincipal is already WHERE principal=$1.
+type APITokensByPrincipalPager interface {
+	ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error)
+}
+
+var _ APITokensByPrincipalPager = PG{}
+
+// ListAPITokensByPrincipalPage is ListAPITokensByPrincipal bounded by p.
+func (s PG) ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error) {
+	q, args := p.appendTo(`SELECT `+apiTokenCols+` FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`, []any{principal})
+	return queryAPITokens(ctx, s, q, args...)
+}
+
+// CapabilityGrantsForPager is the scoped analogue of Pager for GET
+// /me/capabilities. Same safe-fallback posture as GrantsByRunPager; it
+// exists for the uniform list-route contract (?limit=&offset= +
+// X-Wardyn-Truncated), not because grant lists are expected to routinely
+// truncate.
+type CapabilityGrantsForPager interface {
+	ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, userType string, p Page) ([]types.CapabilityGrant, error)
+}
+
+var _ CapabilityGrantsForPager = PG{}
+
+// ListCapabilityGrantsForPage is ListCapabilityGrantsFor bounded by p: the
+// same four subject arms, so a page never drops a `user_type` grant the
+// unpaged read returns (TestPG_ListCapabilityGrantsForPage_MatchesUnpaged).
+func (s PG) ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, userType string, p Page) ([]types.CapabilityGrant, error) {
+	if users == nil {
+		users = []string{}
+	}
+	if groups == nil {
+		groups = []string{}
+	}
+	q, args := p.appendTo(`SELECT `+capabilityGrantCols+` FROM capability_grants
+		WHERE subject_type = 'all'
+		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
+		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
+		   OR (subject_type = 'user_type' AND subject = $3)
+		ORDER BY capability, subject_type, subject, value`, []any{users, groups, userType})
+	return collect(ctx, s.Pool, "list", "capability grants for subject", q, args, scanCapabilityGrant)
 }
 
 // ListApprovalsPage returns approvals filtered by state (empty = all) in reverse
@@ -464,38 +459,28 @@ func (s PG) QueryRecentAuditEventsPage(ctx context.Context, p Page) ([]types.Aud
 
 // AWSSSOSpentTokenStore persists the AWS SSO refresh-token "spent" mark
 // (internal/api/awssso_refresh.go's ssoRefreshSpent map) so it survives a
-// daemon restart. A capability interface for the usual reason (widening Store
-// would silently route a test double's embedded-but-not-overridden methods to
-// the wrong behavior), and for a second one specific to this seam: the mark is
-// written precisely BECAUSE the secret/blob store (storeAWSSSOBlob) failed, so
-// its own persistence must not depend on that same store — it goes through
-// Store/PG (Postgres) instead, a store the blob write's own failure says
-// nothing about.
+// daemon restart. It goes through Store/PG rather than the secret/blob store,
+// since the mark is written precisely because that blob store failed.
 type AWSSSOSpentTokenStore interface {
-	// MarkAWSSSOTokenSpent upserts one spent-token row. Idempotent: marking an
-	// already-spent fingerprint again touches nothing (the ON CONFLICT is a
-	// no-op, not a marked_at bump) — the row's age is "since first spent", which
-	// is what the reaper-tick prune below measures against.
+	// MarkAWSSSOTokenSpent upserts one spent-token row. Idempotent: re-marking
+	// an already-spent fingerprint is a no-op, so the row's age stays "since
+	// first spent" for the prune below.
 	MarkAWSSSOTokenSpent(ctx context.Context, fingerprint, owner string, markedAt time.Time) error
-	// AWSSSOTokenSpent reports whether fingerprint has a row — i.e. whether this
-	// refresh token is already known dead. Read-once by its one caller
-	// (Server.awsSSOTokenSpent memoizes the answer into the in-memory map after
-	// the first read of a given fingerprint), so a cache miss costs at most one
+	// AWSSSOTokenSpent reports whether fingerprint is already known dead. Its
+	// one caller memoizes the answer in-memory, so a miss costs at most one
 	// query per fingerprint per process lifetime.
 	AWSSSOTokenSpent(ctx context.Context, fingerprint string) (bool, error)
-	// PruneAWSSSOSpentTokens deletes rows marked before cutoff and reports how
-	// many it removed. Called from the lifecycle reaper's existing per-tick
-	// advisory lock (cmd/wardynd's reapTickLock) rather than a new timer.
+	// PruneAWSSSOSpentTokens deletes rows marked before cutoff and reports the
+	// count removed. Called from the reaper's existing per-tick advisory lock
+	// rather than a new timer.
 	PruneAWSSSOSpentTokens(ctx context.Context, cutoff time.Time) (int, error)
 }
 
-// Compile-time assertion: PG satisfies AWSSSOSpentTokenStore.
 var _ AWSSSOSpentTokenStore = PG{}
 
-// MarkAWSSSOTokenSpent upserts the spent-token row. ON CONFLICT DO NOTHING: a
-// fingerprint already marked spent stays marked from its FIRST sighting, so a
-// second failed persist (or a second AWS invalid_grant on the same token)
-// never resets the clock the prune measures age against.
+// MarkAWSSSOTokenSpent upserts idempotently: ON CONFLICT DO NOTHING keeps the
+// row's age "since first spent" even on a second failed persist or AWS
+// invalid_grant.
 func (s PG) MarkAWSSSOTokenSpent(ctx context.Context, fingerprint, owner string, markedAt time.Time) error {
 	const q = `INSERT INTO aws_sso_spent_tokens (fingerprint, owner, marked_at) VALUES ($1, $2, $3)
 		ON CONFLICT (fingerprint) DO NOTHING`

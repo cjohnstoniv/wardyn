@@ -7,66 +7,44 @@ import "time"
 
 // One clock for the revocation cutoff and everything compared against it.
 //
-// oidc_session_revocations.revoked_at is stamped by POSTGRES (`VALUES ($1,
-// now())`). The two things compared against it were stamped by WARDYND: an API
-// token's created_at, bound from the Go clock at request admission, and an SSO
-// session cookie's `iat`. Two clocks, one inequality — and the direction that
-// fails is the security one. With wardynd's clock ahead of the database's by d,
-// a credential minted BEFORE a revoke carries a timestamp AFTER the cutoff, so
-// it survives the revoke: the admin's "revoke every session for this human"
-// silently does not.
+// revoked_at is stamped by POSTGRES; the values compared against it (an API
+// token's created_at, a session cookie's iat) are stamped by WARDYND. If
+// wardynd's clock runs ahead of the database's, a credential minted BEFORE a
+// revoke can carry a timestamp AFTER the cutoff and survive the revoke.
 //
-// The fix is not to stamp the app value with now() — that would re-open F143,
-// where a caller who holds a mint request body open across POST /sessions/revoke
-// gets a created_at AFTER the cutoff, which is why the API stamps at request
-// ADMISSION rather than at INSERT. What both need is the app's measurement of
-// an ELAPSED TIME, which no skew rides in on, rendered against the database's
-// own now():
+// Fix: stamp the app value as an ELAPSED TIME (measured at request admission,
+// not INSERT) rendered against the database's own now():
 //
 //	created_at = now() - <the request's age>
 //
-// That keeps admission-time semantics (F143) and puts the value on the database
-// clock (F289). The same arithmetic, used the other way round, is how a
-// cookie's app-stamped `iat` is compared against a database-stamped cutoff.
+// The same arithmetic, reversed, compares an app-stamped iat against a
+// database-stamped cutoff.
 
-// AppClockAgeSQL renders an app-measured age, in MICROSECONDS, as an interval to
-// subtract from the database's own clock. The parameter placeholder is supplied
-// by the caller because it differs per statement.
-//
-// Microseconds, as a bigint, rather than a float or a pgx interval: it is
-// timestamptz's own resolution, so the conversion is exact in both directions
-// and there is no rounding to reason about.
+// AppClockAgeSQL renders an app-measured age, in MICROSECONDS, as an interval
+// to subtract from the database's own clock. Microseconds as a bigint (not a
+// float or pgx interval) matches timestamptz's own resolution exactly.
 func AppClockAgeSQL(placeholder string) string {
 	return "now() - (" + placeholder + "::bigint * interval '1 microsecond')"
 }
 
-// maxAppClockAge bounds what AppClockAgeMicros will report. It exists for the
-// one caller that can legitimately hand in a zero time (a session cookie minted
-// before the `iat` claim existed): unbounded, that is an age of ~2025 years,
-// which multiplies into an interval overflow rather than the very old timestamp
-// the caller wanted. A century is far past every real credential lifetime, and
-// clamping can only make a value read as OLDER — the fail-closed direction for
-// every comparison this is used in.
+// maxAppClockAge bounds AppClockAgeMicros: unbounded, a zero time (e.g. a
+// session cookie minted before the `iat` claim existed) reports an age of
+// ~2025 years, overflowing the interval. A century is far past every real
+// credential lifetime, and clamping can only make a value read as OLDER —
+// the fail-closed direction.
 const maxAppClockAge = 100 * 365 * 24 * time.Hour
 
-// AppClockAgeMicros returns how long ago the app-clock instant t was, as of the
-// app-clock instant now, in microseconds — clamped to [0, maxAppClockAge].
+// AppClockAgeMicros returns how long ago the app-clock instant t was, as of
+// the app-clock instant now, in microseconds, clamped to [0, maxAppClockAge].
 //
-// Both arguments must come from the same clock. That is the whole point: a
-// difference of two readings of one clock is a duration, and a duration carries
-// no skew, so it can be handed to a different clock without carrying an offset
-// across. Passing a value that was read back from the DATABASE as t would put
-// the skew straight back in, in the unsafe direction when the app is behind.
+// Both arguments must come from the SAME clock: a duration between two
+// readings of one clock carries no skew, so it is safe to hand to a
+// different clock. Passing a value read back from the DATABASE as t would
+// reintroduce the skew.
 //
-// Clamped at zero, so a value stamped in the future (the app clock stepped
-// backwards between the stamp and this call) becomes "now" rather than a
-// negative interval that would push a row's timestamp forward of the database's
-// clock — which is the exact shape of the defect this function exists to close.
-//
-// The ZERO TIME is deliberately NOT special-cased here: it means different
-// things to different callers (an unstamped row, versus a pre-D16 cookie that
-// must read as revoked), and a helper that guessed which would be wrong for one
-// of them. Each caller states its own answer.
+// Clamped at zero so a value stamped in the future reads as "now" rather
+// than a negative interval. The ZERO TIME is NOT special-cased here: it
+// means different things to different callers, so each states its own answer.
 func AppClockAgeMicros(t, now time.Time) int64 {
 	age := now.Sub(t)
 	if age < 0 {

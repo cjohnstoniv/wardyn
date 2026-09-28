@@ -25,19 +25,19 @@ func (erroringGrantsStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.
 	return nil, errors.New("store: connection reset by peer")
 }
 
-// TestInternalMint_GrantListErrorFailsClosed pins F098. brokeredForgeMintKind is
-// the mint-time residual check for a policy STORED BEFORE
+// TestInternalMint_GrantListErrorFailsClosed: brokeredForgeMintKind is the
+// mint-time residual check for a policy stored before
 // validateGrantLaneExclusivity: an ssh_key/git_pat grant row for a brokered forge
 // that anyone who learns the grant id can still mint. For exactly that residual
 // this check is the ONLY belt — the broker's own checks (ownership, approval,
-// no-widening) do not cover it — and it used to fail OPEN on a ListGrantsByRun
-// error, answering the mint with the raw credential for the length of a store
-// hiccup. Requirement 6 of the round brief states it "fails CLOSED on a store
-// error"; the code now agrees.
+// no-widening) do not cover it — so it must fail closed on a ListGrantsByRun
+// error, not answer the mint with the raw credential for the length of a store
+// hiccup.
 //
-// RED on the base tree: 200 with a live credential in the body.
+// Failing open, the mint answers 200 with a live credential in the body.
 //
-// The nil-Store row is here so the fix cannot be over-applied: a missing Store is
+// The nil-Store row is here so the check cannot be over-applied: a missing Store
+// is
 // not a failure, it is the configuration in which no persisted pre-exclusivity
 // policy can exist, and every newHarness-based test runs that way.
 func TestInternalMint_GrantListErrorFailsClosed(t *testing.T) {
@@ -98,7 +98,7 @@ func TestInternalMint_GrantListErrorFailsClosed(t *testing.T) {
 	})
 }
 
-// TestInternalMintConflictCodesAreTheWireContract pins F134. The four mint-409
+// TestInternalMintConflictCodesAreTheWireContract. The four mint-409
 // "code" values are the discriminator cmd/wardyn-git-helper switches on to name
 // the real cause of a conflict. Every server-side assertion compared the decoded
 // JSON against the SAME package constant the handler had written, so all four

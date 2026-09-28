@@ -1,12 +1,11 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Short-lived control-plane handoff row (migration 0026): single-use WS attach
-// tickets, durable and shared across every control plane — an in-process map
-// cannot survive a restart or be seen by a second control plane. Consume-once,
-// and here that is a single DELETE ... RETURNING — the atomic form of a map's
-// delete-on-read, exact under concurrency AND across processes. Kept out of
-// store.go on purpose (it sits at a lint size boundary).
+// Short-lived control-plane handoff row (migration 0026): single-use WS
+// attach tickets, durable and shared across every control plane — an
+// in-process map can't survive a restart or be seen by a second control
+// plane. Consume-once is a single DELETE ... RETURNING, atomic under
+// concurrency and across processes.
 package store
 
 import (
@@ -24,48 +23,47 @@ import (
 )
 
 // hashToken returns hex(sha256(token)) — what's actually stored in every
-// *_sha256 credential column this package writes: attach_tickets.token_sha256
-// and api_tokens.token_sha256 (migration 0045). The raw token never
-// reaches SQL: the mint/insert path hashes before writing and the
-// consume/lookup path hashes before reading, so every uniqueness and
-// consume-once property is unchanged (the hash is just as unique and just as
-// unguessable as the token it's derived from) while a live-DB reader (a
-// reporting role, a hot standby, a pg_dump) can no longer read a usable bearer
-// credential off the row.
+// *_sha256 credential column this package writes. The raw token never
+// reaches SQL, so a live-DB reader (reporting role, hot standby, pg_dump)
+// can't read a usable bearer credential off the row.
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// AttachTicket is what one redeemed single-use WS attach ticket carries: the run
-// it is bound to, the principal that minted it (attribution — the session.attach
-// audit names the human, never the ticket), and that principal's role
-// (admin/member — internal/auth/oidc's RoleAdmin/RoleMember) at mint time. The
-// ?ticket= WS lane bypasses humanOrAdminAuth entirely, so this stamped role is
-// the only signal available to re-check owner-or-admin at consume time (see
-// internal/api's ticketOrHumanAuth / handleAttachWS).
+// AttachTicket is what one redeemed single-use WS attach ticket carries: the
+// run it's bound to, the minting principal (audit attribution), and that
+// principal's role at mint time. The ?ticket= WS lane bypasses
+// humanOrAdminAuth entirely, so this stamped role is the only signal
+// available to re-check owner-or-admin at consume time.
 type AttachTicket struct {
 	RunID     uuid.UUID
 	ActorType types.ActorType
 	Principal string
 	Role      string
+	// Via is the delegated lane the ticket was minted on (#1142), nil
+	// otherwise; the ticket lane replays it onto the rows it writes.
+	Via *types.DelegationVia
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
-// sweeps already-expired rows in the same statement. The sweep compares against
-// the caller's clock (now), NOT now(): expires_at is written from the app clock
-// and consume compares against the app clock, so a DB clock running ahead must
-// not silently delete live tickets.
+// sweeps already-expired rows in the same statement. The sweep compares
+// against the caller's clock (now), NOT now(), so a DB clock running ahead
+// can't silently delete live tickets.
 //
 // ponytail: the sweep rides the mint instead of a background worker — the table
 // holds only unredeemed tickets inside a 30s TTL, i.e. a handful of rows. Add a
 // sweeper (or an expires_at index) only if mint volume ever makes that false.
 func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error {
+	var viaDelegate, viaGrant *uuid.UUID
+	if t.Via != nil {
+		viaDelegate, viaGrant = &t.Via.Delegate, &t.Via.Grant
+	}
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now,
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9)`,
+		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -73,25 +71,24 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 	return nil
 }
 
-// ConsumeAttachTicket redeems token exactly once, returning the ticket it stood
-// for. The DELETE ... RETURNING is the single-use guarantee: two racing
-// redemptions can only have one return a row.
+// ConsumeAttachTicket redeems token exactly once, returning the ticket it
+// stood for. The DELETE ... RETURNING is the single-use guarantee: two
+// racing redemptions can only have one return a row.
 //
-// The run-id binding is checked by the CALLER, not here, so a redemption against
-// the wrong run still BURNS the ticket — the in-memory map deleted on any
-// redemption attempt and that property is load-bearing (a leaked ticket probed
-// against a guessed run must not survive the probe). Expiry is in the WHERE
-// instead: an expired row is unredeemable anyway and the next mint sweeps it.
-// A miss and an expired row are both (ok=false), indistinguishable to the caller.
+// The run-id binding is checked by the CALLER, not here, so a redemption
+// against the wrong run still BURNS the ticket (a leaked ticket probed
+// against a guessed run must not survive the probe). A miss and an expired
+// row are both (ok=false), indistinguishable to the caller.
 func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time) (AttachTicket, bool, error) {
 	var t AttachTicket
 	var actorType string
+	var viaDelegate, viaGrant *uuid.UUID
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
@@ -99,5 +96,8 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 		return AttachTicket{}, false, fmt.Errorf("store: consume attach ticket: %w", err)
 	}
 	t.ActorType = types.ActorType(actorType)
+	if viaDelegate != nil && viaGrant != nil {
+		t.Via = &types.DelegationVia{Delegate: *viaDelegate, Grant: *viaGrant}
+	}
 	return t, true, nil
 }

@@ -71,7 +71,7 @@ func newEntraLogin(t *testing.T, secure bool) *entraLogin {
 		IssuerURL:     fake.Issuer(),
 		ClientID:      fake.ClientID(),
 		RedirectURL:   redirect,
-		DefaultRole:   writoidc.RoleMember,
+		DefaultRole:   writoidc.RoleUser,
 		SecureCookies: secure,
 	}, testHMACKey)
 	if err != nil {
@@ -118,7 +118,7 @@ func (e *entraLogin) run(t *testing.T) *httptest.ResponseRecorder {
 
 func hasSession(w *httptest.ResponseRecorder) bool {
 	for _, c := range w.Result().Cookies() {
-		if c.Name == "wardyn_session" && c.Value != "" {
+		if strings.TrimPrefix(c.Name, "__Host-") == "wardyn_session" && c.Value != "" {
 			return true
 		}
 	}
@@ -214,7 +214,7 @@ func TestTheWidenedMarkerIsExpiredSecurely(t *testing.T) {
 	}
 	found := false
 	for _, c := range w.Result().Cookies() {
-		if c.Name != "wardyn_oidc_widened" {
+		if c.Name != "__Host-wardyn_oidc_widened" {
 			continue
 		}
 		found = true

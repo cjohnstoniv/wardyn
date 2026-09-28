@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -76,6 +77,32 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 	return items[offset:end], true
 }
 
+// pagedItems fetches one page of a list via pageFn (DB-side window, when the
+// store implements the scoped pager) or allFn (fetch-all + in-Go window via
+// pageWindow), returning the page and whether a further page exists. This is
+// servePage's fetch half, factored out for callers (#657: /secrets,
+// /integrations, /me/capabilities) whose response wraps the list in a larger
+// JSON object rather than serving it as the bare page servePage writes.
+func pagedItems[T any](page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) ([]T, bool, error) {
+	if pageFn != nil {
+		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
+		if err != nil {
+			return nil, false, err
+		}
+		truncated := len(got) > page.Limit
+		if truncated {
+			got = got[:page.Limit]
+		}
+		return got, truncated, nil
+	}
+	got, err := allFn()
+	if err != nil {
+		return nil, false, err
+	}
+	items, truncated := pageWindow(got, page.Offset, page.Limit)
+	return items, truncated, nil
+}
+
 // servePage writes one page of a list endpoint. When pageFn is non-nil (the
 // store implements store.Pager — production PG) it fetches page.Limit+1 rows at
 // the DB so truncation is exact and the payload is bounded there; otherwise it
@@ -94,25 +121,10 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 // route they did not call. A caller that wants a noun in its 500 owns its own
 // writeServerError at its own site.
 func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) {
-	var items []T
-	var truncated bool
-	if pageFn != nil {
-		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
-		if err != nil {
-			writeServerError(w, r, "list", err)
-			return
-		}
-		items = got
-		if truncated = len(items) > page.Limit; truncated {
-			items = items[:page.Limit]
-		}
-	} else {
-		got, err := allFn()
-		if err != nil {
-			writeServerError(w, r, "list", err)
-			return
-		}
-		items, truncated = pageWindow(got, page.Offset, page.Limit)
+	items, truncated, err := pagedItems(page, pageFn, allFn)
+	if err != nil {
+		writeServerError(w, r, "list", err)
+		return
 	}
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
@@ -132,6 +144,16 @@ func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, p
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
+		return
+	}
+	// #1197 L1a: any opt-in landing-page param (view/owner/status/
+	// ended_within/include_killed/workspace/q) branches to the filtered path
+	// below; NONE present keeps this function's pre-#1197 body byte-identical
+	// (runs_list_filter.go's own doc), so every existing caller that sends no
+	// such param — the Recordings pager, the CLI, the SDK, `wardyn run --wait` —
+	// is unaffected.
+	if hasRunsListFilterParams(r.URL.Query()) {
+		s.handleListRunsFiltered(w, r, page)
 		return
 	}
 	if !s.isSecurityOperator(r.Context()) {
@@ -200,7 +222,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// the run payload — the console's UI-apps lane needs it, and the run row
 	// cannot answer it (agent_runs carries policy_id only, and an inline or
 	// default policy has no row to fetch). Resolved from the same
-	// run.policy.effective envelope the UI gateway itself trusts. A store
+	// run.policy.resolve envelope the UI gateway itself trusts. A store
 	// failure is logged and the field omitted rather than failing the whole run
 	// read: every other field is already loaded and correct, and a missing
 	// ui_apps renders the lane's "no apps declared" state, which is the
@@ -211,23 +233,45 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		types.AgentRun
-		UIApps []types.UIApp `json:"ui_apps,omitempty"`
-	}{AgentRun: run, UIApps: apps})
+		UIApps       []types.UIApp `json:"ui_apps,omitempty"`
+		UserTypeName string        `json:"user_type_name,omitempty"`
+	}{AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType)})
+}
+
+// runUserTypeName is the display name of the type a run was launched as, for
+// the run page's "Ran as {type}". It rides the run read because GET /user-types
+// is securityOps: a user-tier caller (or an admin in the user view) reading
+// their own run could not resolve the id themselves. Empty for a run with no
+// type, or a type since deleted — the page then shows nothing, never the id.
+func (s *Server) runUserTypeName(r *http.Request, id string) string {
+	if id == "" || s.cfg.Store == nil {
+		return ""
+	}
+	t, err := s.cfg.Store.GetUserType(r.Context(), id)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(r.Context(), "api: could not read the run's user type", "user_type", id, "error", err)
+		}
+		return ""
+	}
+	return t.Name
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
-// scanned for its run.policy.effective envelope. Dispatch writes that event
+// scanned for its run.policy.resolve envelope. Dispatch writes that event
 // before the sandbox exists, so it is always among a run's first events; the
 // bound keeps a long-lived run's audit tail out of the query.
 const effectivePolicyAuditScan = 200
 
 // effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
-// authorization envelope dispatch recorded as run.policy.effective
-// (runs_dispatch.go), which is the ONLY post-hoc source of a run's real spec:
-// agent_runs.policy_id has no spec column, run_policies.spec is overwritten in
-// place, and an inline/default policy has no stored row at all. Resolving
-// through policy_id instead would hand a run created with an INLINE policy the
-// DEFAULT policy's apps — a widening this must never do.
+// authorization envelope dispatch recorded as run.policy.resolve
+// (runs_dispatch.go; canonicalAction also accepts a run dispatched before
+// 0.8, run.policy.effective — audit_legacy.go), which is the ONLY post-hoc
+// source of a run's real spec: agent_runs.policy_id has no spec column,
+// run_policies.spec is overwritten in place, and an inline/default policy has
+// no stored row at all. Resolving through policy_id instead would hand a run
+// created with an INLINE policy the DEFAULT policy's apps — a widening this
+// must never do.
 //
 // A run with no such event (never dispatched, or the audit store unavailable)
 // yields no apps, so every caller fails closed on it.
@@ -241,7 +285,7 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	}
 	var apps []types.UIApp
 	for _, ev := range events {
-		if ev.Action != "run.policy.effective" || len(ev.Data) == 0 {
+		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
 		var spec types.RunPolicySpec
@@ -490,6 +534,34 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 		return op
 	}
 	return actor
+}
+
+// operatorOwnedRequest reports whether the request on ctx is the operator
+// itself rather than a person: local mode's injected principal, or
+// actorFromRequest's system actor that is not a device — the real admin token.
+// It reads what authenticated the request, never a principal string, so an
+// IdP sub spelled like the admin token is still a person. Run creation records
+// it (AgentRun.OperatorOwned, identity.Claims.OperatorOwned).
+func operatorOwnedRequest(ctx context.Context) bool {
+	if localPrincipalFromContext(ctx) != "" {
+		return true
+	}
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false
+	}
+	t, _ := actorFromRequest((&http.Request{}).WithContext(ctx))
+	return t == types.ActorSystem
+}
+
+// grantReadOwner is the namespace a grant's stored secret is read from for a
+// run whose identity subject is subject: that subject's (falling back to the
+// operator's unless the grant is owner_only), except that an owner_only grant
+// on an operator-owned run reads the operator's "" namespace, its own.
+func grantReadOwner(subject string, ownerOnly, operatorOwned bool) string {
+	if ownerOnly && operatorOwned {
+		return ""
+	}
+	return subject
 }
 
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit

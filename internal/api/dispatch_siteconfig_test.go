@@ -156,8 +156,8 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	// The resident SigV4 keys are the CREDENTIAL half of the environment, so
 	// they ride SecretEnv, not Env: splitSecretEnv moves every key the Bedrock
 	// lane reports out of the map a k8s pod spec would carry inline. Asserting
-	// both sides here is the point — a regression that put the key back in Env
-	// is exactly the API-readable leak the split closed.
+	// both sides here is the point — a change that put the key back in Env
+	// would be exactly the API-readable leak the split closes.
 	if spec.SecretEnv["AWS_ACCESS_KEY_ID"] != "AKIATESTTESTTESTTEST" {
 		t.Errorf("SecretEnv[AWS_ACCESS_KEY_ID] = %q, want the resident test key", spec.SecretEnv["AWS_ACCESS_KEY_ID"])
 	}
@@ -171,14 +171,13 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	if spec.ProxyConfig.UpstreamProxyURL != "http://proxy.corp:3128" {
 		t.Errorf("ProxyConfig.UpstreamProxyURL = %q, want http://proxy.corp:3128", spec.ProxyConfig.UpstreamProxyURL)
 	}
-	// PORT-QUALIFIED, not bare: 4d8f48e1 (W13-S1-5) made planArtifactRedirect
-	// author net.JoinHostPort(host, redirectPort(r.To)), so the proxy's MITM dial
-	// lands on the port the operator configured instead of assuming 443. The
-	// redirect above has no explicit port, so 443 is the derived one. The proxy
-	// splits the suffix back off (parseMITMHostPort, proxy.go) and scopes the
-	// entry to that port, so this is the correct wire shape — this expectation
-	// predates the change (test last touched d3c1f103) and was stale, not the
-	// code. TestRedirectPort (artifact_redirect_test.go) is the producer-side half.
+	// Port-qualified, not bare: planArtifactRedirect authors net.JoinHostPort(host,
+	// redirectPort(r.To)), so the proxy's MITM dial lands on the port the operator
+	// configured instead of assuming 443. The redirect above has no explicit port,
+	// so 443 is the derived one. The proxy splits the suffix back off
+	// (parseMITMHostPort, proxy.go) and scopes the entry to that port, so this is
+	// the correct wire shape. TestRedirectPort (artifact_redirect_test.go) is the
+	// producer-side half.
 	const wantMITM = "artifactory.corp:443"
 	foundMITM := false
 	for _, h := range spec.ProxyConfig.MITMHosts {
@@ -204,7 +203,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 			if ig.Rule.SecretName != "npm-artifactory-token" {
 				t.Errorf("artifactory.corp injection SecretName = %q, want npm-artifactory-token", ig.Rule.SecretName)
 			}
-			// B10-F5: an `https://` redirect declares TLS-only transport for its
+			// an `https://` redirect declares TLS-only transport for its
 			// corp token. Without it the rule defaulted to require_tls=false, so a
 			// sandbox-chosen `POST http://artifactory.corp/…` was merely
 			// uncredentialed instead of refused — and on a TLS-conventional port
@@ -239,7 +238,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 		t.Errorf("AllowedDomains still contains registry.npmjs.org, want substituted out; got %v", domains)
 	}
 	for _, want := range []string{
-		// PORT-QUALIFIED, matching the MITM entry above (R3 F106): the allowlist
+		// PORT-QUALIFIED, matching the MITM entry above (R3): the allowlist
 		// entry a redirect adds now names the To's port — and when the To spells
 		// none, the SCHEME's default, which redirectPort resolves as 80 for an
 		// explicit http:// To and 443 otherwise — so a literal-IP To cannot open

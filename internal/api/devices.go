@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Hybrid enrolment's organisation side (docs/design/0.8/PLAN.md, epic #78): the
-// route mount and the admin surface — mint an enrolment token, list the
-// enrolled devices, revoke one. The device-facing routes are in devices_auth.go.
+// route mount and the admin surface — mint, list and revoke enrolment tokens,
+// list the enrolled devices, revoke one. The device-facing routes are in devices_auth.go.
 package api
 
 import (
@@ -42,8 +42,9 @@ type mintEnrolmentTokenRequest = client.DeviceEnrolmentTokenRequest
 //     device, never a human.
 //   - /admin/devices sits behind humanOrAdminAuth like every admin route:
 //     minting a token creates a credential, so it is requireOperator; the
-//     inventory and the revoke are the inventory-then-revoke pair /tokens
-//     already puts on requireSecurityOperator.
+//     device and pending-token inventories and their revokes are the
+//     inventory-then-revoke pair /tokens already puts on
+//     requireSecurityOperator.
 //
 // Mounted UNCONDITIONALLY: every handler type-asserts the optional
 // store.DeviceStore and fails closed without it (501 here and on enrol, 401 on
@@ -62,6 +63,8 @@ func (s *Server) mountDeviceRoutes(r chi.Router) {
 		securityOps := r.With(s.requireSecurityOperator)
 		securityOps.Get("/admin/devices", s.handleListDevices)
 		securityOps.Delete("/admin/devices/{id}", s.handleRevokeDevice)
+		securityOps.Get("/admin/devices/enrolment-tokens", s.handleListEnrolmentTokens)
+		securityOps.Delete("/admin/devices/enrolment-tokens/{id}", s.handleRevokeEnrolmentToken)
 	})
 }
 
@@ -151,5 +154,52 @@ func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"device.revoke", d.ID.String(), "success", mustJSON(map[string]any{"name": d.Name})))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListEnrolmentTokens is GET /api/v1/admin/devices/enrolment-tokens: every
+// token still redeemable, newest first — what a mint left outstanding that the
+// device inventory cannot show until it is redeemed. Never the token or its
+// hash: types.DeviceEnrolmentToken serializes neither outside the mint response.
+func (s *Server) handleListEnrolmentTokens(w http.ResponseWriter, r *http.Request) {
+	ds, ok := s.deviceStoreOr501(w)
+	if !ok {
+		return
+	}
+	tokens, err := ds.ListEnrolmentTokens(r.Context(), s.cfg.Now().UTC())
+	if err != nil {
+		writeServerError(w, r, "list enrolment tokens", err)
+		return
+	}
+	if tokens == nil {
+		tokens = []types.DeviceEnrolmentToken{}
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+// handleRevokeEnrolmentToken is DELETE /api/v1/admin/devices/enrolment-tokens/{id}:
+// a mis-delivered or leaked token stops being redeemable at once instead of at
+// its expiry. A token already redeemed, revoked or expired is 404 and writes no
+// row — a redeemed one is cut off with DELETE /admin/devices/{id} instead.
+func (s *Server) handleRevokeEnrolmentToken(w http.ResponseWriter, r *http.Request) {
+	ds, ok := s.deviceStoreOr501(w)
+	if !ok {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id", "enrolment token")
+	if !ok {
+		return
+	}
+	t, err := ds.RevokeEnrolmentToken(r.Context(), id, s.cfg.Now().UTC())
+	if notFoundIf(w, err, "enrolment token") {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "revoke enrolment token", err)
+		return
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"device.enrolment_token.revoke", t.ID.String(), "success",
+		mustJSON(map[string]any{"device_name": t.DeviceName, "minted_by": t.MintedBy})))
 	w.WriteHeader(http.StatusNoContent)
 }

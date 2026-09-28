@@ -169,13 +169,25 @@ COPY deploy/images/common/tmux.conf /etc/tmux.conf
 # system + node trust so `npm install -g` can verify registry TLS through a corp
 # MITM proxy. The proxy/registry knobs are build-only ARGs (NOT ENV) — a persistent
 # proxy ENV would leak into agent RUNS, whose only egress is wardyn-proxy.
+#
+# NODE_EXTRA_CA_CERTS points at node-extra-ca.pem, NOT corp-ca.pem directly
+# (#1114): a Dockerfile ENV can't be conditional, and corp-ca.pem itself only
+# exists when a corp CA was staged — pointing NODE_EXTRA_CA_CERTS straight at
+# it made Node print "Warning: Ignoring extra certs ... load failed" on every
+# start of a default (no-corp-CA) build. node-extra-ca.pem is created in BOTH
+# branches below — empty when no CA was staged (Node reads it, finds zero
+# certs, stays silent), the corp CA's own bytes when one was (Node trusts it,
+# unchanged from before).
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
 RUN if [ -f /corp-ca/corp-ca.pem ]; then \
         mkdir -p /usr/local/share/ca-certificates && \
         cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
-        update-ca-certificates; \
+        update-ca-certificates && \
+        cp /corp-ca/corp-ca.pem /corp-ca/node-extra-ca.pem; \
+    else \
+        : > /corp-ca/node-extra-ca.pem; \
     fi
-ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
+ENV NODE_EXTRA_CA_CERTS=/corp-ca/node-extra-ca.pem
 
 # Install the Claude Code CLI. DEFAULT: npm (@anthropic-ai/claude-code, installs
 # the `claude` binary). Behind a corp proxy where public npm is blocked, set
@@ -296,8 +308,8 @@ RUN git config --system credential.helper \
 # not a descendant of agent-run, so agent-run-lib.sh's exports cannot reach it.
 # Only ENV a derived image inherits does.
 #
-# What each one removes, measured host-by-host through a real proxy
-# (local/v075/evidence/agent-boot-egress/), because the obvious attribution was
+# What each one removes, measured host-by-host through a real proxy,
+# because the obvious attribution was
 # wrong once already:
 #   - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL — the reported pair.
 #     On first REPL start the CLI auto-installs the official PLUGIN MARKETPLACE

@@ -135,7 +135,7 @@ func newSSHKeyTestServer(t *testing.T, existing []sdk.SSHPublicKey, postStatus i
 				resp = sdk.SSHPublicKey{
 					Fingerprint: "SHA256:server-assigned", Principal: "p",
 					Name: body["name"], PublicKey: body["public_key"],
-					Role: "member", CreatedAt: time.Now().UTC(),
+					Role: "user", CreatedAt: time.Now().UTC(),
 				}
 			}
 			_ = json.NewEncoder(w).Encode(resp)
@@ -163,16 +163,16 @@ func (s *sshKeyTestServer) lastPost() map[string]string {
 }
 
 // runSSHKeyEnsureCmd runs `ssh-key <args>` against srv and returns whatever it
-// printed on stdout (--json goes through emitJSON, which targets os.Stdout
-// directly rather than cobra's out sink — captureStdout, from
-// commands_test.go, is the same fixture the table-writer commands need for
-// the same reason).
+// printed (--json goes through emitJSON, which writes to cmd.OutOrStdout()
+// (#200), so cobra's own out sink captures it directly).
 func runSSHKeyEnsureCmd(t *testing.T, srv *httptest.Server, args ...string) (stdout string, err error) {
 	t.Helper()
 	cmd := sshKeyCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	out := &strings.Builder{}
+	cmd.SetOut(out)
 	cmd.SetArgs(args)
-	stdout = captureStdout(t, func() { err = cmd.Execute() })
-	return stdout, err
+	err = cmd.Execute()
+	return out.String(), err
 }
 
 func TestSSHKeyEnsure_EmptyList_RegistersAndReportsJSONShape(t *testing.T) {
@@ -220,7 +220,7 @@ func TestSSHKeyEnsure_FingerprintAlreadyListed_NoPOST(t *testing.T) {
 	}
 	fp := ssh.FingerprintSHA256(pub)
 	srv := newSSHKeyTestServer(t, []sdk.SSHPublicKey{
-		{Fingerprint: fp, Principal: "p", Name: "already-here", PublicKey: "existing", Role: "member", CreatedAt: time.Now().UTC()},
+		{Fingerprint: fp, Principal: "p", Name: "already-here", PublicKey: "existing", Role: "user", CreatedAt: time.Now().UTC()},
 	}, 0, nil)
 
 	out, err := runSSHKeyEnsureCmd(t, srv.Server, "ensure", "--path", path, "--json")

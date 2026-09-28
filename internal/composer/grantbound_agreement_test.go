@@ -10,7 +10,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The runtime half of F014's SECOND round. Round 1 replaced clampGrants' kind-keyed
+// The runtime half of the fix's SECOND round. Round 1 replaced clampGrants' kind-keyed
 // map with a pairing search, which closed the original widening but left the clamp
 // and the write-time comparator (internal/api's governanceGrantWithinCeiling) still
 // disagreeing in two executed ways — both pinned here, and both a consequence of the
@@ -23,7 +23,7 @@ import (
 //     levels, since one scope carries one permissions map) therefore emptied a
 //     proposal that named ONE of them — while the comparator accepted it, because that
 //     entry dominates. Narrowing to nothing is not a widening, but it IS the two rules
-//     giving one input two answers, which is what F014 is about.
+//     giving one input two answers, which is the defect.
 //   - The same pairing written twice with different bounds. Round 1's search returned
 //     the FIRST match and stopped, so the identical ceiling SET clamped to (approval
 //     true, ttl 300) in one slice order and (approval false, ttl 3600) in the other.
@@ -158,7 +158,7 @@ func TestCeilingGrantsCoveringIsTheIdentityAxis(t *testing.T) {
 	}
 }
 
-// ─── THE TWO DOMINATION AXES A MUTATION COULD DELETE UNSEEN ──────────────────
+// The two domination axes a mutation could delete unseen
 //
 // grantDominatedBy asks three questions, and clampGrants' whole shape turns on
 // the answer: when ONE covering ceiling grant dominates the proposal the clamp
@@ -285,7 +285,7 @@ func TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum(t *testing.T) {
 }
 
 // TestClampApprovalAxisThroughTheExportedClamp runs the approval shape through
-// Clamp itself, the entry point boundMemberSpec calls, so the axis is pinned at
+// Clamp itself, the entry point boundUserSpec calls, so the axis is pinned at
 // the boundary a caller actually reaches and not only at the helper.
 func TestClampApprovalAxisThroughTheExportedClamp(t *testing.T) {
 	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{

@@ -9,10 +9,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -29,13 +25,13 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -51,6 +47,7 @@ const (
 	secretSessionKey   = "wardyn-session-key"    // OIDC session-cookie HMAC key (32 bytes)
 	secretSSHHostKey   = "wardyn-ssh-host-key"   // SSH gateway ed25519 host key PEM
 	secretUISessionKey = "wardyn-ui-session-key" // UI-sandbox relay cookie HMAC key (32 bytes)
+	secretRunConfigKey = "wardyn-run-config-key" // seals each run's stored proxy config (32 bytes, #1176)
 )
 
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
@@ -68,6 +65,11 @@ const (
 var groundtruthSensorRunID = uuid.Nil
 
 func main() {
+	// First, before any credential is read: no core dump, no same-uid ptrace.
+	if err := nodump.Disable(); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
+	}
 	if err := run(); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
 		os.Exit(1)
@@ -95,13 +97,15 @@ func run() error {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
-	// -rotate-age-key: MAINTENANCE MODE, another early exit — it re-encrypts the
-	// secret store and returns, never serving. Ahead of validateConfig on
+	// -rotate-age-key: MAINTENANCE MODE, another early exit — it rewraps the
+	// secret store's data keys and returns, never serving. Ahead of validateConfig on
 	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
-	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
-		return rotateAgeKeyMode(f, p)
+	// -migrate-secrets / -reconcile (store mode) are early exits for the same
+	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
+	if ran, err := maintenanceMode(f); ran {
+		return err
 	}
 
 	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
@@ -112,7 +116,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+	// The flag-only posture refusals (UI-sandbox gateway, HYBRID BOOT's org
+	// control plane — issue #100) validate here, beside validateConfig and
+	// before connectAndMigrate, rather than waiting for the daemon to stand up
+	// migration, secrets, identity, the broker and the runner first. See
+	// validateBootPosture's own doc comment (boot_posture.go) for why
+	// validateMemberModePosture is NOT in this list.
+	if err := validateBootPosture(f, posture); err != nil {
 		return err
 	}
 
@@ -165,7 +175,7 @@ func run() error {
 	// and the separate connect/migrate timeout budgets — a fixed 30s
 	// bounds the connect, -migrate-timeout/WARDYN_MIGRATE_TIMEOUT (default 5m)
 	// bounds db.Migrate so a slow migration doesn't crash-loop the upgrade.
-	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout)
+	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout, *f.allowUnknownMigrations)
 	if err != nil {
 		return err
 	}
@@ -200,8 +210,12 @@ func run() error {
 		return err
 	}
 
-	// Secret store (pluggable seam; default "pg" = age-encrypted Postgres column).
-	secrets, err := buildSecretStore(pool, *f.ageKey, *f.secretStoreSel)
+	// Secret store (pluggable seam; default "pg" = envelope-encrypted Postgres
+	// rows), wrapped so every read is audited once (secretstore.Audited).
+	// Returned only after its v0 rows are converted, so the boot-key reads
+	// below never see one. rootCtx, not bootCtx: the conversion is one
+	// all-or-nothing transaction over the whole table.
+	secrets, err := openSecretStore(rootCtx, pool, f, maskedRec)
 	if err != nil {
 		return err
 	}
@@ -209,7 +223,9 @@ func run() error {
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
 	// denylist (identity_revocations).
-	signKey, err := loadOrCreateSigningKey(bootCtx, secrets)
+	// Boot keys: created under a lock that serializes replicas (#754).
+	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
+	signKey, err := loadOrCreateSigningKey(bootCtx, bootKeys)
 	if err != nil {
 		return err
 	}
@@ -236,7 +252,7 @@ func run() error {
 	if *f.printGroundtruthToken {
 		mintCtx, mintCancel := context.WithTimeout(rootCtx, 10*time.Second)
 		defer mintCancel()
-		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience)
+		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
 		if merr != nil {
 			return fmt.Errorf("mint groundtruth token: %w", merr)
 		}
@@ -296,7 +312,7 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
+	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(bootCtx, f, runnerTarget)
 	if err != nil {
 		return err
 	}
@@ -341,25 +357,25 @@ func run() error {
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
 	// subscription/managed LLM credential providers, advisory AI scan
 	// fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
-	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, posture.secureCookies, subPostureOK)
+	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, bootKeys, posture.secureCookies, subPostureOK)
 	if err != nil {
 		return err
 	}
 
-	// MEMBER-MODE DESKTOP posture, then HYBRID BOOT's org control-plane posture
-	// (issue #100) right after it — folded into one call so run() gains no
-	// extra branch for the second, adjacent refusal (gocyclo); see each
-	// validator's own doc comment in boot_posture.go for what it enforces.
-	// Checked here (not in validateConfig) because both of member mode's
+	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
+	// beside validateConfig). Checked here, not there, because both of its
 	// inputs only exist this far into boot: lm.enabled is the RESOLVED
 	// local-mode fact — local mode auto-enables, so the raw flag is not the
 	// answer — and feats.authn is the resolved "OIDC is configured" one.
-	if err := checkMemberAndHybridBootPosture(*f.memberMode, lm.enabled, feats.authn != nil,
-		*f.orgURL, *f.orgEnrolToken, *f.allowPlaintextListen); err != nil {
+	//
+	// Hybrid enrolment (issue #103) runs in the same call, after both checks
+	// and before the server that serves its status; orgFederation is nil when
+	// WARDYN_ORG_URL is unset.
+	st := store.NewPG(pool)
+	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, bootKeys, st, maskedRec)
+	if err != nil {
 		return err
 	}
-
-	st := store.NewPG(pool)
 	// The roster half of the model-identity posture, WARNED at boot beside the
 	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
 	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
@@ -375,6 +391,11 @@ func run() error {
 		Identity:  idp,
 		Approvals: approvals,
 		Broker:    brk,
+		// The wait ceiling a run's captured wait folds under; the approval
+		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
+		// mirrors it onto a hold-mode run's sandbox (RL-1).
+		ApprovalExpiryAfter: *f.approvalExpiryAfter,
+		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace},
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
@@ -404,6 +425,7 @@ func run() error {
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,
+		ControlPlaneCAPEM:         feats.hop.caCertPEM(),
 		RecordingStore:            feats.recStore,
 		OIDC:                      feats.authn,
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
@@ -417,7 +439,7 @@ func run() error {
 		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:        *f.oidcAllowEmailMappings,
-		MemberMounts:              memberMounts,
+		UserMounts:                memberMounts,
 		UserDriveHostRoots:        driveHostRoots,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
@@ -426,7 +448,10 @@ func run() error {
 		BedrockModel:              *f.bedrockModel,
 		BedrockBaseURL:            bedrockBaseURL,
 		AWSSSOEndpointOverride:    awsSSOEndpointOverride,
+		AllowTestEndpoints:        *f.allowTestEndpoints,
 		AWSSSOProxyInject:         api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
+		HarnessLoginCPUMillis:     *f.harnessLoginCPUMillis,
+		HarnessLoginMemoryMiB:     *f.harnessLoginMemoryMiB,
 		BedrockAWSConfigDir:       *f.bedrockAWSDir,
 		BedrockAWSProfile:         *f.bedrockAWSProfile,
 		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,
@@ -446,12 +471,16 @@ func run() error {
 		// subscription-inject escape hatch.
 		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
+		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
+		SecretStoreExternal:   storesExternally(secrets),
+		SecretKeyService:      keyService(secrets),
+		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
 		OIDCRedirectURL:       *f.oidcRedirectURL,
 		OIDCSecureCookies:     posture.secureCookies,
+		BasePath:              *f.basePath,
 		// SSH gateway (C2/C3): SSHHostKey is nil unless -ssh-listen is set
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either
@@ -467,11 +496,16 @@ func run() error {
 		UIAdvertiseURL:   *f.uiAdvertise,
 		UIOriginTemplate: *f.uiOriginTemplate,
 		UISessionTTL:     *f.uiSessionTTL,
+		UICookiePolicy:   uiCookiePolicy(*f.uiStripCookies),
 		UISessionKey:     feats.uiSessionKey,
+		RunConfigKey:     feats.runConfigKey,
+		// Admits every run unless a WARDYN_HOST_* limit is set.
+		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
-		BaseCtx: rootCtx,
+		BaseCtx:       rootCtx,
+		OrgFederation: orgFederationStatusFunc(orgFederation),
 	})
 
 	// The login-grant edge, joined after both sides exist and before anything is
@@ -493,8 +527,10 @@ func run() error {
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
 	startUISandboxGateway(rootCtx, f, posture, srv)
 
-	// Serve until signal/error, then drain: HTTP first, audit sinks last.
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan)
+	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
+	// org federation forwarder (if any) joined so it never outlives the
+	// process (issue #1131).
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop, orgFederation)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
@@ -524,7 +560,7 @@ type tlsPosture struct {
 //     unspecified bind (":8080", the compose 0.0.0.0-in-container topology) stay
 //     warn-only (boot_serve.go), since the unspecified bind is indistinguishable
 //     from a safe compose 127.0.0.1-publish from inside the container.
-//     allowPlaintextListen is the explicit escape hatch (WARDYN_ALLOW_PLAINTEXT_LISTEN).
+//     allowPlaintextListen is the explicit escape hatch (WARDYN_LISTEN_ALLOW_PLAINTEXT).
 func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPlaintextListen bool) (tlsPosture, error) {
 	if dsn == "" {
 		return tlsPosture{}, errors.New("missing -dsn / WARDYN_PG_DSN")
@@ -555,7 +591,7 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 //
 // The carve-outs are deliberately identical for both: loopback and the
 // unspecified bind (the compose 0.0.0.0-in-container topology) stay warn-only,
-// and WARDYN_ALLOW_PLAINTEXT_LISTEN is the one explicit escape hatch.
+// and WARDYN_LISTEN_ALLOW_PLAINTEXT is the one explicit escape hatch.
 func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPlaintextListen bool) error {
 	if posture.secureCookies || allowPlaintextListen || !listenBindsSpecificRoutable(listen) {
 		return nil
@@ -563,7 +599,7 @@ func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPla
 	return fmt.Errorf("refusing to start: serving plaintext HTTP but the %s address %q binds a specific non-loopback interface — "+
 		"every credential and cookie it speaks would travel in cleartext to any LAN/WAN peer; "+
 		"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
-		"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", flagName, listen)
+		"or explicitly set WARDYN_LISTEN_ALLOW_PLAINTEXT=true to override", flagName, listen)
 }
 
 // sameListenAddress reports whether two listen addresses land on the same
@@ -690,209 +726,6 @@ func genAndPrintAgeKey(w io.Writer) error {
 	}
 	_, err = fmt.Fprintln(w, id.String())
 	return err
-}
-
-// buildSecretStore constructs the age-encrypted Postgres secret store. The age
-// identity comes from -age-key; if empty one is generated and logged (operators
-// MUST persist it across restarts to keep prior ciphertext readable).
-func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore.Store, error) {
-	var id *age.X25519Identity
-	var err error
-	if ageKey == "" {
-		id, err = age.GenerateX25519Identity()
-		if err != nil {
-			return nil, fmt.Errorf("generate age identity: %w", err)
-		}
-		// F10: log the PUBLIC recipient as a fingerprint, never the secret identity.
-		// The old message printed the full AGE-SECRET-KEY- to a log file created at
-		// the default umask (~/.wardyn/host-wardynd.log), leaking the secret-store
-		// master key. To persist, mint one with `wardynd -gen-age-key` (prints to
-		// stdout by design) and set WARDYN_AGE_KEY — do not copy it out of this log.
-		slog.Warn("wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY",
-			slog.String("public_recipient", id.Recipient().String()),
-		)
-	} else {
-		if isKnownPublicAgeKey(ageKey) {
-			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
-		}
-		id, err = age.ParseX25519Identity(ageKey)
-		if err != nil {
-			return nil, fmt.Errorf("parse age identity: %w", err)
-		}
-	}
-	s, err := secretstore.New(storeName, secretstore.Deps{Pool: pool, AgeIdentity: id})
-	if err != nil {
-		return nil, fmt.Errorf("secret store: %w", err)
-	}
-	return s, nil
-}
-
-// secretKeyStore is the minimal secret-store surface loadOrCreateSecret needs.
-// Narrowing the dependency to Get/Put makes the load-or-create control flow
-// unit-testable with a hand-rolled fake (cmd/wardynd/main_test.go) and documents
-// that key bootstrap touches nothing else. secretstore.Store satisfies it.
-type secretKeyStore interface {
-	Get(ctx context.Context, name string) ([]byte, error)
-	Put(ctx context.Context, name string, value []byte) error
-}
-
-// loadOrCreateSecret is the shared, fail-closed bootstrap for the two boot keys
-// (the embedded-identity signing key and the OIDC session key).
-//
-// SECURITY (boot-key destruction): the previous per-key logic treated ANY
-// Get error as "key not present" and then generated + Put a fresh key,
-// OVERWRITING whatever ciphertext was already there. The pg secret store
-// distinguishes a TRUE not-found (it wraps pgx.ErrNoRows) from an age-decrypt
-// failure (a generic error). Conflating the two meant a single transient/
-// permanent decrypt error silently rotated the key, invalidating every issued
-// SVID and every active session cookie. We now regenerate ONLY when the key is
-// genuinely absent or present-but-invalid; on any other error we FAIL CLOSED —
-// return the error and never Put, so the existing ciphertext is preserved.
-//
-//   - valid reports whether an existing raw value is usable as-is.
-//   - generate produces fresh key material to persist (called only when the key
-//     is absent or invalid).
-func loadOrCreateSecret(
-	ctx context.Context,
-	secrets secretKeyStore,
-	name string,
-	valid func(raw []byte) bool,
-	generate func() ([]byte, error),
-) ([]byte, error) {
-	// secretKeyStore has no For: the boot keys it bootstraps (identity signing,
-	// OIDC session) are process-global, never per-principal.
-	raw, err := secrets.Get(ctx, name)
-	switch {
-	case err == nil:
-		if valid(raw) {
-			return raw, nil
-		}
-		// Present but unusable (e.g. a legacy too-short session key): fall
-		// through to regenerate. This is safe — the stored value cannot serve
-		// its purpose anyway.
-	case errors.Is(err, pgx.ErrNoRows):
-		// TRUE not-found (first boot): generate + persist below.
-	default:
-		// Decrypt failure or any other Get error: FAIL CLOSED. Do NOT generate
-		// or Put — overwriting here would destroy the existing key.
-		return nil, fmt.Errorf("load secret %q: %w", name, err)
-	}
-
-	val, gerr := generate()
-	if gerr != nil {
-		return nil, fmt.Errorf("generate secret %q: %w", name, gerr)
-	}
-	if perr := secrets.Put(ctx, name, val); perr != nil {
-		return nil, fmt.Errorf("persist secret %q: %w", name, perr)
-	}
-	return val, nil
-}
-
-// loadOrCreateSigningKey returns the embedded identity ES256 key, persisting a
-// freshly-generated one into the secret store on first boot. The key never
-// enters a sandbox; it lives only in the broker/control-plane process memory
-// and the encrypted secret column. A decrypt error fails closed (see
-// loadOrCreateSecret) rather than minting a fresh key over the old one.
-func loadOrCreateSigningKey(ctx context.Context, secrets secretKeyStore) (*ecdsa.PrivateKey, error) {
-	raw, err := loadOrCreateSecret(ctx, secrets, secretSigningKey,
-		func(b []byte) bool { return len(b) > 0 },
-		func() ([]byte, error) {
-			key, gerr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			if gerr != nil {
-				return nil, fmt.Errorf("generate signing key: %w", gerr)
-			}
-			pemBytes, merr := marshalECPrivateKeyPEM(key)
-			if merr != nil {
-				return nil, merr
-			}
-			slog.Info("wardynd: generated and persisted embedded identity signing key")
-			return pemBytes, nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	key, perr := parseECPrivateKeyPEM(raw)
-	if perr != nil {
-		return nil, fmt.Errorf("parse stored signing key: %w", perr)
-	}
-	return key, nil
-}
-
-// loadOrCreateSessionKey returns the 32-byte OIDC session-cookie HMAC key,
-// persisting a freshly-generated one into the secret store on first boot. Like
-// the signing key it never enters a sandbox; it lives only in process memory
-// and the encrypted secret column. Returning the key is safe — the caller is
-// the OIDC authenticator, which never logs it. A decrypt error fails closed
-// (see loadOrCreateSecret) rather than rotating every session out from under
-// logged-in users.
-func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte, error) {
-	return loadOrCreateSecret(ctx, secrets, secretSessionKey,
-		func(b []byte) bool { return len(b) >= 32 },
-		func() ([]byte, error) {
-			key := make([]byte, 32)
-			if _, gerr := rand.Read(key); gerr != nil {
-				return nil, fmt.Errorf("generate session key: %w", gerr)
-			}
-			slog.Info("wardynd: generated and persisted OIDC session key")
-			return key, nil
-		},
-	)
-}
-
-// loadOrCreateUISessionKey returns the UI-sandbox gateway's relay-cookie HMAC
-// key, persisted in the secret store and generated on first boot — the same
-// loadOrCreateSecret pattern as the signing/session/SSH-host keys. It is
-// SEPARATE from the OIDC session key on purpose: the two cookies live on
-// different origins and authorize different things, so one key must never be
-// able to forge the other's cookie.
-func loadOrCreateUISessionKey(ctx context.Context, secrets secretKeyStore) ([]byte, error) {
-	return loadOrCreateSecret(ctx, secrets, secretUISessionKey,
-		func(b []byte) bool { return len(b) >= 32 },
-		func() ([]byte, error) {
-			key := make([]byte, 32)
-			if _, gerr := rand.Read(key); gerr != nil {
-				return nil, fmt.Errorf("generate ui session key: %w", gerr)
-			}
-			slog.Info("wardynd: generated and persisted UI-sandbox relay cookie key")
-			return key, nil
-		},
-	)
-}
-
-// loadOrCreateSSHHostKey returns the SSH gateway's ed25519 host key,
-// persisting a freshly-generated one into the secret store on first boot —
-// the same loadOrCreateSecret pattern as the signing/session keys above,
-// cloned for the one new field this key needs (ed25519 has no "is this a
-// valid key of the right size" shortcut as cheap as the session key's length
-// check, so validity is "does it parse", checked by the generate/persist
-// round-trip itself; a corrupt stored value fails the parse below and
-// loadOrCreateSecret's caller sees that as a startup error, never a silent
-// re-mint over a key clients have already pinned).
-func loadOrCreateSSHHostKey(ctx context.Context, secrets secretKeyStore) (ed25519.PrivateKey, error) {
-	raw, err := loadOrCreateSecret(ctx, secrets, secretSSHHostKey,
-		func(b []byte) bool { return len(b) > 0 },
-		func() ([]byte, error) {
-			_, priv, gerr := ed25519.GenerateKey(rand.Reader)
-			if gerr != nil {
-				return nil, fmt.Errorf("generate ssh host key: %w", gerr)
-			}
-			pemBytes, merr := marshalEd25519PrivateKeyPEM(priv)
-			if merr != nil {
-				return nil, merr
-			}
-			slog.Info("wardynd: generated and persisted ssh gateway host key")
-			return pemBytes, nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	key, perr := parseEd25519PrivateKeyPEM(raw)
-	if perr != nil {
-		return nil, fmt.Errorf("parse stored ssh host key: %w", perr)
-	}
-	return key, nil
 }
 
 // goSafe runs fn with panic recovery so a panic in a DETACHED background

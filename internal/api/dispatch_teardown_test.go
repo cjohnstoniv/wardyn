@@ -25,8 +25,9 @@ import (
 // drops it), abandoning it — and the proxy sidecar holding the resolved
 // injection credential VALUES — forever with no record. reconcile_test.go
 // asserts it for the reconciler; these assert it for the three dispatch sites,
-// which used to `_ = s.cfg.Runner.StopSandbox(...)` and, at the kill-race site,
-// audit "sandbox torn down" whether or not that had happened.
+// none of which may discard the error (`_ = s.cfg.Runner.StopSandbox(...)`) or,
+// at the kill-race site, audit "sandbox torn down" whether or not that
+// happened.
 
 // dispatchTestStore is an in-memory Store with just the surface dispatch drives:
 // one run, one atomic state cell. Deliberately NOT the PG harness — this
@@ -64,6 +65,14 @@ func (s *dispatchTestStore) State() types.RunState {
 }
 
 func (s *dispatchTestStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
+
+// SetRunDiskMiB records onto run, so GetRun shows what dispatch persisted.
+func (s *dispatchTestStore) SetRunDiskMiB(_ context.Context, _ uuid.UUID, mib int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.run.DiskMiB = mib
+	return nil
+}
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
 }
@@ -192,7 +201,7 @@ func TestDispatch_KillRaceTeardownFailure_AuditsTeardownError(t *testing.T) {
 		st.mu.Unlock()
 	}
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})
@@ -227,8 +236,8 @@ func TestDispatch_KillRaceTeardownFailure_AuditsTeardownError(t *testing.T) {
 
 // TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError is the same
 // counterfactual at dispatch's exec-failure site: the run.exec/failure event
-// used to carry only the Exec error, never the teardown error, so a sandbox
-// orphaned on this path vanished from the system of record.
+// must carry the teardown error as well as the Exec error, or a sandbox
+// orphaned on this path vanishes from the system of record.
 func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	rn := &execFailRunner{
 		killRaceRunner: &killRaceRunner{fakeRunner: &fakeRunner{}, stopErr: errors.New("docker: no such container")},
@@ -236,7 +245,7 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	}
 	srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})
@@ -281,18 +290,20 @@ func (r *waitTransientRunner) AgentStatus(_ context.Context, _, execID string) (
 	return runner.Status{State: types.RunStopped, ExitCode: &code}, nil
 }
 
-// TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff is the runs-fsm
-// regression at the PRIMARY watcher — the one that runs for 100% of normal
+// TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff pins the
+// primary watcher — the one that runs for 100% of normal
 // dispatches, unlike reconcileWatch which only runs after a daemon restart. A
 // Wait error that is NOT the daemon shutting down is a probe failure, not "the
 // run finished": this is the run's only watcher (one per dispatch, never
 // respawned), so returning silently strands a RUNNING run with a live sandbox
 // and un-revoked credentials, and the idle reaper is disabled on 6 of the 7
-// shipped policies. The watcher now hands off to reconcileWatch, which tolerates
+// shipped policies. The watcher hands off to reconcileWatch, which tolerates
 // bounded probe errors and then finalizes + revokes + tears down.
-// Counterfactual: with the bare `return` on werr != nil the run stays RUNNING,
+// Counterfactual: with a bare `return` on werr != nil the run stays RUNNING,
 // the broker never revokes, and the sandbox is never stopped.
 func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) {
+	prev := reconcileWatchIntervalNS.Swap(int64(20 * time.Millisecond))
+	t.Cleanup(func() { reconcileWatchIntervalNS.Store(prev) })
 	rn := &waitTransientRunner{
 		killRaceRunner: &killRaceRunner{fakeRunner: &fakeRunner{}},
 		waitErr:        errors.New("docker: wait: exec inspect: EOF"),
@@ -319,12 +330,13 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 	cfg.BaseCtx = baseCtx
 	srv := New(cfg)
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})
 
-	// The watcher is detached; reconcileWatch probes on a 5s tick. Wait for the
+	// The watcher is detached; reconcileWatch probes on its tick (5s, shrunk
+	// above). Wait for the
 	// WHOLE finalize, not just the state flip: the cascade wins the terminal CAS
 	// FIRST and revokes after (deliberately — C002), so a poll that stops at
 	// "terminal" can observe the run finalized microseconds before its revoke
@@ -363,3 +375,11 @@ var (
 	_ runner.Runner = (*execFailRunner)(nil)
 	_ runner.Runner = (*waitTransientRunner)(nil)
 )
+
+// TestReconcileWatchInterval_ProductionValueUnchanged pins the tick the test
+// above shrinks.
+func TestReconcileWatchInterval_ProductionValueUnchanged(t *testing.T) {
+	if got := time.Duration(reconcileWatchIntervalNS.Load()); got != 5*time.Second {
+		t.Fatalf("reconcileWatch interval = %v, want the production 5s", got)
+	}
+}

@@ -11,6 +11,10 @@
 //  2. SameSite=Lax on all session cookies: protects all same-site navigations
 //     from cross-site request forgery without requiring a synchronizer token.
 //
+// SameSite does not stop a same-site host from PLANTING a cookie, so under
+// SecureCookies every cookie carries the __Host- prefix (cookies.go): the
+// browser refuses a Domain= one, and the unprefixed name is never read.
+//
 // A PKCE code_challenge (S256) is included in the authorization request and
 // verified by the token endpoint. This provides additional security even when
 // the state check is bypassed (e.g. by a mix-up attack).
@@ -47,7 +51,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -86,6 +89,9 @@ type Config struct {
 	// RedirectURL is the callback URL registered with the IdP.
 	// Must be <wardynd-base>/auth/callback.
 	RedirectURL string
+	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix of every
+	// redirect back to the console and the Path of every cookie.
+	BasePath string
 	// AllowedEmailDomains, when non-empty, restricts login to email addresses
 	// whose domain — the part after the last '@' — exactly equals one of the
 	// listed values, case-insensitively. Matching is exact, not suffix-based:
@@ -99,21 +105,29 @@ type Config struct {
 	// (WARDYN_OIDC_ROLE_MAP against the "roles" claim, below) plus the app
 	// registration's "assignment required" setting there instead.
 	AllowedEmailDomains []string
+	// ExtraScopes is WARDYN_OIDC_EXTRA_SCOPES (CSV, default empty): scopes
+	// appended to the fixed "openid profile email" request below — usually
+	// "groups", so a WARDYN_OIDC_ROLE_MAP `groups`-keyed row sees the claim on
+	// an IdP that gates it behind a scope. Validated at boot against discovery
+	// scopes_supported (see validateExtraScopes): an unadvertised scope refuses
+	// boot by name instead of locking every human out at login with
+	// invalid_scope. Empty leaves the request unchanged.
+	ExtraScopes []string
 	// RoleMap maps a case-insensitive claim/email value — an Entra App Role
 	// from the ID token's "roles" claim, a "groups" claim entry, or the user's
-	// email — to a Wardyn role, RoleAdmin or RoleMember. Parsed from
+	// email — to a Wardyn role, RoleAdmin or RoleUser. Parsed from
 	// WARDYN_OIDC_ROLE_MAP by ParseRoleMap ("value=role" CSV pairs, e.g.
-	// "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin"); ParseRoleMap
+	// "Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin"); ParseRoleMap
 	// is also where a bad role value is rejected, so every entry here is
 	// already valid. Precedence when more than one entry matches: ANY match
-	// resolving to RoleAdmin wins over one resolving to RoleMember, regardless
+	// resolving to RoleAdmin wins over one resolving to RoleUser, regardless
 	// of which claim produced it (see deriveRole). Empty (the default) disables
 	// role derivation entirely: every signed-in human keeps today's pre-0.5
 	// behavior (RoleAdmin) — opt-in and upgrade-safe.
 	RoleMap map[string]string
 	// DefaultRole is the role a signed-in human gets when RoleMap is non-empty
 	// but nothing in their roles/groups/email matched an entry: RoleAdmin,
-	// RoleMember, or "" (the default) to DENY the login instead, with a message
+	// RoleUser, or "" (the default) to DENY the login instead, with a message
 	// telling them to ask their operator for a WARDYN_OIDC_ROLE_MAP entry.
 	// Ignored when RoleMap is empty (see RoleMap's own empty-map behavior).
 	DefaultRole string
@@ -132,6 +146,7 @@ type Config struct {
 	// or TLS terminates at an upstream reverse proxy. CRITICAL: Secure cookies
 	// are never sent over plain HTTP, so leaving this false (the default) is
 	// required for plain-HTTP demo deployments — otherwise login silently breaks.
+	// True also gives every cookie the __Host- prefix and Path=/ (cookies.go).
 	SecureCookies bool
 	// Revocations is the pg-backed revoke-a-human-now lever (D16). Sessions
 	// are stateless signed cookies with no server-side session table (see the
@@ -155,22 +170,29 @@ type Config struct {
 	// optional-Config-field rule Revocations, above, follows.
 	RoleMappings RoleMappingSource
 
+	// UserTypes is the store of user types (0.8), read once per login beside
+	// RoleMappings: a role-map value may name a type, and the type's priority
+	// and existence decide which one the session carries. A read error denies
+	// the login with authErrorRoleCheckUnavailable, the same fail-closed rule.
+	// nil means only the built-in "standard" type exists.
+	UserTypes UserTypeSource
+
 	// OnLogin, when set, is called synchronously from CallbackHandler after a
 	// login is APPROVED (role derived, session about to be issued) with the
-	// ID token's sub, the freshly-derived role, and the SAME group snapshot
-	// (plus its completeness bit) the new session itself carries — the exact
-	// values sessionGroups just computed, not a second derivation. It exists
-	// for exactly one caller today — internal/api wires it to refresh
-	// ssh_public_keys.role/role_checked_at (migration 0046) and api_tokens'
-	// role/groups/groups_truncated (#152) for every credential this principal
-	// owns, the bounded-stale re-check the SSH gateway's admin override reads
+	// ID token's sub, the freshly-derived role and user type, and the SAME
+	// group snapshot (plus its completeness bit) the new session itself
+	// carries — the exact values sessionGroups just computed, not a second
+	// derivation. It exists for exactly one caller today — internal/api wires
+	// it to refresh ssh_public_keys.role/role_checked_at (migration 0046) and
+	// api_tokens' role/user_type/groups/groups_truncated (#152, #611) for
+	// every credential this principal owns, the bounded-stale re-check the SSH gateway's admin override reads
 	// and the snapshot every wdn_ token replays — but this package stays
 	// store-agnostic: it knows nothing about SSH keys or tokens, only that a
 	// login happened. A failure inside OnLogin must never fail the login
 	// itself (the integrator is expected to log-and-continue, not panic);
 	// CallbackHandler does not inspect its return because it has none. nil
 	// (the default) is a plain no-op, so every existing caller is unaffected.
-	OnLogin func(ctx context.Context, sub, role string, groups []string, groupsTruncated bool)
+	OnLogin func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool)
 }
 
 // SessionRevocations is the store D16's revoke-a-human-now admin action
@@ -238,6 +260,12 @@ type Session struct {
 	Name   string    `json:"name,omitempty"`
 	Role   string    `json:"role"`
 	Expiry time.Time `json:"expiry"`
+	// UserType is the id of the person's user type, stamped beside the tier
+	// at sign-in. Everyone carries the built-in "standard" type until the role
+	// map can name custom ones. Added by codec version 2, which also renamed
+	// the non-admin tier from "member" to "user": a version-1 cookie is not a
+	// session, so nobody holds a tier word this binary no longer knows.
+	UserType string `json:"ut"`
 	// IssuedAt (D16) is when CallbackHandler minted this cookie — the value
 	// SessionRevocations.IsSessionRevoked compares against a revoke cutoff.
 	// omitempty, unlike Groups below: an absent key decodes to the zero
@@ -271,9 +299,7 @@ type Session struct {
 	// signed out. `sess.V != SessionCodecVersion` (session_codec.go) is an exact
 	// compare, and a pre-0.7 cookie carries no "v" key at all, so it decodes to
 	// 0 and is refused outright: upgrading to 0.7 signs every SSO human out
-	// ONCE, on their next request. This comment used to assert the opposite —
-	// that an older cookie survived the upgrade and nobody was forced to sign in
-	// again — and three shipped documents were written from it.
+	// ONCE, on their next request.
 	//
 	// So the nil-vs-empty signal above discriminates within ONE codec version:
 	// a session this binary wrote either has groups or has `[]`. The pre-0.6
@@ -304,7 +330,7 @@ type Session struct {
 	// It is a CLAMP INPUT and nothing else. Role above stays the
 	// sign-in-derived truth — never rewritten — and contextWithPrincipal is the
 	// single place the two meet: the EFFECTIVE role published on the context is
-	// RoleMember while this is set. That split is what makes toggling OFF safe:
+	// RoleUser while this is set. That split is what makes toggling OFF safe:
 	// the stamped role is read back off the cookie rather than re-derived from
 	// the Groups snapshot above, which is a SNAPSHOT and may be truncated, so a
 	// re-derivation could answer "member" and strand an admin outside their own
@@ -326,7 +352,7 @@ type Session struct {
 	MemberMode bool `json:"mm,omitempty"`
 	// MemberModeNoCredential (0.7.5, field report finding 3) is the SECOND
 	// posture of the same mode: "view as a NEW member — one who has not signed
-	// in yet". Meaningful only with MemberMode; SetMemberMode writes it as
+	// in yet". Meaningful only with MemberMode; SetUserView writes it as
 	// `on && noCredential`, so turning the mode off clears it by construction
 	// and it can never be set on its own.
 	//
@@ -348,6 +374,15 @@ type Session struct {
 	// shows the admin their own credential — the 0.7.4 behaviour, never a
 	// widening. docs/OPERATIONS.md publishes it as a ceiling.
 	MemberModeNoCredential bool `json:"mmnc,omitempty"`
+	// UserViewType is the user type the user view looks through, chosen at
+	// the switch (SetUserView validates it first). Meaningful only with
+	// MemberMode; contextWithPrincipal publishes it in place of UserType.
+	// It chooses which type's rows bind, never the tier: the view clamps the
+	// tier to user whatever the type.
+	UserViewType string `json:"uvt,omitempty"`
+	// UserViewDropped names the type whose deletion turned the view off
+	// (DropUserView), so GET /me can say why until the next switch clears it.
+	UserViewDropped string `json:"uvd,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -357,6 +392,8 @@ type Authenticator struct {
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
 	httpClient *http.Client // nil means http.DefaultClient; stored for test injection
+
+	subjectVerifier *gooidc.IDTokenVerifier // any audience: VerifySubjectToken checks it
 
 	// groupsScopeUnrequested records the one fact about this provider that the
 	// LOGIN-TIME half of the groups-scope warning needs and cannot recompute:
@@ -381,7 +418,7 @@ type Authenticator struct {
 }
 
 // New constructs an Authenticator by performing OIDC discovery against
-// cfg.IssuerURL. hmacKey is the secret used to sign session cookies; it must
+// cfg.IssuerURL. hmacKey is the secret that signs session cookies; it must
 // be provided by the caller (e.g. loaded from the secret store). The key is
 // never logged.
 func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error) {
@@ -425,13 +462,17 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 	if err != nil {
 		return nil, fmt.Errorf("oidc: provider discovery for %q: %w", discoverURL, err)
 	}
+	// Refuse boot on an unadvertised extra scope BEFORE it reaches oa.Scopes.
+	if err := validateExtraScopes(provider, cfg.ExtraScopes); err != nil {
+		return nil, err
+	}
 
 	oa := oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.RedirectURL,
 		Endpoint:     provider.Endpoint(),
-		Scopes:       []string{gooidc.ScopeOpenID, "profile", "email"},
+		Scopes:       append([]string{gooidc.ScopeOpenID, "profile", "email"}, cfg.ExtraScopes...),
 	}
 	if cfg.ClientSecret == "" {
 		// C2: a public client's token request must never include a
@@ -467,6 +508,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		cfg:                    cfg,
 		oauth2:                 oa,
 		verifier:               verifier,
+		subjectVerifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
 		hmacKey:                hmacKey,
 		httpClient:             httpClient,
 		groupsScopeUnrequested: groupsScopeUnrequested,
@@ -534,28 +576,6 @@ func warnUnrequestedGroupsScope(gated bool, requested []string, cfg Config) {
 		"claim_keyed_role_map_values", claimKeyed, "env", "WARDYN_OIDC_ROLE_MAP")
 }
 
-// providerGatesGroupsScope reports whether this provider's discovery document
-// advertises a `groups` scope that the authorization request does not ask for —
-// the single condition both halves of the warning are keyed on, computed in one
-// place so they can never disagree about a provider's posture.
-//
-// A discovery document this build cannot read, or one that publishes no
-// scopes_supported at all, is NOT evidence that the provider gates `groups`:
-// both answer false rather than guess and cry wolf on every login screen that
-// follows.
-func providerGatesGroupsScope(provider *gooidc.Provider, requested []string) bool {
-	if slices.Contains(requested, groupsScope) {
-		return false // asked for; there is nothing to warn about
-	}
-	var meta struct {
-		ScopesSupported []string `json:"scopes_supported"`
-	}
-	if err := provider.Claims(&meta); err != nil {
-		return false
-	}
-	return slices.Contains(meta.ScopesSupported, groupsScope)
-}
-
 // LoginHandler initiates the OIDC authorization code flow. It generates a
 // random state and nonce, stores them in HttpOnly SameSite=Lax cookies, and
 // redirects the user to the IdP authorization endpoint.
@@ -602,7 +622,7 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 		// The marker the callback reads to know THIS redirect asked for more
 		// than a login, and may therefore be retried without the extra.
 		http.SetCookie(w, a.loginCookie(widenedCookieName, "1"))
-	} else if _, err := r.Cookie(widenedCookieName); err == nil {
+	} else if _, err := r.Cookie(a.cookieName(widenedCookieName)); err == nil {
 		// An unwidened request clears a marker LEFT BY AN EARLIER ATTEMPT, so
 		// one can never make an unwidened callback retry — and only when the
 		// browser actually presented one, so the overwhelmingly common
@@ -615,10 +635,10 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// LogoutHandler clears the Wardyn session cookie and redirects to "/".
+// LogoutHandler clears the Wardyn session cookie and redirects to the console root.
 func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	clearCookie(w, sessionCookieName)
-	http.Redirect(w, r, "/", http.StatusFound)
+	a.clearSessionCookie(w)
+	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
 
 // Middleware returns an http.Handler wrapper that:
@@ -657,7 +677,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 						return
 					}
 					if revoked {
-						clearCookie(w, sessionCookieName)
+						a.clearSessionCookie(w)
 						// Post-revocation use is THE event "revoke a human now"
 						// exists to make visible: surface it by name.
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "revoked_session")))
@@ -671,7 +691,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			}
 			// Expired session: clear the stale cookie so the browser doesn't
 			// keep sending it, then fall through.
-			clearCookie(w, sessionCookieName)
+			a.clearSessionCookie(w)
 			next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "expired_session")))
 			return
 		}
@@ -744,37 +764,8 @@ func emailDomainAllowed(email string, allowed []string) bool {
 	return false
 }
 
-// loginCookie returns a short-lived HttpOnly SameSite=Lax cookie. These are
-// one-time cookies used during the login flow; they expire after 10 minutes.
-// Secure is set from cfg.SecureCookies so the login leg matches the session
-// cookie: marked Secure only under TLS (direct or terminated), false over plain
-// HTTP (else the browser drops them and the demo login breaks).
-func (a *Authenticator) loginCookie(name, value string) *http.Cookie {
-	return &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     "/",
-		MaxAge:   600, // 10 minutes
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   a.cfg.SecureCookies,
-	}
-}
-
-// clearCookie instructs the browser to delete a named cookie.
-func clearCookie(w http.ResponseWriter, name string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-// Auth-error codes carried on the "/?auth_error=<code>" redirect
-// (W31-S1-5) — stable, machine-readable strings a sign-in screen maps to a
+// Auth-error codes carried on the "/?auth_error=<code>" redirect:
+// stable, machine-readable strings a sign-in screen maps to a
 // human message; never the raw internal error text.
 const (
 	authErrorEmailUnverified = "email_unverified"
@@ -785,7 +776,7 @@ const (
 	// common denial shape on an Entra tenant with AllowedEmailDomains set.
 	authErrorEmailVerifiedAbsent = "email_verified_absent"
 	authErrorEmailDomain         = "email_domain"
-	authErrorNoRole              = "no_role"
+	authErrorNoRole              = DenialNoRole
 	// authErrorRoleCheckUnavailable: Config.RoleMappings is wired but
 	// ListRoleMappings errored — the console role-mapping store couldn't be
 	// read, distinct from authErrorNoRole's "checked, and nothing matched".
@@ -816,13 +807,18 @@ const (
 	// attempt cannot help; the user needs a fresh `/auth/login`, or an
 	// operator needs to look at the client credentials.
 	authErrorOIDCConfig = "oidc_config"
+	// authErrorSignInRefused: a refusal the person cannot act on and should
+	// not be told the cause of (DenialReservedPrincipal). The sign-in screen
+	// has no arm for it and shows its generic sentence; the cause is in the
+	// log and the auth.fail row.
+	authErrorSignInRefused = "sign_in_refused"
 )
 
 // redirectAuthError sends the browser back to "/" with ?auth_error=<code> —
 // a real page it can act on (retry, sign out, ask an operator), rather than
 // a bare http.Error text response with no way back to the console.
-func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
-	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusFound)
+func (a *Authenticator) redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
+	http.Redirect(w, r, a.cfg.BasePath+"/?auth_error="+url.QueryEscape(code), http.StatusFound)
 }
 
 // ─── D12: bounded retry for a transient IdP error on the token endpoint ──────

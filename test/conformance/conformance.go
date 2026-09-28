@@ -29,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -117,6 +118,10 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 // testCapabilities asserts Capabilities invariants.
 //
 //   - Driver field must equal r.Name().
+//   - Every declared ConfinementClass must have a matching entry in Resolved
+//     (a driver that claims a class must also name the concrete substrate
+//     enforcing it — the "no gaps" half of invariant 5, alongside the silent-
+//     downgrade check below).
 //   - If ConfinementClasses is non-empty, CreateSandbox requesting the
 //     strongest (last) class must produce a sandbox whose EnforcedClass is >=
 //     the requested class (not silently downgraded).
@@ -132,6 +137,12 @@ func testCapabilities(t *testing.T, r runner.Runner, opts Options) {
 
 	if caps.Driver != r.Name() {
 		t.Errorf("Capabilities.Driver = %q, want %q (must match runner.Name())", caps.Driver, r.Name())
+	}
+
+	for _, c := range caps.ConfinementClasses {
+		if _, ok := caps.Resolved[c]; !ok {
+			t.Errorf("Capabilities.Resolved has no entry for declared class %q (a driver that claims a class must name the substrate that enforces it)", c)
+		}
 	}
 
 	if len(caps.ConfinementClasses) == 0 {
@@ -162,7 +173,9 @@ func testCapabilities(t *testing.T, r runner.Runner, opts Options) {
 // testCreateStatusStop asserts the create → status → stop idempotency contract.
 //
 // If the driver declares no ConfinementClasses (honest stub) it returns not-implemented
-// for CreateSandbox; the test skips gracefully in that case.
+// for CreateSandbox; the test skips gracefully in that case. A driver that DOES declare
+// ConfinementClasses gets no such grace under CI=true (T-08): CreateSandbox failing there
+// is treated as a real defect (most often a missing/unpullable image), not a skip.
 func testCreateStatusStop(t *testing.T, r runner.Runner, opts Options) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout())
@@ -180,8 +193,21 @@ func testCreateStatusStop(t *testing.T, r runner.Runner, opts Options) {
 
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {
-		// Drivers that declare empty capabilities are expected to return
-		// ErrNotImplemented here; skip rather than fail.
+		// Drivers that declare empty capabilities (the honest stub) are
+		// expected to refuse CreateSandbox; skip in any environment — that
+		// shape proves nothing about a real substrate either way.
+		//
+		// A driver that DOES claim confinement (docker, k8s) has no such
+		// excuse. In CI, where WARDYN_TEST_DOCKER/WARDYN_TEST_K8S select the
+		// real driver, a CreateSandbox failure here is most often an
+		// unpullable sandbox image — and skipping it would let this
+		// must-pass case (T-08) go quietly vacuous exactly like the L0 case
+		// it was written to stop repeating. Fail closed there instead. A
+		// local run without the image pulled still skips, so working on an
+		// unrelated case does not force a pre-pull.
+		if len(caps.ConfinementClasses) > 0 && os.Getenv("CI") == "true" {
+			t.Fatalf("CreateSandbox failed for driver %q, which claims confinement classes %v: %v — most likely an unpullable sandbox image; this case must not skip in CI (T-08)", r.Name(), caps.ConfinementClasses, err)
+		}
 		t.Skipf("CreateSandbox not available (driver %q): %v", r.Name(), err)
 	}
 	ref := sb.Ref
@@ -510,6 +536,11 @@ type RecordingOptions struct {
 	// DefaultRouteProbe uses, so a driver CI without a recorder substrate does
 	// not hard-fail, but a driver CI that wires the probe verifies the contract.
 	RecordingProbe RecordingProbe
+	// MutateSpec, when non-nil, edits the recording sandbox's spec after the
+	// confinement class is pinned and before CreateSandbox. A recording
+	// driver's proxy needs a control plane to upload the cast to, which
+	// minimalSpec does not carry; the caller supplies it here.
+	MutateSpec func(*runner.SandboxSpec)
 }
 
 // CheckRecordingCapability is the recording-capability honesty gate. It is an
@@ -573,6 +604,9 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 
 	spec := minimalSpec(opts.image())
 	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+	if opts.MutateSpec != nil {
+		opts.MutateSpec(&spec)
+	}
 
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {

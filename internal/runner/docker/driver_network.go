@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -77,17 +78,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// (1) Per-run internal network. Internal=true => Docker provisions no
 	// gateway, so the network cannot route off-host: this is what upholds L0
 	// even though the agent is *connected* to it.
-	intNet, err := d.cli.NetworkCreate(ctx, internalNetName(spec.RunID), client.NetworkCreateOptions{
-		Driver:   "bridge",
-		Internal: true,
-		Labels:   wardynLabels(spec.RunID, "network", spec.Labels),
-	})
+	intNetID, err := d.createRunNetwork(ctx, spec.RunID, wardynLabels(spec.RunID, "network", spec.Labels))
 	if err != nil {
-		return runner.Sandbox{}, fmt.Errorf("docker: create internal network: %w", err)
+		return runner.Sandbox{}, err
 	}
 	// rollback collects teardown steps to run on any later failure.
 	var rollback []func()
-	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNet.ID, client.NetworkRemoveOptions{}) })
+	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNetID, client.NetworkRemoveOptions{}) })
 	fail := func(err error) (runner.Sandbox, error) {
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
@@ -96,75 +93,20 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (2) wardyn-proxy sidecar: attached to the per-run internal network now;
-	// the control-plane-facing network is joined after create. It carries the
-	// run token + control-plane URL as non-secret env (the token is verifiable
-	// but not usable outside the platform, per runner.ProxyConfig).
-	proxyCfg := &container.Config{
-		Image:        d.cfg.ProxyImage,
-		Hostname:     "wardyn-proxy",
-		Labels:       wardynLabels(spec.RunID, componentProxy, spec.Labels),
-		Env:          proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort),
-		ExposedPorts: nil,
-	}
-	if d.cfg.ProxyBinaryHostPath != "" {
-		proxyCfg.Entrypoint = []string{"/usr/local/bin/wardyn-proxy"}
-	}
-	if len(d.cfg.ProxyCmd) > 0 {
-		proxyCfg.Cmd = d.cfg.ProxyCmd
-	}
-	proxyHost := &container.HostConfig{
-		// Proxy attaches to the internal net at create; it is NOT NetworkMode
-		// none — it must bridge out via the wardyn-internal network joined
-		// below. Hardened the same way as the agent.
-		NetworkMode:    container.NetworkMode(internalNetName(spec.RunID)),
-		CapDrop:        []string{"ALL"},
-		SecurityOpt:    []string{"no-new-privileges"},
-		ReadonlyRootfs: false,
-		Tmpfs:          map[string]string{"/tmp": "rw,nosuid,nodev,noexec,size=64m"},
-		AutoRemove:     false,
-		// Map host.docker.internal to the docker host gateway so the brokered
-		// control-plane forward (resolveTrustedURL) can reach a wardynd running on
-		// the host in host mode. Docker Desktop injects this alias automatically;
-		// native docker needs the explicit host-gateway mapping. Scoped to the
-		// proxy — only it forwards to the control plane, and the alias is consulted
-		// ONLY by the trusted forward path, never by the agent's policy-governed
-		// egress (which still denies host IPs via the private-IP guard). General
-		// egress is NOT broadened.
-		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-		// The proxy only relays HTTP, so a tight resource envelope still leaves
-		// ample headroom while bounding a compromised proxy: its own PID cap
-		// (fork-bomb guard) and a modest memory cap (MemorySwap pinned so the
-		// cap is not silently doubled via swap).
-		Resources: proxyResources(),
-	}
-	if d.cfg.ProxyBinaryHostPath != "" {
-		proxyHost.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
-	}
-	proxyResp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config:     proxyCfg,
-		HostConfig: proxyHost,
-		Name:       proxyContainerName(spec.RunID),
-	})
+	// the control-plane-facing network is joined after create. Its config
+	// reaches it on stdin, never in its environment (#1176).
+	proxyEnvs, proxyCfg, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 	if err != nil {
-		return fail(fmt.Errorf("docker: create proxy: %w", err))
+		return fail(err)
+	}
+	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
+		proxyEnvs, proxyCfg, netip.Addr{})
+	if err != nil {
+		return fail(err)
 	}
 	rollback = append(rollback, func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), proxyResp.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), proxyID, client.ContainerRemoveOptions{Force: true})
 	})
-
-	// Connect the proxy to the control-plane-facing network so it can reach
-	// the control plane. This network is the ONLY route off the per-run
-	// segment, and only the proxy is on it.
-	if _, err := d.cli.NetworkConnect(ctx, d.cfg.InternalNetwork, client.NetworkConnectOptions{
-		Container:      proxyResp.ID,
-		EndpointConfig: &network.EndpointSettings{},
-	}); err != nil {
-		return fail(fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err))
-	}
-
-	if _, err := d.cli.ContainerStart(ctx, proxyResp.ID, client.ContainerStartOptions{}); err != nil {
-		return fail(fmt.Errorf("docker: start proxy: %w", err))
-	}
 
 	// Resolve the proxy's IP on the per-run internal network so the agent can
 	// reach it via a static /etc/hosts entry instead of Docker's embedded DNS.
@@ -173,7 +115,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// runsc (the agent then cannot reach its only egress path). A static hosts
 	// entry works under every runtime and weakens nothing: the agent still has no
 	// default route — the proxy remains its sole path off the gatewayless segment.
-	proxyInspectRes, err := d.cli.ContainerInspect(ctx, proxyResp.ID, client.ContainerInspectOptions{})
+	proxyInspectRes, err := d.cli.ContainerInspect(ctx, proxyID, client.ContainerInspectOptions{})
 	if err != nil {
 		return fail(fmt.Errorf("docker: inspect proxy for its network IP: %w", err))
 	}
@@ -262,7 +204,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			internalNetName(spec.RunID): {
-				NetworkID: intNet.ID,
+				NetworkID: intNetID,
 				Aliases:   []string{"agent"},
 			},
 		},
@@ -355,6 +297,59 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}, nil
 }
 
+// createRunNetwork creates runID's internal network with a user-specified
+// IPv4 subnet and returns its id. ReplaceProxy pins the proxy's address on this
+// network, and Docker Engine 28 accepts a pinned address only on a network
+// created with a subnet in the request: moby's validateEndpointIPAddress
+// requires IpamConf.IsStatic (PreferredPool != ""), which a subnet the daemon
+// assigned, even one read back, is not. So the daemon picks the subnet first,
+// on a network it is then asked to remove: from its default-address-pools,
+// clear of every other network, the host's on-link routes and its resolvers.
+// The network is then created asking for that subnet. A network created in
+// between that takes it makes that create fail on the overlap, and the pick
+// is made again.
+func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
+	name := internalNetName(runID)
+	var err error
+	for range 3 {
+		opts := client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: labels}
+		var subnet netip.Prefix
+		if subnet, err = d.daemonSubnet(ctx, name, opts); err != nil {
+			break
+		}
+		opts.IPAM = &network.IPAM{Config: []network.IPAMConfig{{Subnet: subnet}}}
+		var res client.NetworkCreateResult
+		if res, err = d.cli.NetworkCreate(ctx, name, opts); err == nil {
+			return res.ID, nil
+		}
+	}
+	return "", fmt.Errorf("docker: create internal network: %w", err)
+}
+
+// daemonSubnet creates network name as opts asks, with no subnet, reads back
+// the IPv4 subnet the daemon gave it and removes it again.
+func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.NetworkCreateOptions) (netip.Prefix, error) {
+	res, err := d.cli.NetworkCreate(ctx, name, opts)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	insp, ierr := d.cli.NetworkInspect(ctx, res.ID, client.NetworkInspectOptions{})
+	// Background, like CreateSandbox's rollback: a cancelled dispatch must not
+	// strand the probe network holding a pool subnet.
+	if _, err := d.cli.NetworkRemove(context.Background(), res.ID, client.NetworkRemoveOptions{}); err != nil {
+		return netip.Prefix{}, fmt.Errorf("remove the subnet probe: %w", err)
+	}
+	if ierr != nil {
+		return netip.Prefix{}, fmt.Errorf("inspect the subnet probe: %w", ierr)
+	}
+	for _, c := range insp.Network.IPAM.Config {
+		if c.Subnet.Addr().Is4() {
+			return c.Subnet, nil
+		}
+	}
+	return netip.Prefix{}, fmt.Errorf("the daemon gave network %s no IPv4 subnet", name)
+}
+
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
 // then remove. Idempotent on a missing sandbox.
 func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
@@ -363,6 +358,136 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 		return fmt.Errorf("docker: stop: %w", err)
 	}
 	return d.teardown(ctx, ref)
+}
+
+// EndSandbox is the lease end (runner.SandboxEnder): stop the agent as
+// StopSandbox does but leave the container in place, so its writable layer
+// (the checkout, the harness transcript) survives, then stop and remove the
+// proxy sidecar (stopProxy). Agent first, as StopSandbox orders it, so a recorder flushing on
+// SIGTERM still delivers through the proxy. The per-run network stays for
+// teardown to remove with the agent. Fails closed: a run id it cannot resolve
+// is an error, never a success that left the proxy up.
+func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
+	timeout := int(stopTimeout.Seconds())
+	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: stop agent: %w", err)
+	}
+	return d.stopProxy(ctx, ref)
+}
+
+// StopProxy stops and removes the agent ref's proxy sidecar and nothing else
+// (runner.ProxyStopper): the agent keeps running with no network path. A
+// revive rebuilds the proxy from the control plane's stored config, so no
+// stopped container is kept for it (#1176). Fails closed like EndSandbox: when the
+// proxy can be neither stopped nor killed, the agent is stopped too (kept, not
+// removed), so no work runs while its egress is unconfirmed, and the proxy's
+// error is still returned (#1060).
+func (d *Driver) StopProxy(ctx context.Context, ref string) error {
+	err := d.stopProxy(ctx, ref)
+	if err == nil {
+		return nil
+	}
+	timeout := int(stopTimeout.Seconds())
+	if _, aerr := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); aerr != nil && !isNotFound(aerr) {
+		return errors.Join(err, fmt.Errorf("docker: stop agent: %w", aerr))
+	}
+	return err
+}
+
+// stopProxy stops the agent ref's proxy sidecar, escalating to SIGKILL when
+// the graceful stop fails (#1060), then removes it: the graceful stop first
+// lets it flush its last decisions, and nothing a revive needs is in it
+// (#1176). A kill refused because the proxy is already stopped is that stop
+// confirmed; a missing proxy is already gone. A failed remove is an error, so
+// the caller's re-assert retries it.
+func (d *Driver) stopProxy(ctx context.Context, ref string) error {
+	id, err := d.proxyRunID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	name := proxyContainerName(id)
+	timeout := int(stopTimeout.Seconds())
+	_, err = d.cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
+	if isNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		if _, kerr := d.cli.ContainerKill(ctx, name, client.ContainerKillOptions{Signal: "KILL"}); kerr != nil && !isNotFound(kerr) && !isNotRunning(kerr) {
+			return fmt.Errorf("docker: stop proxy: %w; kill proxy: %w", err, kerr)
+		}
+	}
+	if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: remove stopped proxy: %w", err)
+	}
+	return nil
+}
+
+// proxyRunID resolves the run id of the agent ref's proxy sidecar: from the
+// deterministic agent name, else from the agent's run-id label.
+func (d *Driver) proxyRunID(ctx context.Context, ref string) (uuid.UUID, error) {
+	if id, err := runIDFromAgentName(ref); err == nil {
+		return id, nil
+	}
+	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if err != nil || res.Container.Config == nil {
+		return uuid.Nil, fmt.Errorf("docker: proxy of agent %s: %w", ref, errTeardownUnresolved)
+	}
+	id, err := parseRunID(res.Container.Config.Labels[labelRun])
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("docker: proxy of agent %s: %w", ref, errTeardownUnresolved)
+	}
+	return id, nil
+}
+
+// FreezeSandbox is runner Freeze/Thaw's pause half (runner.Freezer,
+// long-holds design rev 4 §3.1): ContainerPause on the AGENT ref only — never
+// the proxy sidecar, which is not addressed here and keeps renewing and
+// answering egress decisions while the agent is frozen. Verified against runc
+// (cgroup v2): a paused container refuses a new exec, its established TCP
+// stays ESTABLISHED and ACKed, and its timers fire at thaw. Idempotent: a
+// missing container, or one already paused, is not an error — a retried
+// freeze after a lost response must not surface as a failure.
+//
+// The per-class Capabilities.Freeze check is the caller's, but the driver
+// enforces the same rule on the container itself: a ref whose effective
+// runtime is not runc (runsc, Kata, an operator re-pin since launch) is
+// refused with runner.ErrFreezeUnsupported and never paused.
+func (d *Driver) FreezeSandbox(ctx context.Context, ref string) error {
+	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if isNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("docker: pause: inspect: %w", err)
+	}
+	rt := ""
+	if res.Container.HostConfig != nil {
+		rt = res.Container.HostConfig.Runtime
+	}
+	if rt == "" { // "" is the daemon's default runtime
+		info, err := d.cli.Info(ctx, client.InfoOptions{})
+		if err != nil {
+			return fmt.Errorf("docker: pause: info: %w", err)
+		}
+		rt = info.Info.DefaultRuntime
+	}
+	if rt != "runc" {
+		return runner.ErrFreezeUnsupported
+	}
+	if _, err := d.cli.ContainerPause(ctx, ref, client.ContainerPauseOptions{}); err != nil && !isNotFound(err) && !isAlreadyPaused(err) {
+		return fmt.Errorf("docker: pause: %w", err)
+	}
+	return nil
+}
+
+// ThawSandbox is runner Freeze/Thaw's resume half (runner.Freezer):
+// ContainerUnpause on the agent ref. Idempotent: a missing container, or one
+// that is not paused, is not an error.
+func (d *Driver) ThawSandbox(ctx context.Context, ref string) error {
+	if _, err := d.cli.ContainerUnpause(ctx, ref, client.ContainerUnpauseOptions{}); err != nil && !isNotFound(err) && !isNotPaused(err) {
+		return fmt.Errorf("docker: unpause: %w", err)
+	}
+	return nil
 }
 
 // KillSandbox is the kill-switch path: immediate SIGKILL + force remove. The

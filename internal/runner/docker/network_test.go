@@ -269,7 +269,7 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	// handshake and gets an HTTP reply (404 is fine — busybox httpd has no
 	// docroot) proves L4 reachability on the per-run net. A "Network is
 	// unreachable"/"can't connect" here would mean the agent cannot even reach
-	// its own segment, which would be a regression.
+	// its own segment.
 	peer := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c",
 		"wget -q -T 5 -O - http://" + peerAlias + ":3128/ 2>&1; echo RC=$?",
@@ -392,7 +392,7 @@ func networkNames(insp container.InspectResponse) []string {
 	return names
 }
 
-// TestL0_NoDNSExfil is B9-F4's settling probe, and the only thing that can
+// TestL0_NoDNSExfil is the settling probe, and the only thing that can
 // settle it: whether a CC1 agent — sealed on a gatewayless Internal=true
 // network, with no default route and no path to any resolver of its own — can
 // still get an EXTERNAL name RESOLVED through Docker's embedded DNS at

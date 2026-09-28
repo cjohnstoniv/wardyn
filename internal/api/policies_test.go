@@ -59,6 +59,7 @@ func TestCreatePolicyValidation(t *testing.T) {
 		{"unknown min cc", `{"name":"p","spec":{"min_confinement_class":"CC9"}}`},
 		{"unknown grant kind", `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"weird"}]}}`},
 		{"negative ttl", `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","ttl_seconds":-1}]}}`},
+		{"owner_only on a kind naming no secret", `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"cloud_sts","owner_only":true}]}}`},
 		{"unknown field (typo)", `{"name":"p","spec":{"min_confinement_class":"CC2","allowd_domains":["x"]}}`},
 	}
 	for _, c := range cases {
@@ -69,20 +70,18 @@ func TestCreatePolicyValidation(t *testing.T) {
 	}
 }
 
-// TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime pins the author-time
-// fail-fast for validateWorkspaceSources' sibling reference. A typo'd api_key
-// secret name used to save GREEN and then 422 at every launch that referenced the
-// policy — the exact failure mode the workspace check was added to prevent, on
-// the other referenced resource. Advisory, not the load-bearing gate: the secret
-// can be deleted afterwards, so run-create still re-checks.
-func TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime(t *testing.T) {
+// TestCreatePolicy_SecretRefShapeFailsAtAuthorTime: a stored policy's secret
+// references are checked for shape at author time — here an LLM-auth sentinel
+// with no token provider behind it — and the refusal carries the "secret: "
+// prefix, mirroring "workspace: ". Existence is not checked there (#1123): see
+// TestStoredPolicy_SecretRefsResolvePerRunOwner.
+func TestCreatePolicy_SecretRefShapeFailsAtAuthorTime(t *testing.T) {
 	h := newHarness(t)
-	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("k")}}
-	const body = `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
-		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"anthropic-api-kye"}}]}}`
+	body := `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"` + types.SubscriptionOAuthSecret + `"}}]}}`
 	w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken, body)
 	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("code = %d, want 422 (unknown secret must fail at author time); body=%s", w.Code, w.Body.String())
+		t.Fatalf("code = %d, want 422 (a sentinel with no provider must fail at author time); body=%s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "secret: ") {
 		t.Errorf("error must carry the \"secret: \" prefix, mirroring \"workspace: \": %s", w.Body.String())
@@ -104,7 +103,7 @@ func TestUpdatePolicyValidation(t *testing.T) {
 	}
 }
 
-// TestRedactPolicyForRead is W12-S1-1's read-path belt-and-braces: a policy
+// TestRedactPolicyForRead is the read-path belt-and-braces: a policy
 // read must never echo a raw llm_inspection secret VALUE back to a caller,
 // even though validatePolicySpec already refuses to persist one (defense in
 // depth against a migration/direct-DB-edit violating that invariant). Names
@@ -145,9 +144,9 @@ func TestRedactPolicyForRead(t *testing.T) {
 	}
 }
 
-// TestGetDefaultPolicy pins W14-S1-6: the control plane's ceiling policy
+// TestGetDefaultPolicy pins that the control plane's ceiling policy
 // (Config.DefaultPolicy — the same value composer.Clamp bounds a member's
-// inline policy against) is now readable, redacted the same way a stored
+// inline policy against) is readable, redacted the same way a stored
 // policy's read path is. "default" is a static route registered ahead of
 // /policies/{id}, so it must never fall into parseIDParam's bad-uuid 400.
 func TestGetDefaultPolicy(t *testing.T) {
@@ -212,7 +211,7 @@ func TestGetDefaultPolicyRedactsForMembers(t *testing.T) {
 		return got, w.Body.String()
 	}
 
-	member, raw := read(t, ssoSession(t, "sub-pol-member", "dev@corp.example", oidc.RoleMember))
+	member, raw := read(t, ssoSession(t, "sub-pol-member", "dev@corp.example", oidc.RoleUser))
 	for _, leak := range []string{"/home/operator/.claude", "prod-anthropic-key", "deploy-key", "gh-known-hosts"} {
 		if strings.Contains(raw, leak) {
 			t.Errorf("member read leaked %q: %s", leak, raw)
@@ -253,9 +252,9 @@ func (duplicateNamePolicyStore) CreatePolicy(context.Context, types.RunPolicy) (
 	return types.RunPolicy{}, store.ErrConflict
 }
 
-// TestCreatePolicyDuplicateName pins W20-S1-3: a duplicate policy name must
-// surface as a caller-actionable 409, never handleCreatePolicy's former
-// blanket 500 (raw driver error text).
+// TestCreatePolicyDuplicateName pins that a duplicate policy name must
+// surface as a caller-actionable 409, never a blanket 500 (raw driver
+// error text).
 func TestCreatePolicyDuplicateName(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, duplicateNamePolicyStore{}))

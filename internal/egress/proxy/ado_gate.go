@@ -7,16 +7,13 @@ package proxy
 // run's Azure DevOps grant covers is classified by the capability catalogue
 // (internal/adoscope) and forwarded only when the run holds that capability.
 //
-// THIS IS THE BOUNDARY, not a second opinion. An Entra token carries every
-// scope the person ever consented to, so the token does not bound a run; and it
-// carries no organisation claim, so a person in two organisations holds a token
-// that works in both. The organisation pin and the capability check below are
-// the only things that narrow what the injected credential can do.
-//
-// Everything that cannot be classified honestly is refused: a classification
-// error, a write the catalogue does not recognize, a denied area, a body the
-// classification reads but the peek cannot see whole, and git-over-HTTP (git uses the broker path, never the
-// intercepted connection).
+// THIS IS THE BOUNDARY, not a second opinion: an Entra token carries every
+// scope the person ever consented to and no organisation claim, so the
+// organisation pin and the capability check below are the only things that
+// narrow what the injected credential can do. Everything that cannot be
+// classified honestly is refused: a classification error, an unrecognized or
+// denied write, a body too large to peek, and git-over-HTTP (git uses the
+// broker path, never the intercepted connection).
 
 import (
 	"bytes"
@@ -43,12 +40,6 @@ type ADOGrant struct {
 	Capabilities []adoscope.Capability
 }
 
-// ADOGrantSource answers, for a host, the run's Azure DevOps grant. ok=false
-// means the host is not covered and the gate stands aside.
-type ADOGrantSource interface {
-	ADOGrantFor(host string) (ADOGrant, bool)
-}
-
 // adoRefProtected is the base protected-ref rule: no grant carries a
 // protected-branch list yet, so every ref counts as protected. Fail closed.
 func adoRefProtected(string) bool { return true }
@@ -56,9 +47,8 @@ func adoRefProtected(string) bool { return true }
 // adoRunRefProtected is the ONE protected-ref predicate both Azure DevOps doors
 // use — the REST gate's classifier and the git broker's push check — so a ref
 // needs the same capability whichever door moves it. It is adoRefProtected with
-// one exception: a ref inside this run's own branch namespace,
-// refs/heads/wardyn/<run-id>/…, which agent-run checks the work tree out onto
-// and nothing else writes, needs code_write and not policy_bypass.
+// one exception: a ref inside this run's own branch namespace
+// (refs/heads/wardyn/<run-id>/…) needs code_write, not policy_bypass.
 func (p *Proxy) adoRunRefProtected(ref string) bool {
 	prefix := BranchNSPrefix(p.runID)
 	if strings.HasPrefix(ref, prefix) && len(ref) > len(prefix) {
@@ -82,7 +72,17 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	if !ok {
 		return src
 	}
-	if msg, held := adoCheck(r, host, grant, p.adoRunRefProtected); msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
+	msg, held := adoCheck(r, host, grant, p.adoRunRefProtected)
+	// Push rules sit between hard refusals and the one liftable refusal: a
+	// content write is judged before anyone is asked to grant a capability.
+	if msg != "" && held == nil {
+		p.refuseADO(w, r, host, port, msg, nil)
+		return ""
+	}
+	if !p.governADOContent(w, r, host, port, grant) {
+		return ""
+	}
+	if msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
 		return ""
 	}
 	return ruleSourceADO
@@ -90,10 +90,10 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 
 // refuseADOPlain refuses, on the plain forward lane, every request to a host
 // the run's Azure DevOps grant covers, and reports whether it did. The lane
-// never runs gateADO, and an absolute-form `https://` request-line there would
-// otherwise be credentialed by applyInjection with nothing checking the
-// organisation or the capability. REST reaches these hosts through a CONNECT
-// tunnel and git through the broker; this lane is not a third door.
+// never runs gateADO, so an absolute-form `https://` request-line there would
+// otherwise be credentialed with nothing checking organisation or capability;
+// REST reaches these hosts through a CONNECT tunnel and git through the
+// broker, so this lane is not a third door.
 func (p *Proxy) refuseADOPlain(w http.ResponseWriter, r *http.Request) bool {
 	if p.adoGrants == nil || r.URL == nil {
 		return false
@@ -120,11 +120,9 @@ func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(st
 	if adoGitPath(path) {
 		return "Wardyn refused this Azure DevOps request: git must use Wardyn's git broker, not the API connection.", nil
 	}
-	// The path classifies first with the body withheld. Only a route whose
-	// capability depends on the body (a pull-request completion, a ref move, a
-	// work-item $batch, OPTIONS) answers ErrNeedsBody and is peeked; every
-	// other body — a package publish, a wiki attachment — streams through
-	// untouched, at whatever size.
+	// The path classifies first with the body withheld; only a route whose
+	// capability depends on the body answers ErrNeedsBody and is peeked, so
+	// every other body streams through untouched at whatever size.
 	req := adoscope.Request{
 		Method:       r.Method,
 		Host:         host,
@@ -239,12 +237,9 @@ type adoRefusal struct {
 
 // refuseADO is the ONE refusal point, and the hold point. held names a
 // capability a person may grant (adoCheck); for that refusal alone the request
-// is escalated (awaitADOCapability) and, if a person approves it in time,
-// refuseADO reports true and the caller forwards. Every other refusal, and an
-// escalation that ends without an approval, is answered here.
-//
-// 403, never 401: git and several tools read a 401 as "try another
-// credential", which is not what happened.
+// is escalated (awaitADOCapability) and, if approved in time, refuseADO
+// reports true and the caller forwards. Every other refusal is answered here,
+// with 403 (never 401, which git and several tools read as "try another credential").
 func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, port int, msg string, held *adoscope.Verdict) bool {
 	if held != nil {
 		var ok bool

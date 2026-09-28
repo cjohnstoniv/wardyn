@@ -81,7 +81,8 @@ describe("SetupLayout", () => {
     // F3-F9: the gate row is announced to a screen reader the moment its
     // verdict changes — a probe landing, a redirect proving reached — without
     // requiring the operator to re-focus the footer to discover it settled.
-    it("F3-F9: the head/reason gate row renders inside a role=status/aria-live=polite region", () => {
+    it("the head/reason gate row renders inside a role=status/aria-live=polite region", () => {
+      // ticket: F3-F9
       renderLayout({
         current: "environment",
         nextGate: { blocked: true, head: "Connectivity isn't proven yet", reason: "One probe, and this step is done.", tone: "warning" },
@@ -221,26 +222,28 @@ describe("SetupLayout", () => {
 // MEDIUM-2: nextGate is produced only ON corp_network, so every step AFTER it
 // that the orchestrator's crossing guard still refuses used to render a live
 // Next whose click silently no-op'd. The shell asks the same predicate the
-// guard uses and disables the button, with the gate's reason as its title.
+// guard uses and disables the button, with the gate's reason as VISIBLE text
+// underneath (#497 — never a title tooltip a disabled control can't surface).
 describe("refuseNext — a refused forward move renders a DISABLED Next, not a dead-enabled one", () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-  it("disables Next and titles it with the refusal reason", async () => {
+  it("disables Next and shows the refusal reason as visible text, untitled", async () => {
     const onSelect = vi.fn();
     renderLayout({
-      current: "sealed-box",
+      current: "people",
       onSelect,
       refuseNext: () => "Connectivity isn't proven yet.",
     });
     const next = screen.getByRole("button", { name: /^next:/i });
     expect(next).toBeDisabled();
-    expect(next).toHaveAttribute("title", "Connectivity isn't proven yet.");
+    expect(next).not.toHaveAttribute("title");
+    expect(screen.getByText("Connectivity isn't proven yet.")).toBeInTheDocument();
     await user.click(next);
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("undefined means allowed — Next stays enabled and untitled", () => {
-    renderLayout({ current: "sealed-box", refuseNext: () => undefined });
+  it("undefined means allowed — Next stays enabled with no refusal text", () => {
+    renderLayout({ current: "people", refuseNext: () => undefined });
     const next = screen.getByRole("button", { name: /^next:/i });
     expect(next).toBeEnabled();
     expect(next).not.toHaveAttribute("title");
@@ -263,10 +266,10 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 
-  // #213 — the honest "N optional setup steps and M demos follow" subline,
-  // live-derived by the caller (steps.ts's optionalStepCounts) rather than
-  // hand-kept here — absent renders the bare Step-number line, so callers
-  // that don't pass it (most of this file's other tests) are unaffected.
+  // #213 — the honest "N optional setup steps follow" subline, live-derived
+  // by the caller (steps.ts's optionalStepCounts) rather than hand-kept here
+  // — absent renders the bare Step-number line, so callers that don't pass it
+  // (most of this file's other tests) are unaffected.
   it("renders the requiredSummary subline on a required (in-order) step, and omits it when absent", () => {
     const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
     const { rerender } = renderLayout({ current: "environment", order });
@@ -284,13 +287,13 @@ describe("order — the walked steps, not the whole contract", () => {
         onFinish={vi.fn()}
         operator
         order={order}
-        requiredSummary={{ config: 3, demos: 10 }}
+        requiredSummary={{ config: 3 }}
       >
         <div>step body</div>
       </SetupLayout>,
     );
     expect(
-      screen.getByText("Required before a run can launch. 3 optional setup steps and 10 demos follow."),
+      screen.getByText("Required before a run can launch. 3 optional setup steps follow."),
     ).toBeInTheDocument();
   });
 
@@ -325,7 +328,7 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(onSelect).toHaveBeenCalledWith("review");
   });
 
-  it("an optional step's 'Done with this one' is disabled+titled when refuseNext refuses the return target", () => {
+  it("an optional step's 'Done with this one' is disabled, with the refusal as visible text — not a title", () => {
     const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
     renderLayout({
       current: "sealed-box",
@@ -334,7 +337,8 @@ describe("order — the walked steps, not the whole contract", () => {
     });
     const done = screen.getByRole("button", { name: /^done with this one$/i });
     expect(done).toBeDisabled();
-    expect(done).toHaveAttribute("title", "Prove network access first.");
+    expect(done).not.toHaveAttribute("title");
+    expect(screen.getByText("Prove network access first.")).toBeInTheDocument();
     // Back stays enabled — it is never gated by refuseNext, same as every
     // other Back button in this shell.
     expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();

@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -68,13 +69,16 @@ type ApprovalService interface {
 	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
 	// CancelForRun moves every still-PENDING approval of a run that has just
-	// reached a terminal state to CANCELLED, returning how many it moved. It is
+	// reached a terminal state to CANCELLED, returning how many moved per kind. It is
 	// part of the terminal cascade, beside identity/broker revocation: an
 	// approval whose run has ended is a control that cannot function, and a row
 	// left PENDING renders live Approve/Deny buttons in the console. reason names
 	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
-	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
+	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error)
+	// ExpireOne moves one still-PENDING approval to EXPIRED (a no-op once decided):
+	// wardyn-toolgate's give-up signal (#811). actor is the withdrawing agent.
+	ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error
 	// CountForRun returns how many approvals a run has raised, in ANY state —
 	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
 	// the hosts it asks about, so without that cap the number of rows one run can
@@ -140,6 +144,12 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
+	ApprovalExpiryAfter time.Duration
+	RunLeaseConfig      // the run lease's settings (run_lease_server.go)
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -185,7 +195,7 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
-	// MemberMode mirrors WARDYN_MEMBER_MODE (cmd/wardynd's validateMemberModePosture
+	// MemberMode mirrors WARDYN_USER_DESKTOP (cmd/wardynd's validateMemberModePosture
 	// already enforces its precondition at boot). internal/api did not carry this
 	// bit before #378/#379: it exists here so handleHealthz can compute
 	// token_login — a member-mode desktop's admin token is a PROCESS credential
@@ -268,6 +278,10 @@ type Config struct {
 	// ControlPlaneURL is the externally-reachable base URL handed to sidecars
 	// (proxy config) so they can call the internal endpoints.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA certificate (internal/hoptls),
+	// handed to every proxy as the only root it trusts for ControlPlaneURL.
+	// Empty only when ControlPlaneURL is loopback http (a local install).
+	ControlPlaneCAPEM string
 	// ProxyURL, when set, overrides the WARDYN_PROXY_URL injected into sandbox
 	// env. Defaults to "http://wardyn-proxy:3128" (the per-run proxy sidecar
 	// hostname set by the docker driver). Non-secret: it is a network address,
@@ -326,20 +340,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
-	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
-	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
-	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
+	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
+	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
+	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
 	// — the default — means a member may not onboard a host directory at all
 	// (repos and operator-owned workspaces are unaffected), which is the
 	// fail-closed posture the section-(c) threat model requires. It bounds ONLY
 	// mounts on a member-OWNED workspace; an operator's mounts are never
 	// narrowed by it. See internal/runner/member_mount.go.
-	MemberMounts runner.MemberMountPolicy
+	UserMounts runner.UserMountPolicy
 	// UserDriveHostRoots is the operator/MDM-set ceiling over admin-authored
 	// host_path USER DRIVES (WARDYN_USER_DRIVE_HOST_ROOTS, parsed at boot by
 	// runner.ParseUserDriveHostRoots). The ZERO VALUE — the default — means NO
 	// host_path drive may be authored at all, the same fail-closed posture
-	// MemberMounts takes above and for the same reason: a drive's host root is
+	// UserMounts takes above and for the same reason: a drive's host root is
 	// authored in the database and bound into OTHER PEOPLE's sandboxes, so its
 	// ceiling has to live where a console compromise cannot reach it.
 	//
@@ -420,6 +434,12 @@ type Config struct {
 	// reason as BedrockBaseURL: a runtime-writable spelling would let an
 	// admin re-point a credential exchange with no restart and no boot log.
 	AWSSSOEndpointOverride string
+	// AllowTestEndpoints is WARDYN_ALLOW_TEST_ENDPOINTS: the only thing that lets
+	// a model provider's bedrock.base_url be plain http:// (validateProviderBedrock).
+	AllowTestEndpoints bool
+
+	HarnessLoginCPUMillis int // WARDYN_HARNESS_LOGIN_CPU_MILLIS; see harnessLoginResources (harnesscred.go)
+	HarnessLoginMemoryMiB int // WARDYN_HARNESS_LOGIN_MEMORY_MIB; ditto — still governance-ceiling capped
 
 	// AWSSSOProxyInject is the kill switch for proxy-side SSO token injection
 	// (WARDYN_AWS_SSO_PROXY_INJECT,
@@ -499,7 +519,7 @@ type Config struct {
 	// of auto-enabling TLS-MITM + injecting the live host token. Default false =
 	// the safe proxy-side default whenever a SubscriptionToken provider is wired.
 	DisableSubscriptionInject bool
-	// AuditCoalesceWindow folds IDENTICAL consecutive auth.failed audit rows —
+	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
 	// same boundary, reason, path and peer — into the first row plus one summary
 	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,
 	// default 5m at the boot flag; 0 or unset = off, one row per refusal exactly
@@ -511,8 +531,14 @@ type Config struct {
 	// the bounds that keep a burst from collapsing into one row. The same
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
+	HostCapacityConfig
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
+	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
+	// bootHybrid), nil when WARDYN_ORG_URL is unset. It feeds /healthz's
+	// org_federation block, the wardyn_org_federation_lag gauge and the
+	// create-run refusal once the organisation has revoked this device.
+	OrgFederation func() federation.Status
 	// BaseCtx is the process-lifetime base context used for detached background
 	// work that MUST outlive the request that started it — specifically the
 	// completion watcher dispatch starts after Exec. The request/dispatch ctx is
@@ -527,11 +553,16 @@ type Config struct {
 	// and the recommended production default, for honest /healthz visibility. Nil
 	// => the components object is omitted.
 	Components map[string]ComponentInfo
-	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
-	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
-	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd.
+	// AgeKeyDurable: the age key was SUPPLIED (WARDYN_AGE_KEY), not generated at boot, or no local key holds anything (store
+	// mode, a key service). False, stored secrets are unreadable after a restart: /setup/status warns. Computed in cmd/wardynd.
 	AgeKeyDurable bool
+	// SecretStoreExternal names the store every credential is written to in store mode ("Vault at
+	// vault.example:8200"), "" in local mode; set, /setup/status shows store_external, not the age-key row.
+	SecretStoreExternal string
+	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
+	SecretKeyService string
+	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
+	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).
@@ -600,6 +631,9 @@ type Config struct {
 	// oidc.Config.SecureCookies. Feeds tls_cookie_posture alongside
 	// OIDCRedirectURL. Computed at boot in cmd/wardynd.
 	OIDCSecureCookies bool
+	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix Handler
+	// mounts every console route under (base_path.go).
+	BasePath string
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
 	// the profile is low-confidence or left unrecognized samples (ShouldAdvise),
@@ -668,10 +702,17 @@ type Config struct {
 	// built without going through cmd/wardynd's flags gets the shipped posture
 	// rather than a zero TTL that would refuse every session.
 	UISessionTTL time.Duration
+	// UICookiePolicy is WARDYN_UI_SANDBOX_STRIP_COOKIES: which inbound cookies,
+	// beyond the always-stripped wardyn_* namespace, the relay forwards to a
+	// sandbox app. The zero value forwards every other cookie.
+	UICookiePolicy UICookiePolicy
 	// UISessionKey signs the wardyn_ui_sess relay cookie (HMAC-SHA256, >= 32
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// RunConfigKey seals each run's stored proxy config (32 bytes, the
+	// wardyn-run-config-key boot key; run_proxy_config.go). Nil: none is kept.
+	RunConfigKey []byte
 	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
 	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
 	// gateway: https://, no userinfo, no query/fragment). It re-points the
@@ -684,20 +725,6 @@ type Config struct {
 	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
-}
-
-// ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
-// facts only: Selected is ALWAYS the actual running implementation. The
-// recommended-vs-shipped split is prose and lives in docs/PLUGGABILITY.md +
-// ROADMAP.md. Source is "default" or "configured".
-type ComponentInfo struct {
-	Selected string `json:"selected"`
-	// Available lists every implementation self-registered in this build's seam
-	// registry (so /healthz truthfully shows what THIS binary can run — e.g. a
-	// tagless build advertises sandbox.available=[]). Empty for seams without a
-	// registry (policy_engine today).
-	Available []string `json:"available,omitempty"`
-	Source    string   `json:"source,omitempty"`
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -780,6 +807,8 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
+	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
+	creates inflightCreates
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
 	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
@@ -797,16 +826,16 @@ type Server struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
-	// authFailedLimiter rate-bounds the auth.failed audit emit (see
+	// authFailedLimiter rate-bounds the auth.fail audit emit (see
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
-	// authFailedStreak is the open run of identical consecutive auth.failed rows
+	// authFailedStreak is the open run of identical consecutive auth.fail rows
 	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
 	// like the bounds above. Zero value is ready to use.
 	authFailedStreakMu sync.Mutex
 	authFailedStreak   *authFailedStreak
-	// identityExpiredSeen is the per-run once-guard behind run.identity.expired
+	// identityExpiredSeen is the per-run once-guard behind run.identity.expire
 	// (claimIdentityExpired, http.go): a run whose identity has expired keeps
 	// calling /internal/* and 401ing, so the row has to be emitted once per run
 	// rather than once per request, or the audit log floods.
@@ -819,21 +848,11 @@ type Server struct {
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
-	dirLimiter principalLimiter
-	// enrolLimiter bounds the ONE anonymous device route, POST
-	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
-	// eviction so the map cannot grow without bound. Configured in New.
-	enrolLimiter principalLimiter
-	// The device routes' failure-row bounds (device_audit_bounds.go):
-	// enrolFailures is the anonymous route's one stream, ingestFailures one
-	// stream per device, ingestFailureLimiter that stream's per-device bucket.
-	enrolFailures        failureStreams
-	ingestFailures       failureStreams
-	ingestFailureLimiter principalLimiter
-	// ingestInFlight holds the id of every device with a push in progress —
-	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
-	// the limiters above; an entry lives only as long as its request.
-	ingestInFlight sync.Map
+	dirLimiter       principalLimiter
+	deviceRouteState // the device routes' process state (server_devices.go)
+	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
+	// pause is the pause sweep's process-local state (run_pause.go).
+	pause pauseClocks
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -877,8 +896,8 @@ type Server struct {
 	// same shape as keepaliveEvery/pingEvery above: a test proving WaitBackground
 	// actually gives up at its bound needs to do so in milliseconds, not the
 	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
-	// See background.go for goBackground/WaitBackground themselves.
-	bgWaitBudget time.Duration
+	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
+	bgWaitBudget, signInCaptureKillGrace time.Duration
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -898,9 +917,11 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg,
-		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
-		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
+		deviceRouteState: deviceRouteState{
+			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+		},
 	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it
@@ -920,9 +941,6 @@ const (
 	auditSpoolDrainInterval = 30 * time.Second
 	auditSpoolDrainBatch    = 200
 )
-
-// Handler returns the configured http.Handler (the chi router).
-func (s *Server) Handler() http.Handler { return s.router }
 
 // handleLogout terminates the human session. FIX #6: it is mounted as
 // POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing
@@ -956,6 +974,7 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = s.cfg.Now().UTC()
 	}
+	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the

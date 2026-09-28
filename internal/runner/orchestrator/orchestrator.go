@@ -144,6 +144,42 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
 }
 
+// ProbeDrive implements runner.DriveProber by delegating to the first wired
+// substrate that implements it — the same single-fan-out ImagePresent uses. A
+// drive's backend is already scoped to this deployment's dispatch target
+// before this is ever called (driveBindFailureHere's own backend/target
+// check), so with the one substrate production wires per deployment this is
+// unambiguous.
+func (o *Orchestrator) ProbeDrive(ctx context.Context, mount types.DriveMount) (runner.DriveProbe, error) {
+	for _, s := range o.substrates {
+		if dp, ok := s.(runner.DriveProber); ok {
+			return dp.ProbeDrive(ctx, mount)
+		}
+	}
+	return runner.DriveProbe{}, errors.New("orchestrator: no wired substrate supports drive probing")
+}
+
+// ReclaimDrive implements runner.DriveReclaimer by delegating to the first
+// wired substrate that implements it — the same single fan-out ProbeDrive and
+// ImagePresent take.
+//
+// It does NOT try the next substrate on a refusal, and that is deliberate on
+// the one call here that destroys data: a second attempt would ask a
+// DIFFERENT substrate to delete an object named by a drive the first one
+// already refused, which is how a reclaim aimed at one deployment's storage
+// lands on another's. A drive's backend is scoped to this deployment's
+// dispatch target before the API ever calls this (driveMountFor's
+// backend/target check), so with the one substrate production wires there is
+// nothing to fall through to.
+func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	for _, s := range o.substrates {
+		if dr, ok := s.(runner.DriveReclaimer); ok {
+			return dr.ReclaimDrive(ctx, mount)
+		}
+	}
+	return "", errors.New("orchestrator: no wired substrate can reclaim drive storage")
+}
+
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.
@@ -169,6 +205,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	caps := runner.Capabilities{
 		Driver:   o.Name(),
 		Resolved: map[types.ConfinementClass]string{},
+		Freeze:   map[types.ConfinementClass]bool{},
 	}
 	drives := len(o.substrates) > 0
 	managed := len(o.substrates) > 0
@@ -184,6 +221,11 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 			if !seen[c] {
 				seen[c] = true
 				classes = append(classes, c)
+				// Freeze is decided by the substrate substrateFor ROUTES the
+				// class to (the first to list it), so a later substrate's
+				// claim can never vouch for runs it will not receive. An
+				// absent entry reads false.
+				caps.Freeze[c] = cs.Freeze[c]
 			}
 		}
 		for k, v := range cs.Resolved {
@@ -374,6 +416,121 @@ func (o *Orchestrator) StopSandbox(ctx context.Context, ref string) error {
 	err = s.StopSandbox(ctx, ref)
 	o.forget(ctx, ref, err == nil)
 	return err
+}
+
+// EndSandbox forwards the lease end to ref's substrate when it can keep a
+// stopped sandbox. The route is kept: the sandbox still exists, and a later
+// Stop/Kill must still find its substrate.
+func (o *Orchestrator) EndSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	ender, ok := s.(runner.SandboxEnder)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return ender.EndSandbox(ctx, ref)
+}
+
+// StopProxy forwards a lost run's proxy removal to ref's substrate when it can
+// keep the rest of the sandbox. The route is kept, as for EndSandbox.
+func (o *Orchestrator) StopProxy(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	stopper, ok := s.(runner.ProxyStopper)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return stopper.StopProxy(ctx, ref)
+}
+
+// CanReplaceProxy asks ref's substrate whether it can replace a proxy in
+// place (runner.ProxyReviver).
+func (o *Orchestrator) CanReplaceProxy(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	rv, ok := s.(runner.ProxyReviver)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return rv.CanReplaceProxy(ctx, ref)
+}
+
+// ReplaceProxy forwards a proxy replacement to ref's substrate; see
+// CanReplaceProxy. The route is kept: the agent is the same sandbox.
+func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	rv, ok := s.(runner.ProxyReviver)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return rv.ReplaceProxy(ctx, ref, cfgJSON)
+}
+
+// EnsureProxyImage ensures every substrate's proxy sidecar image ahead of a
+// revive claim (runner.ProxyReviver), not just the one ref's own substrate:
+// this runs BEFORE the claim identifies which run it is for, and pulling an
+// already-present image is a cheap local check (F2). There is exactly one
+// revivable substrate today; this loops in case a future one joins it.
+func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
+	for _, s := range o.substrates {
+		if rv, ok := s.(runner.ProxyReviver); ok {
+			if err := rv.EnsureProxyImage(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// StartSandbox forwards a kept agent's restart to ref's substrate when it can
+// start one again (runner.SandboxStarter). The route is kept.
+func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	st, ok := s.(runner.SandboxStarter)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return st.StartSandbox(ctx, ref)
+}
+
+// FreezeSandbox forwards a pause to ref's substrate when it implements
+// runner.Freezer (Docker/runc today). The route is kept: the sandbox still
+// exists, paused, and Thaw/Stop/Kill must still find its substrate.
+func (o *Orchestrator) FreezeSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.Freezer)
+	if !ok {
+		return runner.ErrFreezeUnsupported
+	}
+	return f.FreezeSandbox(ctx, ref)
+}
+
+// ThawSandbox forwards a resume to ref's substrate; see FreezeSandbox.
+func (o *Orchestrator) ThawSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.Freezer)
+	if !ok {
+		return runner.ErrFreezeUnsupported
+	}
+	return f.ThawSandbox(ctx, ref)
 }
 
 func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {

@@ -5,9 +5,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
+import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
+import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -68,9 +69,10 @@ function runningRunId(): string {
 function seedPending(opts: {
   kind: "credential" | "egress_domain" | "tool_call";
   scope: Record<string, unknown>;
+  runId?: string;
 }): string {
   const id = randomUUID();
-  const runId = anyRunId();
+  const runId = opts.runId ?? anyRunId();
   const scopeJson = JSON.stringify(opts.scope).replace(/'/g, "''");
   sql(
     `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
@@ -557,11 +559,12 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
 // cancels its still-PENDING approvals rather than stranding them until
 // ExpireStale's 24h sweep.
 // ---------------------------------------------------------------------------
-test.describe("B3 — the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+test.describe("the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+  // ticket: B3
   test("1 PENDING + 1 APPROVED on the same run reads '1 held', never 2", async ({ page }) => {
     clearPending();
     const runId = runningRunId();
-    // tool_call is ALWAYS held (isHeld's unconditional true arm) — the
+    // tool_call is ALWAYS held (isHeld is true for any PENDING tool_call) — the
     // cleanest way to seed a guaranteed hold without also depending on
     // requested_scope.mode/timing (the egress_domain wait_for_review arm).
     const heldId = randomUUID();
@@ -581,7 +584,7 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
 
       // The Egress widget's chip: exactly "1 held" — a stale audit-count
       // implementation would read "2" here (one row per decision recorded),
-      // or would count the APPROVED row's own historical egress.pending audit
+      // or would count the APPROVED row's own historical egress.hold audit
       // entry as still "held" forever. "N held" is this widget's own phrase
       // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
       await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toBeVisible();
@@ -598,7 +601,8 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
   });
 });
 
-test.describe("B4 — killing a run cancels its still-PENDING approvals", () => {
+test.describe("killing a run cancels its still-PENDING approvals", () => {
+  // ticket: B4
   test("kill ⇒ the PENDING approval becomes CANCELLED with no decision buttons, and the nav badge returns to 0", async ({
     page,
   }) => {
@@ -646,42 +650,93 @@ test.describe("B4 — killing a run cancels its still-PENDING approvals", () => 
   });
 });
 
+// T-68 — a mid-run AWS re-auth request, seeded directly (the live version of
+// this same story is sso-reauth-hold.spec.ts:781, against a real kind SSO
+// cluster; this proves the same card/kill contract against the hermetic
+// seeded backend, which every PR actually runs).
+test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", () => {
+  test("shows the reauth title and its one sign-in door, never Approve/Deny — and killing the run cancels it", async ({
+    page,
+  }) => {
+    clearPending();
+    const runId = runningRunId();
+    // credential_source: "shared" — reauthAudience grants the SHARED lane to
+    // any operator (model-access-copy.ts), and this harness's bearer token is
+    // always an operator server-side (fixtures.ts's mockMemberRole doc),
+    // so the door renders for this viewer without a second, per_user fixture.
+    const reauthId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
+       VALUES ('${reauthId}','${runId}','credential_reauth','{"credential_source":"shared"}'::jsonb,'PENDING',now())`,
+    );
+
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      // The reauth title (B3 ruling: a sign-in request is not a mint, so it
+      // is never titled "Mint a scoped credential"), its own single-button
+      // door — and never the ordinary Approve/Deny pair: the server answers
+      // 409 to either verb for this kind, so a disabled pair would still
+      // claim a decision some tier could make.
+      await expect(page.getByText(REAUTH_TITLE)).toBeVisible();
+      await expect(page.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Deny" })).toHaveCount(0);
+
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      await expect(killBtn).toBeEnabled();
+      await killBtn.click();
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await confirm.getByRole("button", { name: "Kill run" }).click();
+      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+
+      // Killing the run cancels the still-open sign-in request — the same
+      // fact the live walk proves (a PENDING reauth on a dead run repairs
+      // nothing) — and its door is gone, not disabled. Terminal rows live
+      // under the Decided tab, not Pending.
+      await gotoApprovals(page);
+      await page.getByRole("tab", { name: "Decided" }).click();
+      // Scoped to THIS reauth's own row — the Decided tab can hold rows from
+      // other kinds/runs, and an unscoped STATE_CANCELLED text match or an
+      // unscoped ariaLabel toHaveCount(0) would pass even if this row still
+      // showed a live control (the ariaLabel is only ever rendered by
+      // ReauthAction, which never renders for a Decided row anyway, so an
+      // unscoped check there passes for a reason unrelated to this assertion).
+      const reauthCard = page.getByText(REAUTH_TITLE, { exact: true }).locator("xpath=..");
+      await expect(reauthCard.getByText(APPROVAL.STATE_CANCELLED, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(reauthCard.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toHaveCount(0);
+    } finally {
+      deleteApproval(reauthId);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
-// F-12 pinning — LiveApprovals' row-level gate follows canDecideApproval
-// (server truth: authorizeMemberDecision, internal/api/approvals.go), not a
-// blanket !operator disable. A member may decide an egress_domain approval on
-// a run they own; credential and tool_call stay admin-only regardless.
-//
-// mockMemberRole (fixtures.ts) only flips what the CLIENT believes about its
-// own role — this harness always authenticates every request with the seeded
-// admin bearer token server-side (isOperator has no per-human session to
-// demote), so the decide() call below rides that real admin token and
-// genuinely succeeds. That is fine and explicitly documented as fine: the
-// RENDER decision (is the button enabled) is what F-12 pins, not server-side
-// ownership scoping — that is proven in Go (see this file's own report / the
-// TestDecide_MemberKindRestriction and TestAuthzMatrix coverage in
-// internal/api/authz_test.go).
-//
-// A true "foreign run" negative is NOT meaningfully testable at this
-// component: LiveApprovals only ever polls approvals already filtered to
-// `a.run_id === runId` (live-approvals.tsx's refresh()), so a row from a
-// different run can never even reach this strip to be rendered disabled or
-// enabled — there is no client-side ownership check for a render test to
-// exercise (canDecideApproval mirrors decide() on KIND alone; ownership is a
-// precondition of the row existing at all, per canDecideApproval's own doc).
-// The non-egress-kind negative below is the real, honestly-automatable
-// negative case.
+// Real member authentication checks both the LiveApprovals controls and the
+// server's ownership/kind boundary. The none runner needs only its state seeded.
+async function memberRunningRun(page: Page): Promise<string> {
+  await asRealMember(page);
+  const created = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task: "member approval" });
+  expect(created.status, created.text).toBe(201);
+  const runId = JSON.parse(created.text).id as string;
+  expect(sql(`SELECT created_by FROM agent_runs WHERE id = '${runId}'`)).toBe(MEMBER_PRINCIPAL);
+  sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${runId}'`);
+  return runId;
+}
+
 test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a blanket operator check", () => {
   test("a member's Approve/Deny are ENABLED on their own run's egress_domain approval, and a real decide round-trips", async ({
     page,
   }) => {
     clearPending();
-    const runId = runningRunId();
+    const runId = await memberRunningRun(page);
     const marker = uniqueMarker("f12-egress");
-    const id = seedPending({ kind: "egress_domain", scope: { host: marker, port: 443 } });
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
 
     try {
-      await mockMemberRole(page);
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
 
@@ -701,22 +756,52 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       await expect(panel.getByText("Requires the admin role.", { exact: true })).toHaveCount(0);
 
       await approveBtn.click();
-      // A real decide() round trip (rides the harness's real admin bearer
-      // token) — the row leaves PENDING and the strip goes idle.
+      // Attribution must come from the real member token that made the decision.
       await expect(row).toHaveCount(0, { timeout: 10_000 });
       await expect(page.getByTestId("live-approvals-idle")).toBeVisible();
+      expect(sql(`SELECT state || ':' || decided_by FROM approvals WHERE id = '${id}'`)).toBe(`APPROVED:${MEMBER_PRINCIPAL}`);
     } finally {
       deleteApproval(id);
     }
   });
 
+  test("real member decides own egress but not foreign or tool approvals", async ({ page }) => {
+    clearPending();
+    await asRealSecurityAdmin(page);
+    const foreignRun = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task: "another person's approval" });
+    expect(foreignRun.status, foreignRun.text).toBe(201);
+    const foreignRunId = JSON.parse(foreignRun.text).id as string;
+    const runId = await memberRunningRun(page);
+    const ownId = seedPending({ runId, kind: "egress_domain", scope: { host: uniqueMarker("own") } });
+    const foreignId = seedPending({ runId: foreignRunId, kind: "egress_domain", scope: { host: uniqueMarker("foreign") } });
+    const toolId = seedPending({ runId, kind: "tool_call", scope: { tool: "bash", cmd: "pwd" } });
+    try {
+      const listed = await consoleAPI(page, "GET", "/api/v1/approvals");
+      expect(listed.status).toBe(200);
+      expect(JSON.parse(listed.text).map((row: { id: string }) => row.id).sort()).toEqual([ownId, toolId].sort());
+      for (const action of ["approve", "deny"]) {
+        const missing = await consoleAPI(page, "POST", `/api/v1/approvals/${randomUUID()}/${action}`, { reason: "test boundary", scope: "run" });
+        expect(missing.status).toBe(404);
+        for (const id of [foreignId, toolId]) {
+          const refusal = await consoleAPI(page, "POST", `/api/v1/approvals/${id}/${action}`, { reason: "test boundary", scope: "run" });
+          expect(refusal).toEqual(missing);
+          expect(sql(`SELECT state FROM approvals WHERE id = '${id}'`)).toBe("PENDING");
+        }
+      }
+      const decided = await consoleAPI(page, "POST", `/api/v1/approvals/${ownId}/deny`, { reason: "member refused own egress", scope: "run" });
+      expect(decided.status, decided.text).toBe(200);
+      expect(sql(`SELECT state || ':' || decided_by FROM approvals WHERE id = '${ownId}'`)).toBe(`DENIED:${MEMBER_PRINCIPAL}`);
+    } finally {
+      for (const id of [ownId, foreignId, toolId]) deleteApproval(id);
+    }
+  });
+
   test("negative: a non-egress kind (tool_call) stays disabled for a member on the SAME owned run", async ({ page }) => {
     clearPending();
-    const runId = runningRunId();
-    const id = seedPending({ kind: "tool_call", scope: { tool: "bash", cmd: "rm -rf /" } });
+    const runId = await memberRunningRun(page);
+    const id = seedPending({ kind: "tool_call", runId, scope: { tool: "bash", cmd: "pwd" } });
 
     try {
-      await mockMemberRole(page);
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
 

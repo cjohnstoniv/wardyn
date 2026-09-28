@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// B11a-F13. -base defaults to $HTTP_PROXY — the gate's control plane IS the
+// -base defaults to $HTTP_PROXY — the gate's control plane IS the
 // run's own wardyn-proxy — but the client used http.DefaultTransport, whose
 // Proxy is ProxyFromEnvironment. With the default proxy URL those are the same
 // address and the bug is invisible; under `--proxy-url http://<other-host>:3128`
@@ -21,7 +21,7 @@ import (
 // helper already set Proxy: nil for exactly this reason; toolgate and sidecar
 // did not.
 //
-// WHY THIS IS NOT AN END-TO-END PROXY TEST. It cannot be, in process:
+// Why this is not an end-to-end proxy test. It cannot be, in process:
 // httpproxy's matcher exempts every LOOPBACK destination from proxying, and an
 // httptest server is always 127.0.0.1, so no client configuration makes a local
 // request proxied. A "does it reach the server" test therefore cannot tell

@@ -17,6 +17,10 @@ type Deps struct {
 	// ProxyImage is the wardyn-proxy sidecar image the substrate launches beside
 	// each agent (the sole egress path — L0).
 	ProxyImage string
+	// DriveProbeImage is the OCI image the docker substrate's host_path
+	// drive-readability probe (#165) runs in. Empty = the substrate's own
+	// pinned default; a non-OCI substrate with no such probe ignores it.
+	DriveProbeImage string
 	// ConfinementRuntimes are the operator's fail-closed per-class runtime pins
 	// (WARDYN_CONFINEMENT_MAP); nil = the substrate's built-in defaults.
 	ConfinementRuntimes map[types.ConfinementClass]string
@@ -30,7 +34,24 @@ type Deps struct {
 	// nil (the default) refuses every host_path drive. A substrate with no
 	// host-path drive backend at all (Kubernetes) ignores it.
 	UserDriveHostRoots []string
+	// Record is whether a substrate's driver should wrap Exec's argv with
+	// wardyn-rec (PTY session recording): cmd/wardynd's buildRunnerFromFlags
+	// sets this from the resolved recording-store selection
+	// (WARDYN_RECORDING_STORE via RecordEnabled) rather than a substrate
+	// hardcoding it — see #1113 (an install with recording off still got a
+	// brokered:recording deny row because register.go ignored this and
+	// always wrapped). Each substrate's register.go must carry this through
+	// to its own Config.Record verbatim, never re-defaulting it to true.
+	Record bool
 }
+
+// RecordEnabled maps a recording-store selection (WARDYN_RECORDING_STORE:
+// "pg", "fs", or "off") to Deps.Record: every selection records except "off",
+// which recording.New treats as no store at all (its "disabled" contract).
+// cmd/wardynd calls this to build Deps.Record; a substrate's register_test.go
+// calls it directly so its Config-building tests derive Record from a store
+// name instead of a literal bool.
+func RecordEnabled(store string) bool { return store != "off" }
 
 // Constructor builds a Substrate from Deps.
 type Constructor func(Deps) (Substrate, error)

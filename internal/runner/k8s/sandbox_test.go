@@ -39,7 +39,7 @@ import (
 // installCanaryReactor's doc for why) and overlays ONLY Status.PodIP, so a
 // caller that Gets the same pod again later (e.g. to inspect its Spec) still
 // sees everything CreateSandbox actually set — a bare synthesized stub here
-// previously left Spec.Containers empty and panicked such a caller.
+// would leave Spec.Containers empty and panic such a caller.
 func installProxyIPReactor(t *testing.T, cs *fake.Clientset, ip string) {
 	t.Helper()
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -229,7 +229,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		}
 		createOrder = append(createOrder, a.GetResource().Resource)
 	}
-	// NetworkPolicies FIRST, then the Secret (W6-S4: the policies must strictly
+	// NetworkPolicies first, then the Secret (the policies must strictly
 	// outlive the Secret so the orphan sweep can find it by their labels without
 	// holding `secrets: list`), then proxy pod, then agent pod.
 	want := []string{"networkpolicies", "networkpolicies", "secrets", "pods", "pods"}
@@ -268,7 +268,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		t.Errorf("pod create order = %v, want [%s, %s]", podNames, proxyPodName(spec.RunID), agentPodName(spec.RunID))
 	}
 
-	// B9-F7: enableServiceLinks defaults to TRUE, which makes the kubelet inject
+	// enableServiceLinks defaults to TRUE, which makes the kubelet inject
 	// a pair of docker-link-era env vars (<SVC>_PORT, <SVC>_SERVICE_HOST, ...)
 	// for every Service in the namespace into every container. The agent is
 	// untrusted code and the namespace is the operator's — that is a free
@@ -540,8 +540,8 @@ func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
 	assertRunObjectsGone(t, cs, spec.RunID)
 }
 
-// TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols is the
-// bug-k8s-1 regression test: CreateSandbox's failure path must share the
+// TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols:
+// CreateSandbox's failure path must share the
 // SAME H3 wait-before-netpol-drop guard as StopSandbox/KillSandbox, not a
 // hand-rolled fire-and-forget rollback list. A rollback that deletes the
 // NetworkPolicies the instant the proxy pod's Delete is ISSUED (not once
@@ -1099,11 +1099,12 @@ func TestCreateSandbox_SecretEnvRidesTheRunSecret(t *testing.T) {
 
 // TestPodStuckReason covers the sentence a pod that never started produces.
 //
-// The motivating case is the drive one: a claim that never bound leaves the pod
-// Pending with NO container status at all, so every check inside
-// waitContainerRunning's poll is reading an empty list and the caller used to
-// get "context deadline exceeded" and nothing else. The scheduler had been
-// saying why for the whole three minutes, in the one place nothing looked.
+// The motivating case is the drive one: a claim that never bound leaves the
+// pod Pending with no container status at all, so every check inside
+// waitContainerRunning's poll reads an empty list, and without this the
+// caller gets "context deadline exceeded" and nothing else — while the
+// scheduler has been saying why the whole time, in the one place nothing
+// looked.
 func TestPodStuckReason(t *testing.T) {
 	unbound := "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available"
 	for _, tc := range []struct {
@@ -1328,14 +1329,13 @@ func TestCreateSandbox_NoDiskMiBLeavesEphemeralStorageAbsent(t *testing.T) {
 // a knob the sidecar reads from its own environment is unreachable on this
 // substrate unless CreateSandbox copies it in.
 //
-// That is worse than "off": the operator sets
-// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
+// That is worse than "off": the operator sets the pat scope of
+// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
 // it, docs say it confines PAT pushes, and on Kubernetes the proxy never saw it.
 // The list is runner.ProxySidecarEnvKnobs, shared with the docker driver, so a
 // knob added later cannot land on one substrate only.
 func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
-	t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", "on")
-	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "false")
+	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "app:false,pat:on")
 	t.Setenv("WARDYN_LLM_SCAN", "off")
 	// The re-auth hold's budget (0.7.6): how long the proxy parks a sandbox's
 	// AWS SSO credential exchange while its owner signs in again. Unreachable on
@@ -1360,10 +1360,9 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 		got[e.Name] = e.Value
 	}
 	for name, want := range map[string]string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": "on",
-		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS":     "false",
-		"WARDYN_LLM_SCAN":                         "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":        "45s",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
+		"WARDYN_LLM_SCAN":                      "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1385,7 +1384,6 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 // inheriting a knob nobody set.
 func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	for _, k := range []string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_LLM_SCAN",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
@@ -1407,8 +1405,12 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get proxy pod: %v", err)
 	}
-	if n := len(proxyPod.Spec.Containers[0].Env); n != 3 {
-		t.Errorf("proxy pod carries %d env vars, want the 3 it always has: %+v",
+	// Two, not three: WARDYN_RUN_ID and WARDYN_CONTROL_PLANE_URL. The config
+	// itself is no longer an env var at all (T-28, issue #688) — it reaches
+	// the container as a file via the init-container staging step, mounted
+	// read-only off the shared emptyDir tested in netpol_invariant_probe_test.go.
+	if n := len(proxyPod.Spec.Containers[0].Env); n != 2 {
+		t.Errorf("proxy pod carries %d env vars, want the 2 it always has: %+v",
 			n, proxyPod.Spec.Containers[0].Env)
 	}
 }

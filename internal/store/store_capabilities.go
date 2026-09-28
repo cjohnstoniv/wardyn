@@ -21,13 +21,9 @@ const capabilityGrantCols = `id, subject_type, subject, capability, value, effec
 // UpsertCapabilityGrant writes one grant, keyed on the natural
 // (subject_type, subject, capability, value) UNIQUE: re-granting the same
 // triple FLIPS the effect in place rather than leaving two contradictory rows
-// behind (two rows would resolve as a permanent deny — deny beats allow — and
-// be near-impossible for an admin to explain, let alone undo).
-//
-// The returned row carries the row's real id, which on a conflict is the
-// EXISTING one, not g.ID: the caller needs the id the DELETE route will be
-// given, and an admin re-submitting the same grant must not be handed an id
-// that names no row.
+// (which would resolve as a permanent deny). The returned row carries the
+// EXISTING id on a conflict, not g.ID, so a re-submit gets the id the DELETE
+// route needs.
 func (s PG) UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
@@ -65,31 +61,18 @@ func (s PG) ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, 
 }
 
 // ListGroupDenyGrants returns the GROUP-subject DENY rows of one capability
-// kind — the only rows internal/api's unresolvable-group-deny check can match,
-// and never more than a handful even on a deployment with tens of thousands of
-// grants.
+// kind — the only rows internal/api's unresolvable-group-deny check can match.
 //
 // It exists because that check runs on the FAIL-CLOSED path taken by every
-// caller whose group snapshot is unanswerable — every API token minted before
-// 0.7, on every request. Answering it with ListCapabilityGrants, the whole
-// table, once per value checked, would let a holder of one pre-0.7 token force
-// an unbounded full-table read per checked value: 68 ms at 20k grants against
-// 0.35 ms for the indexed sibling, multiplied by however many values the
-// handler examines. An authorization question whose cost scales with the size
-// of the table it reads is an availability surface, not just a slow page.
-//
-// The predicate is EXACTLY the one internal/api applied in Go afterwards
-// (subject_type='group', effect='deny', capability=$1), moved into SQL so the
-// rows never leave Postgres; the value-overlap matching stays in Go, where the
-// one host/wildcard matcher already lives and where it now runs over a few rows
-// instead of all of them. Same rows in, same answer out — see
-// TestCapUnresolvableGroupDenyMatchesFullScan, which pins the two against each
-// other.
-//
-// The (subject_type, subject) index serves the leading equality, so this reads
-// the group rows rather than the table. No new index: adding one is a migration,
-// and the selectivity that matters here (subject_type) is already the index's
-// first column.
+// caller whose group snapshot is unanswerable (every pre-0.7 API token, on
+// every request): answering it with ListCapabilityGrants would let one such
+// token force an unbounded full-table read per checked value — an
+// authorization question whose cost scales with table size is an availability
+// surface, not just a slow page. The predicate is exactly what internal/api
+// applied in Go afterwards, moved into SQL; value-overlap matching stays in Go
+// (TestCapUnresolvableGroupDenyMatchesFullScan pins the two against each
+// other). The (subject_type, subject) index already serves it; no new index
+// needed.
 //
 // ponytail: no EXISTS fast path in front of it. It would be a second round trip
 // to save a query that already returns nothing on the deployments the fast path
@@ -103,24 +86,22 @@ func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types
 }
 
 // ListCapabilityGrantsFor returns every grant that could apply to one caller:
-// the `all` rows, plus `user` rows naming any of users (the caller's lowercased
-// sub AND email — a grant on either hits), plus `group` rows naming any of
-// groups (the login-time claim snapshot).
+// `all` rows, `user` rows naming any of users (the caller's lowercased sub AND
+// email), `group` rows naming any of groups, and `user_type` rows naming the
+// caller's one type. An empty userType matches no row: the write boundary
+// refuses an empty subject.
 //
 // Deliberately NOT filtered by capability: the resolver needs one kind and
-// GET /me/capabilities needs all four, and a deployment's grant list is small
-// enough that one round trip serving both beats two indexes and two queries.
-// The per-kind and per-value matching (wildcards, host suffixes) then happens
-// in Go, where the one host matcher already lives.
+// GET /me/capabilities needs all four, and one round trip serving both beats
+// two indexes and two queries. Per-kind/per-value matching happens in Go.
 //
 // ponytail: no cache. This runs per request, on the (subject_type, subject)
 // index; a process-local cache is the HA blocker OPERATIONS already names for
 // other state, and a stale permission cache is a security bug, not a slow page.
 // Add one only behind a shared invalidation channel.
-func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
-	// A nil Go slice binds as SQL NULL, and `x = ANY(NULL)` is NULL, not false —
-	// harmless here (it fails closed) but it makes the query's behavior depend on
-	// a driver detail. Normalize so the predicate is always a real empty array.
+func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
+	// A nil Go slice binds as SQL NULL, and `x = ANY(NULL)` is NULL, not false.
+	// Normalize so the predicate is always a real empty array.
 	if users == nil {
 		users = []string{}
 	}
@@ -131,9 +112,10 @@ func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string)
 		WHERE subject_type = 'all'
 		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
 		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
+		   OR (subject_type = 'user_type' AND subject = $3)
 		ORDER BY capability, subject_type, subject, value`
 	return collect(ctx, s.Pool, "list", "capability grants for subject", q,
-		[]any{users, groups}, scanCapabilityGrant)
+		[]any{users, groups, userType}, scanCapabilityGrant)
 }
 
 // GetCapabilityEnforcement returns the per-kind switch map. An ABSENT row means
@@ -162,13 +144,9 @@ func (s PG) GetCapabilityEnforcement(ctx context.Context) (map[string]bool, erro
 }
 
 // PutCapabilityEnforcement replaces the WHOLE switch map: any capability not
-// named in enabled loses its row (absent == not enforced, so dropping the row
-// and writing false mean the same thing, and dropping keeps a kind the Go side
-// no longer defines from lingering).
-//
-// One statement, not a transaction: the DELETE and the INSERT run against the
-// same snapshot inside a single CTE, they touch disjoint capability sets, and
-// the pair is therefore already atomic without a round trip to BEGIN.
+// named in enabled loses its row (absent == not enforced). One statement, not
+// a transaction: the DELETE and INSERT run against the same CTE snapshot over
+// disjoint capability sets, so the pair is already atomic.
 func (s PG) PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error) {
 	caps := make([]string, 0, len(enabled))
 	vals := make([]bool, 0, len(enabled))
@@ -188,6 +166,48 @@ func (s PG) PutCapabilityEnforcement(ctx context.Context, enabled map[string]boo
 		return nil, fmt.Errorf("store: put capability enforcement: %w", err)
 	}
 	return s.GetCapabilityEnforcement(ctx)
+}
+
+// ListCapabilityRestrictions returns every restricted value, kind -> set. The
+// table holds one row per restricted admin-configured resource, so one read
+// per resolution answers every value it asks about. Never nil.
+func (s PG) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT capability, value FROM capability_restrictions`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]bool{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, fmt.Errorf("store: scan capability restriction: %w", err)
+		}
+		if out[k] == nil {
+			out[k] = map[string]bool{}
+		}
+		out[k][v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
+	}
+	return out, nil
+}
+
+// SetCapabilityRestriction restricts one value (inserts its row, keeping the
+// first writer's provenance) or lifts the restriction (deletes it).
+func (s PG) SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error {
+	q := `DELETE FROM capability_restrictions WHERE capability = $1 AND value = $2`
+	args := []any{capability, value}
+	if restricted {
+		q = `INSERT INTO capability_restrictions (capability, value, created_by) VALUES ($1, $2, $3)
+			ON CONFLICT (capability, value) DO NOTHING`
+		args = append(args, by)
+	}
+	if _, err := s.Pool.Exec(ctx, q, args...); err != nil {
+		return fmt.Errorf("store: set capability restriction: %w", err)
+	}
+	return nil
 }
 
 func scanCapabilityGrant(row pgx.Row) (types.CapabilityGrant, error) {

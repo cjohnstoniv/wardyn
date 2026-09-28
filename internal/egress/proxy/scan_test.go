@@ -27,7 +27,7 @@ const scanTestSecret = "sk-ant-test-DEADBEEF-0123456789" // >= secretmask.MinLen
 func TestLLMInspectionConfigRoundTrip(t *testing.T) {
 	cfg := Config{
 		RunID:           uuid.New(),
-		ControlPlaneURL: "http://wardynd:8080",
+		ControlPlaneURL: "http://127.0.0.1:8080",
 		RunToken:        "tok",
 		Policy: types.RunPolicySpec{
 			AllowedDomains: []string{anthropicHost},
@@ -71,7 +71,7 @@ func scanEngine(t *testing.T, mode string, secrets ...string) *contentscan.Engin
 // scanEngineFailClosed builds the engine a STRICT operator actually buys:
 // mode=block PLUS on_scanner_error=block, i.e. Engine.BlocksOnError() == true.
 //
-// F090: every other scan test in this package builds a fail-OPEN engine
+// every other scan test in this package builds a fail-OPEN engine
 // (scanEngine leaves on_scanner_error at its default) and asserts the ALLOW
 // outcome, so the two fail-CLOSED refusals in llm_routes.go — the
 // uninspected-channel refusal and the oversize refusal — were executed by ZERO
@@ -276,7 +276,7 @@ func TestLLMScanBatchesMarkedUninspected(t *testing.T) {
 		t.Fatalf("batches in alert mode must forward, status=%d reached=%v", rec.Code, cu.reached)
 	}
 	d := lastDecision(t, buf)
-	if d.Scan == nil || d.Scan.Action != "skipped" || d.Scan.SkipReason != "uninspected_channel" {
+	if d.Scan == nil || d.Scan.Action != "skip" || d.Scan.SkipReason != "uninspected_channel" {
 		t.Fatalf("batches must be honestly marked uninspected, got %+v", d.Scan)
 	}
 }
@@ -437,7 +437,7 @@ func TestLLMScanBlindOnOpaqueConnect(t *testing.T) {
 	// (E3: the allow is now emitted only AFTER a successful tunnel dial), so
 	// locate it by rule_source rather than assuming it is the last decision.
 	d := findDecision(t, buf, ruleSourceLLMBlind)
-	if d.Scan == nil || d.Scan.Action != "blind" || d.Scan.Scanned || d.Scan.Coverage != coverageOpaque {
+	if d.Scan == nil || d.Scan.Action != "bypass" || d.Scan.Scanned || d.Scan.Coverage != coverageOpaque {
 		t.Fatalf("blind scan summary = %+v", d.Scan)
 	}
 

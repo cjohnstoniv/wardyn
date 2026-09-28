@@ -45,18 +45,20 @@
 # Service name throughout and why this script reads the Service CIDR off the
 # apiserver rather than guessing it.
 #
-# The walk itself is a Playwright project — ui/e2e/live/sso-member.spec.ts,
-# ui/e2e/live/sso-member-recovery.spec.ts (0.7.5) and
-# ui/e2e/live/sso-reauth-hold.spec.ts (0.7.6) — driven through
+# The walk itself is a Playwright project — ui/e2e/walk/sso-member.spec.ts,
+# ui/e2e/walk/sso-member-recovery.spec.ts (0.7.5) and
+# ui/e2e/walk/sso-reauth-hold.spec.ts (0.7.6) — driven through
 # scripts/run-ui-e2e.sh in its LIVE mode: same runner, same per-spec reporting
 # and the same zero-executed check, pointed at this cluster instead of the
-# hermetic backend it otherwise boots. The THREE files run in ONE invocation and
-# in THAT order: the recovery file inherits a member who is already `live` and a
+# hermetic backend it otherwise boots. The THREE files run, one run-ui-e2e.sh
+# call per file (#804 — so a failed spec's own ui/test-results survives to be
+# copied out before the next spec's Playwright process wipes it), in THAT
+# order: the recovery file inherits a member who is already `live` and a
 # roster pin that already contradicts nothing, and the hold file goes last
 # because its case K spends ten minutes of wall clock and every case in it makes
 # its own capture.
 #
-# Then the ROLE WALK (step 6): ui/e2e/live/sso-roles.spec.ts signs in every
+# Then the ROLE WALK (step 6): ui/e2e/walk/sso-roles.spec.ts signs in every
 # identity deploy/kind/sso/dex.yaml ships — admin, allowlist-only operator,
 # security admin, two members and one that matches no role — on this render and
 # again on auth.ssoOnly=true, and restores this render afterwards.
@@ -69,9 +71,16 @@
 # cluster-dependent lane uses.
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
+
+# One daemon everywhere (see deploy/kind/sso/overlay.sh): the cluster's node
+# container and every image this walk touches live on the daemon this picker
+# chooses, and run-ui-e2e.sh picks the same one for its own children.
+. "${ROOT}/scripts/lib/common.sh"
+
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
-  echo "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
-  exit 0
+  skip_lane "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
 fi
 
 # WARDYN_KIND_SSO_PROFILE=ado is a DIFFERENT walk on a different install: the
@@ -84,13 +93,6 @@ case "${WARDYN_KIND_SSO_PROFILE:-default}" in
   *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${WARDYN_KIND_SSO_PROFILE})" >&2; exit 1 ;;
 esac
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${ROOT}"
-
-# One daemon everywhere (see deploy/kind/sso/overlay.sh): the cluster's node
-# container and every image this walk touches live on the daemon this picker
-# chooses, and run-ui-e2e.sh picks the same one for its own children.
-. "${ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -248,11 +250,78 @@ if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
   build_image deploy/images/claude-code/Dockerfile "${AGENT_IMAGE}"   claude-code
   build_image test/awsssofake/cmd/Dockerfile      "${FAKE_IMAGE}"     awsssofake
 
-  step "loading all five into ${CLUSTER} (no registry pull)"
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWS_SSO_IMAGE}" "${AGENT_IMAGE}" "${FAKE_IMAGE}"; do
+  # AWS_SSO_IMAGE is deliberately NOT in this list any more (#891): a
+  # `kind load`ed image is already on the node, so the kubelet never pulls it
+  # and never writes the Pulling Event the sign-in door's download step reads.
+  # Step 1c below serves it from a registry instead, so its every walk is a
+  # real, cold pull.
+  step "loading the other four into ${CLUSTER} (no registry pull)"
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${FAKE_IMAGE}"; do
     kind load docker-image "${img}" --name "${CLUSTER}" || die "kind load ${img} failed"
   done
 fi
+
+# ── 1c. serve the aws-sso image from a registry, so its pull is COLD (#891) ──
+#
+# `scripts/kind-sso-walk.sh` used to `kind load` every image, aws-sso included
+# — but a `kind load`ed image sits in the node's containerd store before the
+# first pod ever asks for it, so the kubelet's pull is always a no-op cache hit
+# and the sign-in door's download step (#628 bullet 4, SIGNIN_PROGRESS.
+# STEP_DOWNLOAD) never has anything to light. This step gives the node a
+# reason to actually pull: a tiny, throwaway registry container on the kind
+# network, and a FRESH tag every walk so the node has never seen this exact
+# manifest — the standard kind local-registry recipe
+# (kind.sigs.k8s.io/docs/user/local-registry), scoped to one image.
+#
+# The other four images are unaffected: still `kind load`ed above, still an
+# instant local-store hit, so the walk's timing everywhere else is unchanged.
+REGISTRY_NAME="${WARDYN_KIND_SSO_REGISTRY:-kind-sso-registry}"
+REGISTRY_PORT="${WARDYN_KIND_SSO_REGISTRY_PORT:-5001}"
+KIND_NETWORK="kind"
+
+step "serving the aws-sso image from a local registry, tagged fresh (cold pull, #891)"
+docker image inspect "${AWS_SSO_IMAGE}" >/dev/null 2>&1 \
+  || die "${AWS_SSO_IMAGE} is not present locally — build it first (WARDYN_KIND_SSO_REBUILD=1, or \`make agent-images\`)"
+docker network inspect "${KIND_NETWORK}" >/dev/null 2>&1 \
+  || die "docker network '${KIND_NETWORK}' not found — is ${CLUSTER} a kind cluster on this daemon?"
+if ! docker inspect "${REGISTRY_NAME}" >/dev/null 2>&1; then
+  # --restart=always so a crash mid-walk leaves it reachable for a retry; the
+  # EXIT trap below (cleanup_walk) still removes it at the end of THIS walk,
+  # so a fresh one is created next time rather than accumulating one more
+  # cold-<epoch> tag per walk forever.
+  docker run -d --restart=always -p 127.0.0.1:"${REGISTRY_PORT}":5000 --name "${REGISTRY_NAME}" registry:2 \
+    >/dev/null || die "could not start the local registry ${REGISTRY_NAME}"
+fi
+# The only non-error outcome `|| true` may swallow is "already connected" (the
+# registry survives a re-run of this step, or was left by a killed walk); any
+# other failure here must not be silently ignored.
+connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)" \
+  || { [[ "${connect_err}" == *"already exists in network"* ]] || die "docker network connect ${REGISTRY_NAME} ${KIND_NETWORK} failed: ${connect_err}"; }
+# Node -> registry, by the registry's CONTAINER name on the shared kind network
+# (never localhost: the node is a different network namespace). Idempotent:
+# the file's content is identical every walk.
+#
+# Requires containerd >= 2.2 on the node: that's the version certs.d's
+# `/etc/containerd/certs.d:/etc/docker/certs.d` default config_path shipped in
+# (containerd's cri/images plugin.go); kind's own v0.33.0 node image ships
+# 2.3.4, but an older kind version or a pre-2.2 node image ignores this file
+# entirely and pulls "localhost:${REGISTRY_PORT}/..." from the node's own
+# loopback instead, which fails closed (ImagePullBackOff), not silently.
+docker exec "${KIND_NODE}" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}" \
+  || die "could not create containerd certs.d on ${KIND_NODE}"
+printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
+  | docker exec -i "${KIND_NODE}" cp /dev/stdin "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" \
+  || die "could not write ${KIND_NODE}'s registry mirror config"
+
+# A fresh tag every walk (not a fixed one): the node's containerd caches by
+# manifest, so re-pushing the SAME tag after a no-op rebuild would leave the
+# node still holding what it pulled last time — warm, silently, with nothing
+# in this script's own output saying so.
+AWS_SSO_COLD_TAG="cold-$(date +%s)"
+AWS_SSO_NODE_IMAGE="localhost:${REGISTRY_PORT}/agent-aws-sso:${AWS_SSO_COLD_TAG}"
+docker tag "${AWS_SSO_IMAGE}" "${AWS_SSO_NODE_IMAGE}" || die "could not tag ${AWS_SSO_IMAGE} for the registry"
+docker push "${AWS_SSO_NODE_IMAGE}" || die "could not push ${AWS_SSO_NODE_IMAGE} to the local registry"
+echo "aws-sso pod image: ${AWS_SSO_NODE_IMAGE} (content: ${AWS_SSO_IMAGE})"
 
 # Recorded EVERY run, rebuilt or not. None of these images carries an
 # org.opencontainers.image.revision label, so the honest provenance is the
@@ -270,42 +339,11 @@ fi
 # and the comment claiming it could was false for two releases. `ctr -n k8s.io
 # images ls` prints the digest of what `kind load` imported, which IS the host
 # daemon's image id byte for byte, so `agree` below means what it says.
-step "recording the image provenance into ${EVIDENCE_DIR}/images.txt"
-# ONE read of the node's store, reused for all five (a `docker exec` per image
-# is five round trips for one question).
-NODE_IMAGES="$(docker exec "${KIND_NODE}" ctr -n k8s.io images ls 2>/dev/null || true)"
-node_digest() { # <repo:tag> -> the node's manifest digest, or ""
-  printf '%s\n' "${NODE_IMAGES}" | awk -v r="docker.io/$1" '$1==r {print $3}' | head -1
-}
-host_digest() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null; }
-IMAGES_AGREE=1
-{
-  echo "walk tree:       $(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo '(not a git tree)')"
-  # The PATHS, not a count (W6-I SHOULD-1): "dirty: 1 file(s)" names nothing a
-  # reader can judge. Bounded, because a stray build artefact must not bury it.
-  echo "walk tree dirty: $(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l) file(s)"
-  git -C "${ROOT}" status --porcelain 2>/dev/null | head -20 | sed 's/^/                 /'
-  echo "rebuilt:         ${WARDYN_KIND_SSO_REBUILD:-0}"
-  echo "proxy inject:    ${PROXY_INJECT} (intended; read back off the deployment in MANIFEST.json)"
-  echo
-  printf '%-34s %-72s %-72s %s\n' "image" "host daemon" "node ${KIND_NODE}" "agree"
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
-    h="$(host_digest "${img}")"; n="$(node_digest "${img}")"
-    a="NO"; [[ -n "${h}" && "${h}" == "${n}" ]] && a="yes"
-    [[ "${a}" == "yes" ]] || IMAGES_AGREE=0
-    printf '%-34s %-72s %-72s %s\n' "${img}" "${h:-(absent)}" "${n:-(absent)}" "${a}"
-  done
-  echo
-  echo "created (host):"
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
-    printf '  %-34s %s\n' "${img}" "$(docker image inspect "${img}" --format '{{.Created}}' 2>/dev/null || echo '(not present locally)')"
-  done
-} | tee "${EVIDENCE_DIR}/images.txt"
-if [[ "${IMAGES_AGREE}" != "1" ]]; then
-  echo "" >&2
-  echo "WARNING: an image the node runs is NOT the one this daemon holds (see ${EVIDENCE_DIR}/images.txt)." >&2
-  echo "         Re-run with WARDYN_KIND_SSO_REBUILD=1, which builds and kind-loads all five." >&2
-fi
+# Image-provenance report (node_digest/node_digest_registry/host_digest/
+# node_ref_for, the host-vs-node IMAGES_AGREE table, images.txt) split out to
+# scripts/lib/kind-sso-walk-image-provenance.sh — same behavior, kept the walk
+# itself under the 1000-line file-size gate. Sets NODE_IMAGES and IMAGES_AGREE.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/kind-sso-walk-image-provenance.sh"
 
 # A KILLED PLAYWRIGHT LEAVES THE NODE UNSCHEDULABLE. The recovery spec's
 # cold-start case taints this node to hold a run pod Pending and untaints it in
@@ -344,20 +382,21 @@ echo "service CIDR: ${SERVICE_CIDR}   ${FAKE_SVC} ClusterIP: ${FAKE_CLUSTER_IP}"
 # in through Dex, and every role assertion below is made against those sessions.
 ADMIN_TOKEN="${WARDYN_KIND_SSO_ADMIN_TOKEN:-walk-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 
-# THE LOGIN SANDBOX'S IMAGE HAS TO BE NAMED, not just loaded. `make kind-sso`
-# loads wardyn/agent-aws-sso:local into the node, but WARDYN_AGENT_IMAGES (set
-# by deploy/kind/quickstart.sh) maps only `base` and `claude-code` — and
-# agentImage() consults that map FIRST, so an unnamed `aws-sso` falls through to
-# the published ghcr ref and the login pod never starts. Read the map off the
-# live deployment and add the one key, rather than restating quickstart's two:
-# the walk then keeps working when that list changes.
+# THE LOGIN SANDBOX'S IMAGE HAS TO BE NAMED, not just loaded/pushed.
+# WARDYN_AGENT_IMAGES (set by deploy/kind/quickstart.sh) maps only `base` and
+# `claude-code` — and agentImage() consults that map FIRST, so an unnamed
+# `aws-sso` falls through to the published ghcr ref and the login pod never
+# starts. Read the map off the live deployment and add the one key, rather
+# than restating quickstart's two: the walk then keeps working when that list
+# changes. #891: the value is AWS_SSO_NODE_IMAGE (step 1c's registry ref, fresh
+# every walk), not a `:local` tag any more — that is what makes the pull cold.
 CUR_AGENT_IMAGES="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" \
   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WARDYN_AGENT_IMAGES")].value}' 2>/dev/null)"
 # An empty read is an empty MAP, not an empty string: --argjson rejects "" and
 # the die below would then blame the map for a deployment that simply sets none.
 [[ -n "${CUR_AGENT_IMAGES}" ]] || CUR_AGENT_IMAGES='{}'
-AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" \
-  '$cur + {"aws-sso": "wardyn/agent-aws-sso:local"}')" \
+AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" --arg img "${AWS_SSO_NODE_IMAGE}" \
+  '$cur + {"aws-sso": $img}')" \
   || die "could not extend WARDYN_AGENT_IMAGES (read: ${CUR_AGENT_IMAGES:-<empty>})"
 
 # ── 2b. the Dex cast the role legs sign in as ───────────────────────────────
@@ -607,7 +646,7 @@ code="$(curl -s -o "${EVIDENCE_DIR}/workspace-providers-put.json" -w '%{http_cod
 
 # ── 5. the walk ─────────────────────────────────────────────────────────────
 # run-ui-e2e.sh in LIVE mode: it skips the hermetic backend entirely and points
-# the `live` Playwright project at this cluster. One spec file, as always.
+# the `walk` Playwright project at this cluster. One spec file, as always.
 # ── 4c. THE PROVENANCE RECORD, IN TREE ──────────────────────────────────────
 #
 # W5 asks each walk to carry a MANIFEST.json naming the commit, the five image
@@ -638,7 +677,7 @@ manifest_images() {
   local first=1
   for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
     local h n
-    h="$(host_digest "${img}")"; n="$(node_digest "${img}")"
+    h="$(host_digest "${img}")"; n="$(node_ref_for "${img}")"
     [[ ${first} -eq 1 ]] || printf ','
     first=0
     jq -cn --arg i "${img}" --arg h "${h}" --arg n "${n}" \
@@ -680,12 +719,15 @@ seen_pf_pid=""
 pod_watch_pid=""
 # ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
-# a leftover one causes on the NEXT walk).
+# a leftover one causes on the NEXT walk). ALSO the registry (step 1c): removed
+# here rather than left running, so a fresh, empty one is created next walk
+# instead of one more cold-<epoch> tag piling up in it forever.
 cleanup_walk() {
   [[ -n "${SSO_ONLY_APPLIED:-}" ]] && set_render sso
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
+  docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1
   return 0
 }
 trap cleanup_walk EXIT
@@ -707,27 +749,27 @@ kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -w \
   >"${EVIDENCE_DIR}/run-pod-volumes.txt" 2>/dev/null &
 pod_watch_pid=$!
 
-step "running the walk (ui/e2e/live/sso-member + sso-member-recovery + sso-reauth-hold)"
-export WARDYN_LIVE_SEEN_URL="${SEEN_URL}"
-export WARDYN_E2E_LIVE_BASE_URL="${BASE_URL}"
+step "running the walk (ui/e2e/walk/sso-member + sso-member-recovery + sso-reauth-hold)"
+export WARDYN_WALK_SEEN_URL="${SEEN_URL}"
+export WARDYN_E2E_WALK_BASE_URL="${BASE_URL}"
 export WARDYN_TEST_K8S=1
-export WARDYN_LIVE_ADMIN_TOKEN="${ADMIN_TOKEN}"
-export WARDYN_LIVE_FAKE_URL="${FAKE_URL}"
-export WARDYN_LIVE_PIN_ACCOUNT="${PIN_ACCOUNT}"
-export WARDYN_LIVE_PIN_ROLE="${PIN_ROLE}"
-export WARDYN_LIVE_SSO_START_URL="${SSO_START_URL}"
-export WARDYN_LIVE_SSO_REGION="${SSO_REGION}"
+export WARDYN_WALK_ADMIN_TOKEN="${ADMIN_TOKEN}"
+export WARDYN_WALK_FAKE_URL="${FAKE_URL}"
+export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
+export WARDYN_WALK_PIN_ROLE="${PIN_ROLE}"
+export WARDYN_WALK_SSO_START_URL="${SSO_START_URL}"
+export WARDYN_WALK_SSO_REGION="${SSO_REGION}"
 # The recovery spec's cold-start case manufactures a Pending run pod with a node
 # TAINT, and reads that pod's phase back to prove the hold was real. It needs
 # the cluster coordinates this script already holds — never its own guesses, or
 # a renamed cluster would make the 90 s assertion vacuous instead of red.
-export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
+export WARDYN_WALK_KUBE_CONTEXT="${CONTEXT}"
 # The RUNS namespace, not the release's: the pod that case reads is a run's
 # proxy pod, and run pods land in k8s.runsNamespace. Handing it ${NAMESPACE} made
 # the phase read come back empty for the whole hold — a red about a Pending pod
 # that was there all along, one namespace over.
-export WARDYN_LIVE_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
-export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
+export WARDYN_WALK_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
+export WARDYN_WALK_KUBE_NODE="${KIND_NODE}"
 # helpers.ts's SANDBOX_UP/LOGIN_DONE default to 300s, tuned on a developer box.
 # A GitHub-hosted runner (GITHUB_ACTIONS is set by every job, incl. the nightly
 # kind-sso-walk one — see docs/ENV.md) schedules the CNI, Postgres, the daemon,
@@ -736,28 +778,97 @@ export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
 # sign-in sandbox. Raise it there; a caller that already set either var wins,
 # and an operator running this by hand keeps the 300s default.
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  export WARDYN_LIVE_SANDBOX_UP_MS="${WARDYN_LIVE_SANDBOX_UP_MS:-720000}"
-  export WARDYN_LIVE_LOGIN_DONE_MS="${WARDYN_LIVE_LOGIN_DONE_MS:-720000}"
+  export WARDYN_WALK_SANDBOX_UP_MS="${WARDYN_WALK_SANDBOX_UP_MS:-720000}"
+  export WARDYN_WALK_LOGIN_DONE_MS="${WARDYN_WALK_LOGIN_DONE_MS:-720000}"
 fi
-# THREE specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
-# one cluster, and sso-member-recovery.spec.ts inherits the state
-# sso-member.spec.ts leaves (a `live` member under the contradicting pin, and
-# the Dex principals). Order is the argument order — never sort these.
+# THREE specs, run in this order against this one cluster: sso-member-recovery
+# inherits the state sso-member leaves (a `live` member under the contradicting
+# pin, and the Dex principals). Order is the argument order — never sort these.
 # sso-reauth-hold.spec.ts is LAST: its case K spends about ten minutes of wall
 # clock waiting for the injector's own re-resolve window, and every case in it
 # makes its own capture, so nothing after it should depend on which session the
 # member is holding.
 #
-# WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 drops it from the invocation entirely — for
-# a nightly job, where that ten minutes is wall clock nobody is watching and
-# every other spec already runs unattended. An interactive or release walk
-# leaves this unset and keeps all three.
+# WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 drops it entirely — for a nightly job,
+# where that ten minutes is wall clock nobody is watching and every other spec
+# already runs unattended. An interactive or release walk leaves this unset and
+# keeps all three.
 specs=(sso-member sso-member-recovery sso-reauth-hold)
 if [[ "${WARDYN_KIND_SSO_SKIP_REAUTH_HOLD:-}" == "1" ]]; then
   specs=(sso-member sso-member-recovery)
 fi
-./scripts/run-ui-e2e.sh "${specs[@]}" 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
-walk_rc="${PIPESTATUS[0]}"
+# ONE run-ui-e2e.sh CALL PER SPEC (#804), not the three-argument call this used
+# to be. run-ui-e2e.sh's own per-spec loop shells out to a SEPARATE `playwright
+# test` process per spec file, and Playwright clears its outputDir
+# (ui/test-results — screenshots, traces, videos) at the START of every one of
+# those processes. A single `run-ui-e2e.sh sso-member sso-member-recovery
+# sso-reauth-hold` call therefore wipes sso-member's own failure artefacts the
+# moment sso-member-recovery's process starts — long before this script's own
+# chart-render restore step, which is where a walk-3 sso-pin-dispatch failure
+# (sso-member.spec.ts, the FIRST spec) lost its screenshot. Calling
+# run-ui-e2e.sh once per spec, and copying ui/test-results out immediately
+# after any call that failed, is what lets that spec's own artefacts survive
+# long enough to reach ${EVIDENCE_DIR} at all. Behavior otherwise unchanged:
+# every spec still runs regardless of an earlier one's outcome (matching
+# run-ui-e2e.sh's own no-early-exit loop), and walk_rc is still 1 if any of
+# them failed.
+walk_rc=0
+: >"${EVIDENCE_DIR}/walk.log"
+for spec in "${specs[@]}"; do
+  ./scripts/run-ui-e2e.sh "${spec}" 2>&1 | tee -a "${EVIDENCE_DIR}/walk.log"
+  spec_rc="${PIPESTATUS[0]}"
+  if [[ "${spec_rc}" -ne 0 ]]; then
+    walk_rc=1
+    if [[ -d "${ROOT}/ui/test-results" ]]; then
+      rm -rf "${EVIDENCE_DIR}/test-results/${spec}"
+      mkdir -p "${EVIDENCE_DIR}/test-results"
+      cp -r "${ROOT}/ui/test-results" "${EVIDENCE_DIR}/test-results/${spec}"
+    fi
+  fi
+done
+
+# ROOT-CAUSE EVIDENCE FOR A FAILED WALK (#1224 part 1). The nightly job's own
+# failure snapshot had no pod scheduling data and no wardynd/proxy logs, so "the
+# sso-member run never reached Running" could not be told apart from "it
+# reached Running and then failed for another reason" — the likeliest
+# candidate (node-capacity starvation from an earlier spec's sandbox still
+# holding the single node) stayed unproven for lack of exactly this. Captured
+# HERE, right after the walk's own exit code and before the role walk below
+# re-renders the chart (which restarts wardynd and would blur the pod/event
+# picture this is trying to preserve) and before this job's runner — and its
+# cluster — are torn down. Every capture is best-effort (`|| true`) and
+# time-bounded (`timeout 60`): a capture that hangs or errors must never mask
+# or change the walk's own exit code, which stays exactly ${walk_rc} either
+# way. Written straight into ${EVIDENCE_DIR}, which nightly.yml already
+# uploads whole.
+if [[ "${walk_rc}" -ne 0 ]]; then
+  step "walk failed (rc=${walk_rc}): capturing pod/node/log evidence for root-cause"
+  timeout 60 kubectl --context "${CONTEXT}" get pods -A -o wide \
+    >"${EVIDENCE_DIR}/failure-pods-all.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" describe pods \
+    >"${EVIDENCE_DIR}/failure-describe-pods-${NAMESPACE}.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" describe pods \
+    >"${EVIDENCE_DIR}/failure-describe-pods-${RUNS_NAMESPACE}.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get events --sort-by=.lastTimestamp \
+    >"${EVIDENCE_DIR}/failure-events-${NAMESPACE}.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get events --sort-by=.lastTimestamp \
+    >"${EVIDENCE_DIR}/failure-events-${RUNS_NAMESPACE}.txt" 2>&1 || true
+  # Allocatable AND allocated: `describe node`, not `get node -o wide`, is the
+  # one view that prints both — the "Allocated resources" section at the
+  # bottom is what proves (or clears) node-capacity starvation.
+  timeout 60 kubectl --context "${CONTEXT}" describe node "${KIND_NODE}" \
+    >"${EVIDENCE_DIR}/failure-describe-node.txt" 2>&1 || true
+  timeout 60 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" \
+    --all-containers --tail=5000 >"${EVIDENCE_DIR}/failure-wardynd-logs.txt" 2>&1 || true
+  # Any per-run proxy pod still around (wardyn.component=proxy — the label
+  # internal/runner/k8s/naming.go stamps every proxy pod with): zero, one or
+  # several depending on exactly where the stuck run got to.
+  for pod in $(timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods \
+                 -l wardyn.component=proxy -o name 2>/dev/null | sed 's|^pod/||'); do
+    timeout 60 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" logs "${pod}" \
+      --all-containers --tail=5000 >"${EVIDENCE_DIR}/failure-proxy-logs-${pod}.txt" 2>&1 || true
+  done
+fi
 
 # /_seen is the one observation that is not Wardyn asserting about itself: it is
 # what the AWS SDK actually asked the portal to mint. Read through the harness's
@@ -799,7 +910,7 @@ fi
 echo
 
 # ── 6. THE ROLE WALK, on both chart renders ─────────────────────────────────
-# ui/e2e/live/sso-roles.spec.ts signs every Dex identity in and checks the role
+# ui/e2e/walk/sso-roles.spec.ts signs every Dex identity in and checks the role
 # it derives, the console it gets and three API tiers, plus the cross-member
 # existence oracle. It runs AFTER the AWS walk so it can change nothing that walk
 # depends on, then twice: on the render above (SSO + the admin token), and on
@@ -825,7 +936,7 @@ set_render() { # sso | sso-only
 roles_rc=0
 roles_leg() { # <render>
   curl -s "${BASE_URL}/healthz" >"${EVIDENCE_DIR}/roles-$1-healthz.json"
-  WARDYN_LIVE_ROLES_RENDER="$1" ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/roles-$1.log"
+  WARDYN_WALK_ROLES_RENDER="$1" ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/roles-$1.log"
   [[ "${PIPESTATUS[0]}" -eq 0 ]] || roles_rc=1
 }
 step "role walk, render: SSO + admin token"

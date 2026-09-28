@@ -6,11 +6,12 @@ package secretmask
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-// TestRegistryMaskerIsCachedPerGeneration pins F076's rebuild half: the two
+// TestRegistryMaskerIsCachedPerGeneration pins the rebuild half: the two
 // masking consumers (api's liveMaskWriter on every PTY chunk, wardynd's
 // maskingRecorder on every audit event) called NewMasker(Snapshot(id)) per
 // event, which clones the corpus twice and sorts it. The registry now derives
@@ -36,7 +37,7 @@ func TestRegistryMaskerIsCachedPerGeneration(t *testing.T) {
 		t.Errorf("a secret registered after the first Masker() was not masked: %q", got)
 	}
 	// So must a global, and an eviction.
-	r.AddGlobal([]byte("a-late-process-global-value"))
+	r.AddGlobal("", "test-credential", time.Now(), []byte("a-late-process-global-value"))
 	if got := r.Masker(runID).Mask([]byte("x a-late-process-global-value y")); bytes.Contains(got, []byte("a-late-process-global")) {
 		t.Errorf("a global registered after the last Masker() was not masked: %q", got)
 	}

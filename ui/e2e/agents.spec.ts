@@ -12,6 +12,7 @@ import {
   navToRoute,
 } from "./fixtures";
 import { AGENTS, AGENTS_DRAFT, MODEL_ACCESS_CHIP_LABEL, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import { RUN_DETAIL } from "../src/app/components/wardyn/copy/run-cockpit";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -49,9 +50,9 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
 async function gotoAgentsTab(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/settings");
+  await navToRoute(page, "/admin/settings");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-  await expect(page).toHaveURL(/\/providers$/);
+  await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
@@ -178,22 +179,22 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     expect(res.status()).toBe(422);
     const { error } = await res.json();
     expect(error).toMatch(
-      /^this run's model access is configured as Amazon Bedrock \(bearer key\), and that credential is not configured/,
+      /^This run's model access is configured as Amazon Bedrock \(bearer key\), and that credential is not configured/,
     );
   });
 });
 
-// A launch whose 201 carries warnings[] (the C-UI review fix pass): the
-// screen stays put, lists the warnings, and Launch becomes "Open run" — no
-// toast, no timer, nothing navigates until that button is clicked. Spliced
-// on the create response (route.fetch() + patch + refulfill): this harness's
+// A launch whose 201 carries warnings[] (#125): the run page renders them
+// immediately — the console navigates there in the SAME TICK, no held screen,
+// no toast, no timer — and Dismiss clears them client-side. Spliced on the
+// create response (route.fetch() + patch + refulfill): this harness's
 // admin-token caller is never member-clamped for real (isOperator
 // short-circuits governance resolution, drives.spec.ts's own documented
 // reason), so a genuine 201-with-warnings needs a member session this
 // harness cannot mint. The CLIENT behavior this pins is C-UI's; the clamping
 // itself is B-α/A2's, Go-tested.
-test.describe("agents — a 201 carrying warnings holds the screen (no timer)", () => {
-  test("warnings render inline and Open run navigates only on click", async ({ page }) => {
+test.describe("agents — a 201 carrying warnings navigates straight to the run", () => {
+  test("navigates immediately, renders the warnings on the run page, and Dismiss clears them", async ({ page }) => {
     // The prior describe block left claude-code declared as bedrock_bearer
     // with nothing configured — a real launch would now itself 422 at the
     // declared-mechanism gate, before ever reaching the splice below. Back to
@@ -215,16 +216,14 @@ test.describe("agents — a 201 carrying warnings holds the screen (no timer)", 
     await page.getByLabel("Title").fill("e2e launch warnings");
     await page.getByRole("button", { name: "Launch run" }).click();
 
+    // Navigates in the same tick — no held /runs/new, no "Open run".
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
     await expect(page.getByText("Egress narrowed to api.anthropic.com by member policy.")).toBeVisible();
-    const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
-    await expect(openRun).toBeVisible();
-    // No navigation yet — still on /runs/new.
-    await expect(page).toHaveURL(/\/runs\/new$/);
-    await expect(page.getByRole("button", { name: "Launch run" })).toHaveCount(0);
+    await expect(page.getByText(RUN_DETAIL.LAUNCH_WARNING_EPHEMERAL)).toBeVisible();
 
-    await openRun.click();
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    await page.getByRole("button", { name: RUN_DETAIL.LAUNCH_WARNING_DISMISS }).click();
+    await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toHaveCount(0);
   });
 });
 
@@ -235,11 +234,20 @@ test.describe("agents — a 201 carrying warnings holds the screen (no timer)", 
 // harness can trigger), so both arms are spliced.
 test.describe("agents — the roster-unknown and empty-roster states withhold Save", () => {
   test("an absent `harnesses` field renders FETCH_FAILED_* with no Save", async ({ page }) => {
+    // Cache-and-serve, not route.fetch()+refulfill per match: gotoAgentsTab's
+    // walk (landing redirect, then settings-screen and providers-screen each
+    // mounting) hits /setup/status more than once, and a real round trip PER
+    // match raced Playwright disposing an in-flight route's response at
+    // teardown ("apiResponse.json: Response has been disposed").
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      delete json.harnesses;
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const response = await route.fetch();
+        const json = await response.json();
+        delete json.harnesses;
+        cached = json;
+      }
+      await route.fulfill({ json: cached! });
     });
     await gotoAgentsTab(page);
     await expect(page.getByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeVisible();
@@ -247,11 +255,16 @@ test.describe("agents — the roster-unknown and empty-roster states withhold Sa
   });
 
   test("a genuinely empty roster ([]) shows the lead, no rows, and no Save", async ({ page }) => {
+    // Cache-and-serve (same reason as the FETCH_FAILED case above).
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.harnesses = [];
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const response = await route.fetch();
+        const json = await response.json();
+        json.harnesses = [];
+        cached = json;
+      }
+      await route.fulfill({ json: cached! });
     });
     await gotoAgentsTab(page);
     await expect(page.getByText(AGENTS.AGENTS_LEAD)).toBeVisible();
@@ -279,22 +292,29 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
       page,
     }) => {
       await mockMemberRole(page);
+      // Cache-and-serve, not route.fetch()+refulfill per match: the landing
+      // redirect and the setup screen's own mount both hit /setup/status (same
+      // reason as the FETCH_FAILED/empty-roster cases above).
+      let cached: Record<string, unknown> | null = null;
       await page.route("**/api/v1/setup/status*", async (route) => {
-        const response = await route.fetch();
-        const json = await response.json();
-        json.model_access = { state: c.state };
-        // U-1 (W6 blind lens): the roster row rides the splice now. `live` and
-        // `expiring` are PER-PERSON labels, and the server emits the same two
-        // states for a SHARED row's admin credential — where the chip row says
-        // "Provided by your admin", because that is whose credential it is. The
-        // six labels this case walks are the per_user lane's, so the fixture is
-        // the per_user lane.
-        json.harnesses = (json.harnesses ?? []).map((h: { id: string }) =>
-          h.id === "claude-code"
-            ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-            : h,
-        );
-        await route.fulfill({ response, json });
+        if (!cached) {
+          const response = await route.fetch();
+          const json = await response.json();
+          json.model_access = { state: c.state };
+          // U-1 (W6 blind lens): the roster row rides the splice now. `live` and
+          // `expiring` are PER-PERSON labels, and the server emits the same two
+          // states for a SHARED row's admin credential — where the chip row says
+          // "Provided by your admin", because that is whose credential it is. The
+          // six labels this case walks are the per_user lane's, so the fixture is
+          // the per_user lane.
+          json.harnesses = (json.harnesses ?? []).map((h: { id: string }) =>
+            h.id === "claude-code"
+              ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+              : h,
+          );
+          cached = json;
+        }
+        await route.fulfill({ json: cached! });
       });
       await gotoConsole(page);
       await navToRoute(page, "/setup");

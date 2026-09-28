@@ -22,18 +22,20 @@ import type {
   ConfinementClass,
   ModelCredential,
   PreflightResult,
+  PushRulesSpec,
   RunPolicySpec,
   SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
-import { Button } from "../../ui/button";
+import { PUSH } from "../../wardyn/copy/push";
+import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
@@ -42,6 +44,7 @@ import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import {
   useClaimModelAccessDoor,
   useModelAccessDoor,
+  useShellSetupStatus,
   type ModelAccessDoorHandle,
 } from "../../wardyn/model-access-context";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
@@ -66,8 +69,16 @@ interface RunRailProps {
   showHoldNote: boolean;
   /** The run's tool_rules in one line, or null when it has none. */
   toolRules: string | null;
+  /** The run's push_rules, from the SAME spec toolRules reads — the section
+   *  renders only when pushRulesIsSet(pushRules) (#181). */
+  pushRules?: PushRulesSpec;
+  /** True for a batch/non-interactive run — nobody is here to answer a held
+   *  push, so PUSH.RAIL_UNATTENDED joins the section when it renders at all. */
+  unattended: boolean;
   launch: {
-    onLaunch: () => void;
+    /** Resolves to the server's refusal when the screen was gone before the
+     *  answer came (use-launch.ts) — the strip shows it then (B9, #146). */
+    onLaunch: () => void | Promise<string | void>;
     /** useDeferredBusy: disabled the instant it fires. */
     disabled: boolean;
     /** useDeferredBusy: the spinner arrives ~200ms later. */
@@ -75,21 +86,31 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** #922 review F5: an ADDITIONAL disable with no text of its own — the
+     *  workspace picker's own advisory line (workspace-card.tsx) already
+     *  names the reason, so Launch disables without the rail repeating the
+     *  same sentence a second time. Optional so every other caller (this
+     *  type's only other use is new-run-screen.tsx) is unaffected. */
+    workspaceUnavailable?: boolean;
     error: string | null;
+    /** Bumped on every failed launch (see use-launch.ts) so a repeated,
+     *  identical failure remounts the alert region and is re-announced (#459). */
+    errorSeq: number;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
     credentialRefused: boolean;
-    /** The 201's advisory `warnings[]`, once Launch has actually fired
-     *  (§5c.8) — rendered here, inline, instead of a toast. */
-    warnings: string[];
-    /** Set once a run launched with warnings: the screen stays put and this
-     *  replaces Launch, so the member opens the run when they have read them.
-     *  Null on every other state. A timed redirect races every other
-     *  navigation off the screen, so this must replace Launch instead. */
-    onOpenRun: (() => void) | null;
+    /** The provider that refusal names (#532), "" when none: its door is the
+     *  one that opens (#543). Optional so a caller with no provider block
+     *  passes nothing. */
+    refusedProvider?: string;
   };
-  preflight: { error: string | null; result: PreflightResult | null };
+  preflight: {
+    error: string | null;
+    /** Same remount purpose as launch.errorSeq, for the preflight alert. */
+    errorSeq: number;
+    result: PreflightResult | null;
+  };
   /**
    * The picked agent's /setup/status roster row — withheld by the screen for a
    * run that makes no model call (a shell command), so its absence is also how
@@ -325,6 +346,21 @@ function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
   );
 }
 
+// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
+// EXACTLY: what "the policy has push rules" means everywhere it's asked,
+// which is NOT a bare truthiness check on the field. An all-zero-but-present
+// {} (a literal `push_rules: {}`) carries no actual rule and must read like
+// an absent field, same as the Go reader — a policy stored before this field
+// existed, and one that sets it to nothing, look identical.
+//
+// Lives here, not in lib/types/policy.ts, because RunRail below is this
+// function's only caller: policy.ts is eager (other exports there reach the
+// runs board) and this screen is lazy — bundle-split fix, #181, same pattern
+// push-content-card.tsx's isPushContentRequest documents.
+export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
+  return !!s && ((s.deny_paths?.length ?? 0) > 0 || (s.require_review_paths?.length ?? 0) > 0 || (s.max_inspect_pack_mib ?? 0) > 0);
+}
+
 export function RunRail({
   governanceProfile,
   savedPolicy,
@@ -333,6 +369,8 @@ export function RunRail({
   startup,
   showHoldNote,
   toolRules,
+  pushRules,
+  unattended,
   launch,
   preflight,
   agentRow,
@@ -385,17 +423,35 @@ export function RunRail({
   const onLaunchRef = React.useRef(launch.onLaunch);
   onLaunchRef.current = launch.onLaunch;
   const autoOpened = React.useRef(false);
+  const { status: shellStatus } = useShellSetupStatus();
+  const refusedProvider = launch.refusedProvider ?? "";
+  const providerBlock = !!shellStatus?.model_providers;
   React.useEffect(() => {
     if (!launch.credentialRefused || autoOpened.current) return;
     autoOpened.current = true;
-    // The audience rule modelAccessDoor already states: a sign-in repairs a
-    // bedrock_sso lane for its per_user owner, or for any operator (a shared
-    // row); a member under a shared row keeps the server's sentence, no door.
-    if (door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
-    door.openDoor(launchRef.current, () => onLaunchRef.current());
+    if (door.open) return;
+    if (refusedProvider) {
+      // #543 (§5.8): the door of the provider the refusal names — never the
+      // agent or provider selected on screen, which may have moved since the
+      // click (#146's ruling). A provider this person has no door for opens
+      // nothing (resolveDoor's null) and the sentence stands.
+      door.openDoor({ for: { provider: refusedProvider }, returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    } else {
+      // A refusal naming no provider under a provider block (a sign-in renewal
+      // that did not complete) has no door. #725/T-65: door.bedrockSSO grades
+      // the claude-code row ALONE (modelAccessDoor mirrors
+      // internal/api/modelaccess.go's modelAccessAgent) — it says nothing about
+      // which agent THIS run picked, so a codex launch refused for its OWN
+      // model_credential reason must not open "Sign in to AWS". Otherwise the
+      // audience rule modelAccessDoor already states: a sign-in repairs a
+      // bedrock_sso lane for its per_user owner, or for any operator (a shared
+      // row); a member under a shared row keeps the server's sentence, no door.
+      if (providerBlock || agentRow?.id !== MODEL_ACCESS_AGENT || !door.bedrockSSO || !(door.perUser || door.operator)) return;
+      door.openDoor({ returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    }
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+  }, [launch.credentialRefused, refusedProvider, providerBlock, agentRow?.id, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -411,6 +467,15 @@ export function RunRail({
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
   const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
+  // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
+  // require_review_paths at all): there is nothing to say about PATHS in
+  // that case, and "0 paths denied · 0 paths held for review" reads as a
+  // real (empty) rule set rather than "no path rule". The section stays
+  // hidden entirely rather than rendering that sentence.
+  const pushDeniedCount = pushRules?.deny_paths?.length ?? 0;
+  const pushReviewCount = pushRules?.require_review_paths?.length ?? 0;
+  const showPushRules = pushRulesIsSet(pushRules) && (pushDeniedCount > 0 || pushReviewCount > 0);
   return (
     // A sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
@@ -500,7 +565,7 @@ export function RunRail({
               sign-in at all"), independent of showModelWarning below (a
               deployment fact — some model path exists at all). */}
           {showModelAccess && (
-            <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
+            <ModelAccessLine door={door} onSignIn={() => door.openDoor({ returnTo: launchRef.current })} />
           )}
           {/* The per-person line supersedes the deployment one when both would
               otherwise render: under a per_user row,
@@ -519,7 +584,7 @@ export function RunRail({
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
-              <Link to="/settings" className="font-medium text-info hover:underline">
+              <Link to="/account" className="font-medium text-info hover:underline">
                 {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
               </Link>
             </p>
@@ -551,6 +616,25 @@ export function RunRail({
           </RailSection>
         )}
 
+        {/* #181 — push_rules counts, the same "policy has this section or it
+            doesn't" shape Tool rules above uses. showPushRules mirrors the Go
+            PushRulesSpec.IsSet() reader AND requires at least one actual
+            path rule (review finding 6) — a stored `{}`, or a spec that sets
+            only max_inspect_pack_mib, reads as no section rather than "0
+            paths denied · 0 paths held for review". The unattended note is
+            gated on require_review_paths alone: an unattended run refuses a
+            REVIEW match outright (push_rules.go), but a deny_paths match is
+            refused identically whether the run is attended or not, so the
+            note would be true of a section with no review rule in it. */}
+        {showPushRules && (
+          <RailSection title={PUSH.RAIL_TITLE}>
+            <p className="text-xs text-muted-foreground">{PUSH.RAIL_BODY(pushDeniedCount, pushReviewCount)}</p>
+            {unattended && pushReviewCount > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>
+            )}
+          </RailSection>
+        )}
+
         {/* A stock Helm install leaves persistence.enabled=false, so this
             promise was false out of the box — and wrong in both dangerous
             directions at once. The shared hook is the same /healthz read the
@@ -572,55 +656,46 @@ export function RunRail({
       </div>
 
       {launch.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+        // key={launch.errorSeq}: a re-announce of the SAME sentence still
+        // needs a fresh DOM node — an update in place is silent to a screen
+        // reader on a live region (#459).
+        <p
+          key={launch.errorSeq}
+          role="alert"
+          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
+        >
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {launch.error}
+          <span>
+            <span className="sr-only">{RAIL.LAUNCH_ERROR_LABEL}</span> {launch.error}
+          </span>
         </p>
-      )}
-
-      {/* §5c.8: the 201's advisory warnings, inline — the toast this replaced
-          was gone the instant the run navigated away. */}
-      {launch.warnings.length > 0 && (
-        <div className="mt-3 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-warning">
-          <p className="font-medium text-foreground">{AGENTS.LAUNCH_WARNING_TITLE}</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {launch.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </div>
       )}
 
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
           Launch, because "what would be clamped" is the last thing read before
-          committing. */}
+          committing. #125: a 2xx launch (warnings or not) navigates straight to
+          the run in the same tick, so there is no longer a held state for this
+          button to become — any advisory warnings render on the run page
+          instead (run-detail/launch-warnings-note.tsx). */}
       <div className="mt-4 flex gap-2">
-        {launch.onOpenRun ? (
-          // The run is launched — Launch has nothing left to do, and the one
-          // teal here becomes the way on. Nothing navigates until it is clicked.
-          <Button type="button" className="flex-1" onClick={launch.onOpenRun}>
-            {AGENTS.OPEN_RUN_CTA}
-          </Button>
-        ) : (
-          <Button
-            ref={launchRef}
-            type="button"
-            className="flex-1"
-            disabled={launch.disabled || !!launch.problem}
-            onClick={() => {
-              autoOpened.current = false;
-              launch.onLaunch();
-            }}
-          >
-            {/* The icon slot always renders (never just on launching) so the
-                has-[>svg] padding rule and the icon+gap width never change —
-                toggling `invisible` cannot shift "Launch run" sideways the way
-                mounting/unmounting the icon would. */}
-            <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
-            Launch run
-          </Button>
-        )}
+        <Button
+          ref={launchRef}
+          type="button"
+          className="flex-1"
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable}
+          onClick={() => {
+            autoOpened.current = false;
+            void launch.onLaunch();
+          }}
+        >
+          {/* The icon slot always renders (never just on launching) so the
+              has-[>svg] padding rule and the icon+gap width never change —
+              toggling `invisible` cannot shift "Launch run" sideways the way
+              mounting/unmounting the icon would. */}
+          <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
+          Launch run
+        </Button>
       </div>
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's
@@ -630,9 +705,15 @@ export function RunRail({
       )}
 
       {preflight.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+        <p
+          key={preflight.errorSeq}
+          role="alert"
+          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
+        >
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {preflight.error}
+          <span>
+            <span className="sr-only">{RAIL.PREFLIGHT_ERROR_LABEL}</span> {preflight.error}
+          </span>
         </p>
       )}
       {/* Unframed: a bordered box inside the rail card is a card in a card
@@ -678,10 +759,10 @@ export function RunRail({
                 href={adoDialog.blockedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium text-info hover:underline"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
                 onClick={adoDialog.onFallbackClick}
               >
-                {ADO.CONNECT_CTA}
+                {ADO.CONNECT_POPUP_OPEN}
               </a>
             </p>
           )}

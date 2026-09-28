@@ -17,7 +17,7 @@ import (
 
 // canSeeApproval reports whether this caller may be told that ap EXISTS — the
 // security tier, which decides any kind on any run, or a caller who owns ap's
-// run (or is an admin), which is the same ownership rule authorizeMemberDecision
+// run (or is an admin), which is the same ownership rule authorizeUserDecision
 // (approvals.go) applies. Everyone else is told nothing, so no refusal above can become
 // the existence oracle the two 404s in that gate exist to deny.
 func (s *Server) canSeeApproval(r *http.Request, ap types.ApprovalRequest) bool {

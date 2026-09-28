@@ -14,7 +14,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { onUnauthorized, probeAuth, safeReturnPath, setToken } from "./lib/api/core";
+import { getToken, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 // From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
@@ -27,20 +27,13 @@ import {
   setupGateActive,
 } from "./components/screens/setup/setup-gate";
 import { useOperatorResolved, useRole, useRoleResolved } from "./components/wardyn/operator-context";
-import { approvals as approvalsApi } from "./lib/api/approvals";
-import { runs as runsApi } from "./lib/api/runs";
-import { usePoll } from "./lib/use-poll";
-import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
+import { attention as attentionApi } from "./lib/api/attention";
+import { PollPauseContext, usePoll } from "./lib/use-poll";
+import { ReauthContext, useReauthController } from "./lib/reauth";
 import { ModelAccessProvider } from "./components/wardyn/model-access-context";
-import type {
-  AgentRun,
-  ApprovalRequest,
-  SetupStatus,
-} from "./lib/types";
-import {
-  approvalSignals,
-  needsAttention,
-} from "./components/screens/runs/board-groups";
+import { ViewGate, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
+import { appURL } from "./lib/base-path";
+import type { SetupStatus } from "./lib/types";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
@@ -109,14 +102,37 @@ const PermissionsScreen = React.lazy(() =>
     default: m.PermissionsScreen,
   })),
 );
+// User types (0.8, UT-7a) — the org-defined kinds of person every "Available
+// to" control and subject picker names. securityOps server-side, like
+// Governance; no member route.
+const UserTypesScreen = React.lazy(() =>
+  import("./components/screens/user-types/user-types-screen").then((m) => ({
+    default: m.UserTypesScreen,
+  })),
+);
+// Stored credentials (CS-8, design F-1) — who holds a credential for which
+// model provider, and offboarding's erase. securityOps server-side, like
+// User types; no member route.
+const CredentialsScreen = React.lazy(() =>
+  import("./components/screens/credentials").then((m) => ({
+    default: m.CredentialsScreen,
+  })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({
     default: m.SecretsScreen,
   })),
 );
-const SettingsScreen = React.lazy(() =>
-  import("./components/screens/settings/settings-screen").then((m) => ({
-    default: m.SettingsScreen,
+// M-5 (#636): the settings split — one screen per view (§4.3), replacing the
+// single SettingsScreen that used to mount unchanged at both routes.
+const AdminSettingsScreen = React.lazy(() =>
+  import("./components/screens/settings/admin-settings-screen").then((m) => ({
+    default: m.AdminSettingsScreen,
+  })),
+);
+const YourAccountScreen = React.lazy(() =>
+  import("./components/screens/settings/your-account-screen").then((m) => ({
+    default: m.YourAccountScreen,
   })),
 );
 const WorkspacesScreen = React.lazy(() =>
@@ -139,11 +155,6 @@ const AuditScreen = React.lazy(() =>
 const RecordingScreen = React.lazy(() =>
   import("./components/screens/recording").then((m) => ({
     default: m.RecordingScreen,
-  })),
-);
-const SSHKeysScreen = React.lazy(() =>
-  import("./components/screens/ssh-keys").then((m) => ({
-    default: m.SSHKeysScreen,
   })),
 );
 // The guided Getting Started funnel — an operator-chosen route, not a gate:
@@ -169,6 +180,10 @@ function RouteFallback() {
       <span className="sr-only">Loading…</span>
     </div>
   );
+}
+
+function suspend(screen: React.ReactNode) {
+  return <React.Suspense fallback={<RouteFallback />}>{screen}</React.Suspense>;
 }
 
 // `/setup` is a member's landing route too (setup-gate.ts's setupGateActive
@@ -200,6 +215,15 @@ function SetupRoute({
   React.useEffect(() => {
     void import("./components/screens/onboarding/onboarding-screen");
   }, []);
+  // Being IN the funnel satisfies the gate's purpose for this load, so arriving
+  // here seals it (setup-gate.ts's gateFiredAt). A load can start directly on
+  // /setup (a reload while onboarding, the SSO callback's return), outside the
+  // gate's wrapper; unsealed, the funnel's own "Open Permissions" would bounce
+  // back to step one. Here, not in the lazy funnel, so sealing never waits on
+  // its chunk.
+  React.useEffect(() => {
+    markGateFired();
+  }, []);
   if (!roleResolved) return <RouteFallback />;
   return (
     <React.Suspense fallback={<RouteFallback />}>
@@ -229,8 +253,12 @@ function SetupRoute({
 // under the role context's fail-open "admin" default, which reads has_runs
 // against the wrong rule. Hooks are called unconditionally, before either
 // early return, per the rules of hooks.
-export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
+//
+// `admin` is the Admin view's own landing (`/admin`); `/` lands by view
+// (console-view.tsx#viewLanding).
+export function FirstRunLanding({ status, admin = false }: { status: SetupStatus | null; admin?: boolean }) {
   const role = useRole();
+  const access = useViewAccess();
   const roleResolved = useRoleResolved();
   // B1: "settled" is not "answered". roleResolved flips on a FAILED /me too (it
   // is the stop-spinning signal and must stay that), which left this gate
@@ -241,7 +269,10 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
   const identityResolved = useOperatorResolved();
   if (roleResolved && !identityResolved) return null;
   if (status === null || !roleResolved) return <RouteFallback />;
-  return <Navigate to={firstRunLanding(status, role)} replace />;
+  const base = firstRunLanding(status, role);
+  // A user's landing is theirs alone, whatever the view context says.
+  const to = admin ? `/admin${base}` : role === "user" ? base : viewLanding(base, access);
+  return <Navigate to={to} replace />;
 }
 
 // The hard gate: while the daemon marks any setup check `blocking`, every route
@@ -258,9 +289,10 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
 // the DAEMON names the rows that mean it (a dead runner, an unenforceable
 // confinement floor, SSO with no role mapping) — a grade alone never holds it,
 // and a row about the caller's own credential never can.
-function RequireSetup({ status }: { status: SetupStatus | null }) {
+export function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
+  const { key } = useLocation();
   // B1, same reasoning as FirstRunLanding above: setupGateActive() reads the
   // role, so a /me that never answered would bounce an unknown human into the
   // ADMIN funnel on the fail-open default. Decline to gate instead — the route
@@ -280,20 +312,22 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
   // OUT of the funnel afterwards is informed wandering, not a gate escape —
   // the failing checks stay visible on every surface, and the funnel's own
   // affordances (People's "Open Permissions" et al.) must be able to leave.
-  // See setup-gate.ts's gateFiredThisLoad for why this is module state.
-  if (!gateAlreadyFired() && setupGateActive(status, role)) {
-    markGateFired();
-    return <Navigate to="/setup" replace />;
+  // See setup-gate.ts's gateFiredAt for why this is module state, and why it
+  // is keyed by location.
+  if (!gateAlreadyFired(key) && setupGateActive(status, role)) {
+    markGateFired(key);
+    // Only an admin is ever gated, and the funnel is the Admin view's.
+    return <Navigate to="/admin/setup" replace />;
   }
   return <Outlet />;
 }
 
-// What needs an operator's attention — surfaced as the amber count badge on the
-// Runs nav entry — is `needsAttention` in screens/runs/board-groups, the SAME
-// predicate the board itself renders. A second, hand-copied set of run states
-// here could disagree with the board about the same run: neither would know
-// about a held approval, which parks the sandbox while the run state stays
-// RUNNING, so a run the board shows as blocked could go unbadged.
+// What needs an operator's attention — surfaced as the amber count badge on
+// the Runs nav entry — is now GET /me/attention's own needs_you (#1197:
+// internal/api/run_attention.go's attention rule, projected server-side). A
+// second, hand-copied predicate here could disagree with the server about
+// the same run; the Runs board's own local count (screens/runs/board-groups)
+// is still client-computed until L3 folds it into the same server rule.
 
 // The Runs attention badge and the Approvals pending badge are background
 // signals visible from every screen, so both are polled — approvals can now be
@@ -315,78 +349,58 @@ const ATTENTION_POLL_MS = 5000;
 // A named module constant on purpose: a field report moves one number here.
 const MODEL_ACCESS_POLL_MS = 300_000;
 
-// M2: can THIS role reach a captured return path? Scoped to the one place a
-// wrong answer is a dead end the plan named (restoring a mid-session-401
-// path after re-auth) — NOT a general client-side route guard (nav-hiding
-// elsewhere is deliberately cosmetic; the server is the real gate). Mirrors
-// this file's own <Route> tree tiers below: a member's REACHABLE surface is
-// wider than their NAV set — Runs/Approvals/Workspaces PLUS the three
-// self-service routes with no sidebar entry at all (/secrets: WRITE/DELETE
-// are self-service since migration 0050, routes.go; /settings and
-// /ssh-keys: the account menu renders both for every role,
-// app-shell.tsx:820-831). /drives and /providers are the two SUPER-only
-// routes with no nav entry for anyone, gated operatorOnly server-side —
-// restorable only for an actual admin, never a security admin either.
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/settings", "/ssh-keys"];
-const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
-export function roleCanReach(path: string, role: string): boolean {
-  const under = (prefixes: string[]) =>
-    prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
-  if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
-  return true;
-}
-
 export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
   const [attentionCount, setAttentionCount] = React.useState(0);
   const navigate = useNavigate();
-  // X3-F7: why the gate reopened (rendered in SignIn's own alert slot) and
-  // where to return once re-authenticated. The path is captured by wfetch
-  // itself (lib/api/core.ts), not read here — by the time this component
-  // could ask, the routed tree the SignIn branch replaces (rendered OUTSIDE
-  // <Routes> below) is already gone.
-  const [authReason, setAuthReason] = React.useState<string | undefined>();
-  const returnPathRef = React.useRef<string | null>(null);
+  // #483: a 401 on a signed-in console keeps the page and asks over it
+  // (lib/reauth.ts; the shell's reauth layer draws it). The full sign-in
+  // screen is only for a load with no session at all, and its notice only
+  // for a session this browser held that was refused on load (a stored
+  // token the mount probe sent and got a 401 for) — never a first visit,
+  // never a deliberate sign-out.
+  const [signedOut, setSignedOut] = React.useState(false);
+  const signingOutRef = React.useRef(false);
+  // Someone else signed in over the page: nothing of it may survive, so the
+  // tree unmounts first (dropping every draft and its beforeunload guard)
+  // and the document then loads fresh as them.
+  const [reloadTo, setReloadTo] = React.useState<string | null>(null);
+  const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo);
+  const lapsed = reauth.phase !== "none";
   // H1: onUnauthorized fires for EVERY 401, including the cold mount probe
   // (no session at all yet) — mirrored in a ref (not read from `auth` state
-  // directly) because the handler below is registered once, in a mount
-  // effect with an empty dep array, and closing over `auth` there would
-  // freeze it at "checking" forever.
+  // directly) because the handler below is registered once (its only
+  // dependency is stable), and closing over `auth` there would freeze it at
+  // "checking" forever.
   const authRef = React.useRef<AuthStatus>(auth);
   React.useEffect(() => {
     authRef.current = auth;
   }, [auth]);
   const location = useLocation();
 
-  // Both badges come off ONE tick, because the attention count is now a join:
-  // a run is blocked when a held approval is parked on it, which lives in the
-  // approvals list, not on the run. Fetching them apart would let the two
-  // halves land a poll out of step and flash a wrong count. Each half fails
-  // independently — a broken approvals call still leaves an honest run badge.
-  // Counts, not lists, stay in state: this re-renders the whole shell, and the
-  // number is the only thing it renders.
-  // RETURNED for usePoll's in-flight guard (R4-F074): the badge fetch is two
-  // un-scoped LIST_LIMIT reads, the most expensive tick in the shell.
+  // Both badges come off ONE small object now (#1197): GET /me/attention
+  // replaces the old two-list join (an unscoped listApprovals + listRuns,
+  // joined client-side via board-groups.ts's approvalSignals/needsAttention)
+  // with one server-scoped read. Counts, not lists, stay in state: this
+  // re-renders the whole shell, and the number is the only thing it renders.
+  // RETURNED for usePoll's in-flight guard (R4-F074).
+  //
+  // view is the console's own path view (console-view.tsx's viewOfPath),
+  // NOT the server-side user/admin session split — same distinction
+  // GET /runs?view= and GET /approvals?view= already draw.
   const refreshBadges = React.useCallback(() => {
-    return Promise.all([
-      approvalsApi.listApprovals("PENDING").catch(() => null),
-      runsApi.listRuns().catch(() => null),
-      /* both already route 401 through onUnauthorized */
-    ]).then(
-      ([approvals, runs]: [ApprovalRequest[] | null, AgentRun[] | null]) => {
-        const pending = approvals?.filter((a) => a.state === "PENDING") ?? [];
-        if (approvals) setPendingApprovals(pending.length);
-        if (runs) {
-          const signals = approvalSignals(pending);
-          setAttentionCount(
-            runs.filter((r) => needsAttention(r, signals)).length,
-          );
-        }
-      },
-    );
-  }, []);
+    return attentionApi
+      .getMeAttention(viewOfPath(location.pathname))
+      .then((counts) => {
+        setPendingApprovals(counts.pending_approvals);
+        setAttentionCount(counts.needs_you);
+        /* 401 already routes through onUnauthorized */
+      })
+      .catch(() => {
+        /* leave the last-known counts in place */
+      });
+  }, [location.pathname]);
 
   // Probe auth on mount: a live OIDC session cookie or a stored admin token
   // lets us straight into the console; otherwise show the sign-in gate.
@@ -400,9 +414,11 @@ export default function App() {
   // so that flag clears itself the moment the daemon comes back.
   React.useEffect(() => {
     let active = true;
+    const hadToken = getToken() !== null;
     void probeAuth().then((probe) => {
       if (!active) return;
       if (probe === "unreachable") setUnreachable(true);
+      if (probe === "unauthed" && hadToken) setSignedOut(true);
       setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {
@@ -410,47 +426,40 @@ export default function App() {
     };
   }, []);
 
-  // An expired session / revoked token (any HTTP 401) returns to the gate —
-  // X3-F7: carrying WHY (into SignIn's alert slot) and WHERE FROM (restored
-  // after re-auth below), so a mid-session expiry stops reading as a silent
-  // teleport back to the gate with everything unexplained and unrecoverable.
+  // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
+  // established this tab), which is the gate's business, not the dialog's.
   React.useEffect(() => {
-    onUnauthorized((reason, path) => {
-      // H1: this fires for EVERY 401, including the cold mount probe above
-      // (no session ever established this tab) — a reason/return-path only
-      // means something for a session that WAS authed and just got cut off.
-      if (authRef.current === "authed") {
-        returnPathRef.current = path;
-        setAuthReason(reason);
-      }
-      setAuth("unauthed");
+    onUnauthorized((refused) => {
+      if (signingOutRef.current) return;
+      if (authRef.current !== "authed") return setAuth("unauthed");
+      // Held from this request on, not from the next render: no write may
+      // slip out between the 401 and the dialog (core.ts setSignedOutHold).
+      setSignedOutHold(true);
+      lapse(refused);
     });
-  }, []);
+  }, [lapse]);
+  // …and released only when the lapse ends: the same person resumed, or the
+  // console was signed out and reset.
+  React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
+  React.useEffect(() => {
+    if (reloadTo !== null) window.location.assign(appURL(safeReturnPath(reloadTo)));
+  }, [reloadTo]);
 
   React.useEffect(() => {
-    if (auth === "authed") refreshBadges();
+    // never rejects (each half is pre-caught above) — fire-and-forget is safe.
+    if (auth === "authed") void refreshBadges();
   }, [auth, refreshBadges]);
 
   // Keep both nav badges live across the whole console, not just while the
   // operator is on the Runs/Approvals screen (a decision made in RunDetail must
   // still tick the pending badge down).
-  // X3-F13: EXCEPT on /runs itself — the board already runs its own listRuns +
-  // listApprovals poll (runs.tsx, 3s) on the same two facts, so this tick (the
-  // most expensive one in the shell — two unscoped LIST_LIMIT reads, see
-  // refreshBadges above) would be pure duplication while parked there. R-1:
-  // that only holds because the board PUBLISHES its counts back up through
-  // publishAttention below — pausing this tick with nothing feeding the
-  // badges from the other side would freeze both of them for as long as the
-  // operator sat on /runs.
-  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || location.pathname === "/runs");
-  // R-1: the setter side of the publish — RunsScreen calls this (via
-  // usePublishAttention) every time its own fetch resolves, driving the SAME
-  // state the paused poll above would have updated. Stable identity so it is
-  // never itself a reason for the board to re-fetch.
-  const publishAttention = React.useCallback(({ pendingApprovals: p, attentionCount: a }: AttentionCounts) => {
-    setPendingApprovals(p);
-    setAttentionCount(a);
-  }, []);
+  // #1197 L3: the old X3-F13 pause (EXCEPT on /runs, because the board ran its
+  // own listRuns + listApprovals poll there and PUBLISHED counts back up
+  // through publishAttention) is gone along with that client-side join —
+  // RunsScreen now reads the same server `attention` GET /me/attention already
+  // projects, off its own GET /runs?view= fetch, so this poll runs everywhere,
+  // /runs included, with no publish side-channel needed to keep the badge fed.
+  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || lapsed);
 
   // Setup status feeds the first-run landing decision ("/" → tour or Runs).
   // Fetched ONCE per session: it is the expensive endpoint, and nothing in the
@@ -473,7 +482,13 @@ export default function App() {
         // flight across a sign-out, and its late answer describes the person
         // who just left.
         if (authRef.current !== "authed") return;
-        setSetupStatus(status);
+        // An `unreachable` answer is READY_FALLBACK's made-up payload (no
+        // checks, has_runs:false), so it never replaces a real one: the gate,
+        // the landing and the model-access door keep deciding from the last
+        // status the daemon actually sent. Only the FIRST read may land it —
+        // with nothing better known, it is what keeps a daemon that can't
+        // answer from trapping anyone in the funnel.
+        setSetupStatus((prev) => (status.unreachable && prev && !prev.unreachable ? prev : status));
       })
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
@@ -533,7 +548,7 @@ export default function App() {
   // is told at 09:00 and never again, and the strip below would be as stale as
   // the tab is old. Paused while unauthenticated — the endpoint 401s, and the
   // landing read above is what re-arms it.
-  usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed");
+  usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed" || lapsed);
   // R4/F027: reachability is NOT gated on being signed in. /healthz is the one
   // unauthenticated endpoint the console has, and the state where it matters
   // most is the one an auth-gated poll would skip — an outage that sent the
@@ -544,7 +559,7 @@ export default function App() {
   }, [refreshHealth]);
   usePoll(refreshHealth, HEALTH_POLL_MS, false);
 
-  if (auth === "checking") {
+  if (auth === "checking" || reloadTo !== null) {
     return (
       <ThemeProvider>
         <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
@@ -563,33 +578,12 @@ export default function App() {
     return (
       <ThemeProvider>
         <SignIn
-          reason={authReason}
-          onSignIn={async () => {
-            // X3-F7/H2: restore the path the 401 interrupted, same-origin
-            // pathname only (safeReturnPath) — root/setup are landing
-            // decisions, not "somewhere to return to", so those (and "no
-            // path captured", the ordinary mount-probe gate) fall back to
-            // Runs like every other finished flow.
-            const path = safeReturnPath(returnPathRef.current);
-            returnPathRef.current = null;
-            // M2: nothing to check for the Runs fallback itself — every role
-            // reaches it. A real captured path might belong to the caller
-            // who was signed in BEFORE (an admin's /drives), not whoever
-            // just signed back in on this tab — a member landing there
-            // would hit a bare 403 instead of the plan's stated /runs
-            // fallback, so ask who signed in before trusting it.
-            //
-            // L4: resolved BEFORE flipping auth, not after — the routed tree
-            // only mounts once auth is "authed", so awaiting here first
-            // (rather than between setAuth and navigate) means it never
-            // mounts for one commit at the pre-401 URL, firing an
-            // operator-only screen's own GET (and a 403 audit row) a beat
-            // before the bounce.
-            const me = path === "/runs" ? null : await health.whoami().catch(() => null);
-            const target = me && !roleCanReach(path, me.role) ? "/runs" : path;
-            setAuthReason(undefined);
+          reason={signedOut ? SESSION_ENDED_REASON : undefined}
+          onSignIn={() => {
+            signingOutRef.current = false;
+            setSignedOut(false);
             setAuth("authed");
-            navigate(target, { replace: true });
+            void navigate("/runs", { replace: true });
           }}
         />
         <Toaster />
@@ -599,7 +593,8 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      <AttentionPublisherProvider value={publishAttention}>
+      <ReauthContext.Provider value={reauth}>
+      <PollPauseContext.Provider value={lapsed}>
       {/* The door: one model-access answer and one sign-in dialog for the strip
           in the shell, the New Run rail, a credential-failed run's failure
           block and a held run's approval row — none of which can be reached by
@@ -627,17 +622,29 @@ export default function App() {
                 // one thing the button exists to prevent. The toast outlives
                 // the branch switch below: sonner's store is a module
                 // singleton and the sign-in gate mounts its own <Toaster />.
+                //
+                // #483: a deliberate sign-out is not a session that ended — the
+                // logout's own 401 (a session already dead) and any read still
+                // in flight must open neither the dialog nor the gate's notice.
+                //
+                // The signed-out hold stays up through the logout (which alone
+                // passes it, core.ts WfetchInit.endsSession) and drops with
+                // resetReauth below, once the logout has settled.
+                signingOutRef.current = true;
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });
                 }
                 setToken(null);
+                resetReauth();
+                setSignedOut(false);
                 setAuth("unauthed");
               }}
             />
           }
         >
+          <Route element={<ViewGate fallback={<RouteFallback />} />}>
           {/* /demos is gone — Getting Started IS the demos surface now, one
               step per demo, so a second page listing the same catalog would be
               a page inside a page. Same redirect precedent /integrations
@@ -660,11 +667,43 @@ export default function App() {
               />
             }
           />
+          {/* The Admin view's funnel: outside RequireSetup for the same reason
+              /setup is. onDone lands on /runs, which an SSO admin in the Admin
+              view is redirected from to its twin, and a single-operator install
+              is meant to reach once setup is done (D1). */}
+          <Route
+            path="/admin/setup"
+            element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
+          />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"
               element={<FirstRunLanding status={setupStatus} />}
             />
+            {/* The Admin view mounts today's screens unchanged; the server
+                scopes their data by the caller's real role. M-5 (#636) split
+                /admin/settings and /account into their own screens — see
+                AdminSettingsScreen/YourAccountScreen below. */}
+            <Route path="/admin" element={<FirstRunLanding status={setupStatus} admin />} />
+            <Route path="/admin/runs" element={<RunsScreen />} />
+            <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
+            <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
+            <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
+            <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
+            <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
+            <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
+            <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
+            <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
+            <Route path="/admin/credentials" element={suspend(<CredentialsScreen />)} />
+            <Route path="/admin/secrets" element={suspend(<SecretsScreen />)} />
+            <Route path="/admin/audit" element={suspend(<AuditScreen />)} />
+            <Route path="/admin/recordings" element={suspend(<RecordingScreen />)} />
+            <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
+            <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
+            <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
+            <Route path="/account" element={suspend(<YourAccountScreen />)} />
             <Route path="/runs" element={<RunsScreen />} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route
@@ -691,58 +730,14 @@ export default function App() {
                 </React.Suspense>
               }
             />
-            <Route
-              path="/policies"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <PoliciesScreen />
-                </React.Suspense>
-              }
-            />
-            {/* Between /policies and /permissions, the order the sidebar
-                reads (mock Q1). Gated server-side by the securityOps route
-                group; the screen itself gates its writes on
-                useSecurityOperator, and a member never sees the nav item. */}
-            <Route
-              path="/governance"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <GovernanceScreen />
-                </React.Suspense>
-              }
-            />
-            {/* SUPER, gated server-side by the operatorOnly route group; the
-                screen itself gates its writes on useOperator, and no nav entry
-                or entry point exists for a member or a security admin. */}
-            <Route
-              path="/drives"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <DrivesScreen />
-                </React.Suspense>
-              }
-            />
-            {/* SUPER, gated server-side by the operatorOnly route group (both
-                GET/PUT /workspace-providers); the screen itself gates its
-                writes on useOperator, and no nav entry or entry point exists
-                for a member or a security admin (their door is two numeric
-                rows on /governance instead). */}
-            <Route
-              path="/providers"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <ProvidersScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/permissions"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <PermissionsScreen />
-                </React.Suspense>
-              }
-            />
+            {/* M-1b: /policies, /governance, /drives, /providers, /permissions,
+                /integrations(/:id), /settings, /audit and /recordings are
+                deleted, clean break — each lives only at its /admin/* twin
+                now (mounted above). A stale bookmark or link falls to the
+                catch-all below. /secrets and /workspaces(/:id) stay: they're
+                in the User view's own URL scheme (admin-member-modes-design.md
+                §2.3). M-5 (#636) deleted /ssh-keys the same way — no alias;
+                SshKeysPane is mounted once now, in /account. */}
             <Route
               path="/secrets"
               element={
@@ -750,26 +745,6 @@ export default function App() {
                   <SecretsScreen />
                 </React.Suspense>
               }
-            />
-            {/* /integrations is gone — Settings is the one home for connections
-              now (Host · Model provider · Providers · Your SSH keys). The
-              redirect is kept because the barrier chip, the old account menu
-              and any operator bookmark pointed here. */}
-            <Route
-              path="/integrations"
-              element={<Navigate to="/settings" replace />}
-            />
-            <Route
-              path="/settings"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <SettingsScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/integrations/:id"
-              element={<Navigate to="/settings" replace />}
             />
             <Route
               path="/workspaces"
@@ -787,36 +762,14 @@ export default function App() {
                 </React.Suspense>
               }
             />
-            <Route
-              path="/audit"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <AuditScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/recordings"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <RecordingScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/ssh-keys"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <SSHKeysScreen />
-                </React.Suspense>
-              }
-            />
             <Route path="*" element={<Navigate to="/runs" replace />} />
+          </Route>
           </Route>
         </Route>
       </Routes>
       </ModelAccessProvider>
-      </AttentionPublisherProvider>
+      </PollPauseContext.Provider>
+      </ReauthContext.Provider>
       <Toaster />
     </ThemeProvider>
   );

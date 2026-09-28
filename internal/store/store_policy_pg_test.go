@@ -116,7 +116,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestPG_CreatePolicy_DuplicateName pins W20-S1-3 against the real driver: the
+// TestPG_CreatePolicy_DuplicateName pins against the real driver: the
 // run_policies.name UNIQUE constraint's 23505 must map to store.ErrConflict,
 // not surface as an opaque wrapped pgconn error the API layer can't classify.
 func TestPG_CreatePolicy_DuplicateName(t *testing.T) {
@@ -137,7 +137,7 @@ func TestPG_CreatePolicy_DuplicateName(t *testing.T) {
 	}
 }
 
-// TestPG_UpdatePolicy_DuplicateName is B1-F5, the UPDATE mirror of the test
+// TestPG_UpdatePolicy_DuplicateName is the UPDATE mirror of the test
 // above: renaming a policy ONTO a taken name raises the same 23505 as an
 // insert, and must map to store.ErrConflict so the API answers 409 instead of
 // a blanket 500 carrying the raw constraint text.

@@ -18,7 +18,7 @@ import (
 )
 
 // bedrockAWSDirCfg is the HOST-MODE Bedrock posture: no stored credential of
-// any kind, an existing ~/.aws to bind read-only. The residual B2-F4 is about is
+// any kind, an existing ~/.aws to bind read-only. The residual risk is
 // sharpest here — the operator's whole AWS config directory in the sandbox of a
 // principal whose profile denies Bedrock outright.
 func bedrockAWSDirCfg(t *testing.T) Config {
@@ -55,8 +55,6 @@ func ceilingBedrockFixture(t *testing.T, cfg Config) (*Server, *recRecorder, typ
 	return srv, audit, run, llm, sandboxEnv, policy
 }
 
-// TestCeilingReassert_WithholdsTheResidentBedrockLane is B2-F4.
-//
 // The re-assertion dropped the Bedrock BEARER injection — a bearer rides an
 // injection rule and injection rules are filtered by host — but the bearer is
 // the one Bedrock mode that is never resident. A profile denying the Bedrock
@@ -97,7 +95,7 @@ func TestCeilingReassert_WithholdsTheResidentBedrockLane(t *testing.T) {
 			if len(mitm) != 0 {
 				t.Errorf("bedrock MITM hosts = %v, want none for a lane that was withheld", mitm)
 			}
-			for _, m := range buildRunMounts(*policy, llm, memberMountPosture{}) {
+			for _, m := range buildRunMounts(*policy, llm, userMountPosture{}) {
 				if m.Target == sandboxAWSDir {
 					t.Errorf("the operator's host ~/.aws is still bind-mounted at %s", m.Target)
 				}
@@ -109,7 +107,7 @@ func TestCeilingReassert_WithholdsTheResidentBedrockLane(t *testing.T) {
 	}
 }
 
-// TestCeilingReassert_NoProfileLeavesBedrockAlone is B2-F4's negative control:
+// TestCeilingReassert_NoProfileLeavesBedrockAlone is the negative control:
 // with no assigned profile the phase must be a provable no-op, so the sandbox
 // env, the transport and the mounts are byte-identical to what dispatch
 // composed.
@@ -120,7 +118,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 		before[k] = v
 	}
 	keysBefore := slices.Clone(llm.secretEnvKeys)
-	mountsBefore := buildRunMounts(*policy, llm, memberMountPosture{})
+	mountsBefore := buildRunMounts(*policy, llm, userMountPosture{})
 
 	var injections []runner.InjectionGrant
 	p := dispatchParams{}
@@ -142,7 +140,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 	if !llm.bedrockReady || len(mitm) != 1 {
 		t.Errorf("bedrockReady=%v mitm=%v; an unassigned principal's run must be untouched", llm.bedrockReady, mitm)
 	}
-	if len(buildRunMounts(*policy, llm, memberMountPosture{})) != len(mountsBefore) {
+	if len(buildRunMounts(*policy, llm, userMountPosture{})) != len(mountsBefore) {
 		t.Error("the mount set changed for a run with no assigned profile")
 	}
 }

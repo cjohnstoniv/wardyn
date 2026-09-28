@@ -3,32 +3,24 @@
 
 // Package adoscope is the Azure DevOps CAPABILITY CATALOGUE: it names the
 // access an Azure DevOps request needs, classifies one request to exactly one
-// name, and maps a set of those names to the Entra scopes a token must carry.
+// name, and maps a set of those names to the Entra scopes a token must carry —
+// because Azure DevOps asks for vso.code_write both to push a commit and to
+// complete a pull request while BYPASSING branch policy, so a token minted
+// from the requested scope is strictly wider than the work it was minted for.
 //
-// It exists because "authorize this person as themselves" is unanswerable
-// without a vocabulary: Azure DevOps asks for vso.code_write both to push a
-// commit and to complete a pull request while BYPASSING branch policy, so a
-// token minted from the scope the API asks for is strictly wider than the work
-// it was minted for. The capability names below are what a run is held to; the
-// scope strings are only what Entra understands.
+// The package is PURE, standard-library only (importing internal/types would
+// cycle; importing internal/api or internal/egress would let a call site's own
+// idea of "read" drift from the one classifier's).
 //
-// THE PACKAGE IS PURE and imports the STANDARD LIBRARY ONLY. Two constraints
-// keep it that way:
-//   - internal/types names Capability on a git-provider row, so importing
-//     internal/types here would be an import cycle.
-//   - the classifier is the one opinion about what a request needs. Importing
-//     internal/api or internal/egress would let a call site's own idea of a
-//     "read" leak in beside it, which is how two spellings of one rule start.
-//
-// FAIL-CLOSED IS THE CONTRACT. Classify returns an error for a request it
-// cannot reason about and CapUnclassifiedWrite for a write it does not
-// recognize; neither is grantable, so a caller refuses both. A classifier that
-// guessed would hand out a scope on a route nobody reviewed.
+// FAIL-CLOSED IS THE CONTRACT: Classify errors on a request it cannot reason
+// about and returns CapUnclassifiedWrite for a write it does not recognize;
+// neither is grantable, so a caller refuses both.
 package adoscope
 
 import (
 	"maps"
 	"slices"
+	"strings"
 )
 
 // Capability is the ONE access name a classified request needs. The set is
@@ -39,13 +31,9 @@ type Capability string
 // profile may name, and the only ones ScopesFor turns into scopes.
 const (
 	// CapRead is a read of any area in readAreas: the floor every profile
-	// starts from, and a ceiling must include it.
-	//
-	// It is WIDER than "read the code". The read scope set covers every area
-	// the catalogue answers CapRead for, so the minimum Azure DevOps credential
-	// can also read service-connection configuration, the organisation's
-	// groups and users, and directory identities. That is inherent to minting
-	// by capability rather than by area, and the label says so.
+	// starts from, and a ceiling must include it. It is WIDER than "read the
+	// code" — the minimum credential can also read service-connection
+	// configuration, groups/users, and directory identities.
 	CapRead Capability = "read"
 	// CapCodeWrite is a commit, a push or a ref move that no branch policy
 	// protects.
@@ -57,8 +45,8 @@ const (
 	CapPolicyAdmin Capability = "policy_admin"
 	// CapPolicyBypass is landing a change THROUGH a policy rather than past
 	// it: a PR completed with bypassPolicy, or a ref moved on a protected
-	// branch. Azure DevOps asks only for write scope for both, which is the
-	// whole reason this capability is spelled separately from CapCodeWrite.
+	// branch. Azure DevOps asks only for write scope for both, hence the
+	// separate capability from CapCodeWrite.
 	CapPolicyBypass Capability = "policy_bypass"
 	// CapRepoAdmin is creating, renaming or deleting a repository.
 	CapRepoAdmin Capability = "repo_admin"
@@ -67,9 +55,8 @@ const (
 	// CapServiceEndpointAdmin is changing a service connection — the object
 	// that holds someone else's cloud credential.
 	CapServiceEndpointAdmin Capability = "serviceendpoint_admin"
-	// CapBuildExecute is queueing a pipeline run — and, because the classic
-	// release area folds onto the build capabilities in this catalogue,
-	// creating, deploying and deleting releases. The label says both.
+	// CapBuildExecute is queueing a pipeline run, plus creating, deploying and
+	// deleting releases (the classic release area folds onto build here).
 	CapBuildExecute Capability = "build_execute"
 	// CapBuildAdmin is editing a pipeline or release definition — deciding
 	// what every future run and release executes.
@@ -93,9 +80,8 @@ const (
 	// area. A token lane that can mint or revoke tokens is a lane that can
 	// leave the lane.
 	CapDeniedTokens Capability = "denied_tokens"
-	// CapDeniedServiceHooks is the service-hook area: a subscription that
-	// forwards the org's events to an address of the caller's choosing is
-	// exfiltration with a webhook's paperwork.
+	// CapDeniedServiceHooks is the service-hook area: forwarding the org's
+	// events to a caller-chosen address is exfiltration with a webhook's paperwork.
 	CapDeniedServiceHooks Capability = "denied_service_hooks"
 	// CapDeniedExtensions is extension management: installing an extension
 	// runs someone else's code inside the organisation.
@@ -107,9 +93,8 @@ const (
 	// CapUnclassifiedWrite is a write this catalogue does not recognize. It is
 	// the fail-closed answer, not a capability anyone can hold.
 	CapUnclassifiedWrite Capability = "unclassified_write"
-	// CapUnclassifiedRead is a read of an area outside readAreas — one whose
-	// read no scope in the read set could perform. Refused like its write
-	// twin, rather than classified as a read that 403s at the forge.
+	// CapUnclassifiedRead is a read outside readAreas, refused like its write
+	// twin rather than classified as a read that 403s at the forge.
 	CapUnclassifiedRead Capability = "unclassified_read"
 )
 
@@ -148,23 +133,20 @@ func GrantableCapabilities() []Capability {
 	return slices.Sorted(maps.Keys(grantableCapabilities))
 }
 
-// GrantableCapabilityList is GrantableCapabilities as strings, the shape an
-// error message joins.
-func GrantableCapabilityList() []string {
+// GrantableCapabilityList is GrantableCapabilities as a comma-separated
+// string, the shape an error message wants.
+func GrantableCapabilityList() string {
 	caps := GrantableCapabilities()
-	out := make([]string, len(caps))
+	strs := make([]string, len(caps))
 	for i, c := range caps {
-		out[i] = string(c)
+		strs[i] = string(c)
 	}
-	return out
+	return strings.Join(strs, ", ")
 }
 
 // labels are the plain-language rendering of every capability, in the SECOND
-// person, because the sentence a person reads is "this run may …".
-//
-// They live in this package on purpose: a console that wrote its own wording
-// would be a second, drifting definition of what a capability permits, and the
-// label is the only part of a capability most people will ever read.
+// person ("this run may …"). Kept here, not in a console, so wording can't
+// drift into a second definition of what a capability permits.
 var labels = map[Capability]string{
 	CapRead:                 "Read code, work items, pipelines, releases, wikis and feeds — including service connection settings, the organisation's groups and users, and directory identities",
 	CapCodeWrite:            "Push commits and move branches that no policy protects",
@@ -201,12 +183,9 @@ func Label(c Capability) string { return labels[c] }
 func ProfileRead() []Capability { return []Capability{CapRead} }
 
 // ProfileContribute is the "do the work" profile: read, push, pull requests,
-// work items and wiki.
-//
-// CapBuildExecute is deliberately ABSENT. Queueing a pipeline executes YAML
-// under the pipeline's own identity, which is a different and usually wider
-// identity than the person contributing — so it is an opt-in on the row, never
-// part of what "contribute" means.
+// work items and wiki. CapBuildExecute is deliberately ABSENT: queueing a
+// pipeline runs under a different, usually wider identity, so it stays an
+// opt-in on the row rather than part of "contribute".
 func ProfileContribute() []Capability {
 	return []Capability{CapRead, CapCodeWrite, CapPR, CapWorkWrite, CapWikiWrite}
 }

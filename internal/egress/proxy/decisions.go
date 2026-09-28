@@ -38,17 +38,13 @@ type decisionSink struct {
 	mu     sync.Mutex
 	closed bool
 
-	// outMu serialises writes to out. mirror() is called from the request
-	// path (concurrently, one call per request), and a single Write of a
-	// line over PIPE_BUF is not atomic at the OS level, so two concurrent
-	// lines can interleave into a corrupted record without it.
+	// outMu serialises writes to out: a single Write over PIPE_BUF is not
+	// atomic at the OS level, so concurrent mirror() calls could interleave
+	// into a corrupted record without it.
 	outMu sync.Mutex
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	s := &decisionSink{
 		endpoint: controlPlaneURL + "/api/v1/internal/decisions",
 		token:    token,
@@ -66,23 +62,18 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mirror(log)
-	// The non-blocking send runs UNDER s.mu so it is mutually exclusive with
-	// close(), which also holds s.mu while it close()s the channel. Otherwise a
-	// send that already passed the closed-check could race close() and panic on a
-	// closed channel (E3). The send never blocks (buffered + default), so holding
-	// the lock here adds no latency to the request path.
+	// The non-blocking send runs UNDER s.mu, mutually exclusive with close()
+	// (which also holds s.mu while closing the channel) — otherwise a send that
+	// already passed the closed-check could race close() and panic on a closed
+	// channel. The send never blocks (buffered + default), so this adds no
+	// latency to the request path.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		// Counted, not silently returned. A decision emitted after close
-		// is still a decision the audit never received, and the sink's stated
-		// posture is "best-effort delivery, but the gap is summarized, not silent".
-		// The window is real and lands where it matters most: MITM tunnels are
-		// served on their own hijacked http.Servers that Shutdown never stops, so
-		// the last requests of a run — the credential-injecting ones — are exactly
-		// the ones still emitting while the sink drains. close() reads this
-		// counter, so a drop that lands in that window is reported by the very
-		// call that caused it.
+		// Counted, not silently returned: MITM tunnels are served on hijacked
+		// http.Servers that Shutdown never stops, so the last (credential-
+		// injecting) requests of a run are exactly the ones still emitting while
+		// the sink drains, and close() reads this counter to report the gap.
 		s.dropped.Add(1)
 		return
 	}
@@ -94,12 +85,8 @@ func (s *decisionSink) emit(log egress.DecisionLog) {
 }
 
 // mirror writes the decision as one JSON line to stdout, masking any secret
-// values registered in the process-global registry. The mask is a snapshot
-// taken at the time of the write (lazy snapshot per-emit is intentional:
-// injection rules are registered before the first emit, so the snapshot is
-// always current).
-//
-// Masking catches verbatim byte-identical occurrences only.
+// values registered in the process-global registry (verbatim byte-identical
+// occurrences only). The mask snapshot is taken fresh per call.
 func (s *decisionSink) mirror(log egress.DecisionLog) {
 	if s.out == nil {
 		return
@@ -109,25 +96,21 @@ func (s *decisionSink) mirror(log egress.DecisionLog) {
 		return
 	}
 	line := maskDecisionBytes(append(b, '\n'))
-	// A line over PIPE_BUF is not an atomic OS write, so a concurrent emit()
-	// from another request could interleave into a corrupted record without
-	// serialising the write itself here.
 	s.outMu.Lock()
 	_, _ = s.out.Write(line)
 	s.outMu.Unlock()
 }
 
 // dropReportInterval bounds how often the worker flushes a synthetic
-// egress.decisions.dropped summary when it is IDLE (drops accrued but no traffic
-// to piggyback on). Under active traffic drops surface at the next flush, so
-// this only bounds the idle case.
+// egress:dropped-decisions-<n> summary when IDLE; under active traffic drops
+// surface at the next flush instead.
 const dropReportInterval = 30 * time.Second
 
 func (s *decisionSink) run() {
 	defer s.wg.Done()
-	// reported tracks the drop count already summarized to the control plane, so
-	// each summary carries only the delta since the last report. Single-goroutine
-	// (this loop), so a plain local is safe; s.dropped itself is atomic.
+	// reported tracks the drop count already summarized, so each summary carries
+	// only the delta since the last report. Single-goroutine, so a plain local
+	// is safe.
 	var reported uint64
 	ticker := time.NewTicker(dropReportInterval)
 	defer ticker.Stop()
@@ -135,21 +118,15 @@ func (s *decisionSink) run() {
 		select {
 		case log, ok := <-s.ch:
 			if !ok {
-				// Channel drained + closed: emit a final summary of any tail drops
-				// so the last window is never silently lost.
+				// Channel drained + closed: emit a final summary of any tail drops.
 				s.reportDropped(&reported)
 				return
 			}
-			// Piggyback: surface accrued drops on the next successful flush so a
-			// drop is visible in the audit trail long before shutdown.
+			// Piggyback: surface accrued drops on the next successful flush.
 			s.reportDropped(&reported)
-			// Individual decision: best-effort, must never block egress — but a
-			// decision the control plane REFUSED is a decision that was not
-			// individually recorded, which is exactly what s.dropped counts and
-			// reportDropped summarizes (F075 fix-up). Discarding the error would
-			// let an over-large or rejected decision vanish from the audit trail
-			// with nothing anywhere saying so: internal/api's MaxBytesReader
-			// 413s a body over maxJSONBody, and that 413 must not be silent.
+			// A decision the control plane REFUSED (e.g. a 413 over maxJSONBody)
+			// is counted as dropped too, so it isn't silently lost from the audit
+			// trail.
 			if err := s.post(log); err != nil {
 				s.dropped.Add(1)
 			}
@@ -160,32 +137,22 @@ func (s *decisionSink) run() {
 	}
 }
 
-// reportDropped posts a synthetic egress.decisions.dropped audit event when the
-// drop counter has advanced since *reported, so the auditor learns that N egress
-// decisions were NOT individually recorded — rather than only learning the total
+// reportDropped posts a synthetic egress.deny (rule_source
+// egress:dropped-decisions-<n>) when the drop counter has advanced since
+// *reported, so the auditor learns of drops as they happen rather than only
 // at shutdown. It runs on the worker goroutine and reuses post(), so it never
-// adds latency to the agent's request path.
-//
-// DB delivery of individual decisions is best-effort under
-// flood; when the buffer overflows those specific decisions are lost, but the
-// gap is summarized to the control plane (count since last report), not silent.
-// The delta is only marked reported once the summary post actually lands, so a
-// CP outage (the very cause of the drops) retries rather than losing the count.
+// adds latency to the request path. *reported only advances once the summary
+// post actually lands, so a CP outage retries rather than losing the count.
 func (s *decisionSink) reportDropped(reported *uint64) {
 	cur := s.dropped.Load()
 	if cur <= *reported {
 		return
 	}
 	n := cur - *reported
-	// post() only, never mirror(): the summary's job is to reach the control-plane
-	// audit. Mirroring from this worker goroutine would race emit()'s stdout writes
-	// on the request path (s.out is single-writer by contract) and would pollute
-	// the "one mirrored line per real decision" stdout invariant.
-	//
-	// Advance *reported ONLY on a delivered summary: the CP being wedged is the very
-	// failure that produces these drops, so a failed post must NOT burn the delta —
-	// leave it unadvanced so the count accrues and retries on the next flush/tick
-	// until it actually lands (otherwise "not silent" would be a lie under CP outage).
+	// post() only, never mirror(): mirroring from this worker goroutine would
+	// race emit()'s stdout writes and pollute the "one mirrored line per real
+	// decision" invariant. *reported advances only on a delivered summary, so a
+	// failed post retries on the next flush/tick rather than burning the delta.
 	if err := s.post(droppedSummaryLog(n)); err != nil {
 		return
 	}
@@ -193,29 +160,26 @@ func (s *decisionSink) reportDropped(reported *uint64) {
 }
 
 // droppedSummaryLog builds the synthetic DecisionLog summarizing dropped
-// decisions. DecisionLog has no dedicated count field (its wire shape is owned
-// elsewhere), so the count rides in RuleSource under the extensible
-// "egress.decisions.dropped:<n>" marker. Decision is Deny: an unrecorded
-// decision is an audit-fidelity gap, surfaced as a fail-closed alert.
+// decisions. DecisionLog has no dedicated count field, so the count rides in
+// RuleSource under the "egress:dropped-decisions-<n>" marker. Decision is
+// Deny: an unrecorded decision is surfaced as a fail-closed alert.
 func droppedSummaryLog(n uint64) egress.DecisionLog {
 	return egress.DecisionLog{
 		Request:    egress.Request{Time: time.Now()},
 		Decision:   egress.Deny,
-		RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n),
+		RuleSource: fmt.Sprintf("egress:dropped-decisions-%d", n),
 	}
 }
 
-// post delivers one decision log to the control-plane audit. It returns an error
-// when delivery did NOT land (marshal / build / transport / non-2xx) so callers that
-// must not lose the record (reportDropped) can retry; individual per-decision posts
-// ignore the error (best-effort — a failed decision post must never block egress).
+// post delivers one decision log to the control-plane audit. It returns an
+// error when delivery did NOT land, so callers that must not lose the record
+// (reportDropped) can retry; individual per-decision posts ignore the error
+// (best-effort — must never block egress).
 func (s *decisionSink) post(log egress.DecisionLog) error {
 	body, err := json.Marshal(log)
 	if err != nil {
 		return err
 	}
-	// Mask secret values from the body before posting to the control plane.
-	// Verbatim byte-identical masking only.
 	body = maskDecisionBytes(body)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -238,28 +202,22 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 }
 
 // maskDecisionBytes applies the process-global secret mask to the serialised
-// decision log bytes. A snapshot is taken fresh on each call so that secrets
-// registered after startup (e.g. in tests) are visible immediately.
-// This is intentionally a package-level function (not a method) so tests can
-// exercise it without constructing a full decisionSink.
+// decision log bytes. A snapshot is taken fresh on each call so secrets
+// registered after startup (e.g. in tests) are visible immediately. A
+// package-level function, not a method, so tests can exercise it standalone.
 func maskDecisionBytes(b []byte) []byte {
-	// Snapshot with uuid.Nil yields only global secrets (no per-run entries
-	// exist in the proxy process — all proxy-side secrets are global).
+	// uuid.Nil yields only global secrets: no per-run entries exist in the
+	// proxy process, all proxy-side secrets are global.
 	snap := procRegistry.Snapshot(uuid.Nil)
 	if len(snap) == 0 {
 		return b
 	}
-	// BOTH decision-log callers hand this JSON, not plain text: mirror() masks
-	// the marshalled stdout line and post() masks the marshalled body of the
-	// /internal/decisions POST. json.Marshal escapes \n, \" and \\ inside any
-	// string and HTML-escapes & < > to \u0026 \u003c \u003e by default, so a
-	// registered secret carrying any of those bytes is NOT byte-identical inside
-	// the body and a raw-value masker cannot match it — the plain-ASCII case
-	// masking correctly is what makes the gap invisible. JSONEscapedVariants is
-	// the one home for that expansion (D31), already used by the two sibling JSON
-	// sinks: internal/api/recording.go (asciicast upload) and cmd/wardynd's audit
-	// maskingRecorder. It COPIES snap first, so the raw entries survive and
-	// httpError's plain-text path through this helper is unaffected.
+	// Both callers hand this JSON, not plain text: json.Marshal escapes \n, \",
+	// \\ and HTML-escapes & < > by default, so a raw-value masker would miss a
+	// registered secret carrying any of those bytes. JSONEscapedVariants covers
+	// that expansion (also used by internal/api/recording.go and cmd/wardynd's
+	// audit maskingRecorder); it copies snap first, so httpError's plain-text
+	// path through this helper is unaffected.
 	return secretmask.NewMasker(secretmask.JSONEscapedVariants(snap)).Mask(b)
 }
 

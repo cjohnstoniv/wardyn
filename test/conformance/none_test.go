@@ -118,6 +118,51 @@ func (downgradingRunner) AgentStatus(context.Context, string, string) (runner.St
 func (downgradingRunner) StopSandbox(context.Context, string) error { return nil }
 func (downgradingRunner) KillSandbox(context.Context, string) error { return nil }
 
+// missingResolvedRunner is a DISHONEST stub: it declares CC1..CC3 in
+// ConfinementClasses and HONESTLY enforces whatever class it is asked for (no
+// silent downgrade), but its Resolved map has no entry for CC3 — so /healthz
+// would have nothing to report for the substrate actually enforcing the run's
+// strongest class. It exists only to prove the conformance Capabilities gate
+// catches a declared-but-unresolved class, the "no gaps" counterpart to
+// downgradingRunner's "no silent weakening". Never a real driver.
+type missingResolvedRunner struct{}
+
+func (missingResolvedRunner) Name() string { return "missing-resolved" }
+
+func (missingResolvedRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	return runner.Capabilities{
+		Driver:             "missing-resolved",
+		ConfinementClasses: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, // claims CC3
+		Resolved: map[types.ConfinementClass]string{
+			types.CC1: "oci/runc",
+			types.CC2: "oci/runsc",
+			// CC3 is claimed above but never resolved here — the gap under test.
+		},
+	}, nil
+}
+
+func (missingResolvedRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	// Honest enforcement (unlike downgradingRunner): this fake isolates the
+	// Resolved-gap failure from the silent-downgrade one.
+	return runner.Sandbox{Ref: "wardyn-missing-resolved-" + uuid.NewString(), Driver: "missing-resolved", EnforcedClass: spec.ConfinementClass}, nil
+}
+func (missingResolvedRunner) Exec(context.Context, string, []string) (string, error) { return "", nil }
+func (missingResolvedRunner) Wait(context.Context, string) (int, error)              { return 0, nil }
+func (missingResolvedRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+	return nil, errors.New("missing-resolved: no attach")
+}
+func (missingResolvedRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrExecStreamUnsupported
+}
+func (missingResolvedRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (missingResolvedRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (missingResolvedRunner) StopSandbox(context.Context, string) error { return nil }
+func (missingResolvedRunner) KillSandbox(context.Context, string) error { return nil }
+
 // recordingRunner is an HONEST recording driver fake: it declares CC1 + Session-
 // Recording and, on Exec, marks the sandbox as having produced a recording
 // artifact. Its companion RecordingProbe inspects that flag. It models the
@@ -211,6 +256,7 @@ func (pretendingRecordingRunner) KillSandbox(context.Context, string) error { re
 var (
 	_ runner.Runner = noneRunner{}
 	_ runner.Runner = downgradingRunner{}
+	_ runner.Runner = missingResolvedRunner{}
 	_ runner.Runner = (*recordingRunner)(nil)
 	_ runner.Runner = pretendingRecordingRunner{}
 )
@@ -353,6 +399,18 @@ func TestConformanceCatchesSilentDowngrade(t *testing.T) {
 		"conformance Capabilities gate did NOT catch a silent confinement-class downgrade; invariant 5 not enforced")
 }
 
+// TestConformanceRejectsMissingResolvedClass proves the Capabilities
+// conformance gate catches a driver that declares a ConfinementClass but never
+// resolves it to a concrete substrate label in Resolved — the "no gaps" half
+// of invariant 5, alongside TestConformanceCatchesSilentDowngrade's "no silent
+// weakening" half. The honest none/downgrading/recording runners all pass
+// because either they declare no classes or (for the ones conformance.Run
+// exercises) every declared class resolves; this liar must fail it.
+func TestConformanceRejectsMissingResolvedClass(t *testing.T) {
+	assertNegativeControlFails(t, "TestNegCtl_MissingResolvedClass",
+		"conformance Capabilities gate did NOT catch a declared ConfinementClass missing from Resolved; invariant 5 not enforced")
+}
+
 // TestRecordingCapabilityCatchesPretender proves the recording gate catches a
 // driver that DECLARES SessionRecording but delivers no artifact.
 func TestRecordingCapabilityCatchesPretender(t *testing.T) {
@@ -378,6 +436,18 @@ func TestNegCtl_SilentDowngrade(t *testing.T) {
 		return // not the targeted child; pass trivially in a normal run
 	}
 	conformance.Run(t, downgradingRunner{}, conformance.Options{Timeout: 5 * time.Second})
+}
+
+// TestNegCtl_MissingResolvedClass is the guarded child of
+// TestConformanceRejectsMissingResolvedClass. It runs the conformance suite
+// against the dishonest missingResolvedRunner, which MUST fail the
+// Capabilities check. It is a no-op unless re-exec'd with WARDYN_NEGCTL set to
+// its name.
+func TestNegCtl_MissingResolvedClass(t *testing.T) {
+	if os.Getenv(negctlEnv) != "TestNegCtl_MissingResolvedClass" {
+		return // not the targeted child; pass trivially in a normal run
+	}
+	conformance.Run(t, missingResolvedRunner{}, conformance.Options{Timeout: 5 * time.Second})
 }
 
 // TestNegCtl_RecordingPretender is the guarded child of
@@ -419,7 +489,7 @@ func TestNegCtl_ProbedNonRecorder(t *testing.T) {
 // guarded helper test with WARDYN_NEGCTL set so it actually executes. The helper
 // is expected to FAIL (the gate fires), so the subprocess must exit non-zero. A
 // zero exit means the gate did not catch the dishonest driver — wantFailMsg is
-// reported. Using -count=1 avoids a cached pass masking a regression.
+// reported. Using -count=1 keeps a cached pass from masking a failure.
 func assertNegativeControlFails(t *testing.T, child, wantFailMsg string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run", "^"+child+"$", "-test.count=1", "-test.v")

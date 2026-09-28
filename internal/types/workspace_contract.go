@@ -16,18 +16,16 @@ import (
 // workspace_contract.go — the three-tier split's shared grammar and the ONE
 // pure fold that turns it into a run contract.
 //
-// Tier 1: Source — a repo/dir configured ONCE, in a shared library: its own
-// requirements contract, its own scan. Tier 2: BaseImageEntry — a shared
-// catalog image (registry/custom/byo; "recommended" is per-workspace derived
-// and deliberately NOT a catalog kind). Tier 3: Workspace — attachments of
-// sources (+ inline ephemerals) + a base image + its own requirement rows.
+// Tier 1: Source (repo/dir configured once, its own contract + scan). Tier 2:
+// BaseImageEntry (shared catalog image; "recommended" is per-workspace derived,
+// not a catalog kind). Tier 3: Workspace (attachments of sources + inline
+// ephemerals + a base image + its own requirement rows).
 //
-// This file lives in types, not api, because the STORE must fold contracts at
-// its hydrate pass and store cannot import api.
+// Lives in types, not api: the store must fold contracts at its hydrate pass
+// and cannot import api.
 
-// SourceKind is a library source's kind. Ephemeral scratch is NOT a kind here:
-// an ephemeral row is a per-workspace inline attachment (nothing to configure,
-// scan, or share), never a library entity.
+// SourceKind is a library source's kind. Ephemeral scratch is not a kind here:
+// it's a per-workspace inline attachment, never a library entity.
 type SourceKind string
 
 const (
@@ -37,58 +35,49 @@ const (
 
 // Source is one tier-1 library entry: a repo or directory configured once and
 // attached to many workspaces. Its Requirements are what THIS source expects
-// of any sandbox it is used in ("a given repo has its expected requirements") —
-// the same "<type>:<key>" grammar Workspace.Requirements documents, MINUS
-// integration: keys (integrations compose at the aggregate, tier 3, by owner
-// decision; the fold would pass them through unharmed, so relaxing later is a
-// validation change only).
+// of any sandbox it is used in, in the same "<type>:<key>" grammar
+// Workspace.Requirements documents, minus integration: keys (those compose at
+// the tier-3 aggregate by owner decision).
 type Source struct {
 	ID   uuid.UUID  `json:"id"`
 	Kind SourceKind `json:"kind"`
 	// Locator is the identity: a host directory path (local_dir, trailing
 	// slashes trimmed) or the canonical repo slug/clone URL (repo, lowercased).
-	// Together with Ref it is UNIQUE in the store — the dedupe rule.
+	// Together with Ref it is UNIQUE in the store.
 	Locator string `json:"locator"`
-	// Ref is an optional git ref (repo only; "" otherwise). Part of identity:
-	// the same repo at two refs is two sources with two contracts.
+	// Ref is an optional git ref (repo only). Part of identity: the same repo
+	// at two refs is two sources with two contracts.
 	Ref  string `json:"ref,omitempty"`
 	Name string `json:"name"`
 	// Requirements is this source's OWN contract. See the type doc above.
 	Requirements map[string]WorkspaceRequirement `json:"requirements,omitempty"`
-	// Profile is this source's scan result (workspacescan.WorkspaceProfile),
-	// opaque here — this type never interprets it, only persists/returns it
-	// (matching Workspace.Profile's own doc). json.RawMessage, not a plain
-	// []byte: encoding/json base64-encodes a bare []byte, which shipped a
-	// tier-1 source's scan profile to GET /sources as an opaque base64 string
-	// instead of real JSON (WIRE-2) — the one other place a source's profile
-	// crossed the wire (source_scan.go) already worked around this by hand
-	// (json.RawMessage(fresh.Profile)).
+	// Profile is this source's scan result, opaque here (never interpreted,
+	// only persisted/returned). json.RawMessage, not a plain []byte: a bare
+	// []byte gets base64-encoded by encoding/json (WIRE-2), shipping the
+	// profile to GET /sources as an opaque string instead of real JSON.
 	Profile json.RawMessage `json:"profile,omitempty"`
-	// Status is the source's scan lifecycle — the same one-word states the
-	// workspace used to own: pending_scan | scanning | scanned | error.
+	// Status is the source's scan lifecycle: pending_scan | scanning | scanned
+	// | error.
 	Status WorkspaceStatus `json:"status"`
-	// ActiveRunID fences this source's in-flight scan run, exactly as the
-	// workspace's own field fenced whole-workspace scans before the retarget.
+	// ActiveRunID fences this source's in-flight scan run.
 	ActiveRunID *uuid.UUID `json:"active_run_id,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // BaseImageEntry is one tier-2 catalog row: a shared, reusable image an
-// operator saved. Kind is registry|custom|byo — NEVER "recommended", which is
-// a per-workspace DERIVED build (computed from that workspace's merged source
-// profiles) and so has no catalog identity; the store enforces this with a
-// CHECK constraint so it is structural, not a convention.
+// operator saved. Kind is registry|custom|byo — never "recommended", which is
+// a per-workspace derived build with no catalog identity; the store enforces
+// this with a CHECK constraint.
 type BaseImageEntry struct {
 	ID   uuid.UUID `json:"id"`
 	Kind string    `json:"kind"` // "registry" | "custom" | "byo"
 	Name string    `json:"name"`
 	// Image is the ref: the image itself (registry/byo) or the FROM (custom).
 	Image string `json:"image"`
-	// Steps are Dockerfile lines attached to a "custom" Image. NOT CURRENTLY
-	// APPLIED at build time — see WorkspaceBaseImage.Steps's doc (workspace.go)
-	// for why (host-side build RCE, outside every confinement tier). Stored so
-	// the catalog row round-trips; never layered onto Image today.
+	// Steps are Dockerfile lines attached to a "custom" Image. Not currently
+	// applied at build time (host-side build RCE; see WorkspaceBaseImage.Steps
+	// in workspace.go) — stored only so the catalog row round-trips.
 	Steps     []string  `json:"steps,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -104,30 +93,25 @@ const (
 
 // WorkspaceAttachment is one tier-3 composition row: EITHER a library source
 // reference (SourceID set) or an inline ephemeral scratch row (Ephemeral true,
-// SourceID nil). Order is load-bearing — attachments[0] is the primary, the
-// same rule Sources[0] carried before the split.
+// SourceID nil). Order is load-bearing — attachments[0] is the primary.
 type WorkspaceAttachment struct {
 	SourceID *uuid.UUID `json:"source_id,omitempty"`
 	// Ephemeral marks an inline scratch row (never a library entity).
 	Ephemeral bool `json:"ephemeral,omitempty"`
 	// Target is the in-sandbox mount/clone/scratch path for THIS attachment.
 	Target string `json:"target,omitempty"`
-	// Writable opts a local_dir attachment into read-write (per-attachment,
-	// not per-source: the same dir can be writable in one workspace and
-	// read-only in another).
+	// Writable opts a local_dir attachment into read-write, per-attachment not
+	// per-source.
 	Writable bool `json:"writable,omitempty"`
 	// Overrides is this workspace's stance on requirement keys the attached
-	// source declares: reqKey -> off|optional|required. "off" means THIS
-	// workspace refuses that requirement (mount the repo read-only to read
-	// code, without its build secrets/egress) — it never edits the shared
-	// source. Keys the source doesn't declare are ignored harmlessly.
+	// source declares: reqKey -> off|optional|required. It never edits the
+	// shared source; keys the source doesn't declare are ignored harmlessly.
 	Overrides map[string]string `json:"overrides,omitempty"`
 }
 
 // SplitRequirementKey splits a "<type>:<key>" requirement key on the FIRST
 // colon only (a write:<path> key may itself legally contain colons) and
-// reports whether the type token is known. This is the grammar's own parser,
-// living beside the grammar; internal/api aliases it for its call sites.
+// reports whether the type token is known.
 func SplitRequirementKey(key string) (typ, rest string, ok bool) {
 	typ, rest, found := strings.Cut(key, ":")
 	if !found || rest == "" {
@@ -147,34 +131,22 @@ func SplitRequirementKey(key string) (typ, rest string, ok bool) {
 //
 // Precedence, evaluated in order:
 //
-//  1. Each attachment in order contributes its source's contract. A dangling
-//     SourceID (source deleted out from under it) contributes nothing — the
-//     mount gate is where that failure surfaces loudly, not here.
+//  1. Each attachment contributes its source's contract; a dangling SourceID
+//     contributes nothing.
 //  2. An override of "off" drops that source's contribution for that key.
-//  3. An override lane (optional|required) replaces the source's lane for
-//     that contribution.
+//  3. An override lane (optional|required) replaces the source's lane.
 //  4. SECURITY: a write:<path> key whose path is not the source's own Locator
-//     is DROPPED. applyWriteNarrowing widens ANY mount whose source path
-//     matches, so without this a shared source could declare write on a path
-//     it doesn't own and silently widen a sibling mount in every workspace
-//     that attaches it. A source may only claim write on itself.
-//  5. Collisions across attachments merge: Level = strongest (required beats
-//     optional); Provenance = WEAKEST (scan_seeded beats operator_set).
-//     Fail-closed on purpose: the run-create trust boundary auto-mints only
-//     operator_set secrets, so if ANY contributor's row came from reading
-//     untrusted repo content, the merged row must not auto-grant. A source's
-//     own operator_set row alone still auto-grants — an operator editing a
-//     shared source's contract is a direct operator act.
+//     is DROPPED — otherwise a shared source could claim write on a path it
+//     doesn't own and widen a sibling mount in every workspace that attaches it.
+//  5. Collisions merge: Level = strongest; Provenance = WEAKEST, fail-closed
+//     since the run-create trust boundary auto-mints only operator_set secrets.
 //     ponytail: fail-closed on provenance collision; the workspace overlay is
 //     the one-row override if this is ever too strict.
-//  6. An overlay row REPLACES the merged value outright (level AND
-//     provenance). The overlay is what this workspace additionally declares
-//     or restates; overrides are how it refuses or re-lanes a source's row.
-//     The overlay deliberately cannot REMOVE a key — "off" is for that.
+//  6. An overlay row REPLACES the merged value outright; it cannot REMOVE a
+//     key — "off" is for that.
 //
 // Pure: no store, no clock. With no attachments (or all-ephemeral), the
-// result is exactly the overlay — the identity that makes migration 0031
-// provably behavior-identical for every pre-split workspace.
+// result is exactly the overlay.
 func FoldWorkspaceContract(
 	attachments []WorkspaceAttachment,
 	sources map[uuid.UUID]Source,
@@ -190,11 +162,8 @@ func FoldWorkspaceContract(
 		if !found {
 			continue // rule 1: dangling reference contributes nothing
 		}
-		// Sorted for a deterministic contribution order. Note what actually
-		// carries that today: `out` is a MAP, mergeRequirement is commutative
-		// (both fields are monotone joins), and one source's keys are distinct,
-		// so the result is byte-equal either way. The sort is what keeps the
-		// goldens byte-exact if any of those three ever stops holding.
+		// Sorted for a deterministic contribution order, so goldens stay
+		// byte-exact even if mergeRequirement's commutativity ever stops holding.
 		for _, key := range slices.Sorted(maps.Keys(src.Requirements)) {
 			row := src.Requirements[key]
 			switch att.Overrides[key] {
@@ -224,7 +193,7 @@ func FoldWorkspaceContract(
 	}
 	if len(out) == 0 {
 		return nil // fold(nil-everything) == nil, not an empty map — keeps
-		// JSON round-trips (omitempty) and the identity golden byte-exact.
+		// JSON round-trips (omitempty) exact.
 	}
 	return out
 }

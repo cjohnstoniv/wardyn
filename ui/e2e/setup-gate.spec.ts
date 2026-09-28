@@ -4,7 +4,8 @@
  */
 
 import type { Page } from "@playwright/test";
-import { test, expect, mockMemberRole } from "./fixtures";
+import { test, expect, mockMemberRole, ADMIN_TOKEN } from "./fixtures";
+import { SITE } from "../src/app/components/wardyn/copy";
 
 /**
  * Count the /setup/status reads the page has actually made. The console
@@ -50,12 +51,13 @@ async function nudgeUntil(page: Page, done: () => Promise<boolean>, timeoutMs = 
 
 async function mockGatedStatus(
   page: Page,
-  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean } = {},
+  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean; hasRuns?: boolean } = {},
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     json.onboarding_complete = overrides.onboarded ?? false;
+    json.has_runs = overrides.hasRuns ?? json.has_runs;
     if (overrides.sso) {
       // The owner's live reproduction was the multi-user (SSO) funnel; sso
       // mode is also what renders People's "Open Permissions" affordance.
@@ -109,8 +111,12 @@ async function openPermissionsFromPeople(page: Page): Promise<void> {
   // step's multi-user branch kicks off) are done. Without this the People
   // click below is the first thing to notice the rail isn't there yet, which
   // reads as "the button never appeared" rather than "the funnel is still
-  // loading".
-  await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
+  // loading". #469's "1 flaky, element(s) not found" exits were NOT a slow
+  // chunk: the page reached /setup and then left it for Runs, because an App
+  // update landing mid-redirect re-rendered the gate at "/" (the case "a shell
+  // update landing mid-redirect…" below pins it). The 15s is ordinary slack
+  // for the chunk on a loaded host, not that fix.
+  await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible({ timeout: 15_000 });
   // The rail's steps are buttons; "Open Permissions" is a Link (role=link).
   await page.getByRole("button", { name: /^People/ }).click();
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
@@ -129,6 +135,48 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.goto("/");
     await page.waitForURL(/\/setup/);
     await expect(page.getByText("Getting started").first()).toBeVisible();
+  });
+
+  test("a shell update landing mid-redirect keeps a gated install in the funnel (#469)", async ({ page }) => {
+    // CI run 36057885376: waitForURL(/\/setup/) passed, then the page settled
+    // on Runs. react-router applies the gate's redirect inside a transition,
+    // so an App state update landing first re-renders the gate at "/" — which
+    // read its once-per-load latch as spent and let "/" land on Runs
+    // (has_runs:true). Reproduced on purpose: App's readiness probe (/readyz,
+    // read only by App's health poll) is held until the redirect's
+    // replaceState, which stalls 10ms the way a loaded host does, so React
+    // yields before the route change renders and the held answer lands first.
+    await mockGatedStatus(page, { hasRuns: true });
+    await skipHero(page);
+    await page.addInitScript(() => {
+      let release!: () => void;
+      const redirected = new Promise<void>((r) => (release = r));
+      const realFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (!String(input instanceof Request ? input.url : input).endsWith("/readyz")) return realFetch(input, init);
+        // Read ahead, so the released answer reaches App in microtasks only.
+        const answer = realFetch(input, init).then(async (r) => {
+          const body = await r.json();
+          return { ok: r.ok, status: r.status, json: async () => body } as Response;
+        });
+        return redirected.then(() => answer);
+      };
+      const replaceState = history.replaceState.bind(history);
+      history.replaceState = (data, unused, url) => {
+        replaceState(data, unused, url);
+        if (String(url).includes("/admin/setup")) {
+          const until = performance.now() + 10;
+          while (performance.now() < until) {
+            /* a loaded host */
+          }
+          release();
+        }
+      };
+    });
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/admin\/setup/);
   });
 
   test("the funnel can leave itself: People → Open Permissions lands on /permissions", async ({
@@ -154,7 +202,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
     // arms it.
     await mockGatedStatus(page, { sso: true });
     await skipHero(page);
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByText("Getting started").first()).toBeVisible();
     await openPermissionsFromPeople(page);
     await page.waitForURL(/\/permissions/);
@@ -177,6 +225,33 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.waitForURL(/\/setup/);
   });
 
+  test("a gated redirect paints the funnel from the status that fired the gate, not a second read (#806)", async ({
+    page,
+  }) => {
+    // SetupScreen used to show "Checking Wardyn's setup…" with no rail until its
+    // OWN /setup/status read answered: a second round trip, serialized after the
+    // one that fired the gate. Every read after the gate's is held here, so the
+    // rail can only appear from the status the console already had. (The
+    // setup-gate CI flake family that raised #806 traced to the gate's redirect
+    // race instead, #469.)
+    await mockGatedStatus(page);
+    let reads = 0;
+    // Registered last, so it sees every read first; the first falls through to
+    // mockGatedStatus, every later one is never answered.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      reads += 1;
+      if (reads === 1) await route.fallback();
+    });
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
+    // #469 (CI-flake): this heading is the first paint of the lazily loaded
+    // setup funnel, and on a loaded CI runner it has missed the default 5s
+    // (the retry then passes in ~1.5s). Same 15s as openPermissionsFromPeople.
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
+  });
+
   test("negative control: an ONBOARDED install with the same warn is never gated", async ({
     page,
   }) => {
@@ -185,9 +260,8 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockGatedStatus(page, { onboarded: true });
     await page.goto("/runs");
     await expect(page).toHaveURL(/\/runs/);
-    await expect(
-      page.getByText(/each confined behind its own barrier/i),
-    ).toBeVisible();
+    // /runs is the User view, whose description is "Your runs · N" (M-7).
+    await expect(page.getByText(/^Your runs · \d+$/)).toBeVisible();
   });
 
   test("negative control: a member is never gated — their checks are redacted", async ({
@@ -214,7 +288,6 @@ test.describe("setup gate — forced on access, never a prison", () => {
   }) => {
     let blocking = false;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      await new Promise((r) => setTimeout(r, 600));
       const response = await route.fetch();
       const json = await response.json();
       json.onboarding_complete = false;
@@ -288,7 +361,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
       if (r.url().includes("/api/v1/setup/status")) seen.push(r.url());
     });
 
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByText("Getting started").first()).toBeVisible();
     expect(
       seen.some((u) => u.includes("recheck=1")),
@@ -328,7 +401,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
       await route.fulfill({ response, json });
     });
     await skipHero(page);
-    await page.goto("/setup?step=corp_network");
+    await page.goto("/admin/setup?step=corp_network");
 
     const evidence = page.getByText(PROXY);
     await expect(page.getByRole("button", { name: "Re-check" }).first()).toBeVisible();
@@ -358,7 +431,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
       await route.fulfill({ response, json });
     });
     await skipHero(page);
-    await page.goto("/setup?step=corp_network");
+    await page.goto("/admin/setup?step=corp_network");
 
     const recheck = page.getByRole("button", { name: "Re-check" }).first();
     await expect(recheck).toBeVisible();
@@ -389,13 +462,15 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await skipHero(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    // #469 (CI-flake): this heading is the first paint of the lazily loaded
+    // setup funnel, and on a loaded CI runner it has missed the default 5s
+    // (the retry then passes in ~1.5s). Same 15s as openPermissionsFromPeople.
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Step 1 of 4")).toBeVisible();
-    // "3" (CONFIG_STEPS) is a constant; the demo count is derived live from
-    // stepOrder(status), so it's asserted by pattern, not a hand-kept number.
-    await expect(
-      page.getByText(/^Required before a run can launch\. 3 optional setup steps and \d+ demos follow\.$/),
-    ).toBeVisible();
+    // "3" (CONFIG_STEPS) is a constant. M-6 (D5) retired the "and N demos
+    // follow" clause: demos moved to User Getting Started, so the admin
+    // funnel's own count was always zero — this counter no longer claims it.
+    await expect(page.getByText("Required before a run can launch. 3 optional setup steps follow.")).toBeVisible();
   });
 
   // #161: the Review step partitions on `blocking` first, not on grade — a
@@ -426,14 +501,17 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await expect(blocking.getByText("e2e non-blocking fail")).toHaveCount(0);
   });
 
-  test("the rail keeps Required / Optional setup / Demos apart, and Secrets (not required) is still reachable with the optional-step footer", async ({
+  test("the rail keeps Required / Optional setup apart (no Demos group — M-6/D5), and Secrets (not required) is still reachable with the optional-step footer", async ({
     page,
   }) => {
     await mockGatedStatus(page);
     await skipHero(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    // #469 (CI-flake): this heading is the first paint of the lazily loaded
+    // setup funnel, and on a loaded CI runner it has missed the default 5s
+    // (the retry then passes in ~1.5s). Same 15s as openPermissionsFromPeople.
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
 
     // Scoped to the full rail's own landmark: "Required" is also a substring
     // of the step-counter's subline ("Required before a run can launch…"),
@@ -444,7 +522,9 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await expect(rail.getByText("· 4")).toBeVisible();
     await expect(rail.getByText("Optional setup")).toBeVisible();
     await expect(rail.getByText("· 3")).toBeVisible();
-    await expect(rail.getByText("Demos", { exact: true })).toBeVisible();
+    // M-6 (D5): the admin funnel walks no demo any more, so the rail's third
+    // group never renders — never an empty "Demos · 0" heading over nothing.
+    await expect(rail.getByText("Demos", { exact: true })).toHaveCount(0);
 
     // Prove the mandatory Network gate (the e2e backend has no real sandbox
     // runner, so the probe answers no_runner — the one honest bypass) before
@@ -475,8 +555,11 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
       await route.fulfill({ response, json });
     });
     await skipHero(page);
-    await page.goto("/setup");
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await page.goto("/admin/setup");
+    // #469 (CI-flake): this heading is the first paint of the lazily loaded
+    // setup funnel, and on a loaded CI runner it has missed the default 5s
+    // (the retry then passes in ~1.5s). Same 15s as openPermissionsFromPeople.
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
     // exact: Playwright's default text match is substring + case-insensitive,
     // and the honest note below contains "recommended" as a lowercase word.
     await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
@@ -493,11 +576,12 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
 // to force horizontal scroll on the WHOLE page the moment it opened, not just
 // clip the popover. ui/popover.tsx's primitive-level
 // max-w-[calc(100vw-2rem)] (this lane) is what keeps it inside the viewport.
-test.describe("egress-redirect endpoint picker at 390px (F3-F8/F7-F7)", () => {
+test.describe("egress-redirect endpoint picker at 390px", () => {
+  // ticket: F3-F8/F7-F7
   test("390px: opening the From picker does not force horizontal scroll", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await skipHero(page);
-    await page.goto("/setup?step=corp_network");
+    await page.goto("/admin/setup?step=corp_network");
     await page.getByRole("tab", { name: /Egress redirection/ }).click();
 
     // Baseline, not an absolute zero-overflow assertion: F7-2 (the shell
@@ -518,5 +602,101 @@ test.describe("egress-redirect endpoint picker at 390px (F3-F8/F7-F7)", () => {
     // 390px viewport) used to push page scrollWidth wider still the instant
     // it opened. max-w-[calc(100vw-2rem)] keeps it from adding any.
     await expect.poll(scrollWidth, "scrollWidth after opening the picker").toBeLessThanOrEqual(before);
+  });
+});
+
+// T-68 (#728) — the corp-network step's own save round trip against the real
+// seeded backend: a saved proxy URL and a saved egress redirect both survive
+// a reload, and a save that collides with another write (#492's If-Match) is
+// refused rather than silently overwriting it. Serial: both tests write the
+// SAME site-config document one backend serves (policies.spec.ts's own rule
+// for a shared, mutating resource) — the second test's stale-save case reads
+// whatever the first test left behind rather than assuming a blank document.
+//
+// No CA PEM field exists to round-trip: docs/design/corp-network's only
+// CA-related fact is `trusted_ca_certs` (SITE.TRUSTED_CA_COUNT), a read-only
+// count derived server-side from WARDYN_TRUSTED_CA_FILE at boot — there is no
+// console-editable CA PEM input to drive. This covers the two fields the step
+// actually lets an operator write: the Host proxy URL and an Egress redirect.
+test.describe("Corporate network step — site-config round trip and a stale save (#728)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+
+  test("a saved proxy URL and a saved redirect both persist across a reload", async ({ page }) => {
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    await expect(page.getByRole("heading", { name: "Network" })).toBeVisible();
+
+    const proxyUrl = "http://proxy.e2e-roundtrip.invalid:3128";
+    await page.getByLabel("Proxy URL").fill(proxyUrl);
+    const proxySave = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await proxySave).ok()).toBe(true);
+    await expect(page.getByText(proxyUrl)).toBeVisible();
+
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+    await page.getByRole("combobox").click();
+    await page.getByText("https://registry.npmjs.org", { exact: true }).click();
+    await page
+      .getByPlaceholder(/artifactory\.corp\.internal/i)
+      .fill("https://artifactory.corp-e2e.internal/api/npm/npm-remote");
+    const redirectSave = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: /\+ add redirect/i }).click();
+    expect((await redirectSave).ok()).toBe(true);
+    const row = page.getByTitle(/^https:\/\/registry\.npmjs\.org →/);
+    await expect(row).toBeVisible();
+
+    // The round trip: a fresh document load, not a client-side rerender.
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Network" })).toBeVisible();
+    await expect(page.getByText(proxyUrl)).toBeVisible();
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+    await expect(page.getByTitle(/^https:\/\/registry\.npmjs\.org →/)).toBeVisible();
+  });
+
+  test("a save that collides with another write is refused 412: the toast names it, the draft survives, and the outside write is not overwritten", async ({
+    page,
+  }) => {
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    await expect(page.getByLabel("Proxy URL")).toBeVisible();
+
+    // Another admin (a second tab, in the real scenario this proves) saves
+    // over the SAME document right after this page's own mount read — real
+    // GET+PUT, real ETags, not a stubbed 412 (providers.spec.ts's own 412
+    // case stubs the response; this drives the actual precondition failure
+    // #869 wired up).
+    const mounted = await page.request.get("/api/v1/site-config", { headers: auth });
+    const mountedEtag = mounted.headers()["etag"] ?? null;
+    const outsideHeaders: Record<string, string> = { ...auth };
+    if (mountedEtag) outsideHeaders["If-Match"] = mountedEtag;
+    const outsideUrl = "http://proxy.e2e-outside-write.invalid:3128";
+    const outsideWrite = await page.request.put("/api/v1/site-config", {
+      headers: outsideHeaders,
+      data: { ...(await mounted.json()), upstream_proxy_url: outsideUrl },
+    });
+    expect(outsideWrite.ok(), await outsideWrite.text()).toBe(true);
+
+    // This page still holds the OLDER etag from its own mount read — its own
+    // save now collides with the write above.
+    const draftUrl = "http://proxy.e2e-my-write.invalid:3128";
+    await page.getByLabel("Proxy URL").fill(draftUrl);
+    const staleSave = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await staleSave).status()).toBe(412);
+    await expect(page.getByText(SITE.SAVED_ELSEWHERE)).toBeVisible();
+
+    // No silent overwrite: the outside write is what actually stuck.
+    const after = await page.request.get("/api/v1/site-config", { headers: auth });
+    expect((await after.json()).upstream_proxy_url).toBe(outsideUrl);
+    // The draft is not reverted or cleared — the operator can just retry.
+    await expect(page.getByLabel("Proxy URL")).toHaveValue(draftUrl);
   });
 });

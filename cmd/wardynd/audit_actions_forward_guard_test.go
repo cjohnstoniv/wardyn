@@ -44,8 +44,14 @@ func documentedAuditActions(t *testing.T, root string) (exact map[string]bool, p
 	if err != nil {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
+	// The "Renamed in 0.8" appendix lists every retired name in its left
+	// column; counting those as documented would let an emit keep an old name.
+	body, _, ok := strings.Cut(string(raw), "## Renamed in 0.8")
+	if !ok {
+		t.Fatal(`docs/AUDIT-ACTIONS.md has no "## Renamed in 0.8" heading — this guard's scope boundary moved; re-anchor it`)
+	}
 	exact = map[string]bool{}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(body, "\n") {
 		m := auditActionRow.FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
 			continue
@@ -141,7 +147,7 @@ func (tr *auditTree) collectConsts(f *ast.File) {
 // event's Action field, keyed by function name and giving the parameter index
 // that carries the action.
 //
-// DERIVED, never enumerated — and that is the whole of F094's second round. The
+// DERIVED, never enumerated — and that is the whole of the fix's second round. The
 // old scan matched ONE hardcoded callee name, `auditEvent`, so the two in-tree
 // helpers that take the action as a PARAMETER were invisible: internal/identity/
 // embedded's (*Provider).audit and internal/groundtruth's auditFor. Adding a
@@ -383,8 +389,8 @@ func literalsAssignedTo(f *ast.File, name string) []string {
 }
 
 // TestAuditActionsDoc_EveryEmitHasRow is the forward ratchet: an audit action
-// emitted by non-test Go must have a row in docs/AUDIT-ACTIONS.md. Adding an
-// emit with a novel action name used to leave `go test ./cmd/wardynd/` green.
+// emitted by non-test Go must have a row in docs/AUDIT-ACTIONS.md, so adding
+// an emit with a novel action name and no row fails `go test ./cmd/wardynd/`.
 func TestAuditActionsDoc_EveryEmitHasRow(t *testing.T) {
 	root := repoRoot(t)
 	exact, prefixes := documentedAuditActions(t, root)

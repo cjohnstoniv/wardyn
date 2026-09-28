@@ -3,182 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The runs board's pure logic — grouping, headlines, and the ONE attention
-// rule. No JSX, so App.tsx's sidebar badge imports the same rule the board
-// renders — one shared source keeps what "needs you" means from drifting
-// between the two.
+// The Runs list's shared naming helpers — headline fallback, the repo/
+// workspace label, and the short id. No JSX, so run-context-row.tsx (an
+// approval card, not the board) can share the same headline rule without
+// pulling in anything board-shaped.
 //
-// Attention is no longer a function of the run state alone. A held approval
-// parks the sandbox while the run is still RUNNING, so the state says nothing
-// about it — the signal comes from the PENDING approvals list, joined here.
-import type { AgentRun, ApprovalRequest } from "../../../lib/types";
-// Import the predicate, not the strip: importing it from live-approvals.tsx
-// would hoist that whole module (and everything it imports) into the eager
-// entry chunk — see isHeld's own doc in lib/types/approvals.ts.
-import { isAdoConsentRequest, isHeld, isStaleHold } from "../../../lib/types";
-import {
-  attentionFor,
-  attentionRank,
-  type AttentionSignals,
-  type RunAttention,
-} from "../../wardyn/run-state-glyph";
-
-// Ranks 1-3 (permission / interrupted / monitoring) are the "needs you" band —
-// see run-state-glyph.tsx's RANK, which is the single ordering.
-const ATTENTION_RANK = 3;
-
-/** One run's live approval facts, as the glyph's signals plus the count the
- *  card states ("2 waiting · sandbox held"). */
-interface RunApprovalSignals extends AttentionSignals {
-  pending: number;
-  /** At least one pending row is a mid-run AWS sign-in request — the board and
-   *  the cockpit header then say "Waiting for your AWS sign-in" instead of
-   *  "sandbox held", because this hold is the person's own to clear. Only set
-   *  while that row is still fresh — see `staleHeld`. */
-  reauth?: boolean;
-  /** #160 — at least one PENDING tool_call/credential_reauth row crossed
-   *  isHeld's stale-hold ceiling. `held` is false for it (isHeld no longer
-   *  counts it live), but the group/card still owe a sentence for what
-   *  happened here rather than going silent about it. */
-  staleHeld?: boolean;
-  /** At least one pending row is an Azure DevOps Entra-consent request (S10
-   *  round 2, F13) — a DIFFERENT provider than `reauth` above, so the board
-   *  and cockpit header say "Azure DevOps sign-in", never "AWS sign-in",
-   *  for this one. Checked structurally (isAdoConsentRequest), never folded
-   *  into `reauth`: the two must never collapse into one string that names
-   *  the wrong provider. */
-  adoConsent?: boolean;
-}
-
-export type RunSignals = ReadonlyMap<string, RunApprovalSignals>;
-
-/**
- * Held vs passive, per run, from ONE PENDING approvals fetch.
- *
- * `isHeld` is imported rather than re-derived: the run cockpit already states
- * this exact fact one screen over, and two copies of the wait_for_review test
- * would be two truths that can disagree — with the disagreement reading as
- * "nothing is holding the sandbox" while the sandbox is, in fact, held.
- *
- * ponytail: that import costs ~3.4kB gzip on the ENTRY chunk. This module is
- * eager (the board is the landing route, and App.tsx's badge shares the rule),
- * live-approvals.tsx is otherwise lazy under run-detail, and Rollup assigns
- * chunks per MODULE — so a shared import hoists the whole file up rather than
- * just this predicate. Correctness bought the bytes. To get them back, move
- * isHeld into lib/types/approvals.ts beside decisionArgs (which lives there
- * for a comparable reason) and have both callers import it from there.
- */
-export function approvalSignals(pending: readonly ApprovalRequest[]): RunSignals {
-  const by = new Map<string, RunApprovalSignals>();
-  for (const a of pending) {
-    if (a.state !== "PENDING") continue;
-    const cur = by.get(a.run_id) ?? { pending: 0 };
-    cur.pending += 1;
-    // A held request blocks; a passive deny_with_review pending does not. Once
-    // anything on the run is held, the run is held — a passive sibling can
-    // never downgrade that. A row isHeld no longer counts (#160's stale-hold
-    // ceiling) is neither: `staleHeld` says what happened without claiming
-    // it is still live.
-    if (isHeld(a)) {
-      cur.held = true;
-      // A mid-run AWS sign-in request is the ONE hold a person can act on
-      // directly, and the board and the cockpit header say so instead of the
-      // generic "sandbox held" — which would send them looking for an
-      // Approve button that does not exist for this kind. Only while fresh:
-      // once stale, `staleHeld` carries the fact instead. An Azure DevOps
-      // consent request is the SAME shape (kind credential_reauth) but a
-      // DIFFERENT provider — checked first and separately so it never falls
-      // into the AWS-named `reauth` bucket (F13).
-      if (isAdoConsentRequest(a)) cur.adoConsent = true;
-      else if (a.kind === "credential_reauth") cur.reauth = true;
-    } else if (isStaleHold(a)) {
-      cur.staleHeld = true;
-    } else {
-      cur.passiveHold = true;
-    }
-    by.set(a.run_id, cur);
-  }
-  return by;
-}
-
-export function signalsFor(run: AgentRun, signals: RunSignals): RunApprovalSignals {
-  return signals.get(run.id) ?? { pending: 0 };
-}
-
-export function runAttention(run: AgentRun, signals: RunSignals): RunAttention {
-  return attentionFor(run.state, signalsFor(run, signals));
-}
-
-/** The amber-badge rule, shared by the sidebar count and the board. */
-export function needsAttention(run: AgentRun, signals: RunSignals): boolean {
-  return attentionRank(runAttention(run, signals)) <= ATTENTION_RANK;
-}
-
-/**
- * Pinned-lane membership: an approval is a REQUEST and a failure is a REPORT
- * (CONSOLE-RULES §5's precedence note). Only the request pins — rank 1. A
- * failed or killed run keeps its place beside the work it belongs to and
- * carries a danger rail there instead.
- */
-export function needsYou(run: AgentRun, signals: RunSignals): boolean {
-  return runAttention(run, signals) === "permission";
-}
-
-/** #160 — one counted reason per wait-worthy run in a title group, exclusive
- *  per run so the header can never render a run under two reasons (and the
- *  "no fourth chip" acceptance bar holds). `starting` is a run.state fact,
- *  independent of the approvals fetch, so it is accurate even while the
- *  caller is still waiting on that fetch to resolve — see runs/title-group.tsx. */
-export interface GroupWaitBreakdown {
-  held: number;
-  reauth: number;
-  starting: number;
-  staleHeld: number;
-}
-
-export function groupWaitBreakdown(runs: readonly AgentRun[], signals: RunSignals): GroupWaitBreakdown {
-  let held = 0;
-  let reauth = 0;
-  let starting = 0;
-  let staleHeld = 0;
-  for (const run of runs) {
-    const s = signalsFor(run, signals);
-    if (s.reauth) reauth++;
-    else if (s.held) held++;
-    else if (s.staleHeld) staleHeld++;
-    else if (run.state === "STARTING") starting++;
-  }
-  return { held, reauth, starting, staleHeld };
-}
-
-// Title grouping
-// The board groups by the run's TITLE: runs that share one are the same piece
-// of work, and seeing the twelve nightly audits as one thing is the point of
-// naming them. It replaced grouping by state — the triage that gave up is
-// preserved two ways: the state facet still narrows BEFORE grouping, and the
-// input list arrives pre-ordered attention → active → done, so a group holding
-// a failed run floats to the top for free and its header says so.
-//
-// A title held by only ONE run is not a group. Those, and every untitled run
-// (legacy rows, CLI runs, the server's own system runs), fall into a single
-// trailing grid — a header per singleton is noise, not structure.
-//
-// ponytail: computed over the LOADED page, not the server. A title split across
-// a pagination boundary groups per page; add a server-side group-by if run
-// counts ever outgrow LIST_LIMIT.
-export function titleGroups(runs: AgentRun[]): {
-  groups: { title: string; runs: AgentRun[] }[];
-  loose: AgentRun[];
-} {
-  const by = new Map<string, AgentRun[]>();
-  for (const r of runs) {
-    const t = (r.title ?? "").trim();
-    if (t) by.set(t, [...(by.get(t) ?? []), r]);
-  }
-  const groups = [...by].filter(([, rs]) => rs.length > 1).map(([title, rs]) => ({ title, runs: rs }));
-  const grouped = new Set(groups.flatMap((g) => g.runs.map((r) => r.id)));
-  return { groups, loose: runs.filter((r) => !grouped.has(r.id)) };
-}
+// #1197 L3: the attention rule that used to live here (approvalSignals /
+// runAttention / needsAttention / needsYou / groupWaitBreakdown) is GONE —
+// folded into the server (internal/types/attention.go's RunAttention,
+// projected by GET /runs?view=), which is the one truth now. See
+// screens/runs/runs-model.ts for the row/section rule that replaced it, and
+// FINAL-PR-1230.md for why moving it server-side was the right call. Title
+// grouping (titleGroups) is also gone: the Runs landing page groups by need
+// then time (design.md H-6), not by title — "Group by Title" is an L4 filter
+// option, not a standing grouping rule.
+import type { AgentRun } from "../../../lib/types";
 
 // The last rung of the headline chain, and the repo slot's stand-in — both
 // name what the run actually is rather than rendering a blank or a dash.
@@ -194,35 +33,27 @@ function basename(path: string | undefined): string {
 }
 
 /**
- * What one card/row calls itself, with honest fallbacks all the way down.
- *
- * INSIDE a group the title is already on the header, so the row's job is to
- * distinguish this run from its siblings — the task does that; the title would
- * print three identical cards.
- *
- * Nothing here is invented. Each rung is a fact the run carries, and
- * "Interactive session" is claimed only for a run that IS one — a nameless
- * non-interactive run still gets the dash rather than a flattering guess.
+ * What one row calls itself, with honest fallbacks all the way down. Nothing
+ * here is invented: each rung is a fact the run carries, and "Interactive
+ * session" is claimed only for a run that IS one — a nameless non-interactive
+ * run still gets the dash rather than a flattering guess.
  */
-export function rowHeadline(run: AgentRun, grouped: boolean): string {
-  const named = grouped ? "" : (run.title ?? "").trim();
+export function rowHeadline(run: AgentRun): string {
   return (
-    named ||
+    (run.title ?? "").trim() ||
     run.task ||
     basename(run.workspace_path) ||
     (run.interactive ? INTERACTIVE_HEADLINE : "—")
   );
 }
 
-/** Row 2's repo cluster: the repo, else the workspace it mounted, else the
- *  honest note that there is neither. Only a real path gets mono type —
- *  the fallback is a phrase, and §3 keeps mono for literals. */
+/** The meta line's workspace slot: the repo, else the workspace it mounted,
+ *  else the honest note that there is neither. Only a real path gets mono
+ *  type — the fallback is a phrase. */
 export function repoLabel(run: AgentRun): { text: string; mono: boolean } {
   const text = run.repo || run.workspace_path || "";
   return text ? { text, mono: true } : { text: NO_REPO, mono: false };
 }
 
-export function shortId(id: string): string {
-  const base = id.replace(/^run_/, "");
-  return base.length > 10 ? base.slice(0, 8) + "…" : base;
-}
+// shortId (the Run ID column) was removed here: the
+// Run ID moved to the run page (design.md §4); nothing on this page reads it.

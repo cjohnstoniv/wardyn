@@ -20,10 +20,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B11a-F1. mint() talks to GitHub BEFORE the single-use burn, so every arm that
+// mint() talks to GitHub BEFORE the single-use burn, so every arm that
 // returns an error AFTER mintKind succeeded is holding a real, live ghs_… with
 // contents:write for GitHub's full ~1h — and with no committed credential.mint
 // row, that token has no jti, so mintedCredentialsSQL cannot see it and
@@ -60,7 +61,7 @@ func TestMint_CommitFailure_RevokesDiscardedGitHubToken(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F1: the WINNER's token is never revoked. A revoke
+// NEGATIVE CONTROL for the WINNER's token is never revoked. A revoke
 // on the success path would hand back the very credential the run is about to
 // use.
 func TestMint_Success_NeverRevokes(t *testing.T) {
@@ -151,7 +152,7 @@ func newTestGitHubMinter(t *testing.T, baseURL string, budget time.Duration) *gi
 	return m
 }
 
-// B11a-F2. A never-responding api.github.com must not pin the mint (and with it
+// A never-responding api.github.com must not pin the mint (and with it
 // the grant row's FOR UPDATE lock and a pooled connection) for longer than the
 // client's own budget. The caller here passes context.Background() ON PURPOSE:
 // the residual the finding names is exactly a caller with no deadline of its
@@ -181,25 +182,24 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 	}
 }
 
-// R-03. The client Timeout bounds ONE round trip, and a cold installByOrg makes
-// TWO (GetRepositoryInstallation, then CreateInstallationToken) — so a slow
-// first hop followed by a blackholed second used to hold the grant row's FOR
-// UPDATE lock and a pooled connection for ~2x the budget. The mint now derives
-// ONE ctx deadline for the whole call, so the in-transaction ceiling is 1x.
+// The client Timeout bounds one round trip, and a cold installByOrg makes two
+// (GetRepositoryInstallation, then CreateInstallationToken) — so per-hop
+// timeouts alone would let a slow first hop followed by a blackholed second
+// hold the grant row's FOR UPDATE lock and a pooled connection for ~2x the
+// budget. The mint derives one ctx deadline for the whole call, so the
+// in-transaction ceiling is 1x.
 //
 // The server here is the shape that separates the two: hop 1 answers just under
 // the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
 //
-// W6-04: a raw hop-hit COUNT cannot discriminate the two shapes — hop 2's HTTP
-// request reaches this fake either way (measured both shapes directly,
-// reverting the ctx-sharing fix locally: hop1Hits/hop2Hits are 1/1 under BOTH
-// the fixed and the pre-fix code, since hop 1 succeeding at all means some of
-// its own per-hop budget is still left for hop 2 to dial, fixed or not). The
-// counters stay as an anti-vacuity floor — proving the fixture actually
-// exercised both hops, so the timing assertion below is proving something —
-// and the ceiling widens from 1.4x to 1.5x, comfortably between the two
-// measured shapes (~500ms fixed vs ~900ms reverted) with more headroom on
-// both sides than the old squeeze.
+// A raw hop-hit count cannot discriminate the two shapes — hop 2's HTTP
+// request reaches this fake either way (hop1Hits/hop2Hits are 1/1 under both,
+// since hop 1 succeeding at all means some of its own per-hop budget is still
+// left for hop 2 to dial). The counters stay as an anti-vacuity floor —
+// proving the fixture actually exercised both hops, so the timing assertion
+// below is proving something — and the ceiling sits at 1.5x, comfortably
+// between the two measured shapes (~500ms with one deadline vs ~900ms
+// per-hop) with headroom on both sides.
 func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 	const budget = 500 * time.Millisecond
 
@@ -254,7 +254,7 @@ func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F2: a merely SLOW GitHub still mints. The deadline
+// NEGATIVE CONTROL for a merely SLOW GitHub still mints. The deadline
 // is a ceiling on a hung server, not a latency budget that fails ordinary
 // round trips.
 func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {
@@ -265,7 +265,7 @@ func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_slow_ok","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_slow_ok","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -283,7 +283,7 @@ func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {
 }
 
 // The production Revoke really issues DELETE /installation/token authenticated
-// AS THE DISCARDED TOKEN — the same call ruleset.go makes for its probe token.
+// As the discarded token — the same call ruleset.go makes for its probe token.
 func TestGitHubMinter_Revoke_DeletesInstallationToken(t *testing.T) {
 	var gotMethod, gotPath, gotAuth atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -97,7 +97,7 @@ func TestBuild_SmokeDockerd(t *testing.T) {
 		// base rootfs). A stock rootful dockerd fails the second; a VM-based daemon
 		// (Docker Desktop/WSL2) fails the first. Neither is a Wardyn defect, so classify
 		// those two signatures as SKIP — but fail on anything else, so a genuine build
-		// regression still reddens this lane.
+		// failure still reddens this lane.
 		log := logs.String()
 		switch {
 		case strings.Contains(log, "connection refused"), strings.Contains(log, "dial tcp"):

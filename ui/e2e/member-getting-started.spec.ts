@@ -3,18 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
 import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../src/app/lib/workspace-providers-copy";
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy";
 
-// Member Getting Started (Phase 5) — same mockMemberRole splice
-// member-console.spec.ts uses (the seeded backend always authenticates as
-// admin server-side; only the CLIENT believes it is a member). This spec
-// proves the render: the six member sections replace the operator funnel at
-// /setup, the account menu drops Demos, and the video player streams nothing
-// until Watch is pressed. Server-side ownership scoping (creator-scoped
-// runs/secrets) is proven in Go, not here — the daemon-backed part of the
-// plan's invariant.
+// Real per-person identities; individual setup splices below exercise rendering
+// states the none runner cannot produce, without claiming backend acceptance.
 
 const MEMBER_SECTION_TITLES = [
   "What's set up for you",
@@ -25,9 +19,35 @@ const MEMBER_SECTION_TITLES = [
   "Connect your tools",
 ] as const;
 
-test.describe("member Getting Started (mocked /me role)", () => {
+test.describe("member Getting Started (real per-person token)", () => {
   test.beforeEach(async ({ page }) => {
-    await mockMemberRole(page);
+    await asRealMember(page);
+  });
+
+  test("real member sees redacted setup facts", async ({ page }) => {
+    const admin = await page.request.get("/api/v1/setup/status", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(admin.status()).toBe(200);
+    const operatorStatus = await admin.json();
+    expect(operatorStatus.checks.length).toBeGreaterThan(0);
+    expect(operatorStatus.secrets.present).toContain("e2e-test-secret");
+    expect(operatorStatus.runner.driver).toBe("none");
+
+    const response = await consoleAPI(page, "GET", "/api/v1/setup/status");
+    expect(response.status, response.text).toBe(200);
+    const status = JSON.parse(response.text);
+    expect(status).toMatchObject({ checks_redacted: true, checks: [], providers: [], secrets: { present: [] } });
+    expect(status.runner.driver ?? "").toBe("");
+    expect(status.runner.confinement_classes).toEqual(operatorStatus.runner.confinement_classes);
+    expect(status.bedrock.region ?? "").toBe("");
+    expect(status.bedrock.model ?? "").toBe("");
+    expect(response.text).not.toContain("e2e-test-secret");
+
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    await expect(page.getByText("Image builder", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 
   test("shows the six member sections, never the admin funnel", async ({ page }) => {
@@ -39,6 +59,30 @@ test.describe("member Getting Started (mocked /me role)", () => {
     }
     await expect(page.getByText("Setup is managed by your workspace admin")).toHaveCount(0);
     await expect(page.getByText("Pick your barrier")).toHaveCount(0);
+  });
+
+  // Packet M-B (modes-b.html): the model-connection row links to Your account.
+  test("the model connections row opens Your account", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+
+    const link = page.getByRole("link", { name: MEMBER_GETTING_STARTED.MODEL_CONNECTIONS });
+    await expect(link).toHaveAttribute("href", "/account");
+    await link.click();
+    await expect(page).toHaveURL(/\/account$/);
+  });
+
+  // M-6 (D5): the demos the admin funnel used to walk now live here. This
+  // pins the section exists and offers a keyless demo for a real member
+  // role — the walkable/gated set itself (needsModel/needsSecret) is unit
+  // coverage in member-getting-started.test.tsx, not re-proven per backend
+  // state here.
+  test("the Egress demos section renders and offers a keyless demo", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+
+    await expect(page.getByText(MEMBER_GETTING_STARTED.DEMOS_EGRESS_TITLE)).toBeVisible();
+    await expect(page.getByText("The sealed box")).toBeVisible();
   });
 
   test("the episode rail leads with the member's own path, then core (Shape C)", async ({
@@ -121,7 +165,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
 
   // U-1 (W6 blind lens) — a SHARED bedrock_sso roster row with model_access
   // `live`: the wire shape every member of such a deployment gets
-  // (memberModelAccess projects the ADMIN's credential for them). The chip row
+  // (userModelAccess projects the ADMIN's credential for them). The chip row
   // used to read "Model access · Your AWS sign-in" over a card saying "Provided
   // by your admin" — a sign-in this member has never done. One owner, one chip.
   test("a shared bedrock row's live credential is the ADMIN's on the chip row too", async ({ page }) => {
@@ -165,7 +209,8 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(cardButton).toBeVisible();
     // Both still SAY the frozen visible text.
     await expect(cardButton).toHaveText(AGENTS.SIGN_IN_AWS);
-    // …and opening the pane takes the card's duplicate off the page.
+    // …and opening the one door (a modal, #544) takes the card's duplicate
+    // out of reach.
     await page
       .getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true })
       .click();
@@ -225,7 +270,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
     // Registered LAST so it wins over the run read above (Playwright matches the
     // most recently registered route first).
     let ticketPosts = 0;
-    await page.route(`**/api/v1/runs/${loginRunId}/attach-ticket`, async (route) => {
+    await page.route(`**/api/v1/runs/${loginRunId}/attach/ticket`, async (route) => {
       ticketPosts++;
       await route.fulfill({ json: { ticket: "e2e-ticket" } });
     });
@@ -294,10 +339,15 @@ test.describe("member Getting Started (mocked /me role)", () => {
   });
 });
 
-// Sibling negative control: the SAME route, unspliced (the harness's real
-// admin session) — the operator funnel, the Demos entry, and none of the
-// member-only section titles.
-test.describe("admin session at /setup (unmocked — negative control)", () => {
+// Sibling negative control, updated for M-6 (admin-member-modes-design.md
+// §4.8/§6, D1): the SAME route, unspliced (the harness's real admin
+// session) — since M-6 the mode is the URL, not the caller's role
+// (onboarding-screen.tsx's own header comment), and D1 (single-operator: an
+// admin bearer, no SSO) says the URL is the ONLY thing that ever decided it
+// here. So the sole admin at plain /setup now gets the SAME User Getting
+// Started page a member would, never the operator funnel — which still
+// renders, unchanged, at /admin/setup.
+test.describe("admin session at /setup and /admin/setup (unmocked — D1: the URL decides)", () => {
   test.beforeEach(async ({ page }) => {
     // Past the welcome hero, straight to the funnel's own step heading — same
     // seed demos.spec.ts uses for a deep link into /setup.
@@ -310,34 +360,28 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
     });
   });
 
-  test("the admin still sees the barrier step, Demos, and no member sections", async ({ page }) => {
+  test("plain /setup shows the same User Getting Started a member gets, never the operator funnel", async ({
+    page,
+  }) => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
 
-    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
-
-    // /setup renders the funnel's own <header> inside the shell, so scope to the
-    // shell's top bar (the first header in DOM order) before taking the last
-    // button — the account-menu trigger. An unscoped .last() lands on a funnel
-    // button and no menu ever opens.
-    await page.locator("header").first().getByRole("button").last().click();
-    const menu = page.getByRole("menu");
-    await expect(menu.getByText("Demos")).toBeVisible();
-
     for (const title of MEMBER_SECTION_TITLES) {
-      await expect(page.getByRole("heading", { name: title })).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: title })).toBeVisible();
     }
+    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toHaveCount(0);
   });
 
-  // Negative control for the member-cold-load fix above: an admin's cold
-  // /setup load is UNCHANGED — it still fires the admin-only site-config read
-  // (this suite's beforeEach seeds wardyn-onboarding-seen so the load lands
-  // straight on the funnel's barrier step, same as the sibling test above).
-  test("a plain admin cold page.goto(\"/setup\") still requests /api/v1/site-config", async ({ page }) => {
+  // Negative control: /admin/setup is still the operator funnel, and still
+  // fires the admin-only site-config read a plain /setup load no longer does
+  // (member-getting-started.tsx never reads it).
+  test("a plain admin cold page.goto(\"/admin/setup\") still shows the funnel and requests /api/v1/site-config", async ({
+    page,
+  }) => {
     const requests: string[] = [];
     page.on("request", (req) => requests.push(req.url()));
 
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
 
     expect(requests.some((u) => new URL(u).pathname === "/api/v1/site-config")).toBe(true);
@@ -347,15 +391,20 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
 // R4/F034: the guard in GettingStarted was `role === "member"` after role went
 // three-valued, so a SECURITY ADMIN fell through to the deployer funnel — built
 // from a SetupStatus the server redacts for every non-operator
-// (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
-// internal/api/setup.go), over mutations that are super-admin-only. It reads
-// `role !== "admin"` now, the way setupGateActive already did.
+// (redactSetupStatusForUser zeroes Checks/Providers/Secrets,
+// internal/api/setup.go), over mutations that are super-admin-only.
+// GettingStarted now checks `role !== "admin"` alongside the view (M-6's
+// `view !== "admin"`), so a security admin is refused the funnel whether
+// they land on plain /setup or reach /admin/setup directly — the latter
+// passes ViewGate because viewAccess maps a security admin to the same
+// "session-admin" tier as an admin.
 //
 // Browser-only: this is a ROUTE decision made from /me, so only a real
 // navigation with a security-admin /me proves it.
-test.describe("security admin at /setup (mocked /me role) — R4/F034", () => {
+test.describe("security admin at /setup (real per-person token)", () => {
+  // ticket: R4/F034
   test.beforeEach(async ({ page }) => {
-    await mockSecurityAdminRole(page);
+    await asRealSecurityAdmin(page);
   });
 
   test("lands on the member Getting Started, never the deployer funnel", async ({ page }) => {
@@ -371,11 +420,14 @@ test.describe("security admin at /setup (mocked /me role) — R4/F034", () => {
     await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 
-  // W6-3. The account menu's Demos entry deep-links to /setup?step=sealed-box,
-  // and the test above is the proof that this tier lands on the member Getting
-  // Started — which ignores ?step entirely. Offering it here is the same dead
-  // invitation the member's own menu already drops.
-  test("the account menu has no Demos entry either — the deep link lands on a page that ignores ?step", async ({ page }) => {
+  // W6-3. The account menu's Demos entry used to deep-link to
+  // /setup?step=sealed-box, and the test above is the proof that this tier
+  // lands on the member Getting Started, which DOES honor ?step=<id> — it
+  // pre-opens the matching row, for a demo it actually offers (see
+  // member-getting-started.test.tsx's own ?step= cases). The entry stays
+  // gone regardless: a menu item pointing at a page this tier already lands
+  // on by default would be a dead invitation either way.
+  test("the account menu has no Demos entry either", async ({ page }) => {
     await gotoConsole(page);
     await page.locator("header").getByRole("button").last().click();
     const menu = page.getByRole("menu");

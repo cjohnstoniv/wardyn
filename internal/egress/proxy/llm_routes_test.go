@@ -32,12 +32,12 @@ func TestIsLLMHost_BedrockPrivateEndpoint(t *testing.T) {
 		{"bedrock-runtime.us-gov-west-1.amazonaws.com", true, "four-part gov region"},
 		{"bedrock-runtime.ap-southeast-4.amazonaws.com", true, "region label with a digit"},
 
-		// --- the rest of AWS's published service labels (F113) ---
+		// --- the rest of AWS's published service labels ---
 		// docs.aws.amazon.com/general/latest/gr/bedrock.html publishes eight
 		// service labels plus their -fips variants. isBedrockHost matched two of
 		// them, so every FIPS endpoint — the host a FedRAMP-High workload is
 		// generally REQUIRED to use, GovCloud included — and the whole agent
-		// family fell out of isLLMHost, and with it the llm.scan.blind coverage
+		// family fell out of isLLMHost, and with it the llm.scan.bypass coverage
 		// row THREAT-MODEL.md promises for an opaque model tunnel.
 		{"bedrock-runtime-fips.us-east-1.amazonaws.com", true, "FIPS data plane"},
 		{"bedrock-runtime-fips.us-gov-west-1.amazonaws.com", true, "GovCloud FIPS data plane"},

@@ -23,7 +23,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"] as const;
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature", "policy"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -104,7 +104,9 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     direction: "narrows",
   },
   integration: {
-    label: "Model providers",
+    // DRAFT (M2 canon pending): was "Model providers", which is now the
+    // model_provider kind's label; this kind retires with the AI integrations.
+    label: "Model integrations",
     blurb: "Which model provider a member may name on a run of their own.",
     valueLabel: "Integration",
     valueHint: "The exact integration id. Use * for every integration.",
@@ -129,6 +131,44 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     unenforced: "Members can launch against a repository on any git provider this deployment admits.",
     enforced:
       "A member can only bring work from providers granted to them — on a run, and on a workspace they create, edit, scan or build. A repository on another provider is refused, naming the provider's kind and nothing more.",
+    direction: "narrows",
+  },
+  // Unlike `integration`, this kind bounds a workspace's pin and an agent's
+  // default too: every model credential is the person's own, so no admin pin
+  // is exempt (multi-provider design §2.10).
+  model_provider: {
+    // DRAFT (M2 canon pending)
+    label: "Model providers",
+    blurb: "Which model provider a member's run may use.",
+    valueLabel: "Model provider",
+    valueHint: "The exact provider id, as it is written on the Model providers page. Use * for every provider.",
+    unenforced: "Members can run on any model provider that serves their agent.",
+    enforced:
+      "A member can only run on providers granted to them — the one they choose, the one a workspace pins, or their agent's default. A run on another one is refused, naming it.",
+    direction: "narrows",
+  },
+  // Staged in docs/design/permissioning-prompt.md §7.1 as DRAFT (#614).
+  feature: {
+    // DRAFT (canon pending)
+    label: "SSH keys and API tokens",
+    blurb: "Whether a member may add an SSH key or mint an API token.",
+    valueLabel: "Feature",
+    valueHint: "ssh_key or api_token. Use * for both.",
+    unenforced: "Members can add SSH keys and mint API tokens.",
+    enforced:
+      "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
+    direction: "narrows",
+  },
+  // Staged in docs/design/permissioning-prompt.md §7.1 as DRAFT (#613).
+  policy: {
+    // DRAFT (canon pending)
+    label: "Stored policies",
+    blurb: "Which stored policies a member may select for a run of their own.",
+    valueLabel: "Policy",
+    valueHint: "The policy's id. Use * for every policy.",
+    unenforced: "Members can select any stored policy for a run they launch.",
+    enforced:
+      "A member can only select policies granted to them. A run naming another one is refused at launch, with the reason. A run with no policy is never refused for it.",
     direction: "narrows",
   },
 };
@@ -198,6 +238,8 @@ export const PERM = {
   EFFECT_DENY: "Deny",
   SUBJECT_USER: "User",
   SUBJECT_GROUP: "Group",
+  // 0.8 (user-types design, UT-7a): the chip on a row naming a user type.
+  SUBJECT_USER_TYPE: "User type",
   SUBJECT_ALL: "Everyone signed in",
   PRECEDENCE:
     "A deny always wins — over an allow on the same person, over a group they're in, and over this capability being unenforced.",
@@ -214,7 +256,13 @@ export const PERM = {
   FIELD_EFFECT: "Effect",
   HINT_USER: "An email address or the sign-in subject id. Either one matches the same person.",
   HINT_GROUP: "A group or app-role name exactly as your identity provider sends it in the token.",
+  // 0.8 (user-types design, UT-7a): pick one of the org's user types.
+  HINT_USER_TYPE: "Everyone stamped with this user type at sign-in.",
   HINT_ALL: "Every signed-in member. Super admins are exempt; a security admin is not.",
+  // user-types-design.md rev 4 §7: a deny at the user_type tier is a wall, so
+  // adding one asks first. Title + body are the design's one sentence pair.
+  TYPE_DENY_TITLE: "This blocks everyone of this type.",
+  TYPE_DENY_BODY: "A person or group allow will not override it.",
   DUPLICATE: "That grant already exists — its effect was updated.",
 
   // ---- group snapshot honesty ----
@@ -260,10 +308,22 @@ export const DENIED = {
   // rule the grant must not appear to have lifted.
   ALWAYS_STILL_ADMIN: "Always is admin-only, even for a host you're granted.",
 
-  // New Run: workspace picker annotations. The list is NOT narrowed — visibility
-  // is not capability — so the ungranted rows say why they'll refuse.
+  // New Run: workspace picker annotation. The list is NOT narrowed — visibility
+  // is not capability — so every ungranted row still carries this chip.
   WORKSPACE_CHIP: "Not granted",
-  WORKSPACE_BODY: "A run against this workspace is refused at launch. Ask an admin to grant it to you.",
+
+  // #922 (UT-7c), the person side: an org workspace pinned to a model
+  // provider this caller's own filtered `/setup/status.model_providers` does
+  // not carry (available-to-prompt.md §7.4's "isn't available to you"
+  // family, the generic form). The console never learns the provider's own
+  // NAME for a value its own capability filtered away — MP-6a's
+  // capVisible(capModelProvider) drops the row whole, "so it reads exactly as
+  // a resource the deployment does not have" (#832) — so this names nothing,
+  // unlike the mock's own worked example, which had the row's name from an
+  // admin-only read. Reused for both the New Run picker's reason line
+  // (workspace-card.tsx) and the workspace's own surfaces (workspaces.tsx,
+  // workspace-detail.tsx).
+  WORKSPACE_NOT_AVAILABLE: "This workspace isn't available to you.",
 
   // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
   // are count-shaped copy for a preflight/Review surface Wardyn doesn't ship:
@@ -276,6 +336,11 @@ export const DENIED = {
   // Secrets page, member view, `secret` enforced.
   SECRETS_NARROWED: "Only secrets granted to you are listed.",
 
+  // Your SSH keys, `feature` enforced or denied for ssh_key: Add key disables
+  // with this beside it. The server's 403 body, byte for byte
+  // (internal/api/sshkeys.go sshKeyFeatureRefusal; a Go test pins the two).
+  SSH_KEY_FEATURE: "SSH keys aren't available to you. Ask your admin.",
+
   // The member half of the stale-groups story.
   STALE_GROUPS:
     "You signed in before Wardyn started recording your groups. If a permission looks missing, sign out and back in.",
@@ -283,7 +348,7 @@ export const DENIED = {
 
 // M3 — member local_dir onboarding (AddWorkspaceDialog), root-constrained per
 // WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md). Presentational
-// only: enforcement is ValidateMemberMountSource at bind time, same
+// only: enforcement is ValidateUserMountSource at bind time, same
 // non-authoritative-hint relationship DENIED above has to server-side
 // requireOperator.
 export const MEMBER_WORKSPACE = {

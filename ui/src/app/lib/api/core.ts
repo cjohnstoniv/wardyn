@@ -10,46 +10,66 @@
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
 import { CC_ORDER, type ConfinementClass } from "../types";
+import { apiURL } from "../base-path";
 
-const BASE = "/api/v1";
 const TOKEN_KEY = "wardyn_admin_token";
 
 // Auth token + 401 handling
-// X3-F7: a REASON and the PATH the caller was on when the 401 arrived — without
-// them, a mid-session expiry swaps the whole tree for a bare <SignIn> with no
-// explanation and no way back, dropping in-progress form state on the floor
-// with nothing to show for it. `path` is captured HERE, at the module level,
-// not in a React hook: the SignIn branch (App.tsx) renders OUTSIDE <Routes>,
-// so by the time a component could ask "where am I", the routed tree is
-// already gone — window.location.pathname is still accurate at the moment
-// wfetch itself observes the 401.
-let _unauthorized: ((reason: string, path: string) => void) | null = null;
+// #483: a 401 on a console that WAS signed in keeps the page mounted and opens
+// a sign-in dialog over it (App.tsx), so the handler needs no path to return
+// to — only whether the refused request was a WRITE, and whose Save it was: a
+// save that hit the expiry is never re-sent, and the screen that made it has
+// to say so.
+export interface Refused {
+  write: boolean;
+  /** The owning screen's id, when the request was that screen's Save (WfetchInit.save). */
+  save?: string;
+}
+let _unauthorized: ((refused: Refused) => void) | null = null;
 
-// DRAFT (M2 canon pending) — X3-F7: the one reason wfetch's 401 branch can
-// honestly give (it cannot tell an expired SSO session from a revoked admin
-// token apart — both arrive as a bare 401).
-export const SESSION_ENDED_REASON = "Your session ended. Sign in again to continue.";
+// #483: while the console is signed out mid-page — the dialog or the
+// read-only bar — no write leaves this tab. Whoever holds a session by then
+// (another tab can have signed in as someone else) must never receive one
+// person's draft; the write is refused here, unsent, and reported as a 401 so
+// the dialog asks again. Reads still go out: only the dialog's own principal
+// check can end the hold (App.tsx sets it from the reauth phase).
+let _signedOutHold = false;
+export function setSignedOutHold(on: boolean): void {
+  _signedOutHold = on;
+}
+
+/** RequestInit plus `save`: the owning screen's id when this request is that
+ *  screen's Save, so a refused one is named beside that Save and nowhere else;
+ *  and `endsSession`: the logout, the one write the signed-out hold lets
+ *  through — it ends a session and carries nothing of the page. Per request,
+ *  never a global release: a Save clicked during the logout stays held. */
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true };
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and
 // `window.location.pathname` reads back exactly `//evil.com` — a
-// protocol-relative host a router's replaceState would dial cross-origin.
-// `/\evil.com` is the same trick some browsers normalize a backslash into a
-// slash for. Neither a bare `/` (the landing decision, not "where you were")
-// nor `/setup` (its own gate) is a real return path. Applied at BOTH ends —
-// here at capture (belt) and again by the caller at restore (suspenders) —
-// one rule, checked twice, rather than trusted to travel through state
-// unchecked.
+// protocol-relative host a navigation would dial cross-origin. `/\evil.com`
+// is the same trick some browsers normalize a backslash into a slash for.
+// Neither a bare `/` (the landing decision, not "where you were") nor
+// `/setup` (its own gate) is a real place to reload to, in either view.
+// Applied where App.tsx turns a reload target into a navigation (#483).
 export function safeReturnPath(path: string | null | undefined): string {
   return path &&
     path.startsWith("/") &&
     !path.startsWith("//") &&
     !path.startsWith("/\\") &&
     path !== "/" &&
-    path !== "/setup"
+    path !== "/setup" &&
+    path !== "/admin" &&
+    path !== "/admin/setup"
     ? path
     : "/runs";
 }
+
+// The full sign-in screen's notice for a session that ended (an amber
+// warning, not the error box). wfetch cannot tell an expired SSO session from
+// a revoked admin token — both arrive as a bare 401 — so this names neither.
+export const SESSION_ENDED_REASON = "You were signed out. Sign in again to continue.";
 
 // The admin bearer defaults to sessionStorage (cleared when the tab/browser
 // closes) so a full-admin token is not left at rest across restarts. It lands in
@@ -78,8 +98,15 @@ export function setToken(token: string | null, remember = false): void {
   }
 }
 
-export function onUnauthorized(fn: (reason: string, path: string) => void): void {
+export function onUnauthorized(fn: (refused: Refused) => void): void {
   _unauthorized = fn;
+}
+
+// Any 403 may mean this tab's view went stale (another tab switched the session
+// under it), so the view re-sync re-reads /me at once (view-switch.tsx).
+let _forbidden: (() => void) | null = null;
+export function onForbidden(fn: (() => void) | null): void {
+  _forbidden = fn;
 }
 
 export class HttpError extends Error {
@@ -94,11 +121,19 @@ export class HttpError extends Error {
    *  from HERE, not from a preflight fact: a 422 can be the very first thing
    *  a caller hears about the row. */
   org: string;
-  constructor(status: number, message: string, reason = "", org = "") {
+  /** The model provider a refusal is about (#532), "" when the body names
+   *  none. A launch refusal's door is keyed by THIS, never by what the screen
+   *  has selected (#146's ruling, #543). */
+  provider: string;
+  /** The refused provider's kind (#532, #535), "" when the body names none. */
+  kind: string;
+  constructor(status: number, message: string, reason = "", org = "", provider = "", kind = "") {
     super(message);
     this.status = status;
     this.reason = reason;
     this.org = org;
+    this.provider = provider;
+    this.kind = kind;
     this.name = "HttpError";
   }
 }
@@ -183,9 +218,15 @@ async function drainBody(res: Response): Promise<void> {
 
 export async function wfetch(
   path: string,
-  init: RequestInit = {},
+  { save, endsSession, ...init }: WfetchInit = {},
   timeoutMs: number = WFETCH_TIMEOUT_MS,
 ): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
+  if (refused.write && _signedOutHold && !endsSession) {
+    _unauthorized?.(refused);
+    throw new HttpError(401, "Unauthorized");
+  }
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -196,7 +237,7 @@ export async function wfetch(
 
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, {
+    res = await fetch(apiURL(path), {
       ...init,
       headers,
       credentials: "include",
@@ -236,16 +277,17 @@ export async function wfetch(
     // The 401 body is thrown over, never handed to a caller — drain it here or
     // the rejected request stays open on its connection (see drainBody).
     await drainBody(res);
-    _unauthorized?.(SESSION_ENDED_REASON, safeReturnPath(window.location.pathname));
+    _unauthorized?.(refused);
     throw new HttpError(401, "Unauthorized");
   }
+  if (res.status === 403) _forbidden?.();
   return res;
 }
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org);
+    const { message, reason, org, provider, kind } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind);
   }
   return (await res.json()) as T;
 }
@@ -272,25 +314,37 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-export async function errEnvelope(res: Response): Promise<{ message: string; reason: string; org: string }> {
+type ErrEnvelope = { message: string; reason: string; org: string; provider: string; kind: string };
+
+export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "" });
+  const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
-    if (!body) return { message: res.statusText, reason: "", org: "" };
+    if (!body) return bare(res.statusText);
     try {
-      const j = JSON.parse(body) as { error?: unknown; reason?: unknown; org?: unknown };
+      const j = JSON.parse(body) as {
+        error?: unknown;
+        reason?: unknown;
+        org?: unknown;
+        provider?: unknown;
+        kind?: unknown;
+      };
       if (typeof j.error === "string" && j.error) {
         return {
           message: j.error,
-          reason: typeof j.reason === "string" ? j.reason : "",
-          org: typeof j.org === "string" ? j.org : "",
+          reason: field(j.reason),
+          org: field(j.org),
+          provider: field(j.provider),
+          kind: field(j.kind),
         };
       }
     } catch {
       // not JSON — fall through to the raw-body guard below
     }
-    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "", org: "" };
+    return bare(isRawBodyDisplayable(body) ? body : res.statusText);
   } catch {
-    return { message: res.statusText, reason: "", org: "" };
+    return bare(res.statusText);
   }
 }
 

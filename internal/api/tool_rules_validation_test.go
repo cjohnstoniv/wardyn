@@ -98,11 +98,11 @@ func TestValidateToolRules(t *testing.T) {
 	})
 }
 
-// TestValidateAllowedDomainsCount is F061's residue: allowed_domains was the
+// TestValidateAllowedDomainsCount pins a residue: allowed_domains was the
 // last per-spec list with NO count cap, so one request body could carry ~52,425
 // entries (what fits under maxJSONBody) and every one of them became work — the
 // proxy matches against each per request, and on the member path
-// narrowMemberInlinePolicy asks the capability seam about each. POST
+// narrowUserInlinePolicy asks the capability seam about each. POST
 // /runs/preflight is on the member router, persists nothing, and is therefore
 // repeatable for free.
 //

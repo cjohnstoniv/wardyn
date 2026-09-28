@@ -20,7 +20,7 @@ import (
 // key-grammar helpers (splitRequirementKey, validateWorkspaceRequirement) the
 // endpoint and the fold in runs_create.go both consult.
 
-// ─── splitRequirementKey / validateWorkspaceRequirement (pure helpers) ──────
+// splitRequirementKey / validateWorkspaceRequirement (pure helpers)
 
 func TestSplitRequirementKey(t *testing.T) {
 	cases := []struct {
@@ -88,7 +88,7 @@ func TestValidateWorkspaceRequirement(t *testing.T) {
 	}
 }
 
-// ─── HTTP-level: auth gating ─────────────────────────────────────────────────
+// HTTP-level: auth gating
 
 func TestWorkspaceRequirementsRouteRequiresAdminAuth(t *testing.T) {
 	h := newHarness(t)
@@ -102,8 +102,8 @@ func TestWorkspaceRequirementsRouteRequiresAdminAuth(t *testing.T) {
 	}
 }
 
-// ─── HTTP-level: validation (fails BEFORE any store call, so a no-Store
-// harness is sufficient — parseIDParam only needs a well-formed UUID). ───────
+// HTTP-level: validation (fails before any store call, so a no-Store
+// harness is sufficient — parseIDParam only needs a well-formed UUID).
 
 func TestSetWorkspaceRequirements_Validation(t *testing.T) {
 	h := newHarness(t)
@@ -158,7 +158,7 @@ func TestSetWorkspaceRequirements_BadID(t *testing.T) {
 	}
 }
 
-// ─── HTTP-level: happy path ──────────────────────────────────────────────────
+// HTTP-level: happy path
 
 // requirementsStoreFake serves one workspace and captures what
 // SetWorkspaceRequirements was called with — a narrower sibling of
@@ -221,8 +221,7 @@ func TestSetWorkspaceRequirements_HappyPath(t *testing.T) {
 }
 
 // TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract pins the
-// HANDLER half of the h4 server guard (local/hardening-0.4.5/h4-design.md §3,
-// HANDOFF-2026-08-06.md §4 moving part 3): the wizard's step ③ now persists a
+// HANDLER half of the h4 server guard: the wizard's step ③ now persists a
 // named integration through THIS endpoint on every "Continue", so
 // handleSetWorkspaceRequirements/scopedWorkspaceWrite must forward whatever
 // row the store hands back into the JSON response VERBATIM — not

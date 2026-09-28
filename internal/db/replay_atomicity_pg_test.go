@@ -3,7 +3,7 @@
 
 package db
 
-// PIN for B8-F1: the boot-time audit-trigger restore replayed its four files as
+// PIN for the boot-time audit-trigger restore replayed its four files as
 // four independent Execs, so a failure partway through COMMITTED a superseded
 // definition of the chain function and left it there.
 //
@@ -150,7 +150,7 @@ func TestPG_AFailedTriggerReplayLeavesNoSupersededChainFunction(t *testing.T) {
 			names[1], auditChainTrigger, serializedChainDef, names, schema)
 	}
 
-	// AND THE RETRY — the operator's actual next move — still restores. A replay
+	// And the retry — the operator's actual next move — still restores. A replay
 	// that rolled back must leave a database the next boot can fix.
 	if err := replayTriggerMigrations(ctx, pool, auditChainTrigger); err != nil {
 		t.Fatalf("the retried replay failed: %v", err)

@@ -11,3 +11,16 @@
 // reads this constant, so it stays the one string for both the nav label and
 // the screen heading, per governance-prompt.md §7.2.
 export const GOVERNANCE_NAV_TITLE = "Governance";
+
+// Same reasoning, one entry later (UT-7a): the User types screen's own
+// heading (user-types-copy.ts's USER_TYPES.TITLE) reads this constant too, so
+// the nav label and the screen heading can't drift apart.
+export const USER_TYPES_NAV_TITLE = "User types";
+
+// The Credentials nav label (design F-1, canon NAV.CREDENTIALS) — kept here,
+// not in the screen's own copy module, for the SAME entry-chunk reason as the
+// two constants above. Unlike those two, the screen's own heading is a
+// DIFFERENT string ("Stored credentials", INVENTORY.TITLE in
+// wardyn/copy/credentials.ts) — the design draws the nav entry and the page
+// heading as two distinct strings, so this constant is nav-only.
+export const CREDENTIALS_NAV_TITLE = "Credentials";

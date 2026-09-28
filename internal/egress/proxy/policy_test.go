@@ -53,10 +53,10 @@ func TestEvalHost(t *testing.T) {
 }
 
 // TestEvalHostPortQualified asserts an "host:port" allow/deny entry is honored
-// (matches ONLY that port) while a bare entry matches any port — ITEM 25. Before
-// the fix, "api.test:443" was stored as the exact host "api.test:443" and never
-// compared against the bare request host, so a port-qualified allow was silently
-// dead (and a port-qualified deny never fired).
+// (matches only that port) while a bare entry matches any port. Stored as the
+// exact host "api.test:443" and never compared against the bare request host, a
+// port-qualified allow would be silently dead (and a port-qualified deny would
+// never fire).
 func TestEvalHostPortQualified(t *testing.T) {
 	p := CompilePolicy(types.RunPolicySpec{
 		AllowedDomains: []string{"api.test:443", "*.wild.test:8443", "any.test", "zero.test:0", "big.test:99999"},
@@ -524,7 +524,7 @@ func TestPrivateIPMemo_BoundedAndFlushesTheStreakItEvicts(t *testing.T) {
 
 // TestResolveFailedDenialIsRetryableAndReEmits is the first negative: a name
 // that did not resolve is a DNS fault that may clear on the next attempt, so it
-// gets neither the retry-never header nor the memo. It also byte-asserts F055's
+// gets neither the retry-never header nor the memo. It also byte-asserts the resolve-failed
 // decision string, which must not be reworded.
 func TestResolveFailedDenialIsRetryableAndReEmits(t *testing.T) {
 	const host = "unresolvable.example"
@@ -552,7 +552,7 @@ func TestResolveFailedDenialIsRetryableAndReEmits(t *testing.T) {
 	}
 	for i, d := range decisions {
 		if d.RuleSource != "builtin:resolve-failed" {
-			t.Errorf("decision %d rule_source = %q, want the literal builtin:resolve-failed (F055)", i, d.RuleSource)
+			t.Errorf("decision %d rule_source = %q, want the literal builtin:resolve-failed", i, d.RuleSource)
 		}
 	}
 }

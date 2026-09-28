@@ -6,6 +6,7 @@
 package docker
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -43,32 +44,20 @@ const (
 	runtimeSysbox = "sysbox" // sysbox-runc: stronger CC1, still shared-kernel
 )
 
-// dangerousKataAnnotations are the two Kata hypervisor-config annotations that
-// let a workload override its OWN microVM's virtio-fs / kernel configuration —
-// the knobs behind CVE-2026-44210/-47243 (a permissive virtio_fs_extra_args
-// cache mode, or a permissive kernel_params, lets a compromised Kata guest
-// reach host-root via virtiofsd).
-//
-// Wardyn ships NO pass-through for either today: runner.SandboxSpec,
-// types.RunPolicySpec, and every composer proposal field were audited and none
-// is annotation-shaped, so the only place either could ever reach a launched
-// container is container.HostConfig.Annotations — moby's daemon copies
-// EXACTLY that field (never Config.Labels/wardynLabels) into the OCI runtime
-// spec's Annotations (daemon/oci_linux.go: coci.WithAnnotations(c.HostConfig.
-// Annotations)) — and hardenedHostConfig below never sets it, so it is always
-// the Go zero value (nil) on every launch. This denylist + the strip call in
-// hardenedHostConfig is defense-in-depth against a FUTURE Annotations source:
-// it is enforced at the one chokepoint every launched container's HostConfig
-// passes through (driver.go's docker-exec create AND the exec-less/krun
-// pending-agent path both call hardenedHostConfig).
+// dangerousKataAnnotations are the two Kata hypervisor-config annotations
+// that let a workload override its OWN microVM's virtio-fs / kernel
+// configuration — the knobs behind CVE-2026-44210/-47243 (a compromised
+// Kata guest reaching host-root via virtiofsd). Nothing today ever sets
+// hc.Annotations, so this is defense-in-depth against a FUTURE source,
+// enforced at the one chokepoint every launched container's HostConfig
+// passes through (hardenedHostConfig).
 var dangerousKataAnnotations = []string{
 	"io.katacontainers.config.hypervisor.virtio_fs_extra_args",
 	"io.katacontainers.config.hypervisor.kernel_params",
 }
 
-// stripDangerousKataAnnotations deletes the dangerousKataAnnotations keys from
-// ann and returns it. Nil-safe: delete on a nil map is a no-op, so calling this
-// unconditionally (as hardenedHostConfig does) never allocates or panics.
+// stripDangerousKataAnnotations deletes the dangerousKataAnnotations keys
+// from ann and returns it. Nil-safe: delete on a nil map is a no-op.
 func stripDangerousKataAnnotations(ann map[string]string) map[string]string {
 	for _, k := range dangerousKataAnnotations {
 		delete(ann, k)
@@ -76,77 +65,60 @@ func stripDangerousKataAnnotations(ann map[string]string) map[string]string {
 	return ann
 }
 
-// cc3Runtimes are the runtime families that deliver the Vault tier's hardware
-// (KVM) VM isolation. CC3 is defined by the GUARANTEE — a real per-sandbox VM
-// boundary — not one product. Both qualify:
-//   - kata*: Kata Containers (mature; ships its OWN containerd shim-v2, which must
-//     track containerd's protocol and can lag a bleeding-edge daemon).
-//   - krun:  crun built with libkrun — a KVM microVM delivered as a plain OCI
-//     RUNTIME binary, invoked through containerd's standard runc shim exactly like
-//     runsc (CC2). That plug-in shape sidesteps the shim-version coupling that
-//     makes Kata brittle against a very new containerd.
-//
-// Probed in this order; the first installed one wins. Bare "crun" (no
-// libkrun) is a shared-kernel runtime and is deliberately NOT accepted for CC3.
+// cc3Runtimes are the runtime families that deliver the Vault tier's
+// hardware (KVM) VM isolation. CC3 is defined by the GUARANTEE — a real
+// per-sandbox VM boundary — not one product: kata* (its own containerd
+// shim-v2) and krun (libkrun, a KVM microVM via the standard runc shim).
+// Probed in this order; first installed wins. Bare "crun" (no libkrun) is
+// shared-kernel and deliberately NOT accepted for CC3.
 var cc3Runtimes = []string{runtimeKata, runtimeKrun}
 
 // runtimeSupportsExec reports whether the OCI runtime can enter a running
-// container via `docker exec`. Every runtime we use can EXCEPT krun/libkrun: a
-// libkrun microVM has no in-guest exec agent (crun's krun handler returns "the
-// handler does not support exec"), so its agent workload must run as the
-// container's MAIN process instead of being exec'd into a keep-alive container.
-// Kata (its own in-VM agent), runsc, and runc all support exec.
+// container via `docker exec`. Every runtime we use can EXCEPT krun/libkrun:
+// a libkrun microVM has no in-guest exec agent, so its workload must run as
+// the container's MAIN process instead of being exec'd in.
 func runtimeSupportsExec(runtimeName string) bool {
 	return !strings.HasPrefix(runtimeName, runtimeKrun)
 }
 
 const (
-	// ociFeaturesStatusKey is the `docker info` runtime-status key carrying that
-	// runtime's OCI features struct as JSON (API v1.44 and newer). It is the
-	// SAME evidence the daemon decides on — moby's supportsRecursivelyReadOnly
-	// reads the identical struct through Runtimes.Features(runtime) — which is
-	// the whole point of asking the daemon rather than guessing from a name.
+	// ociFeaturesStatusKey is the `docker info` runtime-status key carrying
+	// that runtime's OCI features struct as JSON (API v1.44+) — the SAME
+	// evidence the daemon itself decides on, rather than guessing from a name.
 	ociFeaturesStatusKey = "org.opencontainers.runtime-spec.features"
 	// ociMountOptionRRO is the OCI mount option for a RECURSIVELY read-only
 	// bind, the one BindOptions.ReadOnlyForceRecursive asks the runtime for.
 	ociMountOptionRRO = "rro"
 )
 
-// runtimeSupportsRecursiveReadOnly reports whether runtimeName — as the DAEMON
-// describes it in `docker info` — declares the OCI `rro` mount option.
+// runtimeSupportsRecursiveReadOnly reports whether runtimeName — as the
+// DAEMON describes it in `docker info` — declares the OCI `rro` mount
+// option.
 //
 // IT IS A PRE-FLIGHT FOR A CREATE THE DAEMON WOULD OTHERWISE REFUSE, not an
-// optimisation. moby's supportsRecursivelyReadOnly returns an error for a
-// runtime that does not list `rro` in its features (and for one that publishes
-// no features struct at all), and container_routes then FAILS THE CREATE when
-// the mount asked for ReadOnlyForceRecursive. gVisor is exactly that runtime:
-// `runsc features` lists `ro` and `rbind` and no `rro`, so asking for it under
-// the runtime the Wall tier (CC2) requires refused every read-only share drive
-// at ContainerCreate — on this product's own default confinement floor.
+// optimisation: moby's supportsRecursivelyReadOnly errors for a runtime that
+// doesn't list `rro`, and container_routes then fails the create. gVisor is
+// exactly that runtime (`runsc features` lists `ro`/`rbind`, no `rro`), so
+// this avoids refusing every read-only share drive at ContainerCreate under
+// CC2, this product's default confinement floor.
 //
-// UNKNOWN READS AS UNSUPPORTED, deliberately, and that is NOT the fail-closed
-// direction being abandoned: it is the direction the DAEMON takes. A daemon
-// whose info carries no features for this runtime (pre-v1.44, or a
-// Docker-compatible engine that publishes none) is a daemon that would refuse
-// the create, so a request it cannot honour is not a stronger guarantee — it is
-// a run that does not start. driveMount says what is lost when the answer is
-// false, in the log, on the run that is affected.
+// UNKNOWN READS AS UNSUPPORTED, matching the direction the DAEMON itself
+// takes: a daemon with no features for this runtime would refuse the
+// create anyway, so a request it can't honour is a run that doesn't start,
+// not a stronger guarantee.
 func runtimeSupportsRecursiveReadOnly(info system.Info, runtimeName string) bool {
 	name := runtimeName
 	if name == "" {
-		// "" is the daemon's DEFAULT runtime (CC1), which is what the create
-		// will actually be scheduled on — resolving it here is the same hop
-		// the daemon makes before consulting the features struct.
+		// "" is the daemon's DEFAULT runtime (CC1) — the same hop the daemon
+		// makes before consulting the features struct.
 		name = info.DefaultRuntime
 	}
 	rt, ok := info.Runtimes[name]
 	if !ok {
 		return false
 	}
-	// Only the one field is decoded. The features struct is a large, growing
-	// OCI type and this is a single yes/no question about one list; decoding
-	// the whole of it would promote an indirect dependency to a direct one to
-	// learn nothing more.
+	// Only the one field is decoded: a single yes/no question, not the whole
+	// (large, growing) OCI features struct.
 	var feats struct {
 		MountOptions []string `json:"mountOptions"`
 	}
@@ -183,22 +155,18 @@ func classToRuntime(class types.ConfinementClass, info system.Info) (runtimeName
 	}
 }
 
-// verifyCapsEnforced fails closed when the Docker daemon reports it DISCARDED a
-// requested CPU / memory / pids limit — the AUTHORITATIVE post-create signal,
-// read from the ContainerCreate response. On a cgroup-v1 host under rootless
-// Docker (or any host where the cpu/memory/pids controllers aren't delegated to
-// the runtime user), the daemon silently drops the limit and appends a
-// "…Limitation discarded" warning to the create response, leaving an untrusted
-// sandbox effectively uncapped (a fork bomb or memory hog could take out the host).
+// verifyCapsEnforced fails closed when the Docker daemon reports it
+// DISCARDED a requested CPU / memory / pids limit — the AUTHORITATIVE
+// post-create signal, read from the ContainerCreate response. On a
+// cgroup-v1 host under rootless Docker, the daemon silently drops the limit
+// and appends a "…Limitation discarded" warning, leaving an untrusted
+// sandbox effectively uncapped.
 //
-// This replaces a pre-flight `docker info` capability check: `docker info`'s
-// MemoryLimit/PidsLimit/CPUCfsQuota booleans are NOT reliable on Podman's
-// Docker-compat API (it under-reports CpuCfsQuota=false even when the quota
-// binds), which would false-positive fail-closed. The daemon's own create-time
-// discard warning is authoritative on BOTH engines: Moby emits it when it can't
-// enforce a limit; a daemon that actually applied the caps (Podman, or a healthy
-// Moby) returns no such warning (verified). Mirrors classToRuntime's fail-closed
-// contract (invariant 5): refuse rather than run a workload without its guardrails.
+// This replaces a pre-flight `docker info` capability check: those booleans
+// are NOT reliable on Podman's Docker-compat API (it under-reports
+// CpuCfsQuota=false even when the quota binds). The daemon's own
+// create-time discard warning is authoritative on both engines (verified).
+// Mirrors classToRuntime's fail-closed contract (invariant 5).
 func verifyCapsEnforced(createWarnings []string) error {
 	var discarded []string
 	for _, w := range createWarnings {
@@ -209,47 +177,39 @@ func verifyCapsEnforced(createWarnings []string) error {
 	if len(discarded) == 0 {
 		return nil
 	}
-	// Wrapped as adjacent string literals purely to keep the SOURCE line under the
-	// lll cap — the concatenated message is byte-identical to the reader.
+	// Adjacent string literals only to keep the SOURCE line under the lll cap.
 	return fmt.Errorf("the Docker daemon discarded a requested resource limit — an untrusted sandbox would run without it: %s. "+
 		"On cgroup v2, delegate the controllers to the runtime user (systemd unit: Delegate=yes; rootless Docker: enable cgroup v2 delegation per the rootless docs). "+
 		"Set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 to override on a TRUSTED host: %w",
 		strings.Join(discarded, "; "), errCapsUnenforceable)
 }
 
-// resolveRuntime is classToRuntime with operator overrides applied: it is the
-// substrate-selection seam for CC3 (and CC2). An override pins the EXACT runtime
-// family a class must use (still probed against `docker info` and FAIL CLOSED
-// when absent — never downgrade); no override reproduces classToRuntime's
-// built-in default mapping byte-for-byte. overrides may be nil.
+// resolveRuntime is classToRuntime with operator overrides applied: the
+// substrate-selection seam for CC3 (and CC2). An override pins the EXACT
+// runtime family a class must use (still probed against `docker info` and
+// FAIL CLOSED when absent); no override reproduces the built-in default
+// mapping. overrides may be nil.
 func resolveRuntime(class types.ConfinementClass, info system.Info, overrides map[types.ConfinementClass]string) (runtimeName string, needsRuntime bool, err error) {
 	want, pinned := overrides[class]
 	if !pinned || want == "" {
 		return classToRuntime(class, info) // default path, unchanged
 	}
 	// Isolation floor: a pin must not silently downgrade a class below the
-	// isolation family the control plane advertises/gates it as. CC2 must run
-	// gVisor (runsc*), CC3 must run Kata (kata*); e.g. WARDYN_CONFINEMENT_MAP=
-	// "CC2=runc" would run a shared-kernel runtime while the run is gated as
-	// CC2 (Wall) — a silent downgrade. Reject a weaker pin fail-closed, same
-	// error class as an absent runtime, so "the tier you asked for is the tier
-	// you got" holds. CC1 is the weakest tier: any pin (including a STRONGER one
-	// like sysbox) is legitimate, so it is left unrestricted.
+	// isolation family it's gated as (e.g. WARDYN_CONFINEMENT_MAP="CC2=runc"
+	// would run shared-kernel under a CC2 gate). Rejected fail-closed, same
+	// error class as an absent runtime. CC1 is the weakest tier, so any pin
+	// (including a stronger one like sysbox) is left unrestricted.
 	switch class {
 	case types.CC2:
 		if !strings.HasPrefix(want, runtimeRunsc) {
 			return "", false, fmt.Errorf("the Wall tier (CC2) pins runtime %q, which does not deliver gVisor (%s) isolation; refusing to downgrade: %w", want, runtimeRunsc, errRuntimeUnavailable)
 		}
 	case types.CC3:
-		// The built-in auto-mapping (classToRuntime, no pin) stays limited to the
-		// known-VM allowlist (cc3Runtimes: kata, krun) — Wardyn only auto-advertises
-		// CC3 for runtimes it KNOWS boot a VM (invariant 5). An EXPLICIT operator pin
-		// may instead name ANY registered runtime the operator vouches delivers a VM
-		// boundary (bring-your-own microVM: firecracker, cloud-hypervisor, a custom
-		// shim...), so the allowlist is not required here — the pluggable seam. We
-		// still refuse runtimes we POSITIVELY know deliver less than a VM (shared-kernel
-		// runc/crun/sysbox, or gVisor/runsc = the CC2 tier): pinning one of those at
-		// Vault is a silent downgrade, not a bring-your-own choice.
+		// The built-in auto-mapping stays limited to the known-VM allowlist
+		// (kata, krun), but an EXPLICIT pin may name ANY registered runtime
+		// the operator vouches delivers a VM boundary (bring-your-own
+		// microVM). Still refused: runtimes POSITIVELY known to deliver less
+		// than a VM (shared-kernel runc/crun/sysbox, or gVisor/runsc).
 		if runner.IsKnownNonVaultRuntime(want) {
 			return "", false, fmt.Errorf("the Vault tier (CC3) pins runtime %q, a known shared-kernel/userspace-kernel runtime that does not deliver KVM microVM isolation; refusing to downgrade: %w", want, errRuntimeUnavailable)
 		}
@@ -296,40 +256,48 @@ func pickRuntime(info system.Info, want string) string {
 func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]string, record bool) runner.Capabilities {
 	classes := []types.ConfinementClass{}
 	resolved := map[types.ConfinementClass]string{}
-	// CC1 is the floor, but an operator CC1 override (e.g. a stronger sysbox pin)
-	// can still be unhonorable when that runtime is absent. Treat its error EXACTLY
-	// like CC2/CC3: never advertise a class whose (possibly pinned) runtime can't
-	// be enforced, so /healthz reflects the substrate the host can actually deliver
-	// (invariant 5 — fail closed, never overclaim). With no override this is
-	// byte-for-byte the old CC1 path (runtimeOrRunc labels the daemon default).
+	// effective is the runtime NAME each class is actually scheduled on, not
+	// the display label (CC1's "" is the daemon's default runtime).
+	effective := map[types.ConfinementClass]string{}
+	// CC1 is the floor, but an operator CC1 override (e.g. a sysbox pin) can
+	// still be unhonorable when absent. Treated exactly like CC2/CC3: never
+	// advertise a class whose runtime can't be enforced (invariant 5).
 	if rt, _, err := resolveRuntime(types.CC1, info, overrides); err == nil {
 		classes = append(classes, types.CC1)
 		resolved[types.CC1] = "oci/" + runtimeOrRunc(rt)
+		effective[types.CC1] = cmp.Or(rt, info.DefaultRuntime) // the same hop runtimeSupportsRecursiveReadOnly makes
 	}
 	if rt, _, err := resolveRuntime(types.CC2, info, overrides); err == nil {
 		classes = append(classes, types.CC2)
 		resolved[types.CC2] = "oci/" + rt
+		effective[types.CC2] = rt
 	}
 	if rt, _, err := resolveRuntime(types.CC3, info, overrides); err == nil {
 		classes = append(classes, types.CC3)
 		resolved[types.CC3] = "oci/" + rt
+		effective[types.CC3] = rt
 	}
-	// The word is gated on the SAME probe applyDiskQuota consults. `filesystem`
-	// = a per-container quota binds bytes. `none` covers the two arms where no
-	// quota binds: a driver that takes no size option at all (vfs,
-	// fuse-overlayfs — the run is warned and runs uncapped) AND overlay2 over a
-	// non-xfs backing filesystem, where applyDiskQuota still sets StorageOpt
-	// and the daemon REFUSES the create (fail-closed). A reader of `none` must
-	// not assume "uncapped" — §6.2's providers-screen warning covers both.
+	// Gated on the SAME probe applyDiskQuota consults. `none` covers both a
+	// driver that takes no size option (runs uncapped) and overlay2 over
+	// non-xfs (fails closed instead) — a reader of `none` must not assume
+	// "uncapped" (§6.2 covers both).
 	disk := types.StorageEnforcementNone
 	if storageDriverSupportsQuota(info) {
 		disk = types.StorageEnforcementFilesystem
+	}
+	// Freeze (RL-6): ContainerPause/Unpause is verified only on runc. runsc
+	// and Kata pause are UNVERIFIED (RL-0 spike), so every other effective
+	// runtime reports false rather than assume a control nobody proved.
+	freeze := map[types.ConfinementClass]bool{}
+	for class, rt := range effective {
+		freeze[class] = rt == "runc"
 	}
 	return runner.Capabilities{
 		Driver:                   driverName,
 		ConfinementClasses:       classes, // strongest last
 		Resolved:                 resolved,
 		EphemeralDiskEnforcement: disk,
+		Freeze:                   freeze,
 		// L0 is structural here: NetworkMode "none" + internal-only per-run
 		// network means the agent has no default route and one egress path.
 		StructuralEgress: true,
@@ -346,34 +314,23 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 // hardenedHostConfig builds the agent container's HostConfig with Wardyn's
 // non-negotiable hardening. networkMode is set by the caller (always "none"
 // at create time for L0). runtimeName is "" for the daemon default (CC1) or
-// the resolved runtime for CC2/CC3. info is the probed `docker info`, used to
-// gate the AppArmor pin on actual host support.
+// the resolved runtime for CC2/CC3.
 //
 // Constraints encoded here:
-//   - CapDrop ALL: the agent needs no Linux capabilities.
-//   - no-new-privileges: blocks setuid escalation.
+//   - CapDrop ALL, no-new-privileges: no Linux capabilities, no setuid escalation.
 //   - seccomp: we NEVER pass "seccomp=unconfined", so Docker's RuntimeDefault
-//     seccomp profile stays in force. RuntimeDefault is the claimed and
-//     enforced baseline; we do not ship a custom profile.
-//   - AppArmor: explicitly pinned to docker-default on the CC1 (runc) path when
-//     the host supports AppArmor. CC2 (gVisor/runsc) and CC3 (Kata) mediate
-//     syscalls around the host LSMs, so forcing apparmor there is at best a
-//     no-op and can error — it is omitted for non-runc runtimes (invariant 5).
-//   - tmpfs /tmp: writable scratch without a writable rootfs requirement.
-//   - Resources: hard caps from the spec, with conservative platform defaults
-//     applied for any zero field so EVERY sandbox is capped (CPU, memory with
-//     MemorySwap pinned so the cap is not silently doubled via swap, and a
-//     PidsLimit fork-bomb guard set unconditionally).
-//   - StorageOpt: a per-container writable-disk quota when the spec requests one
-//     (DiskMiB>0) AND the daemon storage driver can enforce it. On a driver that
-//     cannot take a size opt at all a clear warning is logged and the run
-//     proceeds uncapped (never hard-broken); on overlay2 over a non-xfs backing
-//     filesystem the opt is handed over anyway and the daemon refuses the
-//     create, so the run fails closed rather than silently losing the cap
-//     (applyDiskQuota).
-//   - userns: left to daemon config (daemon-wide userns-remap); documented,
-//     not forced per-container, because per-container userns conflicts with
-//     some runtimes and the daemon setting is the supported knob.
+//     profile stays in force; no custom profile shipped.
+//   - AppArmor: pinned to docker-default on CC1 (runc) when the host
+//     supports it; omitted for non-runc runtimes, where it's at best a
+//     no-op and can error (invariant 5).
+//   - tmpfs /tmp: writable scratch without a writable rootfs.
+//   - Resources: hard caps from the spec, with conservative defaults for
+//     any zero field so EVERY sandbox is capped (MemorySwap pinned so the
+//     cap isn't silently doubled; PidsLimit set unconditionally).
+//   - StorageOpt: a per-container quota when requested AND enforceable; a
+//     driver that can't take the opt logs a warning and runs uncapped,
+//     while overlay2 on non-xfs fails the create closed (applyDiskQuota).
+//   - userns: left to daemon-wide config, not forced per-container.
 func hardenedHostConfig(networkMode string, runtimeName string, res runner.Resources, info system.Info) *container.HostConfig {
 	secOpt := []string{"no-new-privileges"}
 	// Pin AppArmor explicitly for CC1 (default runc runtime) when the host
@@ -382,14 +339,10 @@ func hardenedHostConfig(networkMode string, runtimeName string, res runner.Resou
 	if runtimeName == "" && hostSupportsAppArmor(info) {
 		secOpt = append(secOpt, "apparmor=docker-default")
 	}
-	// gVisor (runsc) has no SELinux integration: when the daemon applies SELinux
-	// labels (selinux-enabled), runsc refuses to start ("SELinux is not
-	// supported: ...container_t..."). Disable labeling for the runsc path ONLY —
-	// gVisor's own sandbox is the isolation boundary there, so dropping the host
-	// SELinux label is acceptable. NEVER do this on the runc (CC1) path, where
-	// SELinux labeling is a real defense we keep; Kata (CC3) is unaffected. We
-	// key off the daemon's advertised SELinux (not the local host) so it is
-	// correct even when wardynd talks to a remote/VM dockerd.
+	// gVisor (runsc) has no SELinux integration and refuses to start under
+	// selinux-enabled. Disable labeling for the runsc path ONLY — gVisor's
+	// own sandbox is the isolation boundary there. NEVER on runc (CC1),
+	// where SELinux is a real defense we keep; Kata is unaffected.
 	if strings.HasPrefix(runtimeName, runtimeRunsc) && hostSupportsSELinux(info) {
 		secOpt = append(secOpt, "label=disable")
 	}

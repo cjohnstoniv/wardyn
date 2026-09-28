@@ -35,7 +35,7 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
         status: 422,
         contentType: "application/json",
         body: JSON.stringify({
-          error: "git_credential: you are not connected to Azure DevOps — connect and start the run again",
+          error: "you are not connected to Azure DevOps — connect and start the run again",
           reason: "git_credential",
           org,
         }),
@@ -92,7 +92,7 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
         status: 422,
         contentType: "application/json",
         body: JSON.stringify({
-          error: "git_credential: you are not connected to Azure DevOps — connect and start the run again",
+          error: "you are not connected to Azure DevOps — connect and start the run again",
           reason: "git_credential",
           org: "https://dev.azure.com/contoso",
         }),

@@ -51,8 +51,9 @@ Known violations, cited as what the rule forbids:
 |---|---|---|
 | `run-context-row.tsx#RunContextRow` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
 
-`runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more")
-are fixed: both now render `text-info` (`title-group.tsx#TitleGroup`, `runs.tsx#RunsTable`).
+`runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more",
+in the title-group/table board #1197 D2 replaced) were fixed the same way before that
+page was rewritten — both rendered `text-info`, never teal.
 `setup/environment-step.tsx#ColumnState`'s `<Chip tone="primary">Recommended</Chip>` is
 fixed too (#213): the chip now renders `tone="neutral"` — a recommendation is not an
 action.
@@ -139,9 +140,10 @@ never crashing, never borrowing an unearned tone.
 
 **Precedence when indicators compete on one row** — highest wins, and only the winner
 gets the row's accent: needs-you (held approval / awaiting confirmation) > failed or
-killed > working > starting or pending > done > idle. The board flattens the first two
-into one amber treatment (`runs/board-groups.ts#needsYou`) — the divergence to close: an approval
-is a request, a failure is a report.
+killed > working > starting or pending > done > idle. The Runs landing page keeps an
+approval (a request) and a failure (a report) apart rather than flattening them into one
+amber treatment — the server's own `attention.by` decides who the row's word and action
+belong to (`runs/runs-model.ts#rowPresentation`).
 
 ## 6. Buttons and back-out paths
 

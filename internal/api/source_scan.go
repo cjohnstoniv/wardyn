@@ -193,6 +193,9 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if aerr := s.admitLauncherRepo(ctx, src.Locator); aerr != nil {
 		return types.AgentRun{}, aerr
 	}
+	if herr := s.admitHostCapacity(ctx, actor, "source_scan", true); herr != nil {
+		return types.AgentRun{}, herr
+	}
 	// Detach from request cancellation before the durable launch work (the
 	// launchRecordRun rationale: a client that walks away must
 	// not cancel it).
@@ -250,7 +253,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if err != nil {
 		return types.AgentRun{}, release(err)
 	}
-	created, err := s.cfg.Store.CreateRun(ctx, run)
+	created, err := s.createRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}
@@ -324,7 +327,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(ws.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
 		return
 	}
 	// #386 review follow-up N4: a scan clones a repo server-side too — the

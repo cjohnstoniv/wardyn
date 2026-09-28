@@ -17,14 +17,13 @@ import (
 )
 
 // tokenSource holds the per-run token. The renew loop rotates it IN PLACE, so
-// every control-plane caller (decision sink, injector, approval client, brokered
-// local routes) reads the CURRENT token instead of a string captured at startup.
+// every control-plane caller reads the CURRENT token instead of one captured
+// at startup.
 //
-// This is deliberately an explicit holder rather than an Authorization-injecting
+// Deliberately an explicit holder rather than an Authorization-injecting
 // http.RoundTripper: the run token must NEVER reach a forward-egress or
-// upstream-corp-proxy dial, and a transport that adds the header for us would
-// make that leak one accidental client reuse away. Reading it at the call sites
-// that already build control-plane requests keeps the blast radius visible.
+// upstream-corp-proxy dial, and a transport that adds the header for us
+// would make that leak one accidental client reuse away.
 type tokenSource struct {
 	mu  sync.RWMutex
 	tok string
@@ -54,37 +53,32 @@ func (t *tokenSource) Set(tok string) {
 }
 
 const (
-	// renewRetry is the FIRST gap after a failed renew, and the floor on every
-	// gap. Short enough that a brief control-plane blip never burns the token's
-	// remaining life.
+	// renewRetry is the FIRST gap after a failed renew, and the floor on
+	// every gap.
 	renewRetry = time.Minute
-	// renewMaxInterval caps the gap between renews so a (hypothetically) very long
-	// TTL still re-checks authority — revocation and terminal state are only
-	// re-evaluated at renew, so this is the ceiling on how stale that check gets.
-	// It is also the ceiling the failure backoff grows to.
+	// renewMaxInterval caps the gap between renews (revocation and terminal
+	// state are only re-evaluated at renew) and is also the failure-backoff
+	// ceiling.
 	renewMaxInterval = 30 * time.Minute
 	// renewTimeout bounds one renew request.
 	renewTimeout = 10 * time.Second
-	// renewGiveUpAfter is how long the loop keeps trying a refused renew before it
-	// stops: the lifetime of the last token it successfully held. It MIRRORS the
-	// embedded identity provider's tokenTTL (1h — internal/identity/embedded's
-	// tokenTTL), and is spelled here rather than imported because this sidecar
-	// deliberately never parses the JWT (see renewToken) and so holds no `exp` of
-	// its own. Past it the token it is renewing is dead whatever the control plane
-	// meant by refusing, so retrying is pure noise: one audit row a minute at the
-	// control plane, for a run whose credentials expired an hour ago.
+	// renewGiveUpAfter is how long the loop keeps retrying a refused renew:
+	// the lifetime of the last token it successfully held, mirroring the
+	// embedded identity provider's tokenTTL (1h). Spelled here rather than
+	// imported because this sidecar never parses the JWT and holds no `exp`
+	// of its own; past it, the token being renewed is dead regardless of
+	// what the refusal meant.
 	renewGiveUpAfter = time.Hour
 )
 
-// renewStatusError is renewToken's typed refusal, carrying the control plane's
-// status so the loop can tell three different failures apart:
+// renewStatusError is renewToken's typed refusal, carrying the control
+// plane's status so the loop can tell three failures apart:
 //
-//   - 403: handleInternalTokenRenew's OWN post-auth refusals — the run is gone
-//     or terminal. Permanent, and knowable: give up at once.
-//   - 401: internalAuth refused the presented token. NOT proof of revocation —
-//     the embedded provider treats any RevocationStore error as revoked, so a
-//     Postgres blip answers exactly like a real revocation. Back off and keep
-//     trying until the last good token's lifetime has passed.
+//   - 403: a post-auth refusal — the run is gone or terminal. Permanent:
+//     give up at once.
+//   - 401: the presented token was refused. NOT proof of revocation — a
+//     Postgres blip answers exactly like a real revocation. Back off and
+//     keep trying until the last good token's lifetime has passed.
 //   - 5xx / transport: a blip. Same backoff.
 type renewStatusError struct {
 	Status int
@@ -95,14 +89,12 @@ func (e *renewStatusError) Error() string {
 	return fmt.Sprintf("renew status %d: %s", e.Status, e.Body)
 }
 
-// permanent reports whether the control plane has ANSWERED, post-authentication,
-// that this run may never renew again (run not found, run terminal). A 401 is
-// deliberately NOT permanent — see the type's doc.
+// permanent reports whether the control plane has ANSWERED, post-auth, that
+// this run may never renew again. A 401 is deliberately NOT permanent.
 func (e *renewStatusError) permanent() bool { return e.Status == http.StatusForbidden }
 
-// renewerTuning is the loop's timing, held in one struct so the tests can drive
-// the REAL loop at millisecond scale instead of asserting a 1h horizon by
-// reading the code. Production always uses defaultRenewerTuning.
+// renewerTuning is the loop's timing, held in one struct so tests can drive
+// the real loop at millisecond scale. Production uses defaultRenewerTuning.
 type renewerTuning struct {
 	firstRetry  time.Duration
 	maxInterval time.Duration
@@ -119,38 +111,28 @@ func defaultRenewerTuning() renewerTuning {
 	}
 }
 
-// runTokenRenewer keeps ts populated with a FRESH run token for as long as ctx
-// lives. It mirrors wardynd's ground-truth token rotator: renew, then sleep half
-// the new token's remaining life (clamped to [renewRetry, renewMaxInterval]) so a
-// missed or failed tick never leaves an expired token in place.
+// runTokenRenewer keeps ts populated with a FRESH run token for as long as
+// ctx lives: renew, then sleep half the new token's remaining life (clamped
+// to [renewRetry, renewMaxInterval]).
 //
-// The control plane — not this loop — decides whether renewal is still allowed:
-// a revoked or terminal run is refused there. What the loop decides is how long
-// to keep ASKING: retrying forever at a fixed interval on any failure floods the
-// audit log with `auth.failed` rows from a run whose token the control plane
-// will never renew again, burying real security events outside the console's
-// retention window. So:
+// The control plane decides whether renewal is still allowed; the loop
+// decides how long to keep ASKING, since retrying forever on any failure
+// would flood the audit log with auth.fail rows from a run that will never
+// renew again:
 //
-//   - a post-auth 403 (run not found / terminal — handleInternalTokenRenew's own
-//     refusals) is PERMANENT and knowable: stop at once;
+//   - a post-auth 403 is PERMANENT: stop at once;
 //   - a 401 or a 5xx/transport failure backs off exponentially from
-//     firstRetry to maxInterval, because at this end a revoked token and a
-//     store blip are indistinguishable (internalAuth refuses both before the
-//     post-auth arms run) and giving up on the first 401 would brick every
-//     healthy long run's /internal/* calls the moment a Postgres read flickered;
-//   - past giveUpAfter since the last token it actually held, it stops: the
-//     token being renewed is dead by then whatever the refusal meant.
+//     firstRetry to maxInterval, since a revoked token and a store blip are
+//     indistinguishable here, and giving up on the first 401 would brick
+//     every healthy long run's /internal/* calls on a Postgres flicker;
+//   - past giveUpAfter since the last token it actually held, it stops.
 //
-// Giving up is ONE log line and nothing else. The sidecar has no audit writer,
-// and the control plane owns the audit story for this case (internalAuth's
-// run.identity.expired row) — the run keeps running on a dead identity, visibly,
-// rather than quietly hammering a door that will not open.
+// Giving up is ONE log line and nothing else: the sidecar has no audit
+// writer, so it keeps running on a dead identity, visibly, until the control
+// plane's lapsed-token sweep removes it.
 //
-// renews once immediately at startup rather than decoding the token's
-// exp to schedule the first tick. It costs one extra mint per run and, in
-// exchange, needs no JWT parsing here and proves the renew path works at startup
-// instead of failing an hour in. Decode exp only if that mint ever shows up as a
-// real cost.
+// Renews once immediately at startup rather than decoding the token's exp,
+// trading one extra mint per run for no JWT parsing here.
 func runTokenRenewer(ctx context.Context, ts *tokenSource, base string, client *http.Client) {
 	runTokenRenewerTuned(ctx, ts, base, client, defaultRenewerTuning())
 }
@@ -158,8 +140,7 @@ func runTokenRenewer(ctx context.Context, ts *tokenSource, base string, client *
 // runTokenRenewerTuned is runTokenRenewer with its timing injected; see
 // renewerTuning.
 func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning) {
-	// The startup token is the first "last good token": its lifetime is what the
-	// give-up horizon is measured against until a renew succeeds.
+	// The startup token is the first "last good token".
 	lastGood := tune.now()
 	backoff := tune.firstRetry
 	for {
@@ -205,11 +186,9 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 	}
 }
 
-// renewToken POSTs /api/v1/internal/token/renew with the CURRENT run token and
-// returns the fresh token plus its expiry. Any non-200 (revoked run, terminal
-// run, store unavailable) is an error: the caller keeps the old token and decides
-// whether to retry rather than dropping to no credential at all. A non-200
-// carries its status as a *renewStatusError, which is what lets the caller tell a
+// renewToken POSTs /api/v1/internal/token/renew with the CURRENT run token
+// and returns the fresh token plus its expiry. Any non-200 is an error
+// carrying its status as a *renewStatusError, so the caller can tell a
 // permanent refusal from a blip.
 func renewToken(ctx context.Context, base, token string, client *http.Client) (string, time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,

@@ -57,7 +57,7 @@ const (
 	r3TopologySecret   = "acme-prod-db-password"
 	r3TopologyEgress   = "artifacts.corp.internal"
 	// The SCANNED PROFILE republishes the same three axes under its own keys —
-	// the residue F245's first fix left: redactWorkspaceForRead projected
+	// the residue the first fix left: redactWorkspaceForRead projected
 	// Sources/BaseImage/Requirements and never touched Workspace.Profile, which
 	// travels in the SAME response.
 	r3TopologyLeakPath  = "/srv/nfs-prod/payments/config/prod.env"
@@ -100,7 +100,7 @@ func newTopologyWorkspaceServer(t *testing.T, ownedBy string) (*Server, *r3Topol
 	return h.srv, st
 }
 
-// TestWorkspaceReadRedaction is F245 (the member arm) and F246 (the security
+// TestWorkspaceReadRedaction covers both the member arm and the security
 // arm).
 //
 // R1 narrowed GET /site-config, /sources, /sources/{id} and /base-images to
@@ -128,7 +128,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 	for _, a := range []arm{
 		{
 			name:      "a plain member reading an operator-owned workspace",
-			session:   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember),
+			session:   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser),
 			forbidden: append(append([]string{}, leaks...), r3TopologyEgress),
 			// The row is still USEFUL: a member picks a workspace by name.
 			required: []string{"payments"},
@@ -146,7 +146,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 		t.Run(a.name, func(t *testing.T) {
 			// The member arm reads an OPERATOR-owned row (OwnedBy ""), which is
 			// the shape a member can legitimately reach; the security arm reads
-			// a MEMBER-owned row, which is the shape F246 names.
+			// a MEMBER-owned row.
 			ownedBy := ""
 			if strings.Contains(a.name, "security admin") {
 				ownedBy = owner
@@ -174,14 +174,14 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 		})
 	}
 
-	// THE OWNER AND THE SUPER ADMIN STILL SEE EVERYTHING. Without this arm the
+	// The owner and the super admin still see everything. Without this arm the
 	// test above is satisfied by simply deleting the fields.
 	t.Run("the owner and a super admin see the whole document", func(t *testing.T) {
 		for _, c := range []struct {
 			name    string
 			session *http.Cookie
 		}{
-			{"the workspace's owner", ssoSession(t, owner, "owner@corp.example", oidc.RoleMember)},
+			{"the workspace's owner", ssoSession(t, owner, "owner@corp.example", oidc.RoleUser)},
 			{"a super admin", ssoSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin)},
 		} {
 			t.Run(c.name, func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r = r.WithContext(operatorCtx("sub-plain-member", "m@corp.example", oidc.RoleMember))
+		r = r.WithContext(operatorCtx("sub-plain-member", "m@corp.example", oidc.RoleUser))
 		ws, ok := srv.getWorkspaceReadable(httptest.NewRecorder(), r, st.ws.ID)
 		if !ok {
 			t.Fatal("getWorkspaceReadable refused an operator-owned workspace for a member")

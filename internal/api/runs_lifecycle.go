@@ -19,7 +19,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -132,6 +134,14 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			outcome = "failure"
 		}
 
+		// A run its lease ended is KEPT with its agent stopped on purpose: that
+		// stop is what ended this Wait, and finalizing here would tear down the
+		// files the run is kept for. The end marks the run before it stops the
+		// agent, so this read always sees it.
+		if cur, gerr := s.cfg.Store.GetRun(base, runID); gerr == nil && runIsKept(cur) {
+			return
+		}
+
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
 		applied, uerr := s.casRunState(base, runID, types.RunRunning, terminal)
@@ -227,6 +237,9 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 			data["broker_error"] = berr.Error()
 		}
 	}
+	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
+		data["proxy_config_error"] = perr.Error()
+	}
 	if len(data) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
 			runID.String(), "failure", mustJSON(data)))
@@ -253,13 +266,17 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	if s.cfg.Approvals == nil {
 		return
 	}
-	// Counted BEFORE the cancel, because after it there is nothing of this kind
-	// left PENDING to count: wardyn_credential_reauth_total{outcome="cancelled"}
-	// is a STATE-TRANSITION counter, and the first shape bumped it at a later
-	// resolve that happened to meet a terminal row — which counts retries, and
-	// never fires at all once the sidecar has given up.
-	reauth := s.countPendingReauth(ctx, runID)
-	n, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	// wardyn_credential_reauth_total{outcome="cancelled"} is a STATE-TRANSITION
+	// counter, so it counts the credential_reauth rows the cancel actually MOVED
+	// — not a pre-read of PENDING rows, which also counted one a human decided
+	// between the read and the CAS (#151). Counting at a later resolve that
+	// meets a terminal row counts retries instead, and never fires once the
+	// sidecar has given up. AWS SSO re-auth rows only, the series' HELP: an
+	// Azure DevOps sign-in or consent row is credential_reauth too, and is not.
+	byKind, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	for range byKind[approval.TallyReauthAWSSSO] {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -267,8 +284,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 			runID.String(), "failure", mustJSON(map[string]any{"approval_cancel_error": err.Error()})))
 		return
 	}
-	for i := 0; i < reauth; i++ {
-		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
+	n := 0
+	for _, c := range byKind {
+		n += c
 	}
 	if n > 0 {
 		slog.InfoContext(ctx, "wardynd: cancelled a terminal run's pending approvals",
@@ -276,25 +294,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
-// countPendingReauth is how many credential_reauth rows this run still has
-// open. Best-effort: a read that fails costs a metric, never a cancellation.
-func (s *Server) countPendingReauth(ctx context.Context, runID uuid.UUID) int {
-	rows, err := s.runApprovals(ctx, runID, types.ApprovalPending)
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, ap := range rows {
-		if ap.Kind == types.ApprovalCredentialReauth {
-			n++
-		}
-	}
-	return n
-}
-
 // CancelTerminalRunApprovals is cancelRunApprovals' exported seam for the THIRD
 // terminal writer: cmd/wardynd's idle reaper (lifecycleStopper.StopRun) is the
-// only writer of RunState=STOPPED, it lives outside this package, and before
+// then-only writer of RunState=STOPPED, it lives outside this package, and before
 // this it ran the revoke half of the cascade and none of the approval half — so
 // an idle-stopped run's PENDING approvals sat in the queue until the 24h
 // ExpireStale sweep, logged "nobody answered" rather than "the run stopped",
@@ -308,7 +310,8 @@ func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID
 
 // terminalCancelReason is the reason string stamped on a cancelled approval and
 // on its audit row: "run_killed", "run_completed", "run_failed", "run_stopped",
-// or (for an archived row, or a state the read could not resolve)
+// "run_ended" (the lease ran out: kept, or torn down at its end or after the
+// grace), "run_lost" (its sandbox was lost to a reboot or an outage), or (for an archived row, or a state the read could not resolve)
 // "run_terminated" — never a guess that names the wrong transition.
 func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) string {
 	if s.cfg.Store == nil {
@@ -317,6 +320,12 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return "run_terminated"
+	}
+	if run.LostReason != "" && run.State != types.RunKilled {
+		if run.LostReason == types.LostEnded {
+			return "run_ended"
+		}
+		return "run_lost"
 	}
 	switch run.State {
 	case types.RunKilled:
@@ -332,19 +341,26 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	}
 }
 
-// SweepTerminalSandboxes is the retry surface for a gap: a
-// failed StopSandbox/RevokeRun step inside a prior finalize (finalizeRunTail)
-// or kill (handleKillRun) leaves a terminal run row with a sandbox nothing
-// else revisits — ReconcileOnBoot skips terminal runs outright (reconcile.go),
-// and handleKillRun 409s a non-KILLED terminal run rather than risk
-// corrupting its recorded outcome. This PROBES the runner for every terminal
-// run with a SandboxRef (never trusts the row's own state — the row is
-// terminal by definition, so only a live probe can tell orphaned from
-// settled), tears down + re-runs the idempotent revoke cascade for anything
-// still reported running, and reports how many it swept. Read-only on the
-// store: it never writes run state (a terminal row's recorded outcome is
-// untouched either way), only the runner + broker/identity side effects
-// finalizeRunTail already performs for every OTHER terminal transition.
+// SweepTerminalSandboxes is the retry surface for two gaps in the same
+// family: a failed StopSandbox/RevokeRun step inside a prior finalize
+// (finalizeRunTail) or kill (handleKillRun) leaves a terminal run row with a
+// sandbox nothing else revisits — ReconcileOnBoot skips terminal runs outright
+// (reconcile.go), and handleKillRun 409s a non-KILLED terminal run rather than
+// risk corrupting its recorded outcome — and, separately, killTeardownTail
+// itself can be interrupted (a shutdown past its grace, a crash) after the
+// KILLED CAS has already landed but before the teardown/revoke/audit tail
+// finishes, leaving a run correctly marked KILLED with no run.kill row at all
+// (see recoverAbandonedKillTail).
+//
+// This PROBES the runner for every terminal run with a SandboxRef (never
+// trusts the row's own state — the row is terminal by definition, so only a
+// live probe can tell orphaned from settled), tears down + re-runs the
+// idempotent revoke cascade for anything still reported running, retries any
+// KILLED row whose own kill tail looks abandoned, and reports how many it
+// swept. Read-only on run STATE: it never transitions a run (a terminal row's
+// recorded outcome is untouched either way), only the runner + broker/
+// identity + audit side effects finalizeRunTail/killTeardownTail already
+// perform for every other terminal transition.
 //
 // Caller's choice when/how often to invoke this (boot, a periodic ticker, an
 // admin route) — none are wired up here; this is the primitive itself.
@@ -358,7 +374,19 @@ func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 	}
 	swept := 0
 	for _, run := range runs {
-		if !isTerminalRunState(run.State) || run.SandboxRef == "" {
+		if !isTerminalRunState(run.State) {
+			continue
+		}
+		// KILLED rows get an extra, ref-independent check first: a tail that
+		// died before ever reaching KillSandbox leaves SandboxRef exactly as it
+		// was (possibly already empty), so the ref-probe below would never see
+		// it. A run this recovers still falls through to the ref-probe below on
+		// the NEXT pass only if it needs to — this pass counts it once.
+		if run.State == types.RunKilled && s.recoverAbandonedKillTail(ctx, run) {
+			swept++
+			continue
+		}
+		if run.SandboxRef == "" {
 			continue
 		}
 		st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
@@ -370,6 +398,81 @@ func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 		swept++
 	}
 	return swept, nil
+}
+
+// killTailRecoveryGrace is how long a KILLED run's own kill tail
+// (killTeardownTail) is given to finish before the sweep will consider it
+// abandoned. Every caller of killTeardownTail bounds it at killCascadeTimeout —
+// handleKillRun's synchronous cascade and supersedeOneLoginRun's detached
+// goroutine each wrap their own context.WithTimeout(killCascadeTimeout) around
+// it — so a KILLED row whose transition (run.UpdatedAt, stamped by the winning
+// CAS the moment the tail STARTS) is older than that bound, and still has no
+// successful run.kill row, cannot still have a live tail running; the margin
+// on top absorbs scheduling/clock slack rather than racing the bound exactly.
+const killTailRecoveryGrace = killCascadeTimeout + 30*time.Second
+
+// killTailRecoveryTimeout bounds one recovered kill tail: the killCascadeTimeout
+// the normal kill path gives it. A var only so a test can shrink it.
+var killTailRecoveryTimeout = killCascadeTimeout
+
+// killTailSettled lists the audit rows that each prove a KILLED run needs no
+// kill-tail recovery. Matched with an EXISTS over the run's whole trail, never
+// a bounded read: a settled run.kill behind more rows than the window was
+// missed, and the run was re-killed on every sweep.
+var killTailSettled = []store.AuditFilter{
+	// Its own kill tail (killTeardownTail) finished cleanly.
+	{Action: "run.kill", Outcome: "success"},
+	// reclaimProbeRun (site_config_probe.go) KILLs a hung probe through
+	// finalizeRunTail, which writes this row and never run.kill. Any outcome:
+	// that path records the reclaim itself as a failure by design.
+	{Action: "site_config.probe.kill"},
+}
+
+// recoverAbandonedKillTail retries an interrupted kill tail: a KILLED run
+// whose killTeardownTail died — a shutdown past backgroundShutdownBudget, a
+// crash, a killed process — before writing its run.kill audit row, leaving the
+// run correctly marked KILLED but with no record the teardown/revocation
+// cascade ever ran, its sandbox possibly still live, and its credentials
+// possibly still un-revoked. Unlike the SandboxRef probe in
+// SweepTerminalSandboxes, this also covers the NO-REF case: a tail that died
+// before ever calling KillSandbox leaves SandboxRef exactly as claimKillTransition
+// found it, with nothing else in the row to probe — the missing run.kill row
+// is the only signal.
+//
+// Eligibility is read fresh from the run's own state and audit trail every
+// call, never from a flag this sweep sets, so recovery is naturally
+// at-least-once: a sweep interrupted mid-recovery, or whose own run.kill write
+// itself fails to persist, is retried by the very next pass, because the
+// successful row it looks for still will not exist. It reports whether it
+// attempted a recovery (regardless of that attempt's own outcome), so the
+// caller can count it swept.
+//
+// killTailRecoveryGrace guards against racing a tail that is simply still
+// running: entering killTeardownTail a second time WHILE the first is still
+// mid-flight would double the run.kill audit row and double-drive the runner
+// concurrently. A KILLED row younger than the grace is left alone — it may
+// still have a live tail finishing on its own.
+func (s *Server) recoverAbandonedKillTail(ctx context.Context, run types.AgentRun) bool {
+	if s.cfg.Now().UTC().Sub(run.UpdatedAt) < killTailRecoveryGrace {
+		return false // may still be an in-flight tail — leave it alone
+	}
+	matcher, ok := s.cfg.Store.(store.RunAuditMatcher)
+	if !ok {
+		return false // cannot answer exactly: never re-kill on a guess
+	}
+	for _, f := range killTailSettled {
+		found, err := matcher.HasRunAuditEvent(ctx, run.ID, f)
+		if err != nil || found {
+			return false // settled, or unprobeable this pass (the next pass tries again)
+		}
+	}
+	// Bounded like every other killTeardownTail caller, so a hung runner costs
+	// the operator's request at most one budget per run. A tail cut short
+	// audits run.kill as a failure and is retried by the next pass.
+	tailCtx, cancel := context.WithTimeout(ctx, killTailRecoveryTimeout)
+	defer cancel()
+	s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "sweep_recovered_kill_tail"})
+	return true
 }
 
 // RunSecretGrace is how long a run must have been terminal before its masking
@@ -392,8 +495,16 @@ const RunSecretGrace = time.Hour
 // new one can be forgotten. It fails CLOSED on anything it cannot positively
 // prove terminal-and-cold: a store error, or a held run id with no row in the
 // listing, keeps its secrets.
+//
+// It also drops the process-wide mask copies of credentials that were refreshed
+// or deleted more than RunSecretGrace ago (secretmask.Registry.SweepGlobals),
+// on the same grace and for the same reason.
 func (s *Server) SweepRunSecrets(ctx context.Context) int {
-	if s.cfg.MaskRegistry == nil || s.cfg.Store == nil {
+	if s.cfg.MaskRegistry == nil {
+		return 0
+	}
+	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
+	if s.cfg.Store == nil {
 		return 0
 	}
 	held := s.cfg.MaskRegistry.RunIDs()
@@ -526,14 +637,14 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		// failed dispatch that can only ever find nothing.
 		//
 		// The census of transitions that can strand an approval is four:
-		// finalizeRunTail's (the completion watcher, the boot reconciler and the
-		// probe reclaim all route through it), handleKillRun's,
-		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd (the ONLY
-		// writer of STOPPED, which reaches the cascade through
+		// finalizeRunTail's (the completion watcher, the boot reconciler, the
+		// probe reclaim and the lease's stopKeptRun all route through it),
+		// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
+		// cmd/wardynd (which reaches the cascade through
 		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
 		// BECAUSE its agent is parked on a wait_for_review hold), and this one on
 		// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
-		// them so a fifth writer reds instead of silently stranding.
+		// them so a new writer reds instead of silently stranding.
 		if hint != "" {
 			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
 			// the ~30 test doubles that embed store.Store never implement it, so a
@@ -718,6 +829,10 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 	if !applied {
 		return false, nil
 	}
+	// A STARTING run has no sandbox_ref yet, so the teardown tail cannot reach
+	// its half-built sandbox: stop the create instead, and its own rollback
+	// removes what it made. A no-op for a run that is not creating.
+	s.creates.cancel(run.ID)
 	// Approvals: the transition is unambiguously ours, so the run's outstanding
 	// questions are cancelled here — BEFORE teardown, because a PENDING approval
 	// is the one piece of this cascade a human is looking at, and after the CAS
@@ -744,9 +859,11 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // is cancelled, retryQuick bails on ctx.Done() without revoking the identity,
 // and the run.kill row itself fails to write. Nothing on the ordinary paths
 // revisits that state: the idle reaper lists RUNNING and the next supersede
-// selects non-terminal runs only — only SweepTerminalSandboxes (below) can
-// retry a stranded terminal run's teardown, and it is a primitive an operator
-// has to wire up, not something that runs on its own. killRunCascade wraps
+// selects non-terminal runs only. What does come back to it is
+// sweepOrphanedSandboxes (reconcile.go), at boot and every undispatchedGrace:
+// it tears down a terminal run's labelled containers, but writes no run.kill
+// row and revokes nothing — refuseTerminalRun (internal_live_run.go) is what
+// shuts every /internal door to the stranded token meanwhile. killRunCascade wraps
 // ONE shared context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 // around this call and claimKillTransition's together, so handleKillRun's
 // synchronous cascade keeps the single 30s budget it always had; its
@@ -780,6 +897,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 		if berr := retryQuick(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
 			killData["broker_error"] = berr.Error()
 		}
+	}
+	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
+	if perr := s.dropRunProxyConfig(ctx, id); perr != nil {
+		killData["proxy_config_error"] = perr.Error()
 	}
 
 	// Honest outcome: the kill-switch is the central governance control and
@@ -855,7 +976,7 @@ func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
 	// would make docs/AUDIT-ACTIONS.md false. This row answers a different
 	// question — WHO asked for a sweep, and what did it find — and the
 	// primitive's own failure rows still fire underneath it.
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep_requested",
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep.request",
 		"", "success", mustJSON(map[string]any{"swept": swept})))
 	writeJSON(w, http.StatusOK, map[string]any{"swept": swept})
 }

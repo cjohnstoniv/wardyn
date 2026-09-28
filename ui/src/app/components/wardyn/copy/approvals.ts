@@ -17,7 +17,7 @@ export const VIEWER_APPROVAL_BLOCKS_NOTE =
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.
-export type ApprovalKind = "tool" | "credential" | "egress" | "reauth";
+export type ApprovalKind = "tool" | "credential" | "egress" | "reauth" | "push";
 export const APPROVAL_BANNER_LABEL = {
   what: "What you're approving:",
   blast: "Blast radius:",
@@ -27,6 +27,14 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   credential: "Credential",
   egress: "Network egress",
   reauth: "AWS sign-in",
+  // Hand-copied literal, not an import of copy/push.ts's PUSH.KIND_LABEL:
+  // this file is on the ApprovalKindChip path (primitives.tsx), which the
+  // board and the live cockpit strip both reach eagerly, and copy/push.ts's
+  // other strings belong to the push card alone — same reasoning
+  // approvalScopeBadge's own hand-copied ADO strings give below. Cross-
+  // checked against PUSH.KIND_LABEL in push-content-card.test.ts so the two
+  // cannot drift.
+  push: "Push",
 };
 
 // The ONE console label for the CANCELLED approval state (the run ended before
@@ -225,6 +233,7 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   // /approvals title the row "Mint a scoped credential" and paint the
   // blast-radius banner over a request that mints nothing.
   credential_reauth: "reauth",
+  push_content: "push",
 };
 
 // Hoisted from approvals.tsx (kept out of live-approvals.tsx's own module,

@@ -17,10 +17,10 @@
 // end a sign-in that is five minutes old and working.
 //
 // What this file deliberately does NOT do is claim to know a pull is happening.
-// Nothing on the read path can: `GET /runs/{id}` is a plain SELECT, the k8s
-// canary reports `ContainerCreating` for a pull and for everything else, and
-// "Pulling" is an Event reason the chart grants no verb to read. The slow-start
-// sentence is hedged for that reason.
+// Nothing on the read path can: `GET /runs/{id}` is a plain SELECT, and a pull
+// reaches it only as a status reason — Docker's `ensureImage`, or on Kubernetes
+// the pod's "Pulling" Event (#807; a chart Role without `events: list` falls
+// back to `ContainerCreating`). The slow-start sentence is hedged for that reason.
 //
 // 0.7.6 (finding 6) changes the SHAPE of that concession rather than the
 // budget: the substrate's reason now reaches this file (`agent_runs.status_detail`),
@@ -67,8 +67,7 @@ export const RUN_POLL_MIN_FAILURES = 15;
 // there is no node and, with the image already local, nothing pulls; on a first
 // install nothing was upgraded; and the same sentence narrates the ANTHROPIC
 // flow, whose image is the ordinary agent one. What holds in every one of those
-// is that a first start MAY need to pull — same wording as
-// LOGIN_SANDBOX_STARTING's, one fact said one way.
+// is that a first start MAY need to pull.
 export const LOGIN_SANDBOX_SLOW_START =
   "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes.";
 

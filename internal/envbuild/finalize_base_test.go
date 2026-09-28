@@ -164,8 +164,8 @@ func TestBuild_PullsBaseItselfSoTheDaemonCannotRePullPastThePreflight(t *testing
 		t.Fatalf("Build: %v", err)
 	}
 	// The pushed base is still fetched fresh, from THIS build's own per-build
-	// push ref (W20-record-image-2: a bare/shared ref would let a concurrent
-	// build's push resolve here instead — see TestBuild_ConcurrentBuildsUsePerBuildPushRef).
+	// push ref: a bare/shared ref would let a concurrent build's push resolve
+	// here instead — see TestBuild_ConcurrentBuildsUsePerBuildPushRef.
 	if len(f.pulledRefs) == 0 {
 		t.Fatal("finalize did not pull the freshly pushed base")
 	}
@@ -193,14 +193,15 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	}
 }
 
-// TestFinalizeBase_AppliesOwnDeadline is W20-W20-record-image-4:
-// runBuildAndFinalize (the devcontainer-build path) always bounds its work
-// with BuildTimeout/defaultBuildTimeout; FinalizeBase (the BYOI-wrap path)
-// used to run under whatever the caller's ctx carried — nothing at all for a
-// caller that detaches from request cancellation (context.WithoutCancel,
-// e.g. launchRecordRun). Called with context.Background() (no deadline) and
-// a small BuildTimeout, FinalizeBase must still apply ITS OWN bound: the
-// underlying docker call must observe a ctx with a deadline.
+// TestFinalizeBase_AppliesOwnDeadline: runBuildAndFinalize (the
+// devcontainer-build path) always bounds its work with
+// BuildTimeout/defaultBuildTimeout, and FinalizeBase (the BYOI-wrap path)
+// must too, not run under whatever the caller's ctx carries — nothing at all
+// for a caller that detaches from request cancellation
+// (context.WithoutCancel, e.g. launchRecordRun). Called with
+// context.Background() (no deadline) and a small BuildTimeout, FinalizeBase
+// must still apply its own bound: the underlying docker call must observe a
+// ctx with a deadline.
 func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	f.imagesPresent["ubuntu:24.04"] = true
@@ -217,7 +218,7 @@ func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 	}
 }
 
-// TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled is B9-F2: the
+// TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled is the
 // fully-qualified `repo:tag@sha256:...` form — what a resolved BYOI base
 // actually carries once an operator pins it — is present locally under NEITHER
 // list verbatim. A real daemon splits it: `myco/dev:1.2` under RepoTags,
@@ -270,7 +271,7 @@ func TestFinalizeBase_AbsentDigestBasePullsExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestBuild_UntagsThePerBuildBaseAfterFinalize is B9-F3: every devcontainer
+// TestBuild_UntagsThePerBuildBaseAfterFinalize is every devcontainer
 // build pulls its own per-build base (newPushRef gives each one a fresh uuid
 // tag) and then wraps it into the output image. The base's layers are shared
 // with that output, so what is left behind is a TAG — one per build, forever,
@@ -327,7 +328,7 @@ func TestBuild_UntagsThePerBuildBaseAfterFinalize(t *testing.T) {
 // anything else is the daemon failing to answer. Treating the two the same still
 // fails closed (the pull errors too), but it reports a registry refusal for what
 // was a broken socket, on the private pre-pulled base where that message is
-// least true. Which is the exact confusion B9-F8 was raised to remove.
+// least true. Which is the exact confusion this test was raised to remove.
 func TestFinalizeBase_DigestInspectDaemonErrorIsNotAPull(t *testing.T) {
 	const ref = "myco/dev:3.0@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	f := newFakeEnvbuilderDocker()

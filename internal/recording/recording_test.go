@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
-// ── store tests ──────────────────────────────────────────────────────────────
+// store tests
 
 // TestNew_DefaultIsPG pins the S3 default flip: an empty selector must
 // resolve to "pg", not "fs", and "fs" must remain explicitly selectable so
@@ -31,7 +31,7 @@ import (
 // nil-pool guard — proving "" resolved to pg, not fs (which would have
 // happily returned a nil Store for an empty Dir instead of erroring).
 // 0.7.1: "off" is the one spelling of "no recording" an environment can carry
-// now that an empty env value keeps the compiled default (FlagEnv, F011/F067).
+// now that an empty env value keeps the compiled default (FlagEnv).
 func TestNew_OffIsDisabled(t *testing.T) {
 	s, err := recording.New("off", recording.Deps{})
 	if err != nil || s != nil {
@@ -93,7 +93,7 @@ func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 	}
 }
 
-// ── handler tests ─────────────────────────────────────────────────────────────
+// handler tests
 
 // allowAllAuthorizer is the test stub for recording.Authorizer: the mechanics
 // under test here are the Handler's own route/store plumbing and its

@@ -93,7 +93,7 @@ func TestLoginCommand_NoFourthCopy(t *testing.T) {
 	}
 }
 
-// ── the sandbox signs itself in (finding 4) ──────────────────────────────────
+// the sandbox signs itself in (finding 4)
 
 var (
 	shellSelfRunBanner = regexp.MustCompile(`WARDYN_AWS_SSO_SELFRUN_BANNER='([^']+)'`)

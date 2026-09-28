@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package cliutil holds tiny env/flag helpers shared by Wardyn's cmd/* main
-// packages (each cmd is its own `main` package, so these can't just live in
-// one of them without the others importing "main"), plus ScrubChildEnv, the
-// one env denylist shared by every host-exec'd third-party CLI child.
+// packages, plus ScrubChildEnv, the one env denylist shared by every
+// host-exec'd third-party CLI child.
 package cliutil
 
 import (
@@ -19,11 +18,8 @@ import (
 // exit is os.Exit, stubbed in tests. An env value the helper cannot parse is
 // FATAL, not "fall back to the default": the same setting arriving as a bad
 // -flag value already exits 2 (flag.CommandLine is ExitOnError), so the env
-// door must not be quieter than the flag door. Silently reinterpreting an
-// unparseable value as the default is how `WARDYN_ENVBUILD=treu` turns a
-// feature OFF with no error, no warning, and no log line — the operator only
-// finds out when the feature they thought they enabled never runs. Failing
-// closed at startup is cheap; a security toggle silently off is not.
+// door must not be quieter than the flag door — a silently-reinterpreted typo
+// is how a security toggle ends up silently off.
 var exit = os.Exit
 
 // envFatal reports an unusable env value and exits 2, mirroring how the flag
@@ -42,31 +38,37 @@ func EnvOr(key, def string) string {
 	return def
 }
 
-// FlagEnv defines a string flag whose default is overridden by an env var.
-// Unset — or set to the empty string, which is what `docker run -e VAR` and a
-// compose `VAR=` passthrough produce for a var the operator never set — means
-// "use the default", exactly like FlagBool/FlagDuration/FlagIntEnv/EnvOr. It
-// used to honour an explicit empty as an intentional blank, which silently
-// erased thirteen non-empty compiled defaults (WARDYN_LISTEN ":8080",
-// WARDYN_RUNNER "none", WARDYN_DEFAULT_POLICY, WARDYN_GIT_PAT_BROKER "on", ...)
-// for anyone whose orchestrator passes every known variable through. The
-// escape hatch for a genuinely-intended blank is `-name=`, which states it.
+// EnvAlias lets a deprecated env var name go on working for one deprecation
+// window while a new name takes over (UT-5, user-types-design.md rev 4 §6).
+// Empty counts as unset for both names.
 //
-// The env value is applied to the flag's VARIABLE, never to its registered
-// DEFAULT (F157). flag.String captures whatever default it is handed as
-// Flag.DefValue, and PrintDefaults renders a non-empty string default as
-// `(default "…")` — printed not only for -help but for EVERY parse error, since
-// flag.CommandLine is ExitOnError. Seeding the default from the env therefore
-// wrote WARDYN_ADMIN_TOKEN, WARDYN_AGE_KEY (the secret store's master identity),
-// WARDYN_OIDC_CLIENT_SECRET and WARDYN_GROUNDTRUTH_TOKEN verbatim to stderr —
-// container logs, journald, any log shipper — on one typo'd flag in a compose
-// command, a systemd unit or a Helm args list. Writing through the returned
-// pointer instead keeps the exact same precedence (an explicit -name= set at
-// Parse overwrites the env value, because the flag package only calls Set for
-// flags actually present on the command line) while the usage block shows only
-// the COMPILED default, which is never a credential. FlagBool/FlagDuration/
-// FlagIntEnv are unaffected: none of them carries a secret, and their env values
-// are bounded token/number sets rather than free-form strings.
+// When newEnv is unset and oldEnv is set, it copies oldEnv's value into newEnv
+// and reports aliased. When both are set, newEnv wins; if the values differ it
+// reports ignored, since a dropped old value can be a longer deny list the
+// operator still believes is in force. Callers must run it before ANY flag is
+// parsed or either name is otherwise read.
+func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
+	oldV := os.Getenv(oldEnv)
+	if oldV == "" {
+		return false, false
+	}
+	if newV := os.Getenv(newEnv); newV != "" {
+		return false, newV != oldV
+	}
+	os.Setenv(newEnv, oldV) //nolint:errcheck // this process's own env; Setenv cannot fail here
+	return true, false
+}
+
+// FlagEnv defines a string flag whose default is overridden by an env var.
+// Unset/empty means "use the default", like FlagBool/FlagDuration/FlagIntEnv/
+// EnvOr; the escape hatch for a genuinely-intended blank is `-name=`.
+//
+// SECURITY: the env value is applied to the flag's VARIABLE, never to its
+// registered DEFAULT — PrintDefaults renders a non-empty string default as
+// `(default "…")` on every parse error, so seeding the default from the env
+// would write secrets like WARDYN_AGE_KEY verbatim to stderr on one typo'd
+// flag. Writing through the returned pointer instead keeps the same
+// precedence while the usage block shows only the compiled default.
 func FlagEnv(name, env, def, usage string) *string {
 	p := flag.String(name, def, usage+" (env "+env+")")
 	if v := os.Getenv(env); v != "" {
@@ -77,11 +79,9 @@ func FlagEnv(name, env, def, usage string) *string {
 
 // FlagBool defines a bool flag whose default is overridden by an env var.
 // 1/true/yes/on is true, 0/false/no/off is false (case-insensitive, trimmed).
-// Unset — or set to the empty string, which is what `docker run -e VAR` and a
-// compose `VAR=` passthrough produce for an unset var — means "use the
-// default", silently. Anything else exits 2: a value that is neither truthy nor
-// falsey states no intent this helper can honor, and guessing "false" is the
-// worst guess available (it turns features off).
+// Unset/empty means "use the default", silently. Anything else exits 2: a
+// value that is neither truthy nor falsey states no intent this helper can
+// honor, and guessing "false" is the worst guess available.
 func FlagBool(name, env string, def bool, usage string) *bool {
 	v := strings.TrimSpace(os.Getenv(env))
 	switch strings.ToLower(v) {
@@ -99,8 +99,7 @@ func FlagBool(name, env string, def bool, usage string) *bool {
 
 // FlagDuration defines a time.Duration flag whose default is overridden by an
 // env var. Unset/empty keeps the default; an unparseable value exits 2 rather
-// than silently reinstating the default — an operator who typos an interval
-// must not have it quietly reinterpreted as a different, meaningful setting.
+// than silently reinstating it.
 func FlagDuration(name, env string, def time.Duration, usage string) *time.Duration {
 	if v := strings.TrimSpace(os.Getenv(env)); v != "" {
 		d, err := time.ParseDuration(v)
@@ -128,10 +127,8 @@ func FlagIntEnv(name, env string, def int, usage string) *int {
 }
 
 // EnvBool reads a bool directly from an env var, with no flag registered — for
-// sites where flag.Parse() has already run before the read (so FlagBool's flag
-// would never be parsed: a dead flag). Same token set and loudness contract as
-// FlagBool: unset/empty keeps def quietly (correct for `docker run -e VAR`),
-// 1/true/yes/on is true, 0/false/no/off is false, anything else exits 2.
+// sites where flag.Parse() has already run before the read. Same token set and
+// loudness contract as FlagBool.
 func EnvBool(name string, def bool) bool {
 	v := strings.TrimSpace(os.Getenv(name))
 	switch strings.ToLower(v) {
@@ -149,8 +146,6 @@ func EnvBool(name string, def bool) bool {
 
 // EnvDuration reads a time.Duration directly from an env var, with no flag
 // registered — the non-flag twin of FlagDuration for post-flag.Parse() sites.
-// Unset/empty keeps def quietly; an unparseable value exits 2 rather than
-// silently reinstating the default (a typo'd interval must not be reinterpreted).
 func EnvDuration(name string, def time.Duration) time.Duration {
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
 		d, err := time.ParseDuration(v)
@@ -164,26 +159,20 @@ func EnvDuration(name string, def time.Duration) time.Duration {
 }
 
 // ScrubChildEnv returns env with the variables a third-party CLI child must
-// never receive removed, without mutating the input: ANTHROPIC_API_KEY, so a
-// resident `claude` authenticates with the subscription session rather than
-// billing or leaking an API key, and every WARDYN_* variable, which is the
-// daemon's own configuration — WARDYN_AGE_KEY is the secret-store MASTER key,
-// WARDYN_ADMIN_TOKEN the API bearer, WARDYN_PG_DSN the database URL.
+// never receive removed, without mutating the input: ANTHROPIC_API_KEY and
+// every WARDYN_* variable (the daemon's own configuration, including secrets
+// like WARDYN_AGE_KEY and WARDYN_ADMIN_TOKEN).
 //
-// Denylist, not allowlist, deliberately: these children are resident operator
-// CLIs invoked on the control-plane host, and they legitimately need whatever
-// HTTPS_PROXY / NO_PROXY / NODE_EXTRA_CA_CERTS / AWS_* the operator's shell
-// carries to work on a corp network or against Bedrock. A prefix also covers
-// every future WARDYN_* secret for free, which an enumerated allowlist cannot.
+// Denylist, not allowlist: these children legitimately need whatever
+// HTTPS_PROXY / NO_PROXY / AWS_* the shell carries, and a prefix covers every
+// future WARDYN_* secret for free.
 //
-// HONEST RESIDUAL: this is defense-in-depth and consistency, NOT containment. A
+// HONEST RESIDUAL: defense-in-depth and consistency, NOT containment — a
 // host-exec'd child runs as the same uid as wardynd and can read
-// /proc/<ppid>/environ regardless. Containment is the sandbox composer wire.
-//
-// ONE documented exception, enforced by cmd/wardyn's childenv_guard_test.go:
-// `docker compose config` in supportbundle.go's gatherComposeConfig, whose
-// entire job is to resolve ${WARDYN_*} against the real environment. Its
-// output goes through redactSecrets before it reaches a bundle.
+// /proc/<ppid>/environ regardless. One documented exception (enforced by
+// cmd/wardyn's childenv_guard_test.go): `docker compose config` in
+// supportbundle.go, whose output goes through redactSecrets before it reaches
+// a bundle.
 func ScrubChildEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

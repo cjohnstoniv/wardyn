@@ -21,6 +21,9 @@ export interface GrantSpec {
   scope?: Record<string, unknown>;
   ttl_seconds?: number;
   requires_approval: boolean;
+  // Resolve the named stored secret from the run owner's own row only, never
+  // the operator's (api_key / git_pat / ssh_key / env_secret).
+  owner_only?: boolean;
 }
 
 // A single operator/policy-controlled host bind mount. Mirrors the wire shape
@@ -210,15 +213,24 @@ export interface ResourceLimits {
 
 // Content rules for a run's brokered git pushes (mirrors types.PushRulesSpec)
 // — the counterpart to git_push_any_branch's WHERE: this says WHAT a push may
-// touch. Phase one only: deny_paths and max_inspect_pack_mib are STORED and
-// VALIDATED, never matched — no matcher runs yet (that lands with the pack
-// inspector, a later change). Omitted/undefined on RunPolicySpec means no
-// content rules at all, identical to every policy authored before this field
-// existed.
+// touch. deny_paths refuse a push; require_review_paths hold it for an admin's
+// push_content decision for up to hold_seconds (0/absent = 120, max 600), and
+// an unattended run refuses instead. Omitted/undefined on RunPolicySpec means
+// no content rules at all, identical to every policy authored before this
+// field existed.
 export interface PushRulesSpec {
   deny_paths?: string[];
   max_inspect_pack_mib?: number;
+  require_review_paths?: string[];
+  hold_seconds?: number;
 }
+
+// pushRulesIsSet moved to new-run-rail.tsx (bundle-split fix, #181): its only
+// caller is that lazy screen's own RunRail, and this module is eager (some
+// of policy.ts's other exports reach the runs board), so a runtime function
+// living here bundled into the entry chunk for a reader that never runs
+// there — same pattern push-content-card.tsx's isPushContentRequest and
+// audit-decision.tsx's ruleSourceLabel document.
 
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on

@@ -122,8 +122,7 @@ export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 // by a role comparison of the reader's own: a surface gated on isOperator keeps
 // OPERATOR_ONLY_REASON above. Used by ui-member-cluster's own sites AND by
 // approvals.tsx's decide-gate chip (ui-workspaces-approvals, also keyed off
-// useSecurityOperator) — one definition, canon owned by ui-member-cluster
-// (local/v074/canon/ui-member-cluster.md).
+// useSecurityOperator) — one definition, canon owned by ui-member-cluster.
 export const SECURITY_ONLY_REASON = "Requires the admin or security admin role.";
 
 
@@ -156,9 +155,9 @@ export { credentialKind } from "./copy/approvals";
 export { RUN_COCKPIT } from "./copy/run-cockpit";
 export { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX, POLICY_UI_APPS } from "./copy/ui-apps";
 export { YOUR_MODEL_KEY } from "./copy/model-key";
-export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY, RUNS_WAIT } from "./copy/getting-started";
+export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY } from "./copy/getting-started";
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
-export { PEOPLE_STEP, SITE } from "./copy/setup-steps";
+export { PEOPLE_STEP, SETUP, SITE } from "./copy/setup-steps";
 export { SHELL, UNSAVED_GUARD } from "./copy/shell";
 export { RUN } from "./copy/run-clone";
 
@@ -170,6 +169,7 @@ export { TERMINAL } from "./copy/terminal";
 export {
   RECORDING_DISABLED_TITLE,
   RECORDING_DISABLED_DESC,
+  RAIL,
   RAIL_CREDENTIAL,
   RAIL_RECORDING_ON,
 } from "./copy/new-run-rail";

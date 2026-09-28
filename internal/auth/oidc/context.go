@@ -5,8 +5,7 @@ package oidc
 
 // Session principal in the request context: the unexported keys, the
 // exported *FromContext readers internal/api consumes, and the two writers
-// Middleware/CallbackHandler use. Split from oidc.go by seam (the file-size
-// gate); no behaviour lives here that oidc.go's doc does not describe.
+// Middleware/CallbackHandler use.
 
 import (
 	"context"
@@ -22,213 +21,196 @@ func withSessionRejected(ctx context.Context, reason string) context.Context {
 }
 
 // SessionRejectedFromContext returns why Middleware rejected a presented
-// session cookie on this request: "invalid_session" for a tampered/malformed
-// cookie, "expired_session" for a valid-but-expired one, "revoked_session"
-// for a valid cookie the revocation store has cut off, or
-// "session_revocation_unavailable" when that store errored (fail-closed) —
-// the last two only when Revocations is wired. Returns "" when no session
-// cookie was presented at all (the ordinary non-browser-client case) or the
-// session decoded fine.
+// session cookie on this request: "invalid_session", "expired_session",
+// "revoked_session", or "session_revocation_unavailable" (fail-closed) when
+// Revocations is wired; "" when no cookie was presented or it decoded fine.
 func SessionRejectedFromContext(ctx context.Context) string {
 	reason, _ := ctx.Value(sessionRejectedCtxKey{}).(string)
 	return reason
 }
 
-// PrincipalFromContext returns the human principal set by Middleware, or ""
-// if no SSO session is present on the context. The returned value is the OIDC
-// "sub" claim (a stable opaque identifier from the IdP).
-//
-// Integration note: internal/api's principalFromRequest should call this first
-// and fall back to the admin-token path when the result is "".
+// PrincipalFromContext returns the human principal set by Middleware (the OIDC
+// "sub" claim), or "" if no SSO session is present. internal/api's
+// principalFromRequest calls this first, falling back to the admin-token path.
 func PrincipalFromContext(ctx context.Context) string {
 	p, _ := ctx.Value(principalCtxKey{}).(string)
 	return p
 }
 
-// EmailFromContext returns the email claim of the session Middleware verified,
-// or "" when there is no SSO session (or the IdP returned no email — which is
-// possible whenever AllowedEmailDomains is empty, since that is the only check
-// that requires one). It is the identity internal/api resolves the minimal
-// viewer/operator role from; the "sub" is opaque and cannot be matched against
-// an operator allowlist an admin can actually write down.
+// EmailFromContext returns the email claim of the verified session, or "" when
+// absent (possible when AllowedEmailDomains is empty). internal/api resolves
+// the viewer/operator role from this, since the opaque "sub" can't be matched
+// against an admin-writable allowlist.
 func EmailFromContext(ctx context.Context) string {
 	e, _ := ctx.Value(emailCtxKey{}).(string)
 	return e
 }
 
-// NameFromContext returns the display-name ("name") claim of the session
-// Middleware verified, or "" when there is no SSO session or the IdP sent
-// none. Display only — internal/api shows it in the console header and
-// nothing else reads it; the identity every decision is keyed on stays the
-// sub (PrincipalFromContext) and the allowlist identity stays the email.
+// NameFromContext returns the display-name claim, or "" when absent. Display
+// only — every decision keys on the sub/email, never this.
 func NameFromContext(ctx context.Context) string {
 	n, _ := ctx.Value(nameCtxKey{}).(string)
 	return n
 }
 
-// RoleFromContext returns the EFFECTIVE Wardyn role for the session Middleware
-// verified, or "" when there is no SSO session.
-//
-// Effective, not stamped: a session in "view as member" mode (Session.MemberMode)
-// answers RoleMember here whatever its cookie says, because contextWithPrincipal
-// clamps it at the single origin. Nothing outside this package ever sees the
-// stamped role, which is the point — see MemberModeFromContext below.
-// This package only DERIVES and CARRIES the role — see CallbackHandler /
-// deriveRole for how it is computed. Enforcing it (deciding what an admin vs
-// a member may do) belongs to internal/api, the same split
-// PrincipalFromContext/EmailFromContext already follow.
+// RoleFromContext returns the EFFECTIVE Wardyn role, or "" when there is no
+// SSO session. Effective, not stamped: in "view as member" mode
+// (Session.MemberMode) this always answers RoleUser, clamped once in
+// contextWithPrincipal — the stamped role is never visible outside this
+// package. This package only derives/carries the role; internal/api enforces it.
 func RoleFromContext(ctx context.Context) string {
 	r, _ := ctx.Value(roleCtxKey{}).(string)
 	return r
 }
 
-// ExpiryFromContext returns when the session Middleware verified will expire,
-// or the zero time when there is no SSO session. W31-S1-7: there is no
-// refresh — the session dies outright at this instant — so the console
-// surfaces it as an advance warning instead of a surprise 401 that wipes
-// mid-work state back to the sign-in gate.
+// UserTypeFromContext returns the resolved user type id, or "" when there is
+// no SSO session: the sign-in type, or the user-view type while that's on.
+func UserTypeFromContext(ctx context.Context) string {
+	t, _ := ctx.Value(userTypeCtxKey{}).(string)
+	return t
+}
+
+// StampedUserTypeFromContext returns the user type stamped at sign-in, which
+// the user view does not change: the view's fallback when no chosen type is
+// remembered. "" when there is no SSO session.
+func StampedUserTypeFromContext(ctx context.Context) string {
+	t, _ := ctx.Value(stampedUserTypeCtxKey{}).(string)
+	return t
+}
+
+// UserViewDroppedFromContext returns the type whose deletion turned this
+// session's user view off (Session.UserViewDropped), or "".
+func UserViewDroppedFromContext(ctx context.Context) string {
+	t, _ := ctx.Value(userViewDroppedCtxKey{}).(string)
+	return t
+}
+
+// viewedUserType is the type a session's controls resolve against: the
+// chosen type while the user view is on, the stamped one otherwise (and for
+// a view entered before a type could be chosen).
+func viewedUserType(sess Session) string {
+	if sess.MemberMode && sess.UserViewType != "" {
+		return sess.UserViewType
+	}
+	return sess.UserType
+}
+
+// ExpiryFromContext returns when the verified session expires, or the zero
+// time when absent. No refresh — the session dies outright — so the console
+// surfaces it as an advance warning rather than a surprise 401.
 func ExpiryFromContext(ctx context.Context) time.Time {
 	t, _ := ctx.Value(expiryCtxKey{}).(time.Time)
 	return t
 }
 
-// GroupsFromContext returns the login-time group snapshot of the session
-// Middleware verified — the subjects a `group` capability grant matches.
+// GroupsFromContext returns the login-time group snapshot — the subjects a
+// `group` capability grant matches.
 //
-// NIL AND EMPTY MEAN DIFFERENT THINGS and callers must keep them apart. Empty
-// non-nil: this session was minted by 0.6+, the IdP sent no usable group
-// identity, and group grants genuinely do not apply. Nil: either there is no
-// SSO session at all, or the human is holding a PRE-0.6 cookie that predates
-// the field — group grants cannot be evaluated for them until they log in
-// again, which is what internal/api surfaces as groups_snapshot_stale rather
-// than silently reporting "no groups".
-//
-// Same DERIVES-not-ENFORCES split as RoleFromContext: this package carries the
-// snapshot, internal/api decides what it permits.
+// NIL AND EMPTY MEAN DIFFERENT THINGS: empty non-nil means the IdP sent no
+// usable group identity, so grants genuinely don't apply. Nil means no SSO
+// session, or a pre-0.6 cookie predating this field — internal/api surfaces
+// that as groups_snapshot_stale rather than "no groups".
 func GroupsFromContext(ctx context.Context) []string {
 	g, _ := ctx.Value(groupsCtxKey{}).([]string)
 	return g
 }
 
-// GroupsTruncatedFromContext reports whether the session's group snapshot is
-// PARTIAL — sessionGroups hit the cookie byte cap and dropped entries (see
-// Session.GroupsTruncated).
-//
-// A caller must treat true exactly as it treats a nil snapshot: the group
-// identity is not answerable, so no group-scoped decision can be made from it.
-// Reading it as "these are all their groups" is the silent tier evaporation
-// PF-26 names.
+// GroupsTruncatedFromContext reports whether the group snapshot is PARTIAL
+// (hit the cookie byte cap). A caller must treat true exactly like a nil
+// snapshot — no group-scoped decision can be made from it (PF-26).
 func GroupsTruncatedFromContext(ctx context.Context) bool {
 	t, _ := ctx.Value(groupsTruncatedCtxKey{}).(bool)
 	return t
 }
 
 // MemberModeFromContext reports whether this session is in "view as member"
-// mode (Session.MemberMode) — an admin who asked to be treated as a member for
-// the rest of the session.
-//
-// RoleFromContext ALREADY answers member when this is true, so authorization
-// needs this predicate for nothing: every tier decision keeps reading the role.
-// It exists for the two things the clamped role cannot say on its own — the
-// console's banner ("your usual role is paused"), and the seams that must
-// refuse rather than clamp, namely the credential MINT doors, where a
-// member-stamped credential would be re-stamped admin at the next login and
-// outlive the mode (internal/api/membermode.go).
+// mode — an admin treated as a member for the rest of the session.
+// RoleFromContext already answers member when true, so authorization needs
+// nothing from this; it exists only for the console banner and the
+// credential doors (API-token mint refuses, since a member-stamped token
+// would be re-stamped admin at next login; SSH keys are accepted capped).
 func MemberModeFromContext(ctx context.Context) bool {
 	m, _ := ctx.Value(memberModeCtxKey{}).(bool)
 	return m
 }
 
-// MemberPreviewNoCredential reports whether this session is in the NO-CREDENTIAL
-// posture of member mode — "view as a new member who has not signed in"
-// (Session.MemberModeNoCredential, 0.7.5 field report finding 3).
+// MemberPreviewNoCredential reports whether this session is in the
+// NO-CREDENTIAL posture of member mode — "view as a new member who has not
+// signed in" (Session.MemberModeNoCredential). Published as
+// `MemberMode && MemberModeNoCredential`, so it implies MemberModeFromContext.
 //
-// It is published as `MemberMode && MemberModeNoCredential`, so it implies
-// MemberModeFromContext and no caller has to read both.
-//
-// Like MemberModeFromContext it authorizes nothing and clamps nothing: the
-// effective role is already member, the principal is still the admin's own sub,
-// and the ONE thing this predicate moves is whether a PER-USER model-credential
-// read answers "absent" (internal/api's previewHidesOwnCredential). Everything
-// that already fails closed on an absent credential — the create-time mechanism
-// gate, dispatch, /setup/status's probe — then reaches the not-signed-in state
-// with no second rule of its own.
+// Authorizes and clamps nothing: the one thing it moves is whether a
+// per-user model-credential read answers "absent" (previewHidesOwnCredential),
+// letting every already-fail-closed path reach the not-signed-in state.
 func MemberPreviewNoCredential(ctx context.Context) bool {
 	m, _ := ctx.Value(memberPreviewNoCredCtxKey{}).(bool)
 	return m
 }
 
-// contextWithPrincipal stores the verified session's sub, email, EFFECTIVE role,
-// and group snapshot (with its truncation bit) on the context (read back via
-// PrincipalFromContext / EmailFromContext / RoleFromContext /
-// GroupsFromContext / GroupsTruncatedFromContext / MemberModeFromContext).
-//
-// Groups is stored even when nil, and that is not a wasted WithValue: a nil
-// value and an absent key both read back as nil, so this line costs nothing to
-// get right and keeps contextWithPrincipal free of a special case that would
-// only ever be re-added later.
+// contextWithPrincipal stores the verified session's sub, email, EFFECTIVE
+// role, and group snapshot on the context (read back via the *FromContext
+// readers above). Groups is stored even when nil — a no-op WithValue that
+// avoids a special case.
 func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
 	ctx = context.WithValue(ctx, nameCtxKey{}, sess.Name)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
-	// THE MEMBER-MODE CLAMP, and this is the only place it is applied (0.7.4,
-	// P2). This line is the sole read of sess.Role in the product, so clamping
-	// here clamps everything downstream by construction — internal/api's
-	// isOperator/isSecurityOperator, /me, the attach ticket's role stamp, the
-	// UI-gateway session's — rather than asking two dozen call sites to
-	// remember a second predicate.
-	//
-	// DOWNWARD ONLY, and the asymmetry is deliberate: the stamped sess.Role is
-	// never rewritten, so toggling off restores it verbatim instead of
-	// re-deriving it from a group snapshot that may be truncated.
+	// THE MEMBER-MODE CLAMP — the only place it's applied. This is the sole
+	// read of sess.Role in the product, so clamping here clamps everything
+	// downstream by construction rather than every call site remembering a
+	// second predicate. DOWNWARD ONLY: sess.Role is never rewritten, so
+	// toggling off restores it verbatim.
 	role := sess.Role
 	if sess.MemberMode {
-		role = RoleMember
+		role = RoleUser
 	}
 	ctx = context.WithValue(ctx, roleCtxKey{}, role)
+	// The user view publishes the type it looks through in place of the
+	// stamped one, so every control resolves as for a person of that type.
+	ctx = context.WithValue(ctx, userTypeCtxKey{}, viewedUserType(sess))
+	ctx = context.WithValue(ctx, stampedUserTypeCtxKey{}, sess.UserType)
+	ctx = context.WithValue(ctx, userViewDroppedCtxKey{}, sess.UserViewDropped)
 	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)
-	// The preview posture, ANDed with the mode rather than copied: a cookie
-	// hand-built with "mmnc" and no "mm" is inert, so the bit is never a
-	// primitive of its own. sess.Sub above is untouched by both — clamping
-	// identity is the one thing this mode does not do.
+	// ANDed with the mode, not copied: a cookie hand-built with "mmnc" alone
+	// is inert. Identity (sess.Sub) is untouched by both.
 	ctx = context.WithValue(ctx, memberPreviewNoCredCtxKey{}, sess.MemberMode && sess.MemberModeNoCredential)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
 
-// principalCtxKey is the context key for the human SSO principal.
-// Unexported: use PrincipalFromContext.
+// principalCtxKey is the context key for the human SSO principal; use PrincipalFromContext.
 type principalCtxKey struct{}
 
-// emailCtxKey is the context key for the session's email claim.
-// Unexported: use EmailFromContext.
+// emailCtxKey is the context key for the session's email claim; use EmailFromContext.
 type emailCtxKey struct{}
 
-// nameCtxKey is the context key for the session's display-name claim.
-// Unexported: use NameFromContext.
+// nameCtxKey is the context key for the session's display-name claim; use NameFromContext.
 type nameCtxKey struct{}
 
-// roleCtxKey is the context key for the session's derived role.
-// Unexported: use RoleFromContext.
+// roleCtxKey is the context key for the session's derived role; use RoleFromContext.
 type roleCtxKey struct{}
 
-// groupsCtxKey is the context key for the session's login-time group snapshot.
-// Unexported: use GroupsFromContext.
+// userTypeCtxKey is the context key for the session's user type; use UserTypeFromContext.
+type userTypeCtxKey struct{}
+
+// stampedUserTypeCtxKey is the context key for the sign-in type; use StampedUserTypeFromContext.
+type stampedUserTypeCtxKey struct{}
+
+// userViewDroppedCtxKey is the context key for the dropped view's type; use UserViewDroppedFromContext.
+type userViewDroppedCtxKey struct{}
+
+// groupsCtxKey is the context key for the session's login-time group snapshot; use GroupsFromContext.
 type groupsCtxKey struct{}
 
-// groupsTruncatedCtxKey is the context key for that snapshot's PF-26
-// truncation bit. Unexported: use GroupsTruncatedFromContext.
+// groupsTruncatedCtxKey is the context key for that snapshot's PF-26 truncation bit; use GroupsTruncatedFromContext.
 type groupsTruncatedCtxKey struct{}
 
-// memberModeCtxKey is the context key for the session's "view as member" flag.
-// Unexported: use MemberModeFromContext.
+// memberModeCtxKey is the context key for the session's "view as member" flag; use MemberModeFromContext.
 type memberModeCtxKey struct{}
 
-// memberPreviewNoCredCtxKey is the context key for the no-credential posture of
-// that flag. Unexported: use MemberPreviewNoCredential.
+// memberPreviewNoCredCtxKey is the context key for the no-credential posture of that flag; use MemberPreviewNoCredential.
 type memberPreviewNoCredCtxKey struct{}
 
-// expiryCtxKey is the context key for the session's expiry.
-// Unexported: use ExpiryFromContext.
+// expiryCtxKey is the context key for the session's expiry; use ExpiryFromContext.
 type expiryCtxKey struct{}

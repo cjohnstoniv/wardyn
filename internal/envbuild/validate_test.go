@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// Regression for the envbuild SSRF/RCE finding: caller-supplied git URLs/refs
+// The envbuild SSRF/RCE rule: caller-supplied git URLs/refs
 // flow into envbuilder (ENVBUILDER_GIT_URL/REF). Only https://git:// remote
 // clones are allowed; file://, ssh://, scp-like, and ext:: transports — and any
 // control chars / leading-dash refs — must be rejected.
@@ -44,7 +44,7 @@ func TestValidateBuildInput(t *testing.T) {
 		// Input-length bound.
 		{"over-long repo url", BuildSpec{RepoURL: "https://example.com/" + strings.Repeat("a", maxBuildInputLen), OutputImageTag: "x"}, true},
 
-		// B9-F9: the output tag is a caller-supplied string that reaches
+		// the output tag is a caller-supplied string that reaches
 		// envbuilder's environment and the finalize Dockerfile, and the
 		// generated-files entry point has run it through validateGeneratedTag
 		// since it was written. The git path bounded its LENGTH and nothing

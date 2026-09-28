@@ -17,21 +17,36 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Config is the wardyn-proxy sidecar configuration, loaded from a JSON file
-// via the -config flag. The run token authenticates the sidecar to the
+// via the -config flag, or from stdin on Docker. The run token authenticates the sidecar to the
 // control plane's internal endpoints (verified via identity.Provider.Verify
 // with audience "wardyn-internal"); it is NOT a secret usable outside the
-// platform. No third-party secrets ever appear here — injected credentials
-// are minted at startup from the broker and held only in proxy memory.
+// platform. Injected PER-RUN credential VALUES never appear here — each is
+// minted at startup from the broker and held only in proxy memory
+// (InjectionConfig below carries a grant_id, never a value). One exception:
+// UpstreamProxyURL below can embed the OPERATOR's own corporate-proxy
+// credential, a genuine third-party secret that IS part of this struct (see
+// its own doc). RunToken and MITMCAKeyPEM likewise ARE part of this struct,
+// so they persist wherever the sidecar's own rendered config does: the
+// proxy's memory, and the run's sealed run_proxy_configs row (#1176), which a
+// revive rebuilds the proxy from and which is deleted when the run goes
+// terminal. No container holds it at rest.
 type Config struct {
 	// RunID is the governed run this sidecar serves.
 	RunID uuid.UUID `json:"run_id"`
-	// ControlPlaneURL is the base URL of wardynd (e.g. "http://wardynd:8080").
+	// ControlPlaneURL is the base URL of wardynd's internal TLS listener (e.g.
+	// "https://wardynd:8443"). http:// is refused unless the host is loopback
+	// (hoptls.CheckURL).
 	ControlPlaneURL string `json:"control_plane_url"`
+	// ControlPlaneCAPEM is wardynd's internal CA (internal/hoptls), the ONLY
+	// root this sidecar trusts for control-plane calls. Required with an
+	// https ControlPlaneURL.
+	ControlPlaneCAPEM string `json:"control_plane_ca_pem,omitempty"`
 	// RunToken authenticates internal calls (Authorization: Bearer <token>).
 	RunToken string `json:"run_token"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
@@ -86,9 +101,13 @@ type Config struct {
 	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
 	// confinement the credential does not have. Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
-	// ADOGrants is the run's per-person Azure DevOps grant, which drives the
-	// REST gate (ado_gate.go, ado_grants.go). Empty == the gate is off.
-	ADOGrants []ADOGrantConfig `json:"ado_grants,omitempty"`
+	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
+	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
+	// per sidecar: the gate is keyed by host, and every organisation shares
+	// dev.azure.com, so a second grant could only overwrite the first one's
+	// organisation pin. LoadConfigBytes still reads the older ado_grants list,
+	// and refuses one with more than one entry.
+	ADOGrant *ADOGrantConfig `json:"ado_grant,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -103,9 +122,11 @@ type Config struct {
 	// — the org's HTTP CONNECT proxy is the only way out (and is frequently a
 	// PRIVATE address). When set, forward-egress dials are issued as
 	// CONNECT <real-host> to this proxy; control-plane calls to wardynd never
-	// traverse it. Any embedded credential is held proxy-memory-only (like
-	// RunToken) and masked from all decision-log/stdout output. Empty => direct
-	// dial (backward-compatible).
+	// traverse it. Any embedded credential persists wherever this struct's own
+	// rendered config does — proxy memory while running, and the run's sealed
+	// run_proxy_configs row until the run goes terminal (#1176; like RunToken,
+	// above) — and is masked from all decision-log/stdout output. Empty =>
+	// direct dial (backward-compatible).
 	//
 	// SOURCE vs TRANSPORT: the only source is the persisted site-config
 	// (upstream_proxy_secret_ref, admin-authored via PUT /api/v1/site-config).
@@ -113,8 +134,8 @@ type Config struct {
 	// (internal/api/runs_dispatch.go) through resolveUpstreamProxyURL (which
 	// lives in internal/api/runs_bedrock.go), audited as
 	// run.upstream_proxy.resolve on resolve success/failure, and merely
-	// TRANSPORTED here by the run's ProxyConfig (WARDYN_PROXY_CONFIG_JSON,
-	// internal/runner/docker/driver.go).
+	// TRANSPORTED here by the run's ProxyConfig (on the sidecar's stdin on
+	// Docker, internal/runner/docker/driver_proxy_revive.go).
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
 	// UpstreamProxyNoProxy is the upstream's BYPASS list
 	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain
@@ -136,9 +157,9 @@ type Config struct {
 	UpstreamProxyNoProxy []string `json:"upstream_proxy_no_proxy,omitempty"`
 	// TrustedCAPEM is the OPERATOR's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
 	// wardynd's Config.TrustedCAPEM), forwarded verbatim per run so THIS
-	// sidecar's own outbound TLS (the forward/egress transport AND the
-	// control-plane transport, see NewServer) additionally trusts a corporate
-	// TLS-inspecting middlebox on the path to the real upstream. Control-plane
+	// sidecar's forward/egress transport additionally trusts a corporate
+	// TLS-inspecting middlebox on the path to the real upstream. Never the
+	// control-plane transport, which trusts ControlPlaneCAPEM alone. Control-plane
 	// authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM above — the
 	// sandbox cannot set it. Empty (the default) => system roots only,
 	// byte-identical to today.
@@ -168,6 +189,12 @@ type Config struct {
 	// route's own generic detail, plus the below-policy clause either way
 	// (proxyLLMRequest).
 	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
+	// Unattended marks a run nobody is driving (a non-interactive task run).
+	// A push that touches a push_rules.require_review_paths entry is then
+	// refused outright rather than held for a decision nobody is waiting to
+	// make (push_hold.go). Control-plane-authored at dispatch; false (the
+	// default) holds.
+	Unattended bool `json:"unattended,omitempty"`
 }
 
 const (
@@ -205,11 +232,25 @@ func LoadConfig(path string) (*Config, error) {
 // handshake anywhere. A key this binary cannot honour must fail the sidecar's
 // startup loudly instead of being dropped on the floor.
 func LoadConfigBytes(b []byte) (*Config, error) {
-	var c Config
+	// LegacyADOGrants is the ado_grants list an older control plane writes in
+	// place of ado_grant. It is read here and nowhere else.
+	var raw struct {
+		Config
+		LegacyADOGrants []ADOGrantConfig `json:"ado_grants"`
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	c := raw.Config
+	switch {
+	case len(raw.LegacyADOGrants) > 1:
+		return nil, fmt.Errorf("config: ado_grants carries %d grants; a sidecar holds one Azure DevOps grant", len(raw.LegacyADOGrants))
+	case len(raw.LegacyADOGrants) == 1 && c.ADOGrant != nil:
+		return nil, fmt.Errorf("config: ado_grants and ado_grant are both set; a sidecar holds one Azure DevOps grant")
+	case len(raw.LegacyADOGrants) == 1:
+		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
@@ -257,6 +298,15 @@ func (c *Config) applyDefaultsAndValidate() error {
 	}
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
+	}
+	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.ControlPlaneURL)), "https://") && c.ControlPlaneCAPEM == "" {
+		return fmt.Errorf("config: an https control_plane_url needs control_plane_ca_pem — control-plane calls trust wardynd's internal CA only, never the system roots")
+	}
+	if _, err := hoptls.ClientConfig(c.ControlPlaneCAPEM); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	// Validate (but do not retain) the upstream proxy URL: fail fast on a bad
 	// scheme/host/port. The live proxy re-parses it in NewServer.
@@ -324,9 +374,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
 	// connection the proxy terminates. Without the MITM CA nothing terminates,
 	// and the covered hosts would degrade to a credential-less tunnel no gate
-	// sees — so a config carrying ado_grants without the CA is refused at boot.
-	if len(c.ADOGrants) > 0 && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
-		return fmt.Errorf("config: ado_grants requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	// sees — so a config carrying ado_grant without the CA is refused at boot.
+	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these

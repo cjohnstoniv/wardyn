@@ -12,11 +12,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   extractSignedIn,
   serverConfirmsCapture,
+  serverConfirmsProviderCapture,
   watchForCapture,
   CAPTURE_POST_RUN_GRACE_MS,
   CAPTURE_WATCH_MAX_MS,
 } from "./capture-confirm";
-import type { AgentRun, SetupStatus } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 
 const getRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { getRun: (...a: unknown[]) => getRunMock(...a) } }));
@@ -94,10 +96,39 @@ describe("serverConfirmsCapture — strict (Codex #9)", () => {
   });
 });
 
+// #993: the provider row's own source_run_id — the server's stamp from the
+// capturing run's token — proves THIS sign-in without the best-effort audit row.
+describe("serverConfirmsProviderCapture — source_run_id (#993)", () => {
+  const row = (state: string, source_run_id?: string) =>
+    status({ provider_access: [{ provider: "bedrock-prod", state, source_run_id }] });
+
+  it("confirms a matching capture with no audit row (spooled)", () => {
+    expect(serverConfirmsProviderCapture(row("live", "run-123"), "bedrock-prod", false, "run-123")).toBe(true);
+    expect(serverConfirmsProviderCapture(row("expiring", "run-123"), "bedrock-prod", false, "run-123")).toBe(true);
+  });
+
+  it("refuses another run's capture even when this run's audit row is there", () => {
+    expect(serverConfirmsProviderCapture(row("live", "run-000-earlier"), "bedrock-prod", true, "run-123")).toBe(false);
+    expect(serverConfirmsProviderCapture(row("live", "run-123"), "bedrock-prod", true, null)).toBe(false);
+  });
+
+  it("refuses a row with no source_run_id unless this run's audit row is there", () => {
+    expect(serverConfirmsProviderCapture(row("live"), "bedrock-prod", false, "run-123")).toBe(false);
+    expect(serverConfirmsProviderCapture(row("live"), "bedrock-prod", true, "run-123")).toBe(true);
+  });
+
+  it("refuses a matching capture the provider cannot use", () => {
+    for (const state of ["expired_signin", "not_configured", "not_applicable"]) {
+      expect(serverConfirmsProviderCapture(row(state, "run-123"), "bedrock-prod", true, "run-123")).toBe(false);
+    }
+    expect(serverConfirmsProviderCapture(row("live", "run-123"), "other", true, "run-123")).toBe(false);
+  });
+});
+
 describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    getRunMock.mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    getRunMock.mockReset().mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     listAuditMock.mockReset().mockResolvedValue([]);
     getSetupStatusMock.mockReset().mockResolvedValue(status({}));
   });
@@ -106,7 +137,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   });
 
   it("confirms and stops the moment the audit hint fires and /setup/status agrees", async () => {
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
       status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
     );
@@ -153,7 +184,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   });
 
   it("expires CAPTURE_POST_RUN_GRACE_MS after the run goes terminal", async () => {
-    getRunMock.mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "COMPLETED" }));
     listAuditMock.mockResolvedValue([]); // never hinted
     getSetupStatusMock.mockResolvedValue(status({})); // never confirms
     const controller = new AbortController();
@@ -163,7 +194,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   });
 
   it("expires at the absolute CAPTURE_WATCH_MAX_MS even under continuous activity", async () => {
-    getRunMock.mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun); // never terminal
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" })); // never terminal
     listAuditMock.mockResolvedValue([{ id: "a1" }]); // hinted every tick — busy, but never confirming
     getSetupStatusMock.mockResolvedValue(status({})); // never confirms
     const controller = new AbortController();
@@ -196,7 +227,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   // and to `visibilitychange`; the run's own state transition needs no
   // separate wiring, since the loop already re-reads `getRun` every tick).
   it("a wake() tick ends the wait immediately, without advancing any timer", async () => {
-    getRunMock.mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     let auditCalls = 0;
     listAuditMock.mockImplementation(async () => {
       auditCalls += 1;

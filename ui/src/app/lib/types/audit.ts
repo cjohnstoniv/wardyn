@@ -28,6 +28,9 @@ export interface AuditEvent {
   // GET /api/v1/audit/chain/verify, never by reading these back off a row.
   prev_hash?: string;
   row_hash?: string;
+  // The enrolled device that forwarded this row (AuditEvent.DeviceID), read
+  // from the stored row; absent on rows this control plane wrote itself.
+  device_id?: string;
 }
 
 // Tool-rule decisions
@@ -69,67 +72,15 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
   return effect ? { effect, source } : null;
 }
 
-// rule_source console labels (6a)
-// rule_source has ONE other reader in the console: this function, which covers
-// every NON-tool-rule value (a real egress/approval/guard decision, not a
-// policy-answered tool call — those are toolRuleDecision's, immediately
-// above, and this function returns null for them so the two callers never
-// double-label one row). Pure and side-effect-free like toolRuleDecision, for
-// the same reason: RuleSourceChip (wardyn/audit-decision.tsx) renders it, and
-// lib/ must not import components/.
-interface RuleSourceLabel {
-  label: string;
-  tone: "neutral" | "info" | "danger";
-}
-
-// ruleSourceLabel translates a wire rule_source value into console copy.
-// Unknown-but-present values fall back to the raw string rather than invented
-// copy (CONSOLE-RULES §10: never overclaim); callers pass "" or omit the field
-// entirely for "no rule_source" and get null either way.
-export function ruleSourceLabel(source: string): RuleSourceLabel | null {
-  if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
-  if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
-  // Every other policy:* value the proxy emits is a refusal (denied,
-  // default-deny, method, evaluator-error) — the row's outcome column already
-  // says deny; this names WHY at the same weight as the builtin refusals.
-  if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
-  if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
-  // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
-  // refusal: recorded once per run, at proxy construction, to audit the
-  // deliberate SSRF-guard relaxation for the operator's own configured
-  // upstream hop — never a per-request decision. Named BEFORE the generic
-  // builtin:* bucket below (which is refusals only), so it cannot fall into
-  // it and read as a denial that never happened.
-  if (source === "builtin:upstream-proxy") {
-    return { label: "Corp upstream proxy in path", tone: "info" };
-  }
-  // builtin:private-ip is the address-range floor, and it is the one guard an
-  // operator reliably misreads: a private endpoint (a VPC endpoint, an internal
-  // gateway) refused here looks exactly like a policy or an entitlement gap, so
-  // the operator goes to their IAM team about a permission that is fine. Name
-  // the cause on the row — the rest of the family stays generic.
-  if (source === "builtin:private-ip") {
-    return { label: "Refused by a built-in address-range rule, not your policy", tone: "danger" };
-  }
-  // builtin:resolve-failed is the SAME misreading one step earlier: the proxy
-  // never learned an address at all (resolver outage, no such name, no address
-  // records). Under the generic builtin label it reads as a guard hit, and the
-  // operator widens an SSRF control over a DNS outage — so this one names its
-  // cause too, and points at the resolver instead.
-  if (source === "builtin:resolve-failed") {
-    return { label: "Refused because the name did not resolve, not by policy or the address rule", tone: "danger" };
-  }
-  // builtin:* is the proxy's own guard family (dial-failed, gateway-vet-failed,
-  // …) — every remaining value here is a refusal (builtin:upstream-proxy, the
-  // one ALLOW in the family, is handled above and never reaches this line).
-  if (source.startsWith("builtin:")) return { label: "Refused by the built-in guard", tone: "danger" };
-  // brokered:* is every proxy-side brokered lane (git, mint, approvals,
-  // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).
-  if (source.startsWith("brokered:")) return { label: "Brokered", tone: "neutral" };
-  if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
-  if (source.startsWith("egress.decisions.dropped:")) return { label: "Decisions dropped", tone: "neutral" };
-  return { label: source, tone: "neutral" };
-}
+// rule_source console labels (6a): ruleSourceLabel and RuleSourceLabel moved
+// to wardyn/audit-decision.tsx (bundle-split fix, #181) — unlike
+// toolRuleDecision above, RuleSourceChip (audit-decision.tsx) is its ONLY
+// reader; lib/api/audit.ts's egress projection keys on toolRuleDecision alone
+// (see audit.test.ts's 6a negative control) and never called this one. So it
+// carried no lib-must-not-import-components constraint, and living here only
+// hoisted an always-lazy label table (plus #181's five push_* branches) into
+// the eager entry chunk for nothing — see push-content-card.tsx's
+// isPushContentRequest for the identical pattern.
 
 // Run detail supporting shapes (UI-side, projected from audit events)
 export interface CredentialGrant {
@@ -148,7 +99,7 @@ export interface EgressDecision {
   domain: string;
   decision: "allow" | "deny" | "pending";
   bytes?: number;
-  // B3: the approval an `egress.pending` row raised (the audit row's own
+  // B3: the approval an `egress.hold` row raised (the audit row's own
   // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow/deny rows and on
   // an older trail. It exists because a pending ROW is history, not state — the
   // hold it records may have been approved a minute later — so this is the only
@@ -194,11 +145,18 @@ export interface RunEnding {
    */
   detail?: string;
   /**
-   * For `credential`: the DECLARED mechanism of the run that was refused
-   * (`data.mechanism` — "bedrock_sso", "anthropic_api_key", …), so a surface
-   * offering a repair binds to the failed run's own lane rather than to
-   * whatever the viewer's claude-code row says today. Absent on an older
-   * trail, which reads as "not a lane this console has a door for".
+   * For `credential`: the model provider the refusal names (`data.provider`,
+   * #532). A provider run's door is keyed by this alone (#543); `mechanism`
+   * below is not read when it is set.
+   */
+  provider?: string;
+  /**
+   * For `credential` with no `provider`: the DECLARED legacy mechanism of the
+   * run that was refused (`data.mechanism` — "bedrock_sso",
+   * "anthropic_api_key", …), so a surface offering a repair binds to the
+   * failed run's own lane rather than to whatever the viewer's claude-code row
+   * says today. Absent on an older trail, which reads as "not a lane this
+   * console has a door for".
    */
   mechanism?: string;
 }

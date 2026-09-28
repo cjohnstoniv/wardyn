@@ -29,7 +29,7 @@ import (
 // recorded run never used is now DENIED.
 //
 // Two things are proven at different layers, honestly:
-//   - The profile ENDPOINT (POST /runs/{id}/profile) is exercised LIVE and must
+//   - The profile ENDPOINT (POST /runs/{id}/profile/synthesize) is exercised LIVE and must
 //     return a STRUCTURALLY tightened proposal (allow_all forced off,
 //     first_use_approval forced on). Its synthesized ALLOWLIST is derived from the
 //     run's egress-decision audit; in host-mode on a managed-VM docker those
@@ -45,7 +45,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 	ctx := context.Background()
 	best := h.bestInstalledClass(ctx)
 
-	// ── 1. OPEN run: allow-all egress, contacts exactly one host (github.com). ──
+	// 1. Open run: allow-all egress, contacts exactly one host (github.com).
 	openWS := h.seedScriptWorkspace("rec-open", recOpenProbe)
 	openSpec := types.RunPolicySpec{
 		MinConfinementClass: types.ConfinementClass(best),
@@ -65,7 +65,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 		t.Fatalf("open run did not reach github.com (code=%q); recording is meaningless without recorded behavior", code)
 	}
 
-	// ── 2. SYNTHESIZE a profile from the recording (live endpoint). ──
+	// 2. Synthesize a profile from the recording (live endpoint).
 	prof := h.synthesizeProfile(t, openRun.ID)
 	if prof.Kind != "profile_proposal" {
 		t.Fatalf("expected a profile_proposal, got kind=%q", prof.Kind)
@@ -87,7 +87,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 			"in internal/recordmode; the RELAUNCH below proves confinement to the recorded-behavior allowlist directly.")
 	}
 
-	// ── 3. RELAUNCH from the recorded-behavior profile + prove confinement. ──
+	// 3. Relaunch from the recorded-behavior profile + prove confinement.
 	// The reusable profile = the recorded allowlist ([github.com]); recordmode
 	// never synthesizes mounts, so the operator merges the workspace mount back
 	// (mounts are operator-authored); first_use_approval OFF for an unattended
@@ -202,12 +202,12 @@ else echo "PASS canary example.com blocked (rc=$crc) — confined to the recorde
 	return err == nil, string(bytes.TrimSpace(out))
 }
 
-// synthesizeProfile calls POST /api/v1/runs/{id}/profile (Recording Mode).
+// synthesizeProfile calls POST /api/v1/runs/{id}/profile/synthesize (Recording Mode).
 func (h *harness) synthesizeProfile(t *testing.T, id uuid.UUID) profileProposal {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	status, raw, err := h.authedJSON(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/profile", nil)
+	status, raw, err := h.authedJSON(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/profile/synthesize", nil)
 	if err != nil {
 		t.Fatalf("POST profile: %v", err)
 	}

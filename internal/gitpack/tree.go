@@ -14,16 +14,9 @@ import (
 	"strings"
 )
 
-// modeTree and modeFormat are git's S_ISDIR: a tree entry is a directory when
-// the format bits of its mode are S_IFDIR, whatever the remaining bits say.
-//
-// `git ls-tree` prints "040000" and a tree object normally stores "40000", but
-// git parses the digits and MASKS them, so "040000", "40001", "40644" and
-// "47777" are all directories it recurses into. Neither matching the string
-// "40000" nor comparing the whole number for equality sees that: the entry
-// became a leaf, and every path beneath it vanished from the answer. Nothing
-// downstream covers the gap either — receive.fsckObjects rejects "040000" as
-// zeroPaddedFilemode but lets "40001" through with a badFilemode warning.
+// modeTree and modeFormat are git's S_ISDIR: git MASKS the format bits, so
+// "040000", "40001", "40644" and "47777" are all directories — matching the
+// string "40000" or the whole number would miss that.
 const (
 	modeTree    = 0o040000
 	modeRegular = 0o100000
@@ -36,13 +29,8 @@ const (
 const ModeUncarried = "40000"
 
 // Opaque reports whether a checkout may hold paths beneath c.Path that no
-// Change names: a directory whose tree the pack does not carry, a symlink, or a
-// submodule. Anything that is not a regular file counts — git checks out every
-// mode it cannot classify as a submodule pointer — and so does a mode that does
-// not parse, because the safe answer to "what is under this?" is "anything".
-//
-// A rule about a path beneath an opaque entry cannot be decided from the pack,
-// so a deny rule must treat one as matched rather than as absent.
+// Change names (an uncarried directory, symlink, or submodule). A rule about
+// a path beneath an opaque entry must treat it as matched, not absent.
 func (c Change) Opaque() bool {
 	m, err := strconv.ParseUint(c.Mode, 8, 32)
 	return err != nil || m&modeFormat != modeRegular
@@ -59,13 +47,9 @@ func (e treeEntry) isTree() bool {
 	return err == nil && m&modeFormat == modeTree
 }
 
-// parseTree reads a tree object: "<mode> <name>\0<object-id>" repeated, with the
-// id raw rather than hex and the whole thing unterminated.
-//
-// The name checks are not decoration. A path is what a deny rule matches, so a
-// name carrying a slash or a "." segment would let a crafted tree describe a
-// path other than the one it occupies. git refuses to write such a tree; this
-// refuses to read one.
+// parseTree reads a tree object: "<mode> <name>\0<object-id>" repeated. The
+// name checks are not decoration: a slash or "." segment would let a
+// crafted tree describe a path other than the one it occupies.
 func parseTree(data []byte, hashLen int) ([]treeEntry, error) {
 	var out []treeEntry
 	for len(data) > 0 {
@@ -123,16 +107,9 @@ type commitInfo struct {
 	parents []string
 }
 
-// parseCommit reads the headers of a commit object, which run to the first blank
-// line.
-//
-// Git's own parser takes the FIRST tree header and stops its parent loop at the
-// first header that is not a parent, so a second "tree" line — or a "parent"
-// line after the author — is a header git never sees while a last-wins reader
-// takes it as authoritative. A commit shaped that way is hostile by
-// construction and no git writes one, so it is refused rather than reconciled:
-// the two sides disagreeing about what a push contains is the one answer this
-// package must never give.
+// parseCommit reads the headers of a commit object, to the first blank
+// line. A second "tree" line or a late "parent" line is a header git never
+// sees, so such a commit is refused rather than reconciled.
 func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 	var c commitInfo
 	inParentBlock := true
@@ -204,10 +181,9 @@ func (i *index) peel(oid string) (string, bool) {
 	return "", false
 }
 
-// coverCommands refuses a request whose ref updates the pack does not account
-// for. A push that creates a ref at an object the receiving side already holds
-// sends an empty pack: there is nothing wrong with it, and nothing was read
-// about what that ref now points at either.
+// coverCommands refuses a request whose ref updates the pack does not
+// account for (a push creating a ref at an object the receiving side already
+// holds sends an empty pack, so nothing was read about what it now points at).
 func (i *index) coverCommands(cmds []Command) error {
 	for _, c := range cmds {
 		if isZeroOID(c.New) {
@@ -222,14 +198,9 @@ func (i *index) coverCommands(cmds []Command) error {
 }
 
 // changes is the union of what every commit in the pack introduces, and the
-// commits it builds on. A commit held marks true is one the receiving side
-// already has (Settle): it introduces nothing, and is a base.
-//
-// Every commit, not only the ones the commands name: a push of three commits
-// carries all three, and diffing only the tip against its parent would miss what
-// the two below it introduced — a file added in the first commit and left alone
-// afterwards would go unreported. The union is walked in object-id order so that
-// the same pack always produces the same answer.
+// commits it builds on. Every commit is walked, not only the ones the
+// commands name, in object-id order so the same pack always produces the
+// same answer.
 func (i *index) changes(held map[string]bool) ([]Change, []string, error) {
 	w := newWalker(i)
 	w.held = held
@@ -247,26 +218,16 @@ func (i *index) changes(held map[string]bool) ([]Change, []string, error) {
 	}
 	slices.SortFunc(w.out, func(a, b Change) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Mode, b.Mode),
-			cmp.Compare(a.Size, b.Size), strings.Compare(a.OID, b.OID))
+			cmp.Compare(a.size, b.size), strings.Compare(a.OID, b.OID))
 	})
 	return w.out, slices.Sorted(maps.Keys(w.bases)), nil
 }
 
-// Settle is the same answer with the history the receiving side already holds
-// taken out. held reports whether one commit the pack carries is already in
-// history the caller trusts. A commit it holds introduces nothing and neither
-// does anything beneath it, since its parents are in that history too; a
-// commit built on one is diffed against it from the pack's own trees, and it
-// joins Bases. Object ids are content addresses, so the copy the pack carries
-// is the one the receiving side holds.
-//
-// held is asked as little as possible. A commit nothing in the pack builds on
-// is what the push is for and is never asked about. A commit with no parent in
-// the pack is asked first: when it is not held, nothing above it is either, so
-// a push of only new commits costs one question. Then the pack is walked down
-// from its tips, and a held commit answers for everything beneath it. A commit
-// once found new is never taken as held. An error from held is returned with an
-// empty Result.
+// Settle is the same answer with the history the receiving side already
+// holds taken out. held reports whether one commit the pack carries is
+// already in trusted history; a held commit introduces nothing, and a
+// commit built on one is diffed against it and joins Bases. held is asked as
+// little as possible, and a commit once found new is never taken as held.
 func (r Result) Settle(held func(commit string) (bool, error)) (Result, error) {
 	if r.idx == nil {
 		return r, nil
@@ -360,23 +321,15 @@ func (r Result) Settle(held func(commit string) (bool, error)) (Result, error) {
 type walker struct {
 	idx  *index
 	seen map[Change]bool
-	// walked is every (prefix, tree) pair already expanded, for the duration of
-	// one inspection. Trees are a DAG: a pack of 64 levels that each name the
-	// level below twice is 3 KB of objects and 2^65 expansions, and maxTreeDepth
-	// bounds the depth of that walk, not its width. The PREFIX belongs in the key
-	// because the same subtree reached by two paths contributes leaves under
-	// both, and dropping it would under-report. With it the skip is exact:
-	// expanding one tree under one prefix is a pure function of that pair — the
-	// depth is the prefix's component count — and leaf already deduplicates, so
-	// the second expansion could only re-emit what the first did.
+	// walked is every (prefix, tree) pair already expanded — trees are a DAG,
+	// and this memo bounds the width maxTreeDepth does not.
 	walked map[string]bool
-	// nodes counts the tree ENTRIES walked, against maxTreeNodes. The memo
-	// collapses a repeat of the same path; it cannot collapse b^d distinct paths
-	// through d levels of fan-out, and a fan-out whose subtrees resolve to no
-	// leaves never reaches maxChanges either. Entries rather than one unit per
-	// expansion, because every entry costs a lookup whether or not the pack
-	// carries what it names — charging per expansion left width free, and a
-	// wide-and-deep pack spent minutes inside the ceiling.
+	// diffed is every (prefix, old tree, new tree) comparison already made,
+	// a skip exact for the same reason (a merge otherwise re-compares every
+	// directory each parent already compared, #254).
+	diffed map[string]bool
+	// nodes counts the tree ENTRIES walked, against maxTreeNodes, charged
+	// per entry since every entry costs a lookup regardless of expansion.
 	nodes int
 	out   []Change
 	// bases are the parents the pack's commits name and the pack does not
@@ -386,22 +339,21 @@ type walker struct {
 }
 
 func newWalker(i *index) *walker {
-	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}, bases: map[string]bool{}}
+	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}, diffed: map[string]bool{},
+		bases: map[string]bool{}}
 }
 
 // charge accounts for n tree entries about to be walked.
 func (w *walker) charge(n int) error {
 	if w.nodes += n; w.nodes > maxTreeNodes {
-		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrUninspectable, maxTreeNodes)
+		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrTooLarge, maxTreeNodes)
 	}
 	return nil
 }
 
-// introduced reports what one commit brings in: a diff against every parent the
-// pack carries, or — when it carries none — the commit's whole tree. See the
-// package comment for why the second case over-reports and why that is the
-// direction to err in. A parent the pack does not carry is recorded as a base,
-// and so is a held one, which is also diffed against.
+// introduced reports what one commit brings in: a diff against every parent
+// the pack carries, or the commit's whole tree when it carries none
+// (over-reporting is the direction to err in).
 func (w *walker) introduced(c commitInfo) error {
 	diffed := false
 	for _, p := range c.parents {
@@ -428,17 +380,17 @@ func (w *walker) introduced(c commitInfo) error {
 }
 
 // diff reports the entries the new tree adds or changes. Removals are not
-// reported: the enumerated case has no pre-image to notice them in, and one
-// answer that is sometimes richer than the other is worse than one that always
-// means the same thing.
-//
-// An entry whose object id matches the pre-image's at the same name is skipped,
-// and that skip is exact: this is the one place the pack proves a directory it
-// does not carry is the one that stood there before.
+// reported: a sometimes-richer answer is worse than one that always means
+// the same thing.
 func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	if oldOID == newOID {
 		return nil
 	}
+	key := prefix + "\x00" + oldOID + "\x00" + newOID
+	if w.diffed[key] {
+		return nil
+	}
+	w.diffed[key] = true
 	if depth > maxTreeDepth {
 		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
 	}
@@ -525,17 +477,13 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 }
 
 func (w *walker) leaf(path string, e treeEntry) error {
-	return w.record(Change{Path: path, Mode: e.mode, Size: w.idx.blobSize(e.oid), OID: e.oid})
+	return w.record(Change{Path: path, Mode: e.mode, size: w.idx.blobSize(e.oid), OID: e.oid})
 }
 
-// uncarried reports a directory whose tree object the pack does not hold. Its
-// contents are a tree the receiving side already stores, but nothing in the
-// pack says it stood at THIS path before: a directory moved or copied onto a
-// new path, or a commit whose whole root is an older tree, looks exactly like
-// one left untouched. So it is reported, at its own path — the root is "" —
-// as an opaque entry carrying its tree's id, never skipped.
+// uncarried reports a directory whose tree object the pack does not hold, as
+// an opaque entry at its own path (root ""), never skipped.
 func (w *walker) uncarried(prefix, oid string) error {
-	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, Size: -1, OID: oid})
+	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, size: -1, OID: oid})
 }
 
 func (w *walker) record(c Change) error {
@@ -543,7 +491,7 @@ func (w *walker) record(c Change) error {
 		return nil
 	}
 	if len(w.out) >= maxChanges {
-		return fmt.Errorf("%w: the push touches more than %d paths", ErrUninspectable, maxChanges)
+		return fmt.Errorf("%w: the push touches more than %d paths", ErrTooLarge, maxChanges)
 	}
 	w.seen[c] = true
 	w.out = append(w.out, c)

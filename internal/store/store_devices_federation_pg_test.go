@@ -56,7 +56,7 @@ func TestPG_Devices_IngestRefusesARowUnderAnOrgRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range got {
-		if g.Actor == "ceo@corp.example" {
+		if strings.HasSuffix(g.Actor, "ceo@corp.example") {
 			t.Errorf("a device-forwarded row sits under org run %s as %s %q, action %q, source_ip %q", run.ID, g.ActorType, g.Actor, g.Action, g.SourceIP)
 		}
 	}
@@ -251,7 +251,7 @@ func TestPG_Devices_IngestForARevokedDeviceIsErrDeviceRevoked(t *testing.T) {
 	}
 }
 
-// ─── every accepted row re-checks; everything else is refused ────────────────
+// every accepted row re-checks; everything else is refused
 
 // storedFederation is one stored federated row as a verifier sees it: the
 // device's claim recomputed with store.FederatedClaimHashSQL, and the
@@ -272,7 +272,7 @@ func storedFederated(t *testing.T, pool *pgxpool.Pool, deviceID uuid.UUID) []sto
 		       COALESCE(e.prev_hash, '') = COALESCE((SELECT p.row_hash FROM audit_events p
 		                                             WHERE p.seq < e.seq AND p.row_hash IS NOT NULL ORDER BY p.seq DESC LIMIT 1), '')
 		FROM audit_events e WHERE e.actor = $1 ORDER BY e.seq`
-	rows, err := pool.Query(context.Background(), q, "federation:"+deviceID.String())
+	rows, err := pool.Query(context.Background(), q, store.FederatedActor(deviceID, "federation:"+deviceID.String()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,6 +429,152 @@ func TestPG_Devices_RowChainedOnASupersededHeadIsRefused(t *testing.T) {
 	}
 }
 
+// A laptop table reset that restarts its seq (TRUNCATE ... RESTART IDENTITY, a
+// restore) reuses seqs this organisation already recorded. The new chain is a
+// chain reset accepted in full, never rows dropped as a re-send; its own
+// re-send is still a no-op; and a rewrite of held history is refused even when
+// every hash in it verifies.
+func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	d := federationDevice(t, st)
+	ingest := func(rows ...types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+		return st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+	}
+	held := func() (n int) {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE data->'device_origin'->>'device_id' = $1`,
+			d.ID.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	a1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
+	a2 := federationRow(t, pool, d, a1.RowHash, 2, "a2", json.RawMessage(`{}`))
+	a3 := federationRow(t, pool, d, a2.RowHash, 3, "a3", json.RawMessage(`{}`))
+	if res, err := ingest(a1, a2, a3); err != nil || res.Accepted != 3 {
+		t.Fatalf("first chain: %+v %v", res, err)
+	}
+
+	b1 := federationRow(t, pool, d, "", 1, "b1", json.RawMessage(`{}`))
+	b2 := federationRow(t, pool, d, b1.RowHash, 2, "b2", json.RawMessage(`{}`))
+	if res, err := ingest(b1, b2); err != nil || res.Accepted != 2 || !res.Reset {
+		t.Fatalf("a new chain at reused seqs: %+v %v, want Accepted=2 Reset=true", res, err)
+	}
+	if n := held(); n != 5 {
+		t.Fatalf("organisation holds %d rows for the device, want 5", n)
+	}
+	var cur types.Device
+	if err := pool.QueryRow(ctx, `SELECT last_seq, last_row_hash FROM devices WHERE id = $1`, d.ID).
+		Scan(&cur.LastSeq, &cur.LastRowHash); err != nil {
+		t.Fatal(err)
+	}
+	if cur.LastSeq != 2 || cur.LastRowHash != b2.RowHash {
+		t.Fatalf("recorded head = (%d, %s), want (2, %s)", cur.LastSeq, cur.LastRowHash, b2.RowHash)
+	}
+
+	if res, err := ingest(b1, b2); err != nil || res.Accepted != 0 || res.Reset {
+		t.Fatalf("re-send of the new chain: %+v %v, want a no-op", res, err)
+	}
+	b3 := federationRow(t, pool, d, b2.RowHash, 3, "b3", json.RawMessage(`{}`))
+	if res, err := ingest(b1, b2, b3); err != nil || res.Accepted != 1 || res.Reset {
+		t.Fatalf("the new chain continuing past a seq the old one held: %+v %v, want Accepted=1", res, err)
+	}
+
+	rewritten := federationRow(t, pool, d, b1.RowHash, 2, "b2-rewritten", json.RawMessage(`{}`))
+	if _, err := ingest(b1, rewritten); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a re-chained rewrite of a held row: err = %v, want ErrConflict", err)
+	}
+	if n := held(); n != 6 {
+		t.Fatalf("organisation holds %d rows for the device, want 6", n)
+	}
+}
+
+// A row's claimed PrevHash pointing at a real, already-accepted hash from a
+// DIFFERENT device's own chain is not "any hash that verifies" — a device may
+// only continue ITS OWN chain. Row 2 recomputes fine entirely on its own
+// (verifyClaimedHashes checks each row only against its OWN claimed
+// PrevHash), so the foreign splice is caught solely by the intra-batch chain
+// check: refused whole, the device's cursor unchanged, nothing accepted.
+func TestPG_Devices_IngestBatchSpliceRefused(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+
+	foreign := federationDevice(t, st)
+	fRow := federationRow(t, pool, foreign, "", 1, "f1", json.RawMessage(`{}`))
+	if res, err := st.IngestDeviceAudit(ctx, foreign.ID, testPeer, []types.FederatedAuditEvent{fRow}); err != nil || res.Accepted != 1 {
+		t.Fatalf("seed foreign device row: %+v %v", res, err)
+	}
+
+	d := federationDevice(t, st)
+	row1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
+	// row2 claims to continue from the FOREIGN device's real, already-accepted
+	// hash instead of row1's — a splice, not a rewrite: its own RowHash is
+	// self-consistent (audit_row_hash of ITS claimed PrevHash and fields).
+	row2 := federationRow(t, pool, d, fRow.RowHash, 2, "a2", json.RawMessage(`{}`))
+
+	res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{row1, row2})
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("batch splice onto a foreign device's hash: err = %v, want ErrConflict", err)
+	}
+	if res.Accepted != 0 {
+		t.Fatalf("refused splice batch accepted %d rows, want 0", res.Accepted)
+	}
+	devices, err := st.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dv := range devices {
+		if dv.ID == d.ID && dv.LastSeq != 0 {
+			t.Errorf("device cursor advanced to seq=%d despite the refused splice, want 0", dv.LastSeq)
+		}
+	}
+	if got := storedFederated(t, pool, d.ID); len(got) != 0 {
+		t.Fatalf("refused splice batch stored %d rows for the device, want 0", len(got))
+	}
+}
+
+// A laptop reset that restarts seq and then writes PAST the old cursor. Sent
+// from the old cursor, as a forwarder that trusted seq alone did, the first new
+// row links to nothing the organisation holds and is refused; sent from its
+// genesis, the new chain is a chain reset accepted in full, the rows at reused
+// seqs included. This is why the forwarder resends from genesis when the row
+// at its cursor no longer carries the hash it had acknowledged.
+func TestPG_Devices_AResetPastTheOldCursorIsAcceptedFromItsGenesis(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	d := federationDevice(t, st)
+	ingest := func(rows ...types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+		return st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+	}
+	a1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
+	a2 := federationRow(t, pool, d, a1.RowHash, 2, "a2", json.RawMessage(`{}`))
+	if res, err := ingest(a1, a2); err != nil || res.Accepted != 2 {
+		t.Fatalf("first chain: %+v %v", res, err)
+	}
+
+	b := []types.FederatedAuditEvent{federationRow(t, pool, d, "", 1, "b1", json.RawMessage(`{}`))}
+	for i := 2; i <= 4; i++ {
+		b = append(b, federationRow(t, pool, d, b[i-2].RowHash, int64(i), "b"+strconv.Itoa(i), json.RawMessage(`{}`)))
+	}
+	if _, err := ingest(b[2:]...); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the new chain sent from the old cursor: err = %v, want ErrConflict", err)
+	}
+	if res, err := ingest(b...); err != nil || res.Accepted != 4 || !res.Reset {
+		t.Fatalf("the new chain sent from its genesis: %+v %v, want Accepted=4 Reset=true", res, err)
+	}
+	var lastSeq int64
+	var lastHash string
+	if err := pool.QueryRow(ctx, `SELECT last_seq, last_row_hash FROM devices WHERE id = $1`, d.ID).Scan(&lastSeq, &lastHash); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeq != 4 || lastHash != b[3].RowHash {
+		t.Fatalf("recorded head = (%d, %s), want (4, %s)", lastSeq, lastHash, b[3].RowHash)
+	}
+}
+
 // A retry whose already-ingested prefix was edited is refused: every claimed
 // hash is recomputed, the skipped prefix included.
 func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
@@ -511,5 +657,45 @@ func TestPG_Devices_ConcurrentPushesNeitherDeadlockNorBreakTheChain(t *testing.T
 	}
 	if status, err := st.VerifyAuditChain(ctx); err != nil || !status.OK {
 		t.Fatalf("verify after load: %+v %v", status, err)
+	}
+}
+
+// The laptop's revoked mark lives beside its cursor: set once, kept by a later
+// cursor advance, cleared only by ResetFederation (a re-enrolment), which also
+// returns the cursor and its row hash to 0 and "".
+func TestPG_Devices_FederationRevokedMark(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	if _, err := pool.Exec(ctx, `DELETE FROM org_federation`); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := st.FederationRevoked(ctx); err != nil || revoked {
+		t.Fatalf("no row: revoked=%v err=%v", revoked, err)
+	}
+	if err := st.SetFederationCursor(ctx, 42, "h42"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := st.MarkFederationRevoked(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.SetFederationCursor(ctx, 43, "h43"); err != nil {
+		t.Fatal(err)
+	}
+	if seq, hash, err := st.GetFederationCursor(ctx); err != nil || seq != 43 || hash != "h43" {
+		t.Fatalf("cursor = (%d, %q) err=%v, want (43, h43)", seq, hash, err)
+	}
+	if revoked, err := st.FederationRevoked(ctx); err != nil || !revoked {
+		t.Fatalf("after mark and a cursor advance: revoked=%v err=%v", revoked, err)
+	}
+	if err := st.ResetFederation(ctx); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := st.FederationRevoked(ctx)
+	cur, curHash, cerr := st.GetFederationCursor(ctx)
+	if err != nil || cerr != nil || revoked || cur != 0 || curHash != "" {
+		t.Fatalf("after reset: revoked=%v cursor=(%d, %q) err=%v/%v", revoked, cur, curHash, err, cerr)
 	}
 }

@@ -57,7 +57,7 @@ func extractGeneric(body []byte, yield func(Span)) error {
 // decodeAttachmentBase64 tries every base64 alphabet a real client attachment
 // might arrive in — standard padded, standard unpadded (RawStdEncoding), and
 // the URL-safe alphabet (both padded and unpadded) — before declaring a
-// decode failure (F056). A well-formed attachment that merely used a
+// decode failure. A well-formed attachment that merely used a
 // non-StdEncoding alphabet must not be silently treated as "nothing here".
 func decodeAttachmentBase64(s string) ([]byte, bool) {
 	for _, enc := range []*base64.Encoding{
@@ -70,13 +70,11 @@ func decodeAttachmentBase64(s string) ([]byte, bool) {
 	return nil, false
 }
 
-// extractAnthropicAttachments decodes base64 image/document attachment bytes in
-// the newest message and yields the decoded content as spans (opt-in; off by
-// default). It reports (via the return value) whether any base64 block could
-// not be decoded under ANY known alphabet, so the caller can record an honest
-// Skipped{attachment_decode_error} instead of a silent "inspected clean"
-// (F056) — a malformed body is still tolerated (returns false, nothing to
-// report) the same as before.
+// extractAnthropicAttachments decodes base64 image/document attachment bytes
+// in the newest message and yields the decoded content as spans (opt-in, off
+// by default). Returns whether any block was undecodable under every known
+// alphabet, so the caller can record Skipped{attachment_decode_error}
+// instead of a silent "inspected clean". A malformed body returns false.
 func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 	var req struct {
 		Messages []json.RawMessage `json:"messages"`
@@ -113,10 +111,7 @@ func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 		if (blk.Type == "image" || blk.Type == "document") && blk.Source.Type == "base64" && blk.Source.Data != "" {
 			dec, ok := decodeAttachmentBase64(blk.Source.Data)
 			if !ok {
-				// Genuinely undecodable under every known alphabet: the caller must
-				// NOT record this as a clean scan (F056) — it sets
-				// Skipped{attachment_decode_error} so ShouldBlock/on_scanner_error
-				// still governs whether this refuses the request under block mode.
+				// Undecodable under every known alphabet: not a clean scan.
 				decodeFailed = true
 				continue
 			}
@@ -131,11 +126,10 @@ func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 	return decodeFailed
 }
 
-// extractOpenAIChat yields the text the agent is sending THIS turn for an OpenAI
-// /v1/chat/completions request: every role:"system" message (OpenAI/Codex has
-// no top-level `system` field the way Anthropic does — the system prompt rides
-// as a message, F049) plus the LAST message's content (string or text parts)
-// and its tool_call function arguments (a JSON string we walk). Same
+// extractOpenAIChat yields the text the agent is sending THIS turn for an
+// OpenAI /v1/chat/completions request: every role:"system" message (OpenAI
+// has no top-level `system` field; it rides as a message) plus the LAST
+// message's content and its tool_call function arguments. Same
 // newest-message heuristic and known false-negatives as the Anthropic walker.
 func extractOpenAIChat(body []byte, yield func(Span)) error {
 	var req struct {
@@ -148,11 +142,9 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 	if n == 0 {
 		return nil
 	}
-	// Scan every system-role message (bounded: system messages are rare and
-	// singular in practice — this does not turn into a full-history scan the
-	// way walking every message unconditionally would). The last message is
-	// walked below regardless of its own role, so skip it here to avoid a
-	// double scan when the last message IS the system prompt.
+	// System messages are rare/singular, so this stays bounded. The last
+	// message is walked below regardless of role, so it's excluded here to
+	// avoid a double scan when it IS the system prompt.
 	for i, raw := range req.Messages[:n-1] {
 		var hdr struct {
 			Role    string          `json:"role"`
@@ -175,11 +167,8 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 		return fmt.Errorf("contentscan: parse openai message: %w", err)
 	}
 	prefix := fmt.Sprintf("messages[%d]", n-1)
-	// Content is the same string-or-blocks shape walkTextOrBlocks already walks
-	// for Anthropic: a JSON string, or an array whose text parts yield
-	// `<path>[i].text`. Sharing it also scans an OpenAI part spelled as a
-	// tool_result/tool_use block -- a STRICT superset of the OpenAI-only walker,
-	// which read `text` off every part type-blind (walkBlock now does too).
+	// Shares Anthropic's walkTextOrBlocks (string or blocks), which is a
+	// strict superset: it also scans a tool_result/tool_use-shaped part.
 	walkTextOrBlocks(m.Content, prefix+".content", yield)
 	for i, tc := range m.ToolCalls {
 		args := tc.Function.Arguments
@@ -187,8 +176,8 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 			continue
 		}
 		path := fmt.Sprintf("%s.tool_calls[%d].function.arguments", prefix, i)
-		// arguments is a JSON-encoded string; walk its string leaves, or scan it
-		// verbatim if it is not valid JSON.
+		// arguments is a JSON-encoded string: walk its leaves, or scan it
+		// verbatim if not valid JSON.
 		if json.Valid([]byte(args)) {
 			walkJSONStrings(json.RawMessage(args), path, yield)
 		} else {
@@ -198,14 +187,12 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 	return nil
 }
 
-// extractAnthropicMessages yields the text the agent is sending THIS turn: the
-// system prompt and the LAST message in messages[] (Anthropic orders messages
-// oldest->newest, so the newest turn — where a freshly-pasted secret or a
-// tool_result of a just-cat'd file lands — is the final element). Scanning only
-// the newest message bounds cost while covering the primary inadvertent-leak
-// paths. KNOWN false-negatives (documented in threatmodel §5.1a): a first request
-// that seeds multiple prior messages, a turn that appends >1 new message, a secret
-// split across turns, and base64 image/document attachment bytes (skipped here).
+// extractAnthropicMessages yields the text the agent is sending THIS turn:
+// the system prompt and the LAST message in messages[] (oldest->newest, so
+// the newest turn is the final element). Scanning only the newest message
+// bounds cost. KNOWN false-negatives (threatmodel §5.1a): a first request
+// seeding multiple prior messages, a turn appending >1 new message, a secret
+// split across turns, and base64 attachment bytes (skipped here).
 func extractAnthropicMessages(body []byte, yield func(Span)) error {
 	var req struct {
 		System   json.RawMessage   `json:"system"`
@@ -269,12 +256,8 @@ func walkBlock(b json.RawMessage, path string, yield func(Span)) {
 	if json.Unmarshal(b, &hdr) != nil {
 		return
 	}
-	// Type-BLIND, deliberately, and ahead of the switch: image/document parts
-	// keep their binary source.data skipped, but a stray `text` sibling is
-	// scanned no matter what the part calls itself. A type-switched version
-	// silently dropped it on a tool_use/tool_result part — the one shape that
-	// made "never fewer spans than the OpenAI-only walker" untrue, since that
-	// walker read `text` off any part without consulting `type` at all.
+	// Type-BLIND, deliberately: a stray `text` sibling is scanned no matter
+	// what the part calls itself (image/document parts still skip source.data).
 	if hdr.Text != "" {
 		yield(Span{FieldPath: path + ".text", Text: hdr.Text})
 	}

@@ -27,18 +27,13 @@ type Config struct {
 	File    *FileConfig    `json:"file,omitempty"`
 }
 
-// Source (#10, WARDYN_AUDIT_SOURCE), when non-empty, is stamped as an extra
-// top-level "source" field on every event a sink serializes — see
-// marshalEvent. It lets one SIEM index ingesting from several wardynd
-// instances/environments (staging vs prod, cluster A vs B) tell them apart
-// without a per-sink config. Set once at boot (cmd/wardynd) before any sink
-// starts emitting; never mutated after.
+// Source (WARDYN_AUDIT_SOURCE), when set, is stamped as an extra "source"
+// field on every event a sink serializes, so one SIEM index can tell apart
+// ingests from several wardynd instances. Set once at boot; never mutated.
 var Source string
 
-// marshalEvent serializes ev exactly as json.Marshal(ev) would, except that
-// when Source is set it is merged in as an additional "source" field — every
-// sink (file, syslog, webhook) calls this instead of json.Marshal directly so
-// the stamp is applied uniformly rather than once per sink.
+// marshalEvent serializes ev like json.Marshal, merging in Source as a
+// "source" field when set; every sink calls this instead of json.Marshal directly.
 func marshalEvent(ev types.AuditEvent) ([]byte, error) {
 	if Source == "" {
 		return json.Marshal(ev)
@@ -57,13 +52,9 @@ type SyslogConfig struct {
 	Addr string `json:"addr,omitempty"`
 }
 
-// ParseSinks parses cfgJSON and constructs the enabled sinks, returning them
-// as a slice suitable for wrapping in a Fanout. The caller is responsible for
-// calling Close() on any Closer sinks (SyslogSink, FileSink) on shutdown.
-//
-// ParseSinks never partially constructs: if any enabled sink fails to
-// initialise it returns all previously-initialised sinks alongside the error
-// so the caller can close them.
+// ParseSinks parses cfgJSON into the enabled sinks, for wrapping in a Fanout;
+// the caller must Close() any Closer sinks (SyslogSink, FileSink) on
+// shutdown, including any sinks returned alongside an error.
 func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 	var cfg Config
 	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {

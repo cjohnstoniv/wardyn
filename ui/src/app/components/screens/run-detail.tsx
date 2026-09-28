@@ -11,9 +11,7 @@ import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
-  Check,
   LayoutDashboard,
-  Loader2,
   RotateCw,
   ScrollText,
   ShieldCheck,
@@ -42,6 +40,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import {
   audit as auditApi,
+  canonicalAuditAction,
   createRequestFromAudit,
   egressFromAudit,
   exitCodeFromAudit,
@@ -51,48 +50,31 @@ import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
-import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
+import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
-import { Label } from "../ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import {
-  ActorTypeChip,
-  ApprovalKindChip,
-  ApprovalStateBadge,
-  Chip,
-} from "../wardyn/primitives";
+import { ActorTypeChip } from "../wardyn/primitives";
 import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
-import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
-import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
-  RECORDING_DISABLED_DESC,
-  RECORDING_DISABLED_TITLE,
   RUN_COCKPIT,
-  SECURITY_ONLY_REASON,
   VIEWER_APPROVAL_BLOCKS_NOTE,
-  approvalScopeBadge,
 } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
 import { LoginSandboxNote } from "./run-detail/login-sandbox-note";
+import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { TerminalPane } from "./run-detail/terminal-notice";
-import { sessionOptionLabel, RECORDING_MISSING_SESSION_TITLE, RECORDING_MISSING_SESSION_BODY } from "./run-detail/recording-tab-copy";
+import { RecordingTab } from "./run-detail/recording-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
@@ -104,22 +86,19 @@ type Tab = "overview" | "approvals" | "audit" | "recording";
 export function RunDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
   const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
-  // The run's session.recording events, indexed SEPARATELY from the
-  // general audit trail — that trail is fetched oldest-first with a hard
-  // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording
-  // events can crowd out later ones (or vice versa: an early one falls off)
-  // before the recording picker ever sees them. A tiny second, filtered
-  // fetch spends its own 1000-row budget on just this action.
+  // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
+  // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
   // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
   // trail — the first ones the 1000-row cap on `audit` above pushes off —
-  // scoped-fetched the same way session.recording is, so the exit code and
+  // scoped-fetched the same way session.recording.write is, so the exit code and
   // ending derivation stay known past that cap.
   const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -128,7 +107,7 @@ export function RunDetailScreen() {
   // what actually happened", now that /runs/new's Record radio (which only ever
   // set allow_all_egress) is gone. Same runId-driven ProfileReview sheet
   // workspace-detail.tsx and setup/demos-step.tsx already mount: it POSTs
-  // /runs/{id}/profile, renders the proposal's inline_policy verbatim, and its
+  // /runs/{id}/profile/synthesize, renders the proposal's inline_policy verbatim, and its
   // own "Save as policy" persists it via POST /policies. Local open-state only.
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
@@ -179,7 +158,9 @@ export function RunDetailScreen() {
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
-        auditApi.listAudit(id, "session.recording"),
+        // "session.recording" names the ACTION FAMILY, prefixing both the old
+        // and new action names — not itself a legacy action name (Conductor ruling, #1062).
+        auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
         .then(([r, g, runApprovals, a, recA]) => {
           if (r.status === "rejected") {
@@ -209,11 +190,13 @@ export function RunDetailScreen() {
           // on THIS tick's own fresh state (not a stale last-known ref), so
           // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
-            Promise.all([
-              auditApi.listAudit(id, "run.complete"),
-              auditApi.listAudit(id, "run.kill"),
-              auditApi.listAudit(id, "run.autostop"),
-            ]).then((lists) => setEndingAudit(lists.flat()));
+            // Best-effort like the allSettled above: a rejected listAudit
+            // leaves endingAudit at its last-good value, never unhandled.
+            void Promise.all([
+              auditApi.listAudit(id, { action: "run.complete" }),
+              auditApi.listAudit(id, { action: "run.kill" }),
+              auditApi.listAudit(id, { action: "run.autostop" }),
+            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
         })
@@ -237,7 +220,7 @@ export function RunDetailScreen() {
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
-    load(true);
+    void load(true);
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
@@ -286,7 +269,7 @@ export function RunDetailScreen() {
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
-    copyAsync(url).then((ok) => {
+    void copyAsync(url).then((ok) => {
       if (ok) toast.success("Link copied");
       else toast.error("Couldn't copy the link — copy it from the address bar.");
     });
@@ -301,7 +284,21 @@ export function RunDetailScreen() {
         description: getErrorMessage(err),
       });
     } finally {
-      load(false);
+      void load(false);
+    }
+  };
+
+  // Rename (#1197 L2): PATCH /runs/{id}/title, then re-fetch so the new
+  // title renders in place — no reload, same `load(false)` pattern kill and
+  // the decision handlers below already use.
+  const rename = async (title: string) => {
+    try {
+      await runsApi.setTitle(id, title);
+      toast.success(RUN_COCKPIT.renamed);
+    } catch (err) {
+      toast.error(`Couldn't rename this run`, { description: getErrorMessage(err) });
+    } finally {
+      void load(false);
     }
   };
 
@@ -315,7 +312,7 @@ export function RunDetailScreen() {
       toast.warning(CLONE_UNREADABLE);
       return;
     }
-    navigate("/runs/new", { state: { prefill } });
+    void navigate("/runs/new", { state: { prefill } });
   };
 
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
@@ -326,7 +323,7 @@ export function RunDetailScreen() {
       else await approvalsApi.deny(decide.id, reason, ...args);
       toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
-      load(false);
+      void load(false);
       return true;
     } catch (err) {
       toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
@@ -342,17 +339,24 @@ export function RunDetailScreen() {
   // carries no reason field, and `opts` ALWAYS carries an explicit
   // decision_scope — decisionArgs()'s omit-for-"run" shape would collide
   // with adoDecisionRule's different bodyless default (see ado-capability-
-  // card.tsx's adoDecisionArgs).
-  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+  // card.tsx's adoDecisionArgs). The push card passes no opts at all.
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [] | [DecisionOptions]): Promise<void> => {
     try {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      load(false);
+      void load(false);
     } catch (err) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
   };
+
+  // decidePushDirect — the Approvals tab's own push_content decide path
+  // (#181, review finding 3). Same reason decideAdoDirect bypasses
+  // ReasonDialog/submitDecision: the card's own control carries no reason
+  // field — but unlike ADO, NO opts at all (decide's rule 4 refuses a
+  // decision_scope on this kind).
+  const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
 
   // ----- top-level states -----
   const pending = approvals.filter((a) => a.state === "PENDING");
@@ -424,8 +428,11 @@ export function RunDetailScreen() {
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
-            onClone={onClone}
+            onClone={view === "user" ? onClone : undefined}
+            onRename={view === "user" ? rename : undefined}
           />
+
+          <LaunchWarningsNote />
 
           <RunDetailCommandBar
             tabs={
@@ -456,7 +463,7 @@ export function RunDetailScreen() {
               scrolls, which e2e asserts. */}
           <TabsContent value="overview" className="mt-0 flex min-h-0 flex-1 flex-col">
             <Cockpit
-              run={run}
+              run={run} view={view}
               terminal={terminal}
               grants={grants}
               egress={egress}
@@ -476,6 +483,7 @@ export function RunDetailScreen() {
               run={run}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
+              onPushDecide={decidePushDirect}
             />
           </TabsContent>
 
@@ -528,8 +536,7 @@ export function RunDetailScreen() {
 // terminal, it does not build it, because building it needs the attach /
 // recording / approvals graph that lives here.
 function Cockpit({
-  run,
-  terminal,
+  run, view, terminal,
   grants,
   egress,
   audit,
@@ -541,6 +548,7 @@ function Cockpit({
   onGoRecording,
 }: {
   run: RunDetail;
+  view: ConsoleView; // M-7: no relaunch/SSH/credential door in admin view.
   terminal: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
@@ -562,7 +570,7 @@ function Cockpit({
   // pane reads it below.
   const createRequest = createRequestFromAudit(audit);
   // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
-  // decide any of these", and authorizeMemberDecision (approvals.go:392)
+  // decide any of these", and authorizeUserDecision (approvals.go:392)
   // early-returns for the security tier — so a security admin can decide every
   // one of them and must never be told otherwise. The SUPER-only surfaces on
   // this page (attach, take-over) read useOperator in their own components.
@@ -610,7 +618,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} adminView={view === "admin"} />
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -635,7 +643,7 @@ function Cockpit({
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
-          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} />
+          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} adminView={view === "admin"} />
         </div>
       )}
     </>
@@ -645,8 +653,7 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
-    // The ssh widget's gate is owner-or-admin, like the card it places.
-    operator,
+    operator, view, // ssh widget: owner-or-admin AND the user view (M-7).
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's
@@ -662,155 +669,14 @@ function Cockpit({
   return <RunCanvas ctx={ctx} />;
 }
 
-// Every human attach session is recorded and masked, but under a COMPOSITE cast
-// key the console never asked for — so it is write-only without an index.
-// There is no list-casts endpoint (and no Store.List to add one on): the
-// index is a session.recording-FILTERED audit fetch — not the
-// general trail, whose own 1000-row cap a chatty run can blow through —
-// where the event's TARGET is that very key.
+// Every human attach session is recorded under a COMPOSITE cast key the
+// console never asked for; the index is the action_prefix="session.recording"
+// fetch above (not the capped general trail), keyed on the event's TARGET.
+// The filter is an EXACT match on the CANONICAL name (canonicalAuditAction),
+// not the prefix — a plain startsWith would also admit session.recording.other.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
-  return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
-}
-
-// Approvals tab (this run's approvals)
-function ApprovalsTab({
-  approvals,
-  run,
-  onDecide,
-  onAdoDecide,
-}: {
-  approvals: ApprovalRequest[];
-  // Round 2 (F2) — this page always has the run loaded by the time this tab
-  // can render (see this file's own `status`/Tabs gate), so unlike
-  // screens/approvals.tsx's per-row RunContextRow fetch, there is no
-  // loading/error tri-state to thread here: it's always the real thing.
-  run: RunDetail;
-  onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
-  onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
-}) {
-  // useSecurityOperator (0.7 §B): the only thing this reads is
-  // canDecideApproval, which mirrors authorizeMemberDecision's early return
-  // for the security tier (approvals.go:392).
-  const securityOperator = useSecurityOperator();
-  const principal = usePrincipal();
-  // The id of the row currently deciding, and which of its two actions
-  // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
-  // boolean isn't enough.
-  const [adoBusy, setAdoBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
-  if (approvals.length === 0) {
-    return (
-      <div className="rounded-xl border border-border bg-card">
-        <EmptyState
-          icon={ShieldCheck}
-          title="No approvals for this run"
-          description="Credential, egress, and tool-call requests for this run will appear here."
-        />
-      </div>
-    );
-  }
-  return (
-    <div className="flex max-w-3xl flex-col gap-3">
-      {approvals.map((a) => {
-        // S10 round 2 (F2) — an Azure DevOps escalation (or its Entra-consent
-        // chain) gets AdoCapabilityCard, not this tab's generic row: it needs
-        // an explicit decision_scope (never the bodyless decide onDecide's
-        // ReasonDialog path produces) and the ownership-aware decidability
-        // rule canDecideApproval doesn't model.
-        //
-        // N1 (round 2) — gated on PENDING: `approvals` here is EVERY state
-        // this run's approvals ever reached (unlike approvals.tsx's
-        // pendingItems / live-approvals.tsx's pending, both already PENDING-
-        // only), so a DECIDED Azure DevOps row reaches this map too. Without
-        // the state check it rendered live Approve/Deny buttons — and, on an
-        // ended run, a false "nothing to allow" — over a row nobody can act
-        // on any more. A decided row falls through to the generic branch
-        // below, whose `scopeBadge` (approvalScopeBadge, extended F11) reads
-        // "Allowed once"/"Allowed for this run" for it.
-        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
-          return (
-            <AdoCapabilityCard
-              key={a.id}
-              item={a}
-              securityOperator={securityOperator}
-              viewerPrincipal={principal}
-              run={run}
-              busy={adoBusy?.id === a.id ? adoBusy.action : null}
-              onApprove={async (opts) => {
-                setAdoBusy({ id: a.id, action: "approve" });
-                await onAdoDecide(a.id, true, opts);
-                setAdoBusy(null);
-              }}
-              onDeny={async (opts) => {
-                setAdoBusy({ id: a.id, action: "deny" });
-                await onAdoDecide(a.id, false, opts);
-                setAdoBusy(null);
-              }}
-            />
-          );
-        }
-        const pending = a.state === "PENDING";
-        // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
-        // the KIND question: egress_domain is a member act on an owned run,
-        // credential/tool_call stay admin-OR-security-admin-only (see its doc).
-        const canDecide = canDecideApproval(securityOperator, a.kind);
-        const scopeBadge = approvalScopeBadge(a);
-        return (
-          <div key={a.id} className="rounded-xl border border-border bg-card p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <ApprovalKindChip kind={a.kind} />
-              <ApprovalStateBadge state={a.state} />
-              <span className="ml-auto text-xs text-muted-foreground" title={a.requested_at}>
-                requested {relativeTime(a.requested_at)}
-              </span>
-            </div>
-            <div className="mt-3">
-              <Label className="text-meta uppercase tracking-wide text-muted-foreground">
-                Requested scope
-              </Label>
-              <JsonBlock value={a.requested_scope} className="mt-1.5" />
-            </div>
-            {a.decided_by && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                Decided by <span className="text-foreground">{a.decided_by}</span>
-                {/* Scope badge — the console's DecidedRow shows the same
-                    fact; without it here the cockpit would show a decided
-                    egress row and the console would show it grew a scope,
-                    for the SAME approval. */}
-                {scopeBadge && <> · {scopeBadge}</>}
-                {a.reason && <> · {a.reason}</>}
-              </div>
-            )}
-            {pending && (
-              <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                {/* Gated on the SECURITY tier (canDecideApproval reads
-                    securityOperator, admin-OR-security-admin), not plain
-                    isOperator — SECURITY_ONLY_REASON says so; OPERATOR_ONLY_
-                    REASON here would undersell who this control actually
-                    admits. */}
-                {!canDecide && <Chip tone="neutral">{SECURITY_ONLY_REASON}</Chip>}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onDecide(a.id, "deny", a.kind)}
-                  disabled={!canDecide}
-                >
-                  Deny
-                </Button>
-                <Button
-                  size="sm"
-                  variant="info"
-                  onClick={() => onDecide(a.id, "approve", a.kind)}
-                  disabled={!canDecide}
-                >
-                  <Check className="size-4" /> Approve
-                </Button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
+  const seen = new Set<string>(); // dedup, belt-and-braces
+  return audit.filter((e) => canonicalAuditAction(e.action) === "session.recording.write" && e.outcome === "success" && e.target && !seen.has(e.id) && seen.add(e.id));
 }
 
 // Audit tab (this run's events)
@@ -823,21 +689,24 @@ function AuditTab({
   runId: string;
   onMakePolicy: () => void;
 }) {
+  const securityOperator = useSecurityOperator();
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <ScrollText className="size-3.5" />
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
-        {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
-            member — the server scopes non-admins to ?run_id= of a run they own
-            (internal/api/audit.go handleQueryAudit) — so an unqualified link
-            would drop them on a feed that can never fill. */}
-        <Link
-          to={`/audit?run_id=${runId}`}
-          className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
-        >
-          open full Audit <ArrowRight className="size-3" />
-        </Link>
+        {/* W25-W25.2-3: carry the run, so the full feed opens scoped to it.
+            M-1b: the full-page Audit screen is Admin view only now
+            (/admin/audit), so the link renders only for the tier that screen
+            serves; a user's own events are already inline above. */}
+        {securityOperator && (
+          <Link
+            to={`/admin/audit?run_id=${runId}`}
+            className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
+          >
+            open full Audit <ArrowRight className="size-3" />
+          </Link>
+        )}
         {/* Beside the record it is synthesized FROM, not on the command bar:
             what this run actually did is the whole basis of the proposal. */}
         <Button variant="outline" size="sm" className="ml-auto h-7" onClick={onMakePolicy}>
@@ -892,94 +761,3 @@ function AuditTab({
   );
 }
 
-// Recording tab
-function RecordingTab({
-  state,
-  recording,
-  recordingDisabled,
-  runId,
-  sessions,
-  selected,
-  onSelect,
-  onRetry,
-}: {
-  state: "idle" | "loading" | "error" | "ready";
-  recording: Recording | null;
-  /** This deployment's recording store never came up — a missing
-   *  cast means "it can't", not "it hasn't yet". */
-  recordingDisabled: boolean;
-  runId: string;
-  // The run's interactive attach sessions (session.recording audit events).
-  sessions: AuditEvent[];
-  selected: string;
-  onSelect: (key: string) => void;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="max-w-4xl">
-      {/* The picker sits ABOVE the body on purpose: a run whose OWN cast is
-          missing still has to be able to reach its attach sessions. */}
-      {sessions.length > 0 && (
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Session</span>
-          <Select value={selected} onValueChange={onSelect}>
-            <SelectTrigger size="sm" className="w-[280px]" aria-label="Recorded session">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={runId}>Agent session</SelectItem>
-              {sessions.map((e) => (
-                <SelectItem key={e.id} value={e.target!}>
-                  {sessionOptionLabel(e)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
-      {state === "loading" || state === "idle" ? (
-        <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
-          <Loader2 className="size-5 animate-spin text-muted-foreground" />
-        </div>
-      ) : state === "error" ? (
-        <div className="rounded-xl border border-border bg-card">
-          <ErrorState message={RUN_COCKPIT.recordingError} onRetry={onRetry} />
-        </div>
-      ) : !recording ? (
-        <div className="rounded-xl border border-border bg-card">
-          <EmptyState
-            icon={SquareTerminal}
-            title={
-              recordingDisabled
-                ? RECORDING_DISABLED_TITLE
-                // F1-F11: a SPECIFIC attach session's missing cast is not a
-                // fact about the whole run — the picker above is already
-                // looking at one session, so the empty state must say so too.
-                : selected !== runId
-                  ? RECORDING_MISSING_SESSION_TITLE
-                  : "No recording available"
-            }
-            description={
-              recordingDisabled
-                ? RECORDING_DISABLED_DESC
-                : selected !== runId
-                  ? RECORDING_MISSING_SESSION_BODY
-                  : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
-            }
-          />
-        </div>
-      ) : (
-        <>
-          <TerminalPlayer recording={recording} />
-          <div className="mt-2 text-xs text-muted-foreground">
-            Recorded when the run's runner supports session capture ·{" "}
-            <Link to="/recordings" className="text-primary hover:underline">
-              Recordings library
-            </Link>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}

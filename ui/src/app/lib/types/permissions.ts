@@ -10,12 +10,13 @@
 // lib/permissions-copy.ts here), and a stored kind this build doesn't know is
 // inert rather than a parse error.
 
-export type CapabilitySubjectType = "user" | "group" | "all";
+export type CapabilitySubjectType = "user" | "group" | "user_type" | "all";
 export type CapabilityEffect = "allow" | "deny";
 
 // One row of the grant table: "subject S may (or may not) use capability C at
 // value V". `subject` is "" for subject_type "all" (there is nothing for it to
-// name); user/group subjects are stored lowercased server-side.
+// name); user/group subjects are stored lowercased server-side, and a
+// user_type subject is the type's id, verbatim.
 export interface CapabilityGrant {
   id: string;
   subject_type: CapabilitySubjectType;
@@ -59,4 +60,15 @@ export interface CapabilityGrantInput {
   capability: string;
   value: string;
   effect: CapabilityEffect;
+}
+
+// GET/PUT /permissions/availability/{kind}/{value} — one resource's
+// "Available to" control (user-types design §2.6): the restricted bit, plus
+// the allow rows that already name this exact value (the "Only…" list).
+// Mirrors internal/api/permissions_availability.go's availabilityView.
+export interface AvailabilityView {
+  kind: string;
+  value: string;
+  restricted: boolean;
+  allowed_by: CapabilityGrant[];
 }

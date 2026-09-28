@@ -18,12 +18,11 @@ import (
 )
 
 // The PLAIN forward lane with an ABSOLUTE-FORM request URI — the lane
-// ServeHTTP routes to handlePlain, and the one every LLM test in this package
-// used to skip: they all reach inspection through CONNECT/MITM
-// (serveMITMRequest, mitmConnect) or the brokered local route
-// (/wardyn/llm/...). Nothing drove `POST https://api.anthropic.com/v1/messages`
-// straight at the proxy, so the handleConnect/handlePlain divergence was
-// completely unpinned (F141) and the divergence itself was live (F103, F104).
+// ServeHTTP routes to handlePlain. The other LLM tests in this package reach
+// inspection through CONNECT/MITM (serveMITMRequest, mitmConnect) or the
+// brokered local route (/wardyn/llm/...); these drive `POST
+// https://api.anthropic.com/v1/messages` straight at the proxy, so the
+// handleConnect/handlePlain divergence is pinned.
 
 // newPlainLaneProxy builds a proxy whose only allowlisted host is the Anthropic
 // vendor host, dialling a local (TLS) stand-in upstream. TLSClientConfig is set
@@ -61,7 +60,7 @@ func mustAbsReq(t *testing.T, method, rawurl, body string) *http.Request {
 	return req
 }
 
-// TestPlainLaneLLMHostIsInspected pins F103: an absolute-form prompt POST to a
+// TestPlainLaneLLMHostIsInspected: an absolute-form prompt POST to a
 // model host on the forward lane is the SAME prompt egress as the tunnel, so it
 // takes the same per-endpoint classifier. Under mode=block a secret-bearing
 // body must be REFUSED and must not reach the upstream — instead of being
@@ -99,7 +98,7 @@ func TestPlainLaneLLMHostIsInspected(t *testing.T) {
 	}
 }
 
-// TestPlainLaneInjectionStripsSandboxCredential pins F104: the plain lane's
+// TestPlainLaneInjectionStripsSandboxCredential: the plain lane's
 // injection must strip the sandbox's OWN credential headers before setting the
 // brokered one, exactly as forwardInspectedLLM does. Otherwise the upstream
 // receives both and picks — which makes credential substitution the UPSTREAM's
@@ -113,7 +112,7 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 		anthropicMessagesBody("hello"))
 	req.Header.Set("Authorization", "Bearer SANDBOX-OWN-KEY")
 	req.Header.Set("X-Auth-Token", "SANDBOX-OWN-TOKEN")
-	// F104 fix-up: the strip list has to cover every header a vendor Wardyn
+	// The strip list has to cover every header a vendor Wardyn
 	// brokers for reads as a credential, not four of them.
 	for h, v := range sandboxCredentialHeaders {
 		req.Header.Set(h, v)
@@ -140,10 +139,9 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 	}
 }
 
-// TestPlainLaneHTTPSAbsoluteFormPort pins F141's port half: an https
+// TestPlainLaneHTTPSAbsoluteFormPort pins the port half: an https
 // absolute-form request with no explicit port means 443 — the port the proxy
-// vets, dials and RECORDS. It used to be evaluated and audited as 80 while the
-// transport ran a TLS handshake against it.
+// vets, dials and records — not 80 with a TLS handshake run against it.
 func TestPlainLaneHTTPSAbsoluteFormPort(t *testing.T) {
 	cu := captureUpstream(t, true, "upstream-ok")
 	p, buf := newPlainLaneProxy(t, upstreamAddr(cu.srv), nil)
@@ -171,7 +169,7 @@ func TestPlainLaneHTTPSAbsoluteFormPort(t *testing.T) {
 	}
 }
 
-// TestPlainLaneNoCleartextInjectionToTheTLSPort pins the half of F110 the code
+// TestPlainLaneNoCleartextInjectionToTheTLSPort pins the half the code
 // can decide alone: a sandbox-chosen cleartext request to a port the operator
 // never authored — reachable only because an api_key grant's exact allowlist
 // entry is port-blind — must NOT carry the brokered credential.

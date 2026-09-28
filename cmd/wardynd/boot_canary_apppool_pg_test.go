@@ -78,8 +78,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		return v.String()
 	}
 
-	// The app role's search_path finds a table named audit_events that carries
-	// NO chain trigger — the F024-shaped drift, and the state 0058 exists to
+	// NO chain trigger — the drift, and the state 0058 exists to
 	// repair. Catalog checks against the migrated schema still pass; the write
 	// the app pool would actually make does not chain.
 	if _, err := admin.Exec(ctx, `CREATE TABLE `+appSchema+`.audit_events (
@@ -90,7 +89,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		t.Fatalf("create the shadowing audit_events in %s: %v", appSchema, err)
 	}
 
-	pool, err := connectAndMigrate(t.Context(), schemaDSN(appSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute)
+	pool, err := connectAndMigrate(t.Context(), schemaDSN(appSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if pool != nil {
 		pool.Close()
 	}
@@ -108,7 +107,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 	// SCOPED: the same split-role boot with both DSNs on the migrated schema
 	// must still come up. The canary is a refusal for a chain that does not
 	// chain, not a tax on the split-role posture.
-	ok, err := connectAndMigrate(t.Context(), schemaDSN(migrateSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute)
+	ok, err := connectAndMigrate(t.Context(), schemaDSN(migrateSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if err != nil {
 		t.Fatalf("a split-role boot on a healthy schema: %v, want it to come up", err)
 	}

@@ -84,6 +84,8 @@ func (s *supersedeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref stri
 	return nil
 }
 
+func (s *supersedeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error { return nil }
+
 // QueryAuditEvents: the RUN READ path asks for a run's events to project its UI
 // apps (effectiveUIApps, runs_policy.go), and an unimplemented promoted method
 // on a double is a nil-pointer panic rather than the logged error that read path
@@ -116,7 +118,7 @@ func (s *supersedeStore) seed(run types.AgentRun) types.AgentRun {
 
 // ctxAwareIdentity is the harness identity plus the two things the cascade's
 // contract needs a test to see: WHETHER RevokeRun ran, and whether it ran on a
-// LIVE context. The ctx check is what makes R1-F1 testable at all — a kill that
+// LIVE context. The ctx check is what makes the detached cascade testable at all — a kill that
 // leaked the caller's cancellation would reach RevokeRun with a dead context,
 // which in production (a store write) fails exactly like this.
 type ctxAwareIdentity struct {
@@ -176,7 +178,7 @@ func waitForRevoke(t *testing.T, idp *ctxAwareIdentity, runID uuid.UUID) {
 
 // ctxAwareAudit drops a row written on a dead context, which is what the real
 // sink does — recordAudit passes the context straight to a store write. Without
-// it a cancelled cascade still "audits" in these tests and R1-F1 is unprovable.
+// it a cancelled cascade still "audits" in these tests and the detached cascade is unprovable.
 type ctxAwareAudit struct{ *memAudit }
 
 func (a *ctxAwareAudit) Record(ctx context.Context, ev types.AuditEvent) error {
@@ -225,7 +227,7 @@ func newSupersedeFixture(t *testing.T, cs *capStore, rnr runner.Runner) supersed
 
 func memberLoginSession(t *testing.T) *http.Cookie {
 	t.Helper()
-	return ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	return ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 }
 
 // launchLoginRun POSTs one sign-in and returns its run id.
@@ -291,13 +293,13 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // GREEN ON THE UNFIXED TREE — a regression pin, not a defect fix. The
 // no-credential preview's 409 sits in handleHarnessLogin, before
 // launchHarnessLoginRun and therefore before the supersede; the existing preview
-// case asserts only "no run row, no harness.login.started" on a fixture with no
+// case asserts only "no run row, no harness.login.start" on a fixture with no
 // supersede seam and no live login run, so moving the 409 below the launch (or
 // hoisting the supersede into the handler — a plausible refactor, since the
 // comment at the supersede call already argues about placement) would kill the
-// admin's REAL sign-in from inside a preview with every test still green. That
-// is the worst possible shape of this feature: a view that destroys the thing it
-// is pretending not to have.
+// admin's real sign-in from inside a preview with every other test still green.
+// That is the worst possible shape of this feature: a view that destroys the
+// thing it is pretending not to have.
 func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 	f := newSupersedeFixture(t, nil, nil)
 
@@ -313,8 +315,8 @@ func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("harness-login in the preview = %d, want 409: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), memberPreviewSignInRefusal) {
-		t.Errorf("body = %q, want %q", w.Body.String(), memberPreviewSignInRefusal)
+	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
+		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
 	}
 	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
 		t.Errorf("the admin's own sign-in sandbox is %s, want RUNNING — a refused launch must not "+
@@ -361,7 +363,7 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 // lands after the winner's. The second pass is what closes it, and it has to do
 // so WITHOUT an in-process mutex, which is not a lock on the second replica.
 //
-// WHAT IS PINNED, EXACTLY: the interleaving where a pass SEES BOTH ROWS — both
+// What is pinned, exactly: the interleaving where a pass sees both rows — both
 // are in the store before either second pass runs. That is the ordinary
 // double-click, and the passes are run in each order because the property is
 // that the answer does not depend on which finishes first. It is NOT a universal
@@ -618,13 +620,13 @@ func TestUploadSSOToken_KilledRunIsRefused(t *testing.T) {
 		}
 		var refused *types.AuditEvent
 		for _, ev := range h.audit.events {
-			if ev.Action == "harness.credential.refused" {
+			if ev.Action == "harness.credential.refuse" {
 				refused = &ev
 				break
 			}
 		}
 		if refused == nil {
-			t.Fatal("no harness.credential.refused row — a refused capture that leaves no trail is the 0.7.3 finding again")
+			t.Fatal("no harness.credential.refuse row — a refused capture that leaves no trail is the 0.7.3 finding again")
 		}
 		var data map[string]any
 		if err := json.Unmarshal(refused.Data, &data); err != nil {
@@ -716,13 +718,13 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 	}
 	var refused *types.AuditEvent
 	for _, ev := range h.audit.events {
-		if ev.Action == "harness.credential.refused" {
+		if ev.Action == "harness.credential.refuse" {
 			refused = &ev
 			break
 		}
 	}
 	if refused == nil {
-		t.Fatal("no harness.credential.refused row for a refused capture")
+		t.Fatal("no harness.credential.refuse row for a refused capture")
 	}
 	data := killData(t, *refused)
 	if data["reason"] != refuseReasonRunKilled {
@@ -736,7 +738,7 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 	}
 }
 
-// TestKillRunCascade_FinishesAfterTheCallersContextDies is R1-F1: the cascade
+// TestKillRunCascade_FinishesAfterTheCallersContextDies: the cascade
 // detaches ITSELF, so no caller can leak a cancellation into a half-applied
 // kill.
 //
@@ -748,8 +750,8 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 //
 // BOTH callers, because the property belongs to the cascade and not to either
 // of them: the supersede runs on the launch POST's context (a person closing
-// that tab mid-launch is this lane's whole subject), and the kill route is the
-// regression pin for the detach it has always had.
+// that tab mid-launch is this lane's whole subject), and the kill route
+// carries the same detach.
 func TestKillRunCascade_FinishesAfterTheCallersContextDies(t *testing.T) {
 	t.Run("the login supersede", func(t *testing.T) {
 		f := newSupersedeFixture(t, nil, nil)
@@ -858,7 +860,7 @@ func waitForKillRow(t *testing.T, audit *memAudit, runID string) types.AuditEven
 	return types.AuditEvent{}
 }
 
-// TestKillRunCascade_PartialCascadeIsHonest is R1-F2: the branch where a
+// TestKillRunCascade_PartialCascadeIsHonest covers the branch where a
 // teardown step FAILS had no test in either caller, and this lane both moved it
 // and gave it a second consumer.
 //
@@ -1028,7 +1030,7 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 
 	// The second POST, run on its own goroutine and answered through a channel
 	// rather than asserted there — t.FailNow (which t.Fatal calls) may only run
-	// on the test's own goroutine — so a synchronous-teardown regression fails
+	// on the test's own goroutine — so a synchronous teardown fails
 	// this test with a clear timeout instead of hanging until `go test`'s own
 	// deadline.
 	type postResult struct {
@@ -1040,7 +1042,7 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/setup/harness-login", strings.NewReader(`{"provider":"aws"}`))
 		r.AddCookie(sess)
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		resultCh <- postResult{code: w.Code, body: w.Body.String()}
 	}()
 
@@ -1166,4 +1168,30 @@ func TestServer_WaitBackground_RespectsItsBudget(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Errorf("WaitBackground took %s with a 50ms budget and a goroutine that never finishes — it did not respect its bound", elapsed)
 	}
+}
+
+// TestSupersedeOfStartingLoginRunCancelsItsCreate is the supersede twin of
+// TestKillOfStartingRunCancelsItsCreate (#1182): a second sign-in supersedes a
+// first one still STARTING, and that first run's in-flight CreateSandbox must
+// stop with it. Otherwise both runs' pods compete for the node and the NEW
+// sign-in's agent pod sits Unschedulable until the old create times out.
+//
+// Red on the unfixed tree: the superseded run's create runs on after its KILLED
+// CAS.
+func TestSupersedeOfStartingLoginRunCancelsItsCreate(t *testing.T) {
+	rn := newCtxBlockingCreateRunner(t)
+	f := newSupersedeFixture(t, nil, rn)
+	srv, st := f.srv, f.store
+	sess := memberLoginSession(t)
+
+	first := launchLoginRun(t, srv, sess)
+	rn.waitEntered(t)
+	waitRunState(t, st, first, types.RunStarting)
+
+	second := launchLoginRun(t, srv, sess)
+	rn.waitCancelled(t)
+	if got := st.stateOf(t, first); got != types.RunKilled {
+		t.Fatalf("the superseded sign-in is %s, want KILLED", got)
+	}
+	waitRunState(t, st, second, types.RunRunning)
 }

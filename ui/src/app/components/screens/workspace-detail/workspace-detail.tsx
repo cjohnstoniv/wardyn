@@ -21,14 +21,20 @@ import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
+import { AVAILABILITY } from "../../../lib/availability-copy";
+import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities";
+import { DENIED } from "../../../lib/permissions-copy";
 import { Button } from "../../ui/button";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { useCanMutate } from "../../wardyn/operator-context";
-import { KIND_META, workspaceImage } from "../workspaces";
+import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
+import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
+import { resolvedModelProviders, workspaceModelProviderUnavailable } from "../new-run/wizard-types";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
@@ -44,7 +50,7 @@ const POLL_MS = 2500;
 // approved mock verbatim for a repo (`repo · github.com/acme/api · main`).
 function detailSourceLine(ws: Workspace): string {
   if (!ws.source) return "empty — discarded after the run";
-  const kindLabel = KIND_META[ws.kind]?.label ?? ws.kind;
+  const kindLabel = kindMetaOf(ws.kind)?.label ?? ws.kind;
   return ws.kind === "repo" && ws.ref ? `${kindLabel} · ${ws.source} · ${ws.ref}` : `${kindLabel} · ${ws.source}`;
 }
 
@@ -75,6 +81,13 @@ export function WorkspaceDetailScreen() {
   // tier, and it fails closed on an absent owner or an unresolved /me. Every
   // OTHER control on this page keeps its own (security/operator) gate.
   const canMutate = useCanMutate(ws?.owned_by);
+  const securityOperator = useSecurityOperator();
+  // #922 (UT-7c), the person side: an admin is exempt from every capability
+  // (capabilities.ts's own fail-open doctrine), so this never asks for one —
+  // useMyCapabilities' own `enabled` gate.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
+  const { status: shellStatus } = useShellSetupStatus();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
@@ -127,6 +140,19 @@ export function WorkspaceDetailScreen() {
         // hasLlmPath(READY_FALLBACK) is always false — `unreachable` is
         // checked first so a daemon that simply never answered doesn't read
         // as "no model provider configured".
+        //
+        // M-6/QM-10 known gap (not verified at runtime): hasLlmPath(s) is the
+        // DEPLOYMENT's model path, not this caller's own connection.
+        // ModelAccessNote's Admin-view branch (record-pane-chips.tsx) reads
+        // this same value as `modelReady`, i.e. "is MY connection
+        // configured" — so it can show the "connect your own" line when the
+        // real gap is a missing deployment provider, and stay silent when
+        // only the admin's own connection (status.model_access, the field
+        // member-getting-started.tsx's "Your model key" section keys on) is
+        // what's missing. Stays deployment-level until MP wires the admin's
+        // own model_access into this pane — do not "fix" this by swapping in
+        // status.model_access without first confirming it answers the
+        // ADMIN's own state, not a member's, for an Admin-view caller.
         setLlmReady(s.unreachable ? null : hasLlmPath(s));
         setHostClasses(s.runner?.confinement_classes ?? null);
       })
@@ -322,8 +348,23 @@ export function WorkspaceDetailScreen() {
     );
   }
 
-  const kindMeta = KIND_META[ws.kind] ?? KIND_META.local_dir;
+  const kindMeta = kindMetaOf(ws.kind) ?? KIND_META.local_dir;
   const image = imageRow(ws);
+  // #922 (UT-7c): "Start a run" only NAVIGATES to New Run (it launches
+  // nothing itself), so disabling it here costs nothing a member could not
+  // already reach a different way — but it is the one place on this page
+  // that ever pointed at launching AGAINST this workspace specifically, so it
+  // is where the person-side "isn't available to you" consequence belongs.
+  // Two independent reasons fold into the SAME generic sentence (see
+  // DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment for why neither ever
+  // names the resource): this workspace itself carries no allow naming the
+  // caller (capabilityAllowed's existing "workspace" narrowing, the same
+  // signal workspace-card.tsx's own selectedWorkspaceUngranted reads), or it
+  // is pinned to a model provider the caller's own filtered list doesn't
+  // carry.
+  const workspaceUnavailable =
+    (!operator && !capabilityAllowed(caps, "workspace", ws.id)) ||
+    workspaceModelProviderUnavailable(ws, resolvedModelProviders(shellStatus));
 
   return (
     <div className="mx-auto max-w-[1000px] px-6 py-5">
@@ -354,7 +395,12 @@ export function WorkspaceDetailScreen() {
               )}
             </div>
           </div>
-          <Button size="sm" onClick={() => navigate("/runs", { state: { openNewRun: true } })}>
+          <Button
+            size="sm"
+            disabled={workspaceUnavailable}
+            title={workspaceUnavailable ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined}
+            onClick={() => navigate("/runs", { state: { openNewRun: true } })}
+          >
             Start a run
           </Button>
           <Button
@@ -370,6 +416,13 @@ export function WorkspaceDetailScreen() {
             {!canMutate && <OperatorOnlyHint />}
           </Button>
         </div>
+
+        {/* A disabled button that doesn't say why is a dead end (M-ux-6) —
+            the same rule New Run's own Launch button follows for its
+            `problem` line. */}
+        {workspaceUnavailable && (
+          <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
+        )}
 
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5">
           <div className="min-w-0 flex-1">
@@ -410,6 +463,18 @@ export function WorkspaceDetailScreen() {
             }}
           />
         </DetailSectionCard>
+
+        {/* UT-7b: kind workspace, value = the workspace's own id — one more
+            resource editor carrying the §2.6 "Available to" control, wired
+            here rather than into the /workspaces list row (a table row has
+            no room for it; this detail page is the workspace's editor).
+            Security admins and super admins only, like the control itself:
+            a person opening their own workspace gets no empty card. */}
+        {securityOperator && (
+          <DetailSectionCard title={AVAILABILITY.WORKSPACE_CARD_TITLE} subtitle={AVAILABILITY.WORKSPACE_CARD_SUBTITLE}>
+            <AvailabilityControl kind="workspace" value={ws.id} />
+          </DetailSectionCard>
+        )}
 
         <AllowedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
         <DeniedHostsCard ws={ws} onWorkspaceUpdated={setWs} />

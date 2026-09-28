@@ -5,11 +5,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -160,22 +162,21 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 }
 
 // runDriveGet runs `drive get` against url and returns what it printed and
-// any error. `--json` output goes through emitJSON, which targets os.Stdout
-// directly rather than cobra's OutOrStdout sink (run_wait_ready_test.go,
-// sshkey_test.go note the same thing) — captureStdout (commands_test.go) is
-// this tree's existing fix for that.
+// any error. `--json` output goes through emitJSON, which writes to
+// cmd.OutOrStdout() (#200), so cobra's own SetOut sink captures it directly.
 func runDriveGet(t *testing.T, url string) (stdout string, err error) {
 	t.Helper()
 	root := rootCmd()
+	out := &strings.Builder{}
 	root.SetArgs([]string{"drive", "get", "--url", url, "--token", "tok"})
+	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
-	stdout = captureStdout(t, func() { err = root.Execute() })
-	return stdout, err
+	err = root.Execute()
+	return out.String(), err
 }
 
 // runDriveApply marshals doc to a temp file, runs `drive apply` on it, and
-// returns what it printed and any error (see runDriveGet on why stdout needs
-// captureStdout).
+// returns what it printed and any error (see runDriveGet).
 func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout string, err error) {
 	t.Helper()
 	b, merr := json.Marshal(doc)
@@ -187,10 +188,12 @@ func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout str
 		t.Fatalf("write doc: %v", werr)
 	}
 	root := rootCmd()
+	out := &strings.Builder{}
 	root.SetArgs([]string{"drive", "apply", path, "--url", url, "--token", "tok"})
+	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
-	stdout = captureStdout(t, func() { err = root.Execute() })
-	return stdout, err
+	err = root.Execute()
+	return out.String(), err
 }
 
 // seedDrives exercises every types.DriveBackend, not just docker_volume, the
@@ -330,5 +333,159 @@ func TestDriveApply_RejectsUnknownField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "drivs") {
 		t.Errorf("error %q does not name the unknown field", err)
+	}
+}
+
+// TestDriveGet_ReadsEveryAllocationPage pins issue #508 F5: GET /drives serves
+// allocations one page at a time and flags the rest with X-Wardyn-Truncated.
+// `drive get` sells its output as a snapshot to restore from, so it must read
+// every page — and print nothing when the pages do not add up to grant_total,
+// rather than a document `apply` would turn into a partial restore.
+func TestDriveGet_ReadsEveryAllocationPage(t *testing.T) {
+	const pageSize = 2
+	all := make([]sdk.UserDriveGrant, 5)
+	for i := range all {
+		all[i] = sdk.UserDriveGrant{ID: uuid.New(), SubjectType: "user", Subject: string(rune('a' + i)), Enabled: true}
+	}
+	serve := func(total int, ignoreOffset bool) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			off := 0
+			if o := r.URL.Query().Get("offset"); o != "" && !ignoreOffset {
+				off, _ = strconv.Atoi(o)
+			}
+			end := min(off+pageSize, len(all))
+			if end < len(all) {
+				w.Header().Set("X-Wardyn-Truncated", "true")
+			}
+			_ = json.NewEncoder(w).Encode(sdk.DrivesDocument{Grants: all[off:end], GrantTotal: total, RunnerTarget: "docker"})
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+
+	out, err := runDriveGet(t, serve(len(all), false).URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var doc sdk.DrivesDocument
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("unmarshal get output: %v", err)
+	}
+	if !reflect.DeepEqual(doc.Grants, all) {
+		t.Fatalf("get printed %d allocations, want all %d in order", len(doc.Grants), len(all))
+	}
+
+	for name, srv := range map[string]*httptest.Server{
+		"an allocation added while paging": serve(len(all)+1, false),
+		"a server that ignores offset":     serve(len(all), true),
+	} {
+		out, err := runDriveGet(t, srv.URL)
+		if err == nil {
+			t.Errorf("%s: get succeeded, want a refusal", name)
+		}
+		if strings.TrimSpace(out) != "" {
+			t.Errorf("%s: get printed an incomplete document:\n%s", name, out)
+		}
+	}
+}
+
+// reclaimOK is the 200 body the daemon answers with.
+func reclaimOK(driveID uuid.UUID, object, outcome string) map[string]any {
+	return map[string]any{
+		"drive": "Corp NAS", "drive_id": driveID.String(), "subject_type": "user",
+		"subject": "sub-bob", "backend": "docker_volume", "object": object, "outcome": outcome,
+	}
+}
+
+// TestDriveReclaim_PostsTheSubjectAndPrintsWhatWent.
+func TestDriveReclaim_PostsTheSubjectAndPrintsWhatWent(t *testing.T) {
+	driveID := uuid.New()
+	object := "wardyn-drive-corp-nas-d-9f3a1c"
+	cs := newCmdServer(t, http.StatusOK, reclaimOK(driveID, object, "deleted"))
+
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(),
+		"--subject", "sub-bob", "--yes"); err != nil {
+		t.Fatalf("drive reclaim: %v", err)
+	}
+	got := cs.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/drives/"+driveID.String()+"/reclaim" {
+		t.Fatalf("request = %s %s, want POST /api/v1/drives/<id>/reclaim", got.method, got.path)
+	}
+	var sent map[string]string
+	if err := json.Unmarshal(got.body, &sent); err != nil {
+		t.Fatalf("decode sent body %q: %v", got.body, err)
+	}
+	if sent["subject"] != "sub-bob" || sent["subject_type"] != "user" {
+		t.Errorf("body = %v, want the (subject_type, subject) pair the allocation is keyed on", sent)
+	}
+}
+
+// TestDriveReclaim_RefusesWithoutYes is the CLI's own rail. A verb that
+// destroys a person's data must not run off a mistyped drive id, and the flag
+// is required rather than prompted so the automated offboarding path keeps the
+// same guard a keyboard does.
+func TestDriveReclaim_RefusesWithoutYes(t *testing.T) {
+	driveID := uuid.New()
+	cs := newCmdServer(t, http.StatusOK, reclaimOK(driveID, "wardyn-drive-corp-nas-d-9f3a1c", "deleted"))
+
+	err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(), "--subject", "sub-bob")
+	if err == nil {
+		t.Fatal("drive reclaim ran without --yes")
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("error %q does not name the flag the operator has to add", err)
+	}
+	if len(cs.reqs) != 0 {
+		t.Errorf("the unconfirmed command still reached the daemon: %v", cs.reqs)
+	}
+}
+
+// TestDriveReclaim_RefusesWithoutASubject: a reclaim names ONE person's
+// storage, and a missing subject must not become a request the server has to
+// interpret.
+func TestDriveReclaim_RefusesWithoutASubject(t *testing.T) {
+	driveID := uuid.New()
+	cs := newCmdServer(t, http.StatusOK, reclaimOK(driveID, "x", "deleted"))
+
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(), "--yes"); err == nil {
+		t.Fatal("drive reclaim ran with no --subject")
+	}
+	if len(cs.reqs) != 0 {
+		t.Errorf("the command reached the daemon with no subject: %v", cs.reqs)
+	}
+}
+
+// TestDriveReclaim_SurfacesTheConflictVerbatim: the 409 the daemon answers
+// while a run still holds the object is the operator's whole remedy ("wait for
+// the run"), so it reaches them as the server's own message — not as a
+// fallback, and not as a generic failure.
+func TestDriveReclaim_SurfacesTheConflictVerbatim(t *testing.T) {
+	driveID := uuid.New()
+	cs := newCmdServer(t, http.StatusConflict,
+		map[string]string{"error": "reclaim refused: the drive's storage is still held by a running sandbox"})
+
+	err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(), "--subject", "sub-bob", "--yes")
+	if err == nil {
+		t.Fatal("a 409 was reported as success")
+	}
+	var apiErr *sdk.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+		t.Fatalf("err = %v (%T), want *sdk.APIError with status 409", err, err)
+	}
+	if !strings.Contains(err.Error(), "still held by a running sandbox") {
+		t.Errorf("the operator does not see the server's reason: %v", err)
+	}
+}
+
+// TestDriveReclaim_RefusesANonUUIDDriveID, the same refusal `attach` makes for
+// the same reason: a mistyped id must not be posted at a path that could match
+// something else.
+func TestDriveReclaim_RefusesANonUUIDDriveID(t *testing.T) {
+	cs := newCmdServer(t, http.StatusOK, nil)
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", "corp-nas", "--subject", "sub-bob", "--yes"); err == nil {
+		t.Fatal("drive reclaim accepted a non-uuid drive id")
+	}
+	if len(cs.reqs) != 0 {
+		t.Errorf("a non-uuid id was still sent: %v", cs.reqs)
 	}
 }

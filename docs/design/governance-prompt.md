@@ -675,6 +675,7 @@ too.
 | `WARN_STORED_CLAMPED(policy, name)` | saved policy "{policy}" was clamped to your governance profile "{name}" |
 | `WARN_WORKSPACE_DENIED(host, name)` | workspace host "{host}" is denied by your governance profile "{name}" — the run launches, but that host is refused at the proxy |
 | `WARN_GRANT_DROPPED(name, kind, reason)` | governance profile "{name}": dropped {kind} grant no longer within the deployment's eligible grants ({reason}) |
+| `WARN_PUSH_RULES_DROPPED(name)` | governance profile "{name}": push_rules dropped — this profile's ceiling sets none, so the deployment default's content rules do not apply to members of it |
 | `DENIED_STALE_GROUPS` | groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved |
 | `DENIED_SEEDED_IMAGE(image)` | image {image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image |
 | `DENIED_WORKSPACE_LLM_CRED` | llm_cred is operator-only — an admin binds a workspace's model/harness credential (PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding |
@@ -692,11 +693,15 @@ rather than re-worded, because the shipped wording is the better wording:
   (`internal/api/governance.go`), which fires when a redeploy removes a pairing from
   `WARDYN_DEFAULT_POLICY` that a stored profile still names: the grant is dropped rather than
   the run failed, and the member is told. It rides the same `warnings[]` list as the two above.
+  **`WARN_PUSH_RULES_DROPPED`** is its `push_rules` mirror (`droppedPushRulesWarning`, same
+  file): it fires at the same resolve seam when the deployment default carries `push_rules` and
+  the assigned profile's ceiling sets none, so the deployment's content rules stop applying to
+  that profile's members — said out loud rather than dropped in silence (#272).
 - **`DENIED_SEEDED_IMAGE`** is `denyMemberSeededImage`'s refusal
   (`internal/api/runs_create_validate.go`) verbatim — the **seeded-image door**, closing the gap
   §1 names: a workspace's own `base_image` sets `req.Image` *after* `denyMemberRequest` has
   already run, so the explicit `--image` branch could not catch it. Same target and reason
-  (`runs.image` / `byoi_member`) as that branch, because it is the same capability answered
+  (`runs.image` / `byoi_user`) as that branch, because it is the same capability answered
   about the same value; only the door differs, and the message says which one.
 - **`DENIED_WORKSPACE_LLM_CRED`** is `handleCreateWorkspace`'s refusal
   (`internal/api/workspaces.go`) verbatim — a member naming an `llm_cred` binding on workspace
@@ -762,6 +767,99 @@ it takes the chip's lowercase, so the third tier's in-sentence form is `security
 (`people-access-prompt.md` §7.2). One derivation owns that lowering — `roleLabelInSentence` in
 `ui/src/app/components/screens/setup/access-panel.tsx`, beside the `roleLabel` chip form it is
 derived from — so this string stays the only frozen spelling.
+
+### 7.10–7.13 — the autonomy rubric (backfilled, #768)
+
+Unlike §7.1–§7.9, these four tables were not drawn before implementation. `RUBRIC`,
+`LIMITS_CHIP.AUTONOMY`, `AUTONOMY_RAIL` and `AUTONOMY_BOUND` (`governance-copy.ts`) shipped in
+#339 against #96's mock (`autonomy-launch`, approved 2026-09-20, two rulings recorded on #96),
+but the approved prototype never landed in this repo and the mock itself lived in a scratchpad,
+so nothing under `docs/design/` could be diffed against the module. Per the owner's 2026-09-23
+ruling on #768, the strings as shipped in #339 (which already carry both #96 rulings) are
+canon — transcribed verbatim from the module below, the reverse direction from §7.1–§7.9's
+mock-first tables. `governance-copy.test.ts` parses §7.10–§7.13 the same way it parses
+§7.2–§7.9 and fails on a single byte of drift.
+
+### 7.10 `RUBRIC` — the profile editor's rubric section (`profile-rubric.tsx`)
+
+| Key | String |
+|---|---|
+| `RUBRIC.HEADING` | Autonomy rubric |
+| `RUBRIC.INTRO` | Cap how much a run may do on its own, by the posture it launches with. A run gets the lowest level any matching row sets. Rows left at No cap restrict nothing. |
+| `RUBRIC.EMPTY_NOTE` | No row sets a cap, so this profile leaves autonomy exactly as it is today. |
+| `RUBRIC.NOCAP` | No cap |
+| `RUBRIC.GROUP_EGRESS` | Network reach |
+| `RUBRIC.GROUP_SECRETS` | Secrets |
+| `RUBRIC.GROUP_BARRIER` | Barrier |
+| `RUBRIC.GROUP_BARRIER_HINT` | The enforced barrier — “confinement class” in the API and the docs. |
+| `RUBRIC.ROWS.egress_open.LABEL` | Open |
+| `RUBRIC.ROWS.egress_open.WHY` | The run can reach hosts beyond the baseline, or everything. |
+| `RUBRIC.ROWS.egress_reviewed.LABEL` | Reviewed |
+| `RUBRIC.ROWS.egress_reviewed.WHY` | New hosts are approved on first use. |
+| `RUBRIC.ROWS.egress_sealed.LABEL` | Sealed |
+| `RUBRIC.ROWS.egress_sealed.WHY` | Baseline hosts only. |
+| `RUBRIC.ROWS.secrets_powerful.LABEL` | Powerful |
+| `RUBRIC.ROWS.secrets_powerful.WHY` | The run carries a credential that can write. |
+| `RUBRIC.ROWS.secrets_baseline.LABEL` | Baseline |
+| `RUBRIC.ROWS.secrets_baseline.WHY` | The run carries credentials, none of them write-capable. |
+| `RUBRIC.ROWS.secrets_none.LABEL` | None |
+| `RUBRIC.ROWS.secrets_none.WHY` | The run carries no credential. |
+| `RUBRIC.ROWS.confinement_cc1.LABEL` | Fence (CC1) |
+| `RUBRIC.ROWS.confinement_cc1.WHY` | Shared kernel. |
+| `RUBRIC.ROWS.confinement_cc2.LABEL` | Wall (CC2) |
+| `RUBRIC.ROWS.confinement_cc2.WHY` | gVisor userspace kernel. |
+| `RUBRIC.ROWS.confinement_cc3.LABEL` | Vault (CC3) |
+| `RUBRIC.ROWS.confinement_cc3.WHY` | Kata microVM. |
+| `RUBRIC.SET_NOTE(n, level)` | {n} of 9 rows set a cap. The lowest is {level}. |
+
+`ROWS` is keyed by the nine `AutonomyRubricRowKey` values, iterated in `AUTONOMY_RUBRIC_ROW_KEYS`
+order (egress, then secrets, then confinement) rather than object insertion order, matching the
+Go side's own row order. `SET_NOTE`'s `{n}` is a plain count, not a pluralised alternation — it
+is always "rows" regardless of `n`.
+
+### 7.11 `LIMITS_CHIP` — the profiles-list chip's autonomy cell (`governance-screen.tsx`)
+
+| Key | String |
+|---|---|
+| `LIMITS_CHIP.AUTONOMY(label)` | Autonomy: {label} at the strictest |
+
+Ruling 2 (#96 review): the chip names the **strictest cap** a set rubric row resolves to, not
+merely that a rubric exists — `{label}` is that level's `AUTONOMY_META` label (e.g. "Attended"),
+looked up by the caller. Detail behind a tooltip is unreadable on a phone and unreachable by
+keyboard, so the fact that matters is on the chip face itself.
+
+### 7.12 `AUTONOMY_RAIL` — the New Run rail's Autonomy section and the run header
+
+| Key | String |
+|---|---|
+| `AUTONOMY_RAIL.HEADING` | Autonomy |
+| `AUTONOMY_RAIL.NO_CAP` | Your organization's profile sets no autonomy rubric, so nothing caps this run. |
+| `AUTONOMY_RAIL.NO_PROFILE` | No governance profile applies to you, so nothing caps this run. |
+| `AUTONOMY_RAIL.DERIVED_HOLD_NOTE` | Every tool call in this run will wait for your confirmation. |
+| `AUTONOMY_RAIL.PROFILE_LINE(p)` | From the {p} governance profile. |
+
+### 7.13 `AUTONOMY_BOUND` — the one-cause "bound by" sentence, one per rubric row
+
+| Key | String |
+|---|---|
+| `AUTONOMY_BOUND.egress_open` | Bound by this run's network reach: it can reach hosts beyond the baseline. |
+| `AUTONOMY_BOUND.egress_reviewed` | Bound by this run's network reach: new hosts are approved on first use. |
+| `AUTONOMY_BOUND.egress_sealed` | Bound by this run's network reach: baseline hosts only. |
+| `AUTONOMY_BOUND.secrets_powerful` | Bound by this run's secrets: it carries a credential that can write. |
+| `AUTONOMY_BOUND.secrets_baseline` | Bound by this run's secrets: it carries credentials, none of them write-capable. |
+| `AUTONOMY_BOUND.secrets_none` | Bound by this run's secrets: it carries none. |
+| `AUTONOMY_BOUND.confinement_cc1` | Bound by this run's barrier: Fence, confinement class CC1. |
+| `AUTONOMY_BOUND.confinement_cc2` | Bound by this run's barrier: Wall, confinement class CC2. |
+| `AUTONOMY_BOUND.confinement_cc3` | Bound by this run's barrier: Vault, confinement class CC3. |
+
+Ruling 1 (#96 review): when more than one rubric row ties at the resolved level, the rail names
+**every** tied cause, not just the first — `autonomyBoundSentence` (`governance-copy.ts`)
+composes the tied rows' own dimension and detail fragments (the same fragments each row's
+`AUTONOMY_BOUND` sentence above is built from) rather than concatenating whole sentences; a
+single cause renders the frozen sentence above unchanged. The composition itself — joining
+dimensions with "and", details with ";" so a detail's own comma (confinement's "Fence,
+confinement class CC1") never reads as a fourth tied cause — is behaviour, not copy, and is not
+re-frozen here.
 
 ## 8. Where to apply (once implemented, out of scope this round)
 

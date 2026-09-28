@@ -37,6 +37,7 @@ func (s *runWarnStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 }
 
 func (s *runWarnStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+func (s *runWarnStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error  { return nil }
 
 func (s *runWarnStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	return g, nil
@@ -69,7 +70,7 @@ func TestCreateRun_SurfacesMemberNarrowingWarnings(t *testing.T) {
 
 	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com","evil.example.com"]}}`
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-		ssoSession(t, "sub-warn-member", "dev@corp.example", oidc.RoleMember), body)
+		ssoSession(t, "sub-warn-member", "dev@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201 (a drop narrows, it does not refuse): %s", w.Code, w.Body.String())
 	}
@@ -133,10 +134,10 @@ func (s *collisionStore) ActiveRunsAtWorkspacePath(_ context.Context, path strin
 // policy bounds, to decide whether to print one sentence that usually is not
 // printed. The predicate is two columns; Postgres can answer it with a WHERE.
 //
-// THE OUTPUT IS IDENTICAL EITHER WAY, which is exactly why this needs a test
+// The output is identical either way, which is exactly why this needs a test
 // that watches the read: every existing assertion about the warning's text
-// passes on both implementations, so nothing stood between the fix and a
-// silent revert to the full scan.
+// passes on both implementations, so without this nothing would stop a silent
+// revert to the full scan.
 func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 	const path = "/srv/shared-workspace"
 	mine, other, done, elsewhere := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -150,7 +151,7 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 
 	// The caller here holds no verified human (the admin-token / local-mode
 	// shape), so isSecurityOperator is true and every colliding run is visible
-	// to them — this test is about the READ, and F336's ownership filter is
+	// to them — this test is about the READ, and the ownership filter is
 	// pinned separately in r3_workspace_collision_test.go.
 	warnings := srv.warnWorkspaceCollision(collisionRequest(), mine, path)
 
@@ -166,7 +167,7 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 		t.Errorf("the read was scoped to %q, want the run's own workspace path %q", st.activePath, path)
 	}
 
-	// AND THE ANSWER IS UNCHANGED, in all three directions the filter decides:
+	// And the answer is unchanged, in all three directions the filter decides:
 	// the other live run collides, the finished one does not, the run being
 	// created is not its own collision, and a run elsewhere is irrelevant.
 	if len(warnings) != 1 {
@@ -228,9 +229,7 @@ func TestCreateRun_StoredReservedRepoTargetIsSaidOutLoud(t *testing.T) {
 			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "octocat/hello", Target: target}},
 		}
 		srv := New(cfg)
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "sub-stored-repo", "admin@corp.example", oidc.RoleAdmin),
-			`{"agent":"claude-code","task":"t"}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","task":"t"}`)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201 (a stale stored target drops the repo, it does not refuse the run): %s",
 				w.Code, w.Body.String())

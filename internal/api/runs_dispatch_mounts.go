@@ -9,13 +9,14 @@ import (
 	"log/slog"
 	"maps"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -42,7 +43,7 @@ import (
 // A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchRun.
 //
-// member is the run's member-mount posture (memberMountPosture, workspace_refs.go).
+// member is the run's member-mount posture (userMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
 // driver's bind-time within-roots check keys on. Everything NOT in that set is
 // operator/Wardyn-authored (the blessed credential mounts copied from the
@@ -60,7 +61,7 @@ func driveTargetReserved(target string) bool {
 	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
 }
 
-func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberMountPosture) []runner.Mount {
+func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
 		// The resident ~/.claude subscription mount is a MODEL-RUN-ONLY
@@ -131,9 +132,9 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // plain site_config.UpstreamProxyURL or (when it carries a credential) as
 // site_config.UpstreamProxySecretRef naming the secret holding it;
 // resolveUpstreamProxyURL prefers the plain URL when set. The resolved
-// cred-bearing URL lands in the sidecar's WARDYN_PROXY_CONFIG_JSON env var, the
-// SAME posture as RunToken today: proxy-process-only, never on the sandbox
-// side, masked from decision-log/stdout by the proxy — a deliberate,
+// cred-bearing URL lands in the sidecar's rendered config, the SAME posture as
+// RunToken: the proxy's memory and the run's sealed stored config (#1176),
+// never on the sandbox side, masked from decision-log/stdout by the proxy — a deliberate,
 // already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
 // new one. Fail SAFE: neither field configured, an unresolvable secret, a
 // non-http URL, or a URL the sidecar itself would refuse (from either source —
@@ -164,7 +165,13 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 		// secret here would let a member redirect every run's egress to a
 		// server of their own choosing with no SSRF guard on that hop at all,
 		// not merely widen what a vetted destination allows.
-		getSecret = s.cfg.Secrets.For("").Get
+		// A closure, not the method value: the read carries its purpose
+		// (the Audited store refuses a read without one), and the read guard
+		// can see it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
+		}
 	}
 	detail := map[string]any{
 		"secret_ref": siteCfg.UpstreamProxySecretRef, "url_configured": siteCfg.UpstreamProxyURL != "",
@@ -181,14 +188,29 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	return resolved
 }
 
-// envEnabled reports whether an operator env-toggle string is truthy
-// (1/true/yes/on, case-insensitive). Empty/unset/anything else is false.
-func envEnabled(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
+// envEnabled reports whether an operator env-toggle named by env is truthy
+// (1/true/yes/on, case-insensitive; 0/false/no/off is false), via
+// cliutil.EnvBool (#202). Unset/empty is false. It runs per request, so the
+// name must be listed in envToggles: that list is what makes a garbage value
+// a boot refusal instead of an exit 2 on the first request that reads it.
+func envEnabled(env string) bool {
+	return cliutil.EnvBool(env, false)
+}
+
+// envAllowAgentTelemetry lets agent-CLI telemetry through; see buildBaseSandboxEnv.
+const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
+
+// envToggles names every switch this package reads with envEnabled.
+// TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
+var envToggles = []string{envEgressSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry}
+
+// ValidateEnvToggles reads each envToggles switch once, so a value that is
+// neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
+// killing the daemon mid-request later. cmd/wardynd calls it right after flag
+// parsing.
+func ValidateEnvToggles() {
+	for _, name := range envToggles {
+		cliutil.EnvBool(name, false)
 	}
 }
 
@@ -229,7 +251,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		// Exclude the proxy itself and loopback from proxy traversal. DERIVED
 		// from proxyURL, not the literal "wardyn-proxy": that name is
 		// only the default per-run sidecar alias, and -proxy-url /
-		// WARDYN_PROXY_URL_OVERRIDE moves it. With an override the sandbox's own
+		// WARDYN_SANDBOX_PROXY_URL moves it. With an override the sandbox's own
 		// HTTP_PROXY named a host that was NOT in its NO_PROXY, so a
 		// proxy-aware client reaching the proxy's local /wardyn/... routes tried
 		// to reach the proxy THROUGH the proxy — while a name that resolves to
@@ -273,7 +295,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// the approval queue shows only task-relevant egress. An operator who WANTS
 	// agent telemetry sets WARDYN_ALLOW_AGENT_TELEMETRY (1/true/yes/on) to omit
 	// these; default-unset keeps the suppression on.
-	if !envEnabled(os.Getenv("WARDYN_ALLOW_AGENT_TELEMETRY")) {
+	if !envEnabled(envAllowAgentTelemetry) {
 		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 		env["DISABLE_TELEMETRY"] = "1"
 	}
@@ -400,8 +422,31 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// InteractiveStart above is gated on `interactive`: an interactive run's
 	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
 	// matter what the request said.
-	if !p.Interactive && p.ToolApprovals == "hold" {
+	if p.holdLane() {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
+		// The same ceiling the approval-expiry sweeper actually expires a
+		// PENDING approval at (Config.ApprovalExpiryAfter — see the field's
+		// doc). agent-run's hold branch reads it to size MCP_TOOL_TIMEOUT and
+		// wardyn-toolgate defaults -deadline from it (RL-1): without this, a
+		// tool call's wait is bounded by their own hardcoded literals instead
+		// of the operator's real, possibly-raised, ceiling.
+		sandboxEnv["WARDYN_APPROVAL_EXPIRY_AFTER"] = p.ApprovalExpiryAfter.String()
+	}
+	// The RESOLVED autonomy level, read off the run row the launch gate froze
+	// it on (resolveRunAutonomy, runs_autonomy.go) rather than off a dispatch
+	// parameter, so the sandbox and the audit trail cannot be told two levels
+	// for one run.
+	//
+	// An ANNOUNCEMENT, never the mechanism — the same posture WARDYN_USER_DRIVE
+	// takes. What constrains the agent is the launch branch above plus the
+	// managed-settings file generated from this same level
+	// (runs_dispatch_agentpolicy.go), so an agent that ignores this key still
+	// has both and one that fabricates it still has neither. It exists so the
+	// image's launcher can SAY which level it came up under, which is what
+	// makes a MISSING agent-side layer visible from inside the sandbox instead
+	// of only in the control plane. Absent for every run no rubric bound.
+	if run.AutonomyLevel != "" {
+		sandboxEnv["WARDYN_AUTONOMY_LEVEL"] = string(run.AutonomyLevel)
 	}
 	if p.FirstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()

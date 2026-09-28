@@ -14,11 +14,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestWarnUpstreamProxyNoBypass (#139): a corp upstream proxy configured with
-// no upstream_proxy_no_proxy entry covering a configured gateway host used to
-// say nothing at all at boot — every brokered call to that gateway is
-// CONNECTed through the upstream instead of dialled directly, which times out
-// on a private-endpoint estate the upstream cannot reach.
+// TestWarnUpstreamProxyNoBypass: a corp upstream proxy configured with no
+// upstream_proxy_no_proxy entry covering a configured gateway host must warn
+// at boot — every brokered call to that gateway is CONNECTed through the
+// upstream instead of dialled directly, which times out on a private-endpoint
+// estate the upstream cannot reach.
 func TestWarnUpstreamProxyNoBypass(t *testing.T) {
 	gateways := map[string]string{"api.anthropic.com": "https://gateway.internal:8443"}
 

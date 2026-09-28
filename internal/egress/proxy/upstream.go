@@ -18,28 +18,24 @@ import (
 	"time"
 )
 
-// upstreamConnectTimeout bounds the CONNECT handshake with the corporate parent
-// proxy (dial + reply). Matches the 15s dialer in newProxy: an upstream that
-// accepts TCP but never answers must surface as a dial failure, never as a hang.
-const upstreamConnectTimeout = 15 * time.Second
+// upstreamConnectTimeout bounds the CONNECT handshake with the corporate
+// parent proxy (dial + reply). Matches the 15s dialer in newProxy: an
+// upstream that accepts TCP but never answers must surface as a dial
+// failure, never as a hang. A var, not a const, so a test can shrink it (see
+// TestUpstreamConnectTimeout_ProductionValueUnchanged).
+var upstreamConnectTimeout = 15 * time.Second
 
-// upstreamProxy is the OPTIONAL corporate parent proxy that wardyn-proxy chains
-// its egress through. In a locked-down corporate network the sandbox host has NO
-// direct route to the internet — the ONLY way out is the org's HTTP CONNECT
-// proxy, which is FREQUENTLY a PRIVATE address (e.g. proxy.corp:8080 @ 10.x).
-// When set, every FORWARD-EGRESS dial (HTTPS CONNECT tunnels, plain-HTTP
-// forwards, and the MITM LLM path) is issued as CONNECT <real-host>:<port> to
-// this proxy instead of a direct dial. Control-plane calls to wardynd NEVER
-// traverse it — that split is enforced by a dedicated controlTransport (see
-// newProxy), so the run token is never sent toward the corp proxy.
-//
-// The embedded credential (if the operator's URL carried user:pass@)
-// is held ONLY here in proxy memory — the same posture as the run token — and is
-// registered in the process secret-mask registry (see NewServer) so it can never
-// leak into a decision log or stdout.
+// upstreamProxy is the OPTIONAL corporate parent proxy that wardyn-proxy
+// chains its egress through, since the ONLY way out of a locked-down
+// corporate network may be the org's HTTP CONNECT proxy (frequently a
+// PRIVATE address). When set, every FORWARD-EGRESS dial is issued as CONNECT
+// to this proxy instead of a direct dial. Control-plane calls NEVER traverse
+// it (controlTransport in newProxy), so the run token is never sent toward
+// the corp proxy. The embedded credential is held ONLY here in proxy memory
+// and registered in the process secret-mask registry (NewServer).
 type upstreamProxy struct {
-	// addr is the corp proxy's host:port, dialed directly. It is resolved and
-	// pinned WITHOUT the private-IP guard — the deliberate, audited exception.
+	// addr is the corp proxy's host:port. Resolved and pinned WITHOUT the
+	// private-IP guard — the deliberate, audited exception.
 	addr string
 	// authHeader is the "Basic <base64>" Proxy-Authorization value, or "" when
 	// the operator configured no credential.
@@ -65,12 +61,10 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "http":
-		// Only plaintext-HTTP CONNECT-forwarding is implemented. dialThroughUpstream
-		// does a plaintext TCP CONNECT + Proxy-Authorization; an https:// proxy
-		// would need a TLS wrap first (else the Basic cred goes cleartext to the
-		// proxy). Reject https until that's implemented rather than silently
-		// leaking the credential. (The tunneled payload to the real target is
-		// still end-to-end TLS regardless — this is only the hop to the proxy.)
+		// Only plaintext-HTTP CONNECT-forwarding is implemented; an https://
+		// proxy would need a TLS wrap first or the Basic cred goes cleartext
+		// to the proxy. (The tunneled payload to the real target is still
+		// end-to-end TLS regardless — this is only the hop to the proxy.)
 	default:
 		return nil, fmt.Errorf("upstream proxy url: unsupported scheme %q (only http is supported; https-to-proxy is not yet implemented)", u.Scheme)
 	}
@@ -92,11 +86,10 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 		port: port,
 	}
 	if u.User != nil {
-		// user[:pass] -> "Basic base64(user:pass)". Use the DECODED username/password,
-		// not u.User.String(), which percent-encodes them: a password like "p@ss/w0rd"
-		// would otherwise be sent as "p%40ss%2Fw0rd" — the wrong credential, so the
-		// upstream proxy rejects the CONNECT. The cleartext credential is NEVER logged;
-		// NewServer registers maskValues() in the mask registry.
+		// user[:pass] -> "Basic base64(user:pass)". Use the DECODED username/
+		// password, not u.User.String(), which percent-encodes them (a
+		// password like "p@ss/w0rd" would be sent wrong). NewServer registers
+		// maskValues() so the cleartext credential is never logged.
 		cred := u.User.Username()
 		if pw, ok := u.User.Password(); ok {
 			cred += ":" + pw
@@ -107,10 +100,9 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 }
 
 // maskValues returns the secret byte-strings that must be masked from any
-// decision-log / stdout output: the base64 credential as it appears on the wire
-// (Proxy-Authorization), the decoded user:pass, and the password half alone.
-// Empty when no credential is configured. (secretmask ignores values shorter
-// than its MinLen, so trivially short creds are simply not registered.)
+// decision-log / stdout output: the base64 credential as it appears on the
+// wire, the decoded user:pass, and the password half alone. Empty when no
+// credential is configured.
 func (u *upstreamProxy) maskValues() [][]byte {
 	if u == nil || u.authHeader == "" {
 		return nil
@@ -126,19 +118,16 @@ func (u *upstreamProxy) maskValues() [][]byte {
 	return vals
 }
 
-// dialThroughUpstream dials the corporate parent proxy and issues a CONNECT for
-// the REAL destination host:port, returning the established tunnel.
+// dialThroughUpstream dials the corporate parent proxy and issues a CONNECT
+// for the REAL destination host:port, returning the established tunnel.
 //
 // Security relaxation (deliberate + audited): the corp proxy address is
-// resolved+pinned WITHOUT the private-IP/loopback/metadata guard — a corp proxy
-// is frequently a private IP (10.x), and this is the OPERATOR-CONFIGURED trusted
-// egress hop, the same trust boundary as the control-plane URL
-// (resolveTrustedURL). This exception applies ONLY to dialing the configured
-// proxy; agent-chosen targets keep the full guard (evaluate() still runs
-// policy/approval/method, and the literal-IP guard still denies an agent naming
-// a private IP directly). The real host is sent by NAME — the corp proxy does
-// the outbound DNS+dial, so the sandbox never needs to resolve it (the vetted-IP
-// TOCTOU pin is relaxed for this hop only, documented in evaluate()).
+// resolved+pinned WITHOUT the private-IP/loopback/metadata guard — the
+// OPERATOR-CONFIGURED trusted egress hop, same trust boundary as the
+// control-plane URL. This exception applies ONLY to dialing the configured
+// proxy; agent-chosen targets keep the full guard. The real host is sent by
+// NAME — the corp proxy does the outbound DNS+dial, so the vetted-IP TOCTOU
+// pin is relaxed for this hop only (documented in evaluate()).
 func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPort int) (net.Conn, error) {
 	up := p.upstream
 	if up == nil {
@@ -166,16 +155,11 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 		_ = conn.Close()
 		return nil, fmt.Errorf("write upstream CONNECT: %w", err)
 	}
-	// Read the proxy's reply to our CONNECT; a 2xx means the tunnel is open.
-	//
-	// Bound the read: a proxy that accepts the TCP connection and then never
-	// answers would otherwise block here forever: the MITM path has already told
-	// the agent "200 Connection Established" before this dial, so the operator
-	// sees an APPROVED request hang indefinitely instead of failing — the
-	// failure mode when a corp client binds its proxy to loopback only, where
-	// the container-runtime VM can open nothing but a misrouted address can
-	// still accept and stall. Fail fast instead; the caller turns the error into the
-	// normal dial-failed DENY + 502. Matches the dialer timeout in proxy.go.
+	// Bound the read: a proxy that accepts the TCP connection and never
+	// answers would otherwise hang forever — the MITM path has already told
+	// the agent "200 Connection Established" before this dial, so an
+	// APPROVED request would hang instead of failing. Fail fast instead; the
+	// caller turns the error into the normal dial-failed DENY + 502.
 	if err := conn.SetReadDeadline(time.Now().Add(upstreamConnectTimeout)); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("set upstream CONNECT deadline: %w", err)
@@ -187,8 +171,7 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 		return nil, fmt.Errorf("read upstream CONNECT response: %w", err)
 	}
 	_ = resp.Body.Close()
-	// Clear the deadline: the tunnel that follows is long-lived (an agent may
-	// hold a streaming response open far longer than the handshake budget).
+	// Clear the deadline: the tunnel that follows is long-lived.
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("clear upstream CONNECT deadline: %w", err)

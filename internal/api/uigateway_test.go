@@ -37,7 +37,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ───────────────────────────────────────────────────────────────────
+// fakes
 
 // uiMemStore extends the package's run fake (sshMemStore) with the two things
 // the gateway needs beyond a run row: the attach-ticket table it redeems, and
@@ -99,8 +99,8 @@ func (s *uiMemStore) wasTouched() bool {
 
 // touchCount is wasTouched's cardinal twin: a relayed WebSocket is ONE inbound
 // request for its whole life, so "was it touched at all" cannot tell an
-// open-and-idle editor apart from one the reaper is about to stop under
-// (B3-F3). Only a count > 1 proves a keepalive is running.
+// open-and-idle editor apart from one the reaper is about to stop for
+// keepalive strain. Only a count > 1 proves a keepalive is running.
 func (s *uiMemStore) touchCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,7 +119,7 @@ func (s *uiMemStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, limit 
 	return out, nil
 }
 
-// putEffectivePolicy seeds the run.policy.effective envelope dispatch writes —
+// putEffectivePolicy seeds the run.policy.resolve envelope dispatch writes —
 // the gateway's only source for which apps a run really declared.
 func (s *uiMemStore) putEffectivePolicy(runID uuid.UUID, spec types.RunPolicySpec) {
 	data, _ := json.Marshal(spec)
@@ -127,7 +127,7 @@ func (s *uiMemStore) putEffectivePolicy(runID uuid.UUID, spec types.RunPolicySpe
 	defer s.mu.Unlock()
 	s.events = append(s.events, types.AuditEvent{
 		ID: uuid.New(), Time: time.Now(), RunID: &runID,
-		Action: "run.policy.effective", Outcome: "success", Data: data,
+		Action: "run.policy.resolve", Outcome: "success", Data: data,
 	})
 }
 
@@ -295,11 +295,55 @@ func (h *uiHarness) ticket(runID uuid.UUID, principal, role string) string {
 	return tok
 }
 
-// enter drives GET /__wardyn/enter with the given query and returns the
-// response recorder.
+// bindCookie walks the console's pre-enter fetch (#1241) for ticket, as the
+// console page does, and returns the binding cookie the gateway set: the
+// cookie a browser that minted the ticket holds.
+func (h *uiHarness) bindCookie(ticket string) *http.Cookie {
+	h.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, uiBindPath, strings.NewReader(url.Values{"ticket": {ticket}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	req.Header.Set("Origin", "https://console.example.com")
+	rec := httptest.NewRecorder()
+	h.srv.handleUIBind(rec, req)
+	if rec.Code != http.StatusNoContent {
+		h.t.Fatalf("bind: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if strings.HasPrefix(c.Name, uiBindCookiePrefix) {
+			return c
+		}
+	}
+	h.t.Fatal("bind set no binding cookie")
+	return nil
+}
+
+// bound adds the binding cookie for the ticket in v, when there is one, so the
+// enter helpers below act as the browser that minted it.
+func (h *uiHarness) bound(req *http.Request, v url.Values) *http.Request {
+	if t := v.Get("ticket"); t != "" {
+		req.AddCookie(h.bindCookie(t))
+	}
+	return req
+}
+
+// enter drives GET /__wardyn/enter with the given query, from the browser
+// that bound its ticket, and returns the response recorder.
 func (h *uiHarness) enter(q url.Values) *httptest.ResponseRecorder {
 	h.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
+	req := h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
+	rec := httptest.NewRecorder()
+	h.gateway.ServeHTTP(rec, req)
+	return rec
+}
+
+// enterPOST drives POST /__wardyn/enter with the given values as an
+// application/x-www-form-urlencoded body (the #1220 hand-off), from the
+// browser that bound its ticket, and returns the response recorder.
+func (h *uiHarness) enterPOST(form url.Values) *httptest.ResponseRecorder {
+	h.t.Helper()
+	req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(form.Encode())), form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
 	return rec
@@ -310,7 +354,7 @@ func (h *uiHarness) openSession() *http.Cookie {
 	h.t.Helper()
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
 		h.t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
@@ -347,7 +391,7 @@ func okBackend() http.Handler {
 	})
 }
 
-// ─── the gateway exists only on its own origin ───────────────────────────────
+// the gateway exists only on its own origin
 
 // TestUIGateway_OffMeansNoHandlerAndNoHealthzBlock: empty
 // WARDYN_UI_SANDBOX_LISTEN is off — no handler for cmd/wardynd to serve, and
@@ -382,6 +426,15 @@ func TestUIGateway_HealthzPublishesEnterTemplate(t *testing.T) {
 	if block["host_mode"] != false {
 		t.Fatalf("host_mode = %v, want false without an origin template", block["host_mode"])
 	}
+	// enter_post_url (#1220): the same base with NO query string at all — the
+	// console POSTs run/app/ticket as form fields against it instead.
+	postURL, _ := block["enter_post_url"].(string)
+	if strings.Contains(postURL, "?") {
+		t.Fatalf("enter_post_url %q carries a query string, want none", postURL)
+	}
+	if !strings.HasSuffix(tmpl, "?run={run}&app={app}&ticket={ticket}") || strings.TrimSuffix(tmpl, "?run={run}&app={app}&ticket={ticket}") != postURL {
+		t.Fatalf("enter_post_url %q is not enter_url_template %q with the query stripped", postURL, tmpl)
+	}
 }
 
 // TestUIGateway_ConsoleOriginHasNoRelayRoutes is the origin-separation test: a
@@ -401,7 +454,7 @@ func TestUIGateway_ConsoleOriginHasNoRelayRoutes(t *testing.T) {
 	}
 }
 
-// ─── enter: the ticket is the only way in ────────────────────────────────────
+// enter: the ticket is the only way in
 
 // TestUIGateway_EnterRejectsBadTickets covers every way a ticket can fail to
 // authorize: absent, garbage, already used, and minted for another run. All
@@ -409,7 +462,7 @@ func TestUIGateway_ConsoleOriginHasNoRelayRoutes(t *testing.T) {
 // oracle to distinguish the cases.
 func TestUIGateway_EnterRejectsBadTickets(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	used := h.ticket(h.run.ID, h.owner, oidc.RoleMember)
+	used := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
 	if rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {used}}); rec.Code != http.StatusFound {
 		t.Fatalf("first redemption: %d", rec.Code)
 	}
@@ -420,7 +473,7 @@ func TestUIGateway_EnterRejectsBadTickets(t *testing.T) {
 		"no ticket":                     {"run": {h.run.ID.String()}, "app": {"code"}},
 		"garbage ticket":                {"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}},
 		"reused ticket":                 {"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {used}},
-		"ticket minted for another run": {"run": {otherRun.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)}},
+		"ticket minted for another run": {"run": {otherRun.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}},
 	}
 	for name, q := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -439,7 +492,7 @@ func TestUIGateway_EnterRejectsNonOwnerTicket(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, "mallory", oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, "mallory", oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-owner ticket: %d %s", rec.Code, rec.Body.String())
@@ -462,7 +515,7 @@ func TestUIGateway_EnterRequiresDeclaredApp(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"secretsrv"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("undeclared app: %d", rec.Code)
@@ -471,13 +524,13 @@ func TestUIGateway_EnterRequiresDeclaredApp(t *testing.T) {
 		t.Fatalf("refusal does not name the policy field: %s", rec.Body.String())
 	}
 
-	// A run with no run.policy.effective envelope at all (never dispatched, or
+	// A run with no run.policy.resolve envelope at all (never dispatched, or
 	// the audit store unavailable) must fail closed the same way.
 	bare := types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-3"}
 	h.store.putRun(bare)
 	rec = h.enter(url.Values{
 		"run": {bare.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(bare.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(bare.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("run with no effective policy: %d", rec.Code)
@@ -493,10 +546,53 @@ func TestUIGateway_EnterRequiresRunningRun(t *testing.T) {
 	h.store.putRun(stopped)
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("stopped run: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_EnterRefusesAKeptRun: a run the lease ended is RUNNING with
+// its agent stopped, so /enter must refuse it with a plain 409 rather than
+// minting a cookie and redirecting into a relay that dies on its first dial
+// (matching the attach gates' TestAttach_RefusesAKeptRun).
+func TestUIGateway_EnterRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	rec := h.enter(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			t.Fatal("a kept run must not get a relay cookie")
+		}
+	}
+}
+
+// TestUIGateway_RelayRefusesAKeptRun: the per-connection dial gate re-checks
+// the run on EVERY new connection (not just at enter), so a session opened
+// before the run ended must stop working once it is kept, the same as a
+// stopped run.
+func TestUIGateway_RelayRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	good := h.openSession()
+
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	if rec := h.relay("/ide", good, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s, want 409", rec.Code, rec.Body.String())
 	}
 }
 
@@ -510,7 +606,7 @@ func TestUIGateway_EnterSetsRunScopedCookie(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
 		t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
@@ -547,9 +643,9 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 	h.srv.cfg.UIOriginTemplate = "https://run-{run}.ui.example.com"
 	q := url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	}
-	req := httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
+	req := h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
 	req.Host = "run-" + uuid.New().String() + ".ui.example.com"
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
@@ -557,8 +653,8 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 		t.Fatalf("enter on another run's host: %d %s", rec.Code, rec.Body.String())
 	}
 
-	q.Set("ticket", h.ticket(h.run.ID, h.owner, oidc.RoleMember))
-	req = httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
+	q.Set("ticket", h.ticket(h.run.ID, h.owner, oidc.RoleUser))
+	req = h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
 	req.Host = "run-" + h.run.ID.String() + ".ui.example.com"
 	rec = httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
@@ -567,7 +663,262 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 	}
 }
 
-// ─── relay: the cookie is the only credential ────────────────────────────────
+// enter: the POST hand-off (#1220) — the same path, reached a different way
+
+// TestUIGateway_EnterPOST_ValidTicketSetsCookieAnd303 is POST's success case:
+// 303 (not GET's 302 — a POST redirect must not be silently replayed as a GET
+// against the relay path) plus the same relay cookie GET sets.
+func TestUIGateway_EnterPOST_ValidTicketSetsCookieAnd303(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	rec := h.enterPOST(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST enter: %d %s, want 303", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Header().Get("Location"), uiRunPrefix+h.run.ID.String()+"/code/ide"; got != want {
+		t.Fatalf("Location %q, want %q", got, want)
+	}
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("POST enter set no relay cookie")
+	}
+}
+
+// TestUIGateway_EnterPOST_RejectsBadTicketsSameAsGET mirrors
+// TestUIGateway_EnterRejectsBadTickets exactly, through POST: absent, garbage,
+// already-used and minted-for-another-run tickets all refuse with the SAME
+// 403 GET gives, because uiEnterCommon is the one path both methods run.
+func TestUIGateway_EnterPOST_RejectsBadTicketsSameAsGET(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	used := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+	if rec := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {used}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("first redemption: %d", rec.Code)
+	}
+	otherRun := types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-2"}
+	h.store.putRun(otherRun)
+
+	cases := map[string]url.Values{
+		"no ticket":                     {"run": {h.run.ID.String()}, "app": {"code"}},
+		"garbage ticket":                {"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}},
+		"reused ticket":                 {"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {used}},
+		"ticket minted for another run": {"run": {otherRun.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}},
+	}
+	for name, form := range cases {
+		t.Run(name, func(t *testing.T) {
+			if rec := h.enterPOST(form); rec.Code != http.StatusForbidden {
+				t.Fatalf("got %d %s, want 403", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if !h.audit.hasDataValue("reason", "invalid, expired, or already-used ticket") {
+		t.Fatalf("no ui.authorize/denied audit row for a bad POST ticket: %s", h.audit.dataReasons())
+	}
+}
+
+// TestUIGateway_EnterPOST_WrongHostRefused: the host-mode wrong-host refusal
+// (uiRunOrigin) holds on POST exactly as it does on GET.
+func TestUIGateway_EnterPOST_WrongHostRefused(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	h.srv.cfg.UIOriginTemplate = "https://run-{run}.ui.example.com"
+	form := url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	}
+	req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(form.Encode())), form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = "run-" + uuid.New().String() + ".ui.example.com"
+	rec := httptest.NewRecorder()
+	h.gateway.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST enter on another run's host: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_EnterPOST_RefusesAKeptRun mirrors
+// TestUIGateway_EnterRefusesAKeptRun: a run the lease ended is RUNNING with
+// its agent stopped, and POST must not paper over that either.
+func TestUIGateway_EnterPOST_RefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	rec := h.enterPOST(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_EnterPOST_TicketInQueryIsRefused is the no-mixed-mode rule: a
+// ticket in the query string on a POST is refused BEFORE any ticket lookup —
+// proven by redeeming the same ticket successfully right after, which would
+// fail if the refused request had already consumed it. Covers a bare
+// `?ticket=<T>`, an empty `?ticket=` with none in the form, and (review F1)
+// `?ticket=&ticket=<T>` — the query check has to test for the KEY's presence
+// (url.Values.Has), not a non-empty first VALUE (url.Values.Get), or a form
+// ticket riding alongside an empty query one would slip through as valid.
+func TestUIGateway_EnterPOST_TicketInQueryIsRefused(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+
+	t.Run("bare query ticket", func(t *testing.T) {
+		ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+		form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}}
+		req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket="+ticket, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("ticket in query on POST: %d %s, want 400", rec.Code, rec.Body.String())
+		}
+		rec2 := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+		if rec2.Code != http.StatusSeeOther {
+			t.Fatalf("ticket unusable after the refused mixed-mode attempt: %d %s", rec2.Code, rec2.Body.String())
+		}
+	})
+
+	t.Run("empty query ticket, none in the form", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket=", strings.NewReader(url.Values{
+			"run": {h.run.ID.String()}, "app": {"code"},
+		}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("empty query ticket: %d %s, want 400", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("empty query ticket alongside a valid form one", func(t *testing.T) {
+		ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+		form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}}
+		req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?ticket=", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("empty query ticket + valid form ticket: %d %s, want 400 (Get(\"ticket\")!=\"\" would wrongly let this through)", rec.Code, rec.Body.String())
+		}
+		rec2 := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+		if rec2.Code != http.StatusSeeOther {
+			t.Fatalf("ticket unusable after the refused mixed-mode attempt: %d %s", rec2.Code, rec2.Body.String())
+		}
+	})
+}
+
+// TestUIGateway_EnterPOST_OversizeBodyRefused pins the body bound (review F3,
+// mutation M4): dropping http.MaxBytesReader survives the rest of this suite
+// silently, because nothing else sends a body anywhere near the 4KB cap.
+// Without the bound, ParseForm falls back to its own 10MB default — a much
+// larger unauthenticated read per request than this endpoint needs.
+func TestUIGateway_EnterPOST_OversizeBodyRefused(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+	form := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}}
+	oversize := form.Encode() + "&pad=" + strings.Repeat("x", int(maxUIEnterFormBytes))
+	req := httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(oversize))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.gateway.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversize body: %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	// The oversized request must never have gotten far enough to consume the
+	// ticket it carried.
+	rec2 := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+	if rec2.Code != http.StatusSeeOther {
+		t.Fatalf("ticket unusable after the oversize-body refusal: %d %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm pins the OTHER half
+// of "the form is the only source of truth" (review F3, mutations M3/M3b): a
+// query run/app must never override the form's, whether or not a ticket is
+// also present in the query, and a run/app ONLY in the query is not read at
+// all. r.PostForm is what makes this hold: r.Form merges the query in, and
+// only lets the body's values win where the body has the key (body values
+// come first in r.Form), so a query-only run/app would be read from it.
+func TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	otherRun := types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-2"}
+	h.store.putRun(otherRun)
+
+	form := url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	}
+	req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath+"?run="+otherRun.ID.String()+"&app=evil", strings.NewReader(form.Encode())), form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.gateway.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("form vs query run/app: %d %s, want 303 (the form wins)", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Header().Get("Location"), uiRunPrefix+h.run.ID.String()+"/code/ide"; got != want {
+		t.Fatalf("Location %q, want %q — the FORM's run, not the query's", got, want)
+	}
+
+	t.Run("run and app only in the query", func(t *testing.T) {
+		ticketOnly := url.Values{"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}}
+		req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath+"?run="+h.run.ID.String()+"&app=code", strings.NewReader(ticketOnly.Encode())), ticketOnly)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query-only run/app: %d %s, want 400", rec.Code, rec.Body.String())
+		}
+		full := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": ticketOnly["ticket"]}
+		if rec := h.enterPOST(full); rec.Code != http.StatusSeeOther {
+			t.Fatalf("ticket unusable after the query-only refusal: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// TestUIGateway_EnterPOST_TicketNeverAppearsInLocationOrRelayRequest is the
+// issue's core proof: the ticket value lands in neither the 303's Location nor
+// the request line the relay dials into the sandbox with.
+func TestUIGateway_EnterPOST_TicketNeverAppearsInLocationOrRelayRequest(t *testing.T) {
+	var gotRequestLine string
+	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRequestLine = r.Method + " " + r.URL.String()
+		_, _ = io.WriteString(w, "sandbox app")
+	}))
+	ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+	rec := h.enterPOST(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, ticket) {
+		t.Fatalf("Location leaks the ticket: %s", loc)
+	}
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("no relay cookie")
+	}
+	if relayRec := h.relay("/ide", cookie, nil); relayRec.Code != http.StatusOK {
+		t.Fatalf("relay: %d %s", relayRec.Code, relayRec.Body.String())
+	}
+	if strings.Contains(gotRequestLine, ticket) {
+		t.Fatalf("relay request line leaks the ticket: %s", gotRequestLine)
+	}
+}
+
+// relay: the cookie is the only credential
 
 // TestUIGateway_RelayRequiresAValidSessionForThisRun: no cookie, a forged one,
 // an expired one, and another run's cookie all fail — and none of them fall
@@ -722,7 +1073,7 @@ func TestUIGateway_RelayDropsSandboxWardynCookiesOutbound(t *testing.T) {
 	}
 }
 
-// ─── launcher ────────────────────────────────────────────────────────────────
+// launcher
 
 // TestUIGateway_MissingLauncherIs502WithTheFrozenMessage: the BYOI case an
 // operator actually hits. The body is a frozen string the console prints
@@ -793,7 +1144,7 @@ func TestUIGateway_LauncherScriptShape(t *testing.T) {
 	}
 }
 
-// ─── bounds ──────────────────────────────────────────────────────────────────
+// bounds
 
 // TestUIGateway_PerRunConnectionCap: every relay connection is a live exec in
 // the sandbox, so the count is bounded per run and slots come back on close.
@@ -835,7 +1186,7 @@ func TestUIGateway_RelayTouchesTheRun(t *testing.T) {
 	}
 }
 
-// ─── audit ───────────────────────────────────────────────────────────────────
+// audit
 
 // TestUIGateway_AuditsAuthAndSessionWithoutContent: the ui.* actions record
 // THAT a human opened an app, never what they did in it — and they are
@@ -850,7 +1201,7 @@ func TestUIGateway_AuditsAuthAndSessionWithoutContent(t *testing.T) {
 	h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"bogus"}})
 
 	got := strings.Join(h.audit.actions(), " ")
-	for _, want := range []string{"ui.auth/success", "ui.auth/denied", "ui.open/success"} {
+	for _, want := range []string{"ui.authorize/success", "ui.authorize/denied", "ui.open/success"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("audit %q missing %q", got, want)
 		}
@@ -860,7 +1211,7 @@ func TestUIGateway_AuditsAuthAndSessionWithoutContent(t *testing.T) {
 	}
 }
 
-// ─── session cookie ──────────────────────────────────────────────────────────
+// session cookie
 
 // TestUIGateway_SessionCookieIsSignedAndBounded: the cookie is the whole
 // credential, so a flipped byte, a swapped key, or a passed expiry must all

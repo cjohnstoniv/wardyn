@@ -53,8 +53,7 @@ export const C = {
 };
 
 // WORKSPACE_DETAIL_DRAFT
-// DRAFT (M2 canon pending): new strings staged in
-// local/v074/canon/ui-workspaces-approvals.md — not part of the frozen `C`
+// DRAFT (M2 canon pending): new strings staged for review — not part of the frozen `C`
 // export above (workspace-copy.test.ts's byte-checks parse only `C`).
 export const WORKSPACE_DETAIL_DRAFT = {
   // F5-F6: the Add-workspace dialog's one honest image choice — replaces the
@@ -69,4 +68,11 @@ export const WORKSPACE_DETAIL_DRAFT = {
   // session profile" action. This subtitle matches RecordPane's own wording.
   SESSIONS_SUBTITLE:
     "Run a task once with everything open. Wardyn watches what it reaches and you approve the hosts. Replay it confined to prove that approval is enough.",
+} as const;
+
+// M-6 (QM-10/§4.6, admin-member-modes-design.md, modes-b.html) — Record
+// stays an Admin view control, but it runs on the admin's own model
+// connection, made in the User view (record-pane.tsx's dependency line).
+export const RECORD = {
+  NEEDS_OWN_CONNECTION: "Record uses your own model connection — connect it in the user view.",
 } as const;

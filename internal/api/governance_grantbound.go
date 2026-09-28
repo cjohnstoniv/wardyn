@@ -78,6 +78,7 @@ const (
 	// in one place, and a proposal it covers nothing of is refused with the
 	// matching sentence before any ranking starts.
 	boundFailApproval grantBoundFailure = iota
+	boundFailOwnerOnly
 	boundFailTTL
 	boundFailGitHubScope
 )
@@ -95,7 +96,7 @@ const (
 // profile-authoring surface writes a profile carrying an arbitrary grant
 // pairing, assigns it to themselves — their own ceiling IS their assigned
 // profile, since the resolver's operator short-circuit keys on the admin tier
-// they do not hold — and filterMemberGrants plus the dispatch injection then
+// they do not hold — and filterUserGrants plus the dispatch injection then
 // deliver any operator-stored secret into their own sandbox, with self-authored
 // egress to carry it out. A profile may narrow credential eligibility; it may
 // never mint it.
@@ -112,12 +113,12 @@ const (
 //     approval forced on, a smaller GitHub repo set — which is the entire point
 //     of authoring one.
 //
-// Four axes, all in the narrowing direction: the pairing must be one the
+// Five axes, all in the narrowing direction: the pairing must be one the
 // deployment ceiling already lists — that axis is composer.CeilingGrantsCovering,
 // the SAME selection the runtime clamp bounds against and the same pairing rule
-// filterMemberGrants enforces, so a profile, a member and a dispatched run are
+// filterUserGrants enforces, so a profile, a member and a dispatched run are
 // bounded by one rule, not three that can drift; approval may be forced on,
-// never stripped;
+// never stripped; owner_only likewise;
 // TTL may be shortened, never lengthened (both sides normalized —
 // normalizeGrantTTLSeconds); and github_token repos/permissions must be a
 // subset, which pairing checks CANNOT see (storedSecretGrantPairing reports
@@ -142,7 +143,7 @@ func governanceGrantsWithinCeiling(profile, ceiling []types.GrantSpec) error {
 func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) error {
 	// An UNDECODABLE profile scope is a malformed write, not a silent pass: the
 	// pairing cannot be computed, so nothing can be said about whether it is in
-	// the ceiling. Fail closed, exactly as filterMemberGrants does.
+	// the ceiling. Fail closed, exactly as filterUserGrants does.
 	host, secretRef, _, covered, derr := storedSecretGrantPairing(g)
 	if derr != nil {
 		return fmt.Errorf("eligible grant %q: invalid scope: %w", g.Kind, derr)
@@ -185,6 +186,13 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 			note(boundFailApproval, fmt.Errorf(
 				"eligible grant %q strips requires_approval, which the deployment ceiling sets "+
 					"(a profile may force approval on, never off — without it the credential auto-mints at proxy boot)",
+				g.Kind))
+			continue
+		}
+		if cg.OwnerOnly && !g.OwnerOnly {
+			note(boundFailOwnerOnly, fmt.Errorf(
+				"eligible grant %q strips owner_only, which the deployment ceiling sets "+
+					"(a profile may force it on, never off — without it a person with no row of their own is served the operator's)",
 				g.Kind))
 			continue
 		}

@@ -20,9 +20,8 @@ import (
 
 // store_sources.go — the three-tier split's tier-1 (sources library) and
 // tier-2 (base-image catalog) storage, plus the workspace HYDRATE pass that
-// turns attachments back into the derived read-only view every pre-split
-// consumer keeps reading (Sources/BaseImage/Profile/Status), and the folded
-// EffectiveRequirements the run path consumes.
+// turns attachments back into the derived read-only view
+// (Sources/BaseImage/Profile/Status) and the folded EffectiveRequirements.
 
 // Sources (tier 1)
 
@@ -50,14 +49,10 @@ func scanSource(row pgx.Row) (types.Source, error) {
 	return src, nil
 }
 
-// sourceRequirementsParam marshals a requirements map for a jsonb param. A nil
-// map (a failed scan, or "no seed to apply") becomes SQL NULL — callers
-// COALESCE nil back to '{}' in the SQL, and the scan-seed CASE below reads NULL
-// as "leave requirements untouched". A non-nil map, empty or not, marshals to
-// real JSON ("{}" for empty) so a scan that legitimately finds nothing still
-// REBUILDS the scan_seeded subset instead of reading as a failed scan. Shared
-// by the explicit-requirements writers below and the scan-seed fill (seed and a
-// source's own requirements are the same concrete type).
+// sourceRequirementsParam marshals a requirements map for a jsonb param. nil
+// becomes SQL NULL (failed scan / "leave untouched" in the scan-seed CASE
+// below); a non-nil-but-empty map marshals to real "{}" so a legitimate
+// no-op scan still rebuilds the scan_seeded subset.
 func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
 	b, _ := jsonOrNull(m, m == nil).([]byte)
 	return b
@@ -65,10 +60,8 @@ func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
 
 // UpsertSource inserts a library source or returns the existing row with the
 // same identity (kind, locator, ref) — ONE statement, no read-then-write race:
-// the UNIQUE constraint IS the dedupe rule. The no-op DO UPDATE lets RETURNING
-// yield the surviving row either way. Identity fields must arrive
-// CANONICALIZED (the api layer owns that: dirs trim trailing slashes, repo
-// locators lowercase, refs trimmed) — the store stores what it is given.
+// the UNIQUE constraint IS the dedupe rule. Identity fields must arrive
+// CANONICALIZED (the api layer owns that) — the store stores what it is given.
 func (s PG) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
 	q := `
 		INSERT INTO sources (` + sourceCols + `)
@@ -88,9 +81,8 @@ func (s PG) GetSource(ctx context.Context, id uuid.UUID) (types.Source, error) {
 }
 
 // GetSourcesByIDs returns the sources for ids in ONE query, keyed by id — the
-// hydrate pass's bulk read. Missing ids are simply absent from the map (a
-// dangling attachment contributes nothing; the fold and the mount gate each
-// handle that in their own register).
+// hydrate pass's bulk read. Missing ids are simply absent (a dangling
+// attachment contributes nothing; fold and mount-gate each handle it).
 func (s PG) GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error) {
 	out := make(map[uuid.UUID]types.Source, len(ids))
 	if len(ids) == 0 {
@@ -113,9 +105,8 @@ func (s PG) ListSources(ctx context.Context) ([]types.Source, error) {
 		`SELECT `+sourceCols+` FROM sources ORDER BY created_at DESC, id DESC`, nil, scanSource)
 }
 
-// UpdateSourceConfig replaces a source's operator-editable fields (name +
-// its OWN requirements contract) — scoped, never touching the scan-owned
-// columns, in the SetWorkspaceRequirements tradition.
+// UpdateSourceConfig replaces a source's operator-editable fields (name,
+// requirements) — scoped, never touching scan-owned columns.
 func (s PG) UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
 		UPDATE sources SET name=$1, requirements=$2, updated_at=now()
@@ -124,11 +115,9 @@ func (s PG) UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, r
 }
 
 // WorkspacesAttaching returns the names of workspaces whose attachments
-// reference source id — the loud half of delete-in-use. One GIN probe
-// (workspaces_attachments_gin). A dangling attachment would silently narrow a
-// workspace to its remaining sources (no error, no mount-gate check for a
-// source that used to be there), so DELETE refuses with these names rather
-// than orphaning silently.
+// reference source id — the loud half of delete-in-use (one GIN probe on
+// workspaces_attachments_gin). DELETE refuses with these names rather than
+// silently orphaning a workspace to a source that no longer exists.
 func (s PG) WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error) {
 	return collect(ctx, s.Pool, "list", "workspaces attaching", `
 		SELECT name FROM workspaces
@@ -144,15 +133,12 @@ func scanName(row pgx.Row) (string, error) {
 	return n, err
 }
 
-// workspacesOrphanedBySource returns the names of workspaces whose
-// attachments consist ENTIRELY of source id — i.e. detaching id (DeleteSource
-// with detach=true) would empty attachments to '[]'. hydrateWorkspace reads
-// an empty attachments array as the PRE-SPLIT marker and falls back to the
-// workspace's stale legacy `sources` column (store.go's
-// workspaceAttachmentsParam doc), so the deleted source would silently
-// reappear in the API/UI and the run mount gate would still admit it (STORE-1)
-// — a workspace with an ephemeral attachment alongside this source is NOT
-// orphaned (attachments stays non-empty), so it is excluded.
+// workspacesOrphanedBySource returns workspaces whose attachments consist
+// ENTIRELY of source id — detaching would empty attachments to '[]', which
+// hydrateWorkspace reads as the PRE-SPLIT marker and falls back to the stale
+// legacy `sources` column, silently un-deleting the source (STORE-1). A
+// workspace with an ephemeral attachment alongside this source is excluded
+// (attachments stays non-empty).
 func (s PG) workspacesOrphanedBySource(ctx context.Context, id uuid.UUID) ([]string, error) {
 	return collect(ctx, s.Pool, "list", "workspaces orphaned by source detach", `
 		SELECT name FROM workspaces
@@ -164,17 +150,12 @@ func (s PG) workspacesOrphanedBySource(ctx context.Context, id uuid.UUID) ([]str
 		ORDER BY name`, []any{id.String()}, scanName)
 }
 
-// DeleteSource removes a library source. detach=true first strips every
-// workspace attachment referencing it (the ?force=1 escape) — UNLESS doing so
-// would leave a workspace with zero attachments (workspacesOrphanedBySource):
-// 0029 makes a workspace a composition of one-or-more sources, and
-// decodeWorkspaceRequest already guarantees every write keeps that true, so
-// '[]' must stay unreachable (STORE-1). That check and the detach are two
-// statements — narrows the window against a workspace attaching uniquely to
-// this source between them, same as detach=false's own residual race below;
-// neither closes it (STORE-2's finding on this exact file: READ COMMITTED
-// against two independently-written tables can narrow a TOCTOU to one
-// statement, never fully close it without an explicit lock on both sides).
+// DeleteSource removes a library source. detach=true strips every workspace
+// attachment referencing it (?force=1) UNLESS that would leave a workspace
+// with zero attachments (workspacesOrphanedBySource) — '[]' must stay
+// unreachable (STORE-1). The check and the detach are two statements, so this
+// only narrows (never closes, STORE-2) the race against a concurrent attach;
+// same residual race as the detach=false path below.
 func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
 		orphaned, err := s.workspacesOrphanedBySource(ctx, id)
@@ -204,17 +185,10 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 		}
 		return nil
 	}
-	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, narrowing
-	// — not closing (STORE-2) — the window against a concurrent attach: one
-	// that already COMMITTED by the time this statement runs is always seen
-	// (a caller's own WorkspacesAttaching probe can't be beaten by an attach
-	// that lands and commits after it), but READ COMMITTED does not block on
-	// a STILL-OPEN attach transaction writing the unrelated `workspaces`
-	// table, so that one interleaving survives. Zero rows affected means
-	// either "still attached" or "no such id" — the DELETE has already
-	// refused either way, so a follow-up existence probe cannot reopen the
-	// TOCTOU; it only picks which honest error to report (a genuinely-absent
-	// id must still 404, not 409).
+	// Non-force: NOT EXISTS runs atomically WITH the DELETE, narrowing — not
+	// closing (STORE-2) — the race against a concurrent attach still open
+	// under READ COMMITTED. Zero rows affected means "still attached" or "no
+	// such id"; the follow-up probe only picks which honest error to report.
 	tag, err := s.Pool.Exec(ctx, `
 		DELETE FROM sources WHERE id=$1 AND NOT EXISTS (
 			SELECT 1 FROM workspaces
@@ -236,9 +210,8 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 	return nil
 }
 
-// ClaimSourceActiveRun fences a source's in-flight scan run — the exact job
-// ClaimWorkspaceActiveRun did for whole-workspace scans before the retarget.
-// Returns ErrConflict when another run already holds the slot.
+// ClaimSourceActiveRun fences a source's in-flight scan run, mirroring
+// ClaimWorkspaceActiveRun. Returns ErrConflict when another run holds the slot.
 func (s PG) ClaimSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE sources SET active_run_id=$2, status='scanning', updated_at=now()
@@ -265,26 +238,20 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 }
 
 // sourceScanRebuild is the provenance-aware requirements REBUILD both writers
-// below apply, named once because it is the half that must never drift between
-// them: $4 is the scan seed. NULL (a failed scan) leaves the contract
-// untouched; otherwise the seed replaces the scan_seeded subset outright — so a
-// name a rescan no longer finds is DROPPED — while every non-scan_seeded row an
-// operator set survives, because jsonb_object_agg gathers those and the seed is
-// concatenated onto their LEFT. $4 is the seed in both queries so this fragment
-// reads identically either way.
+// below share ($4 = scan seed): NULL leaves the contract untouched; otherwise
+// the seed replaces the scan_seeded subset outright (a name a rescan no
+// longer finds is DROPPED) while every non-scan_seeded row an operator set
+// survives via jsonb_object_agg concatenated onto the seed's LEFT.
 const sourceScanRebuild = `requirements = CASE WHEN $4::jsonb IS NULL THEN requirements ELSE $4::jsonb || COALESCE(
 		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
 		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END`
 
 // The two scan-result writes: ONE static literal per path, selected in Go
-// rather than by interpolating the fence into SQL — the same rule
-// qAddApprovedEgressDecision / qAddDeniedEgressDecision keep, and for the same
-// reason: each stays a single auditable query a reader can grep whole.
-//
-// The fence differs TWICE, which is why these are not one query with an
-// optional clause: the fenced write is gated on the claim ($5) and also
-// RELEASES it (active_run_id=NULL), while the unfenced path never claimed a
-// slot, so it has no claim to check and must not clear one it never took.
+// rather than interpolating the fence into SQL (same rule
+// qAddApprovedEgressDecision / qAddDeniedEgressDecision keep) — each stays a
+// single auditable query. The fence differs TWICE: the fenced write is gated
+// on the claim ($5) and releases it, while the unfenced path never claimed a
+// slot and must not clear one it never took.
 const qSetSourceScanResultFenced = `
 		UPDATE sources
 		SET profile=$1, status=$2, ` + sourceScanRebuild + `,
@@ -299,29 +266,20 @@ const qSetSourceScanResultUnfenced = `
 		WHERE id=$3
 		RETURNING ` + sourceCols
 
-// SetSourceScanResult persists a scan outcome FENCED on the claiming run:
-// only the run that holds active_run_id may write, so a stale upload from a
-// superseded run can never clobber a fresher result. `seed` is the scan's
-// requirement discovery for the SOURCE's OWN contract, applied as a
-// provenance-aware REBUILD in the same statement: seed replaces the
-// scan_seeded subset of requirements outright (so a name a rescan no longer
-// finds is DROPPED, not stuck forever); non-scan_seeded rows — an operator's
-// own edit — always win regardless of seed, because they land on the RIGHT
-// side of jsonb `||`; a NULL seed (failed scan — workspace_run.go's
-// launch-failure path passes nil) leaves the contract untouched. A non-nil but
-// EMPTY seed (a rescan that legitimately finds nothing) still rebuilds: it
-// marshals to '{}', not NULL — see sourceRequirementsParam.
+// SetSourceScanResult persists a scan outcome FENCED on the claiming run: only
+// the run holding active_run_id may write, so a stale upload from a
+// superseded run can never clobber a fresher result. `seed` rebuilds the
+// scan_seeded subset of requirements (provenance-aware, see
+// sourceScanRebuild); NULL (failed scan) leaves the contract untouched, while
+// a non-nil empty seed still rebuilds — see sourceRequirementsParam.
 func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, qSetSourceScanResultFenced,
 		profile, string(status), id, sourceRequirementsParam(seed), runID))
 }
 
 // SetSourceScanResultUnfenced persists a SYNCHRONOUS (inline local_dir) scan,
-// which never claimed a run slot — there is no concurrent writer to fence
-// against on that path, exactly as the workspace inline scan wrote directly.
-// Same provenance-aware rebuild semantics as the fenced writer: rebuilds the
-// scan_seeded subset; non-scan_seeded rows still win; NULL seed (failed scan)
-// leaves the contract untouched.
+// which never claimed a run slot to fence against. Same provenance-aware
+// rebuild semantics as the fenced writer (sourceScanRebuild).
 func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, qSetSourceScanResultUnfenced,
 		profile, string(status), id, sourceRequirementsParam(seed)))
@@ -352,15 +310,11 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // CHECK constraint refuses 'recommended' structurally: that build is derived
 // per-workspace and has no catalog identity.
 //
-// An identity hit does NOT touch name (same as UpsertSource's conflict
-// clause below) — on purpose. This upsert is also the PASSTHROUGH path a
-// workspace/run resolves its declared base-image spec through (sources.go's
-// attachSourcesAndBaseImage-shaped callers), which always derives an
-// auto-placeholder name (lastPathSegment(image)) with no rename intent
-// whatsoever; if this conflict clause applied EXCLUDED.name unconditionally,
-// every such passthrough call would silently rename an operator's
-// custom-named catalog row back to that placeholder. See
-// UpdateBaseImageName for the actual rename path.
+// An identity hit does NOT touch name, deliberately: this upsert is also the
+// PASSTHROUGH path a workspace/run resolves its base-image spec through,
+// which always derives an auto-placeholder name — applying EXCLUDED.name
+// unconditionally would silently rename an operator's custom-named row back
+// to that placeholder. See UpdateBaseImageName for the actual rename path.
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -376,11 +330,9 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 }
 
 // UpdateBaseImageName renames a catalog base-image row — the explicit, scoped
-// rename path, mirroring UpdateSourceConfig above. handleCreateBaseImage
-// is the only caller: on an identity hit where the REQUEST carried an explicit
-// name (the Add dialog's re-POST-to-rename shape), never from UpsertBaseImage's
-// own conflict clause, which passthrough callers share and must never let rename
-// an operator's chosen name away from under them (see UpsertBaseImage's doc).
+// rename path, mirroring UpdateSourceConfig above. handleCreateBaseImage is
+// the only caller, on an identity hit where the REQUEST carried an explicit
+// name (never via UpsertBaseImage's own conflict clause — see its doc).
 func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error) {
 	return scanBaseImage(s.Pool.QueryRow(ctx, `
 		UPDATE base_images SET name=$1, updated_at=now()
@@ -388,21 +340,17 @@ func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) 
 		name, id))
 }
 
-// GetBaseImage returns the catalog row for id, or ErrNotFound. NOT on the Store
-// interface: no handler reads one image by id (the console lists them), so
-// requiring it of every implementation bought nothing. Kept as a PG method
+// GetBaseImage returns the catalog row for id, or ErrNotFound. Not on the
+// Store interface (no handler reads one image by id); kept as a PG method
 // because store_hydrate_pg_test.go round-trips through it.
 func (s PG) GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error) {
 	return scanBaseImage(s.Pool.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images WHERE id=$1`, id))
 }
 
 // GetBaseImagesByIDs is hydrateAll's own batched read, not a Store-interface
-// method: its only caller is inside this package.
-//
-// GetBaseImagesByIDs returns the base images for ids in ONE query, keyed by
-// id — hydrateAll's bulk read, mirroring GetSourcesByIDs. Missing ids are
-// simply absent from the map (a dangling base_image_id contributes nothing;
-// hydrateWorkspace leaves BaseImage nil for it).
+// method — its only caller is inside this package. Returns the base images
+// for ids in ONE query, keyed by id, mirroring GetSourcesByIDs. Missing ids
+// are simply absent (hydrateWorkspace leaves BaseImage nil for them).
 func (s PG) GetBaseImagesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.BaseImageEntry, error) {
 	out := make(map[uuid.UUID]types.BaseImageEntry, len(ids))
 	if len(ids) == 0 {
@@ -431,15 +379,12 @@ func (s PG) WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]strin
 		`SELECT name FROM workspaces WHERE base_image_id=$1 ORDER BY name`, []any{id}, scanName)
 }
 
-// DeleteBaseImage removes a catalog row; detach=true first drops every
-// workspace reference (those workspaces fall back to the derived recommended
-// build — NULL is the marker, so "detach" is honest, not destructive).
-// detach=false narrows the in-use check and the delete to ONE statement —
-// mirrors DeleteSource, including its residual race (STORE-2): a concurrent
-// workspace UPDATE committing base_image_id=id between this statement's own
-// NOT EXISTS check and its commit is caught by the base_image_id FK
-// (0031:61) instead, surfacing as a raw 23503 — mapped to ErrConflict below
-// so that loses race still answers a clean 409, not a raw Postgres 500.
+// DeleteBaseImage removes a catalog row; detach=true drops every workspace
+// reference first (falling back to the derived recommended build — NULL is
+// the marker, so "detach" is honest, not destructive). detach=false mirrors
+// DeleteSource's residual race (STORE-2): a concurrent commit between the
+// NOT EXISTS check and delete is instead caught by the base_image_id FK
+// (0031:61), surfacing as 23503 — mapped to ErrConflict below.
 func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
 		if _, err := s.Pool.Exec(ctx,
@@ -455,22 +400,16 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 		}
 		return nil
 	}
-	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, the same
-	// narrowed (not closed — STORE-2) guarantee DeleteSource makes. Zero rows
-	// affected means either "still in use" or "no such id" — the DELETE has
-	// already refused either way, so a follow-up existence probe cannot
-	// reopen the TOCTOU; it only picks which honest error to report (a
-	// genuinely-absent id must still 404, not 409).
+	// Non-force: same narrowed-not-closed guarantee as DeleteSource (STORE-2).
+	// Zero rows affected means "still in use" or "no such id"; the follow-up
+	// probe only picks which honest error to report.
 	tag, err := s.Pool.Exec(ctx, `
 		DELETE FROM base_images WHERE id=$1 AND NOT EXISTS (
 			SELECT 1 FROM workspaces WHERE base_image_id=$1
 		)`, id)
 	if err != nil {
-		// The residual race the doc above admits: a concurrent workspace
-		// UPDATE committing base_image_id=id between this statement's own
-		// NOT EXISTS check and its commit is caught by the FK (0031:61)
-		// instead of NOT EXISTS — map that to the SAME clean 409 the
-		// zero-rows branch below gives, not a raw Postgres 500.
+		// The residual race the doc above admits: caught by the FK (0031:61)
+		// instead of NOT EXISTS — map to the same clean 409, not a raw 500.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return ErrConflict
@@ -493,13 +432,10 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 // The verify-approve merge writer
 
 // MergeWorkspaceRequirements ADDS rows to a workspace's requirements overlay
-// atomically — the `jsonb ||` idiom SetWorkspaceRecordResult established — so
-// the verify loop's approve-writes-the-row-now can never clobber a concurrent
-// edit the way read-modify-write on the full-replace writer would. The WHERE
-// clause carries the same key-count cap the PUT endpoint enforces, evaluated
-// on the POST-merge total (existing keys merged with this patch) so a
-// multi-key merge can't overshoot the cap in one jump; at the cap it returns
-// ErrConflict rather than silently dropping rows or exceeding it.
+// atomically (`jsonb ||`), so a concurrent edit can never be clobbered by
+// read-modify-write. The WHERE clause enforces the same key-count cap the PUT
+// endpoint does, evaluated on the POST-merge total so a multi-key merge can't
+// overshoot it in one jump; at the cap it returns ErrConflict.
 func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	if len(add) == 0 {
 		return s.GetWorkspace(ctx, id)
@@ -529,13 +465,11 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 
 // Hydration: attachments → the derived view
 
-// hydrated materializes a workspace's derived read-only view. For a row whose
-// composition lives in ATTACHMENTS (post-split), Sources/BaseImage/Profile/
-// Status are computed from the attached source rows and the catalog; for a
-// pre-split row (attachments empty, embedded sources column still the truth)
-// everything passes through EXACTLY as stored — byte-identical behavior, the
-// migration's guarantee. EffectiveRequirements is folded in BOTH cases (the
-// zero-source fold is the overlay identity).
+// hydrated materializes a workspace's derived read-only view. Post-split rows
+// (composition in ATTACHMENTS) get Sources/BaseImage/Profile/Status computed
+// from the attached rows and catalog; pre-split rows (attachments empty) pass
+// through EXACTLY as stored — the migration's byte-identical guarantee.
+// EffectiveRequirements is folded in BOTH cases.
 func (s PG) hydrated(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	out, err := s.hydrateAll(ctx, []types.Workspace{ws})
 	if err != nil {
@@ -545,12 +479,11 @@ func (s PG) hydrated(ctx context.Context, ws types.Workspace) (types.Workspace, 
 }
 
 // hydrateAll is the bulk form: ONE sources query and ONE base-images query for
-// the union across every workspace — referencedWorkspaces already full-lists
-// workspaces on run-create/preflight, so per-row queries would multiply a hot
-// path. ponytail: recomputed per read; a profile_cache column keyed on source
+// the union across every workspace, since per-row queries would multiply a
+// hot path (run-create/preflight already full-lists workspaces).
+// ponytail: recomputed per read; a profile_cache column keyed on source
 // versions is the upgrade path if merges ever show hot.
 func (s PG) hydrateAll(ctx context.Context, wss []types.Workspace) ([]types.Workspace, error) {
-	// Union the ids.
 	sourceIDs := map[uuid.UUID]struct{}{}
 	imageIDs := map[uuid.UUID]struct{}{}
 	for i := range wss {
@@ -604,7 +537,6 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 		return
 	}
 
-	// Sources view, in attachment order.
 	derived := make([]types.WorkspaceSource, 0, len(ws.Attachments))
 	profiles := make([]workspacescan.WorkspaceProfile, 0, len(ws.Attachments))
 	identities := make([]string, 0, len(ws.Attachments)) // profiles[i]'s source locator, for MergeProfiles attribution
@@ -648,14 +580,11 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	}
 	ws.Sources = derived
 
-	// primaryIdentity names the source behind ws.Sources[0] — derived the SAME
-	// way resolveWorkspaceImage (internal/api/workspace_run.go) reads "primary"
-	// (primary.Sources[0]), so MergeProfiles attributes HasDevcontainer/
-	// HasDockerfile from that exact attachment rather than merely the first one
-	// that happened to scan (profiles[0]/identities[0] can name a DIFFERENT,
-	// later attachment when the first is ephemeral or not yet scanned). Empty
-	// when Sources[0] is ephemeral or there are no sources at all — matches no
-	// identity, which MergeProfiles reads as "primary has no devcontainer".
+	// primaryIdentity names the source behind ws.Sources[0] — derived the same
+	// way resolveWorkspaceImage reads "primary", so MergeProfiles attributes
+	// HasDevcontainer/HasDockerfile from that exact attachment, not merely the
+	// first one that happened to scan. Empty when Sources[0] is ephemeral or
+	// there are no sources, which MergeProfiles reads as "no devcontainer".
 	var primaryIdentity string
 	if len(derived) > 0 {
 		switch derived[0].Type {
@@ -666,12 +595,10 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 		}
 	}
 
-	// Profile: the merge of scanned attached sources — same field, same shape,
-	// so list badges and pollers are none the wiser. An EPHEMERAL-ONLY
+	// Profile: the merge of scanned attached sources, same field/shape as
+	// before so list badges and pollers are unaffected. An EPHEMERAL-ONLY
 	// composition derives the deterministic empty profile (high confidence —
-	// there is nothing ambiguous about "no source"), exactly what the legacy
-	// scan stamped for it: nil here read as "no contract yet" and the wizard's
-	// Requirements tabs never mounted on the default scratch-floor path.
+	// nothing ambiguous about "no source").
 	switch {
 	case len(profiles) > 0:
 		merged := workspacescan.MergeProfiles(profiles, identities, primaryIdentity)
@@ -705,9 +632,8 @@ var statusRank = map[types.WorkspaceStatus]int{
 	types.WorkspacePendingScan: 1, types.WorkspaceScanned: 0,
 }
 
-// worseWorkspaceStatus orders the scan lifecycle: error > scanning >
-// pending_scan > scanned. "Worse" wins so a workspace never reads readier
-// than its least-ready attached source.
+// worseWorkspaceStatus orders the scan lifecycle; "worse" wins so a workspace
+// never reads readier than its least-ready attached source.
 func worseWorkspaceStatus(a, b types.WorkspaceStatus) types.WorkspaceStatus {
 	if statusRank[b] > statusRank[a] {
 		return b

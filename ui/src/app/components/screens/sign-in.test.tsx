@@ -36,7 +36,8 @@ function renderSignIn() {
 // doors exist — no token field, no SSO control, just an honest "checking"
 // row. After three unanswered reads it says the checking is still going.
 describe("SignIn — checking state before any answer (#457)", () => {
-  it("Q457-1: shows only the checking row — no token field, no SSO control, no claim either way", async () => {
+  it("shows only the checking row — no token field, no SSO control, no claim either way", async () => {
+    // ticket: Q457-1
     healthMock.mockResolvedValue({}); // never answers
     renderSignIn();
     expect(await screen.findByText(SIGNIN.CHECKING)).toBeInTheDocument();
@@ -46,7 +47,8 @@ describe("SignIn — checking state before any answer (#457)", () => {
     expect(screen.queryByRole("button", { name: /sign in with sso/i })).not.toBeInTheDocument();
   });
 
-  it("Q457-2: adds the still-checking line only after three unanswered reads, not before", async () => {
+  it("adds the still-checking line only after three unanswered reads, not before", async () => {
+    // ticket: Q457-2
     vi.useFakeTimers();
     try {
       healthMock.mockReset();
@@ -332,7 +334,8 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
 // the code the user sees a plain sign-in form with zero explanation, no
 // better than the dead end it replaced. SignIn must render the mapped
 // message inline.
-describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-S1-5)", () => {
+describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () => {
+  // ticket: W31-S1-5
   afterEach(() => {
     window.history.replaceState({}, "", "/");
   });
@@ -388,6 +391,18 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't check your access/i);
   });
 
+  // 0.8 user types: a sign-in refused over its type names the cause, never
+  // the generic "Sign-in failed".
+  it.each([
+    ["user_type_ambiguous", SIGNIN.USER_TYPE_AMBIGUOUS],
+    ["user_type_unknown", SIGNIN.USER_TYPE_UNKNOWN],
+  ])("renders the %s message", async (code, text) => {
+    window.history.pushState({}, "", `/?auth_error=${code}`);
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+  });
+
   // claims_overage must NOT reach the generic fallback: that arm says "Try
   // again", and retrying replays the identical token. The remedy is the
   // admin's, so the copy has to name it.
@@ -435,11 +450,12 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
   });
 });
 
-// X3-F7: App.tsx's onUnauthorized handler now hands SignIn a `reason` for a
-// mid-session expiry — rendered in the SAME alert slot submitToken's own
-// failures use, so the gate stops reading as a silent, unexplained teleport.
-describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
-  it("renders the reason prop in the alert slot on mount", async () => {
+// A session this browser held that was refused on load — App.tsx hands
+// SignIn a `reason`, rendered as an amber warning (role=status), not in the
+// error box submitToken's own failures use.
+describe("SignIn — the signed-out notice", () => {
+  // ticket: #483
+  it("renders the reason as a warning, not an error, on mount", async () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});
     render(
@@ -447,17 +463,19 @@ describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
         <SignIn onSignIn={() => {}} reason={SESSION_ENDED_REASON} />
       </ThemeProvider>,
     );
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/your session ended/i);
+    // Not findByRole("status") alone: the #457 "checking" row is a status too.
+    expect((await screen.findByText(SESSION_ENDED_REASON)).closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   // Negative control: the ordinary mount-probe gate (never signed in this tab
   // at all) passes no reason — must render exactly as it always did.
-  it("neg: no reason prop means no alert on mount", () => {
+  it("neg: no reason prop means no notice on mount", () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});
     renderSignIn();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
   });
 });
 

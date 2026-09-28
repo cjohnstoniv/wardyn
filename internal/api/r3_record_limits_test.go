@@ -25,8 +25,6 @@ func (s quotaRecordStore) CountActiveRunsBy(context.Context, string) (int, error
 	return s.active, nil
 }
 
-// TestRecordRunHonorsCeilingLimits is F153.
-//
 // launchRecordRun resolved the FULL governanceCeiling and applied only its deny
 // axis. The Limits axis was read at POST /runs and nowhere else, so a profile
 // setting deny_interactive or max_concurrent_runs bound a member's ordinary run
@@ -61,7 +59,7 @@ func TestRecordRunHonorsCeilingLimits(t *testing.T) {
 			t.Fatalf("launchRecordRun err = %v, want a governance-limit refusal — a deny_interactive profile "+
 				"must not get a server-authored, allow-all, attachable sandbox", err)
 		}
-		// A REFUSAL COSTS NO STATE: the check runs before the CAS claim, so
+		// A refusal costs no state: the check runs before the CAS claim, so
 		// nothing was launched and nothing has to be aborted.
 		if fr.lastSpec.RunID != uuid.Nil {
 			t.Errorf("a refused record launch still reached the runner (run %s) — the limit must be applied "+

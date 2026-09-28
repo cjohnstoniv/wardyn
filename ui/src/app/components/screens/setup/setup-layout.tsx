@@ -56,7 +56,9 @@ export function SetupLayout({
   // The current step's Next-gate, if it has one (only Corporate network
   // today — steps.ts's corpNetworkGate, mapped by setup-screen.tsx). Generic
   // on purpose: this shared layout has no idea which step or why.
-  //  - blocked: Next is disabled (title = reason).
+  //  - blocked: Next is disabled (its reason is the head/reason row above,
+  //    already visible — never a title tooltip a disabled control can't
+  //    surface).
   //  - head/reason: the state, rendered as a bold headline over its sentence,
   //    with the gate dot — present on some ENABLED states too (no_runner, a
   //    custom-endpoint pass), where it is a neutral standing note.
@@ -96,11 +98,11 @@ export function SetupLayout({
   // (corp-network-egress.tsx), which are already `disabled={!operator}`. This
   // shell has no idea of the role otherwise, so the caller passes it once.
   operator: boolean;
-  // #213 — the counter's honest "N optional setup steps and M demos follow"
-  // subline, live-derived by the caller (steps.ts's optionalStepCounts) so it
-  // never goes stale the way a hand-kept count would. Absent renders the
-  // number alone, for callers (and tests) that don't need the subline.
-  requiredSummary?: { config: number; demos: number };
+  // #213 — the counter's honest "N optional setup steps follow" subline,
+  // live-derived by the caller (steps.ts's optionalStepCounts) so it never
+  // goes stale the way a hand-kept count would. Absent renders the number
+  // alone, for callers (and tests) that don't need the subline.
+  requiredSummary?: { config: number };
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -192,8 +194,7 @@ export function SetupLayout({
                 </div>
                 {requiredSummary && (
                   <div className="mt-0.5 normal-case">
-                    Required before a run can launch. {requiredSummary.config} optional setup steps and{" "}
-                    {requiredSummary.demos} demos follow.
+                    Required before a run can launch. {requiredSummary.config} optional setup steps follow.
                   </div>
                 )}
               </>
@@ -216,14 +217,17 @@ export function SetupLayout({
                 <ArrowLeft className="size-4" aria-hidden />
                 Back to required steps
               </Button>
-              <Button
-                onClick={() => returnTo && onSelect(returnTo)}
-                disabled={!!returnRefusal}
-                title={returnRefusal}
-              >
-                Done with this one
-                <ArrowRight className="size-4" aria-hidden />
-              </Button>
+              {/* #459/#497: helper text under the standalone control, not a
+                  title tooltip a disabled control can't surface. */}
+              <div className="space-y-1">
+                <Button onClick={() => returnTo && onSelect(returnTo)} disabled={!!returnRefusal}>
+                  Done with this one
+                  <ArrowRight className="size-4" aria-hidden />
+                </Button>
+                {returnRefusal && (
+                  <p className="text-right text-meta text-muted-foreground">{returnRefusal}</p>
+                )}
+              </div>
             </footer>
           ) : (
           <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
@@ -266,22 +270,36 @@ export function SetupLayout({
                   </div>
                 )}
                 {nextGate?.blocked && nextGate.action ? (
-                  <Button
-                    onClick={nextGate.action.onClick}
-                    disabled={!operator}
-                    title={!operator ? OPERATOR_ONLY_REASON : undefined}
-                  >
-                    {nextGate.action.label}
-                  </Button>
+                  // #459: standing alone in the footer — helper text under it,
+                  // not a title tooltip a disabled control can't surface.
+                  <div className="space-y-1">
+                    <Button onClick={nextGate.action.onClick} disabled={!operator}>
+                      {nextGate.action.label}
+                    </Button>
+                    {!operator && (
+                      <p className="text-right text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
+                    )}
+                  </div>
                 ) : (
-                  <Button
-                    onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}
-                    disabled={!!nextGate?.blocked || !!refusal}
-                    title={nextGate?.blocked ? nextGate.reason : refusal}
-                  >
-                    {nextGate?.nextLabel ?? `Next: ${STEP_LABEL[next]}`}
-                    <ArrowRight className="size-4" aria-hidden />
-                  </Button>
+                  // #459/#497: a nextGate.blocked reason is already visible
+                  // above (the head/reason live region, always populated
+                  // together — see corpNetworkGate); only the plain
+                  // crossing-rule refusal (refuseNext, no nextGate involved)
+                  // has nowhere else to show, so it gets its own helper text
+                  // instead of a title tooltip a disabled control can't
+                  // surface.
+                  <div className="space-y-1">
+                    <Button
+                      onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}
+                      disabled={!!nextGate?.blocked || !!refusal}
+                    >
+                      {nextGate?.nextLabel ?? `Next: ${STEP_LABEL[next]}`}
+                      <ArrowRight className="size-4" aria-hidden />
+                    </Button>
+                    {!nextGate?.blocked && refusal && (
+                      <p className="text-right text-meta text-muted-foreground">{refusal}</p>
+                    )}
+                  </div>
                 )}
               </>
             ) : (

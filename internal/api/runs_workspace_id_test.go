@@ -325,13 +325,12 @@ func TestResolveWorkspaceImage_AlwaysBakesStandardAgentTool(t *testing.T) {
 	}
 }
 
-// TestResolveWorkspaceImage_RebuildReclaimsSupersededTag is the bug-workspace-1
-// regression: every build lane in resolveWorkspaceImage mints a fresh,
-// uniquely-named local docker tag on every cache miss, but nothing ever
-// called ImageRemove on the tag it superseded — every rescan/edit leaked a
-// full docker image forever. A cache-miss rebuild (a stale ImageRef whose
-// BuiltProfileHash no longer matches p.CacheKey()) must reclaim the OLD tag
-// once the new one has actually built.
+// TestResolveWorkspaceImage_RebuildReclaimsSupersededTag: every build lane in
+// resolveWorkspaceImage mints a fresh, uniquely-named local docker tag on every
+// cache miss, so the tag it supersedes must be removed (ImageRemove) or every
+// rescan/edit leaks a full docker image forever. A cache-miss rebuild (a stale
+// ImageRef whose BuiltProfileHash no longer matches p.CacheKey()) must reclaim
+// the old tag once the new one has actually built.
 func TestResolveWorkspaceImage_RebuildReclaimsSupersededTag(t *testing.T) {
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
@@ -494,12 +493,12 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 		//
 		// Both halves of what handleBuildWorkspace's success path leaves behind
 		// are replayed here, because the READER consults the row and not just
-		// the tracker (B4-F2): resolveWorkspaceImage's SetWorkspaceBuiltImage is
+		// the tracker: resolveWorkspaceImage's SetWorkspaceBuiltImage is
 		// what puts the ref and this lane's own cache key on the workspace, and
 		// the fake records rather than applies it — the same store-write replay
 		// TestResolveBuildView_AgreesWithBuiltHash already does. Asserting off
 		// the tracker alone pinned an artefact of the fake: a ref that lives
-		// only in this process's memory is exactly the stale "done" B4-F2 exists
+		// only in this process's memory is exactly the stale "done" this guard exists
 		// to stop.
 		ws.ImageRef, ws.BuiltProfileHash = built, st.builtHash
 		srv.builds.finish(ws.ID, built, "")
@@ -566,10 +565,10 @@ func (r *imageRemoverRunner) ImageRemove(_ context.Context, ref string) error {
 	return nil
 }
 
-// TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild is
-// W20-W20-record-image-5: a cached image_ref the daemon no longer has used to
-// be a permanent dead end — resolveWorkspaceImage trusted BuiltProfileHash
-// alone and never verified the ref was still real. With an ImageChecker
+// TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild: a cached
+// image_ref the daemon no longer has must not be a permanent dead end —
+// resolveWorkspaceImage cannot trust BuiltProfileHash alone without
+// verifying the ref is still real. With an ImageChecker
 // Runner wired, a cache "hit" whose ref the runner reports ABSENT must fall
 // through to a rebuild instead of returning the dead ref.
 func TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild(t *testing.T) {
@@ -635,11 +634,11 @@ func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
 	}
 }
 
-// TestResolveWorkspaceImage_ByoiCachesAcrossSessions is
-// W20-W20-record-image-3: the byoi lane used to tag EVERY wrap with the run
-// id (`wardyn-byoi/<runid>:latest`), so two record/replay sessions against
-// the identical base image always rebuilt — a multi-minute FinalizeBase call
-// on every single launch. A cache hit must reuse the workspace's stored
+// TestResolveWorkspaceImage_ByoiCachesAcrossSessions: tagging every byoi
+// wrap with the run id (`wardyn-byoi/<runid>:latest`) would make two
+// record/replay sessions against the identical base image always rebuild — a
+// multi-minute FinalizeBase call on every single launch. A cache hit must
+// reuse the workspace's stored
 // ImageRef without calling FinalizeBase again; a base ref CHANGE must still
 // rebuild (and re-cache under the new key).
 func TestResolveWorkspaceImage_ByoiCachesAcrossSessions(t *testing.T) {
@@ -713,7 +712,7 @@ func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ s
 }
 
 // TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions is
-// W20-W20-record-image-3's repo-own-devcontainer half: this lane built the
+// repo-own-devcontainer half: this lane built the
 // repo's OWN devcontainer unconditionally on every session (a fixed tag, but
 // no cache-hit check before calling BuildDevcontainer again).
 func TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// TestCollectFacts_SymlinkedRootIsScanned pins B11b-F1: a scan root that is
+// TestCollectFacts_SymlinkedRootIsScanned pins a scan root that is
 // ITSELF a symlink (~/work -> /mnt/d/work, macOS /tmp, a WSL drive shortcut)
 // scanned as EMPTY and — because nothing was truncated and nothing was
 // unrecognized — the empty result graded high confidence with NeedsReview
@@ -41,7 +41,7 @@ func TestCollectFacts_SymlinkedRootIsScanned(t *testing.T) {
 }
 
 // TestCollectFacts_FifoDoesNotWedgeTheWalk pins the cross-lane half of
-// B11b-F1: every file the walk opens went through a bare os.Open, and
+// every file the walk opens went through a bare os.Open, and
 // CollectFacts runs on an HTTP handler goroutine with NO ctx — a FIFO named
 // after any file the scan reads (an unrecognized build descriptor, a
 // Dockerfile whose content is hashed, a package.json, a compose file the

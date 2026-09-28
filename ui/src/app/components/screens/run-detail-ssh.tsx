@@ -65,6 +65,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const [uiSandbox, setUISandbox] = React.useState<{
     enabled?: boolean;
     enter_url_template?: string;
+    enter_post_url?: string;
+    bind_url?: string;
   } | null>(null);
   // Did /healthz actually ANSWER? `ssh`/`uiSandbox` being null conflates two
   // facts — "not loaded yet" and "loaded, and the deployment has it off" — and
@@ -91,7 +93,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
-    healthApi.health().then((h) => {
+    void healthApi.health().then((h) => {
       if (!alive) return;
       setSSH(h.ssh ?? null);
       setUISandbox(h.ui_sandbox ?? null);
@@ -145,26 +147,43 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // the new tab itself — unobservable here across origins, so "the new tab is
   // the feedback" for that case, exactly as the mock's step 4 says.
   //
-  // window.open's return is deliberately NOT checked: with "noopener" the spec
-  // requires it to return null even when the tab opened fine, so a `!win`
-  // branch showed a popup-blocked error on EVERY successful Open. A blocked
-  // popup is undetectable from here, and the mock lists no such state.
+  // #1220: this is a POST, not a GET-with-query-string — the whole point is
+  // that the ticket leaves the URL, so it must not be re-encoded back into
+  // one here. submitEnterForm below builds and submits a hidden form instead
+  // of calling window.open on a composed URL.
+  //
+  // enter_post_url is absent only against an OLDER daemon than this console
+  // (a dev-setup skew — the console is normally baked into the daemon that
+  // serves it). Falling through to an empty form action would silently POST
+  // run/app/ticket to the console's OWN current URL instead of the gateway,
+  // burning the ticket for nothing; fall back to the GET template that older
+  // daemon actually published instead, and only give up if neither is there.
   async function openApp(app: UIApp) {
     setAppError(null);
     setOpeningApp(app.name);
     try {
       const ticket = await runsApi.attachTicket(run.id);
-      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) puts {run} in the HOST
-      // *and* the query — "https://run-{run}.ui.example.com/__wardyn/enter?run=
-      // {run}&app={app}&ticket={ticket}" — so a single String.replace fills the
-      // host and leaves `?run={run}` literal, which uuid.Parse rejects on every
-      // Open. split/join replaces every occurrence (replaceAll is ES2021; this
-      // tsconfig's lib is ES2020).
-      const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
-        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
-        uiSandbox?.enter_url_template ?? "",
-      );
-      window.open(url, "_blank", "noopener");
+      // #1241: the gateway refuses a ticket this browser did not bind first,
+      // so a ticket minted elsewhere cannot be pushed into this browser.
+      if (uiSandbox?.bind_url) {
+        await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(run.id)), ticket);
+      }
+      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
+      // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
+      // __wardyn/enter", no query) — split/join replaces every occurrence
+      // (replaceAll is ES2021; this tsconfig's lib is ES2020).
+      if (uiSandbox?.enter_post_url) {
+        const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(run.id));
+        submitEnterForm(action, { run: run.id, app: app.name, ticket });
+      } else if (uiSandbox?.enter_url_template) {
+        const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
+          (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+          uiSandbox.enter_url_template,
+        );
+        window.open(url, "_blank", "noopener");
+      } else {
+        throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+      }
     } catch (err) {
       setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -224,7 +243,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             The command below is real, but no key is registered to connect with yet.
           </p>
           <Button asChild size="sm" className="mt-2">
-            <Link to="/ssh-keys">
+            <Link to="/account">
               <KeyRound className="size-3.5" /> Manage SSH keys
             </Link>
           </Button>
@@ -272,7 +291,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       )}
 
       {sshOn && (
-        <Link to="/ssh-keys" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
+        <Link to="/account" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
           Manage SSH keys
         </Link>
       )}
@@ -377,6 +396,54 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
     );
   }
   return parts;
+}
+
+// bindTicket is the pre-enter step (#1241): one credentialed fetch to the
+// gateway, which sets an HttpOnly cookie on ITS origin tying the ticket to
+// this browser. A plain fetch, never the api client: nothing of the console's
+// own session may travel to the gateway. It fails when the console and the
+// gateway are not the same site, since the gateway cannot then set that cookie.
+async function bindTicket(url: string, ticket: string) {
+  let ok = false;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      body: new URLSearchParams({ ticket }),
+    });
+    ok = res.ok;
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    throw new Error(
+      "The UI-sandbox gateway did not accept this browser. The console and the gateway must be served from the same site; an admin finds the exact reason in the audit log (ui.authorize).",
+    );
+  }
+}
+
+// submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
+// with target="_blank" so it opens the same new tab window.open(url, "_blank")
+// used to, but as a real POST whose fields never touch the URL, browser
+// history, or a reverse-proxy access log. rel="noopener" is form.submit()'s
+// equivalent of window.open's "noopener" flag above — no window.opener back
+// to the console from the new tab.
+function submitEnterForm(action: string, fields: Record<string, string>) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = action;
+  form.target = "_blank";
+  form.rel = "noopener";
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
 }
 
 // splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)

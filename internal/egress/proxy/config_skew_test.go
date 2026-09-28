@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestLoadConfigBytesRefusesUnknownKeys pins F029: the sidecar image is pinned
+// TestLoadConfigBytesRefusesUnknownKeys: the sidecar image is pinned
 // by the OPERATOR, independently of wardynd, so a config written by a NEWER
 // control plane routinely meets an OLDER proxy binary. A key this binary cannot
 // honour must fail startup loudly rather than be silently discarded — the
@@ -23,9 +23,10 @@ import (
 // every one.
 func TestLoadConfigBytesRefusesUnknownKeys(t *testing.T) {
 	base := map[string]any{
-		"run_id":            uuid.New().String(),
-		"control_plane_url": "http://wardynd:8080",
-		"run_token":         "tok",
+		"run_id":               uuid.New().String(),
+		"control_plane_url":    "https://wardynd:8443",
+		"control_plane_ca_pem": testCPCAPEM,
+		"run_token":            "tok",
 	}
 	// Sanity: the same config WITHOUT the unknown key loads.
 	b, err := json.Marshal(base)
@@ -71,7 +72,8 @@ func TestLoadConfigBytesRefusesUnknownKeys(t *testing.T) {
 func TestLoadConfigBytesAcceptsEveryShippedKey(t *testing.T) {
 	cfg := map[string]any{
 		"run_id":                  uuid.New().String(),
-		"control_plane_url":       "http://wardynd:8080",
+		"control_plane_url":       "https://wardynd:8443",
+		"control_plane_ca_pem":    testCPCAPEM,
 		"run_token":               "tok",
 		"upstream_proxy_url":      "http://corp-proxy.internal:3128",
 		"upstream_proxy_no_proxy": []string{"10.0.0.0/8", ".internal"},

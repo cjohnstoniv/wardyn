@@ -68,8 +68,9 @@ const defaultMaxTTL = time.Hour
 // smart-HTTP). A git_pat push DOES traverse a brokered, cleartext smart-HTTP
 // route since 0.7 (the never-resident lane, default ON — internal/egress/proxy/
 // pat_broker.go), and since 0.7.2 the same parser binds it when the operator
-// wires it behind WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF: a PAT
-// carries whatever scope the operator issued and Wardyn cannot narrow it, over
+// wires it behind the pat scope of WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF
+// (folded from the standalone WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS by
+// #203): a PAT carries whatever scope the operator issued and Wardyn cannot narrow it, over
 // forges whose push ref conventions are not GitHub's, so opting in is the
 // operator's call rather than Wardyn's default. Either way both are bounded by the operator who supplied the
 // credential, not by this namespace — and on a brokered run no such second path
@@ -165,6 +166,9 @@ type Minted struct {
 	// Metadata carries kind-specific, non-secret context (e.g. github_token
 	// branch namespace, repos, clamped permissions).
 	Metadata map[string]string `json:"metadata,omitempty"`
+	// OwnerOnly carries an api_key grant's owner_only to the injection sink,
+	// which reads the value itself.
+	OwnerOnly bool `json:"-"`
 }
 
 // GitHubMinter mints a short-lived, down-scoped GitHub App installation token.
@@ -581,6 +585,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// cannot be written, roll the whole mint back rather than hand out an
 	// unrecorded credential.
 	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
+	mintEv.Data = withSecretScope(mintEv.Data, minted)
 	if leased {
 		// A lease widens what ONE human decision authorizes, so the stream must
 		// say which mints the human made and which the lease did — B2's own
@@ -600,9 +605,12 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 
 	// The durable record is committed above (in-tx). Fan the SAME event out to the
 	// SIEM sinks — best-effort, primary store NOT re-written (see the siem field
-	// doc). The Fanout logs any per-child failure itself.
+	// doc). The Fanout logs any per-child failure itself. WithoutCancel: the
+	// credential is already the caller's, so a client hanging up now must not
+	// cost its SIEM record (SyslogSink.Emit skips on a done ctx). Every sink
+	// enqueues or writes locally, so detaching cannot pin the request.
 	if b.siem != nil {
-		_ = b.siem.Emit(ctx, mintEv)
+		_ = b.siem.Emit(context.WithoutCancel(ctx), mintEv)
 	}
 
 	// Register the minted token — and, for ssh_key, its known_hosts material —
@@ -671,17 +679,7 @@ func leaseCoversRemint(row grantApprovalRow) bool {
 // decode failure returns data unchanged rather than dropping the event: an
 // unmarked lease mint in the stream is bad, an absent one is worse.
 func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMessage {
-	var d map[string]any
-	if err := json.Unmarshal(data, &d); err != nil {
-		return data
-	}
-	d["lease"] = true
-	d["decision_scope"] = string(scope)
-	out, err := json.Marshal(d)
-	if err != nil {
-		return data
-	}
-	return out
+	return withDataField(withDataField(data, "lease", true), "decision_scope", string(scope))
 }
 
 // mintKind dispatches to the kind-specific minter. github_token scopes are
@@ -851,26 +849,37 @@ var reservedBrokerSecretNames = map[string]bool{
 	"wardyn-signing-key":    true,
 	"wardyn-session-key":    true,
 	"wardyn-ui-session-key": true,
+	"wardyn-run-config-key": true,
 	"aws-access-key-id":     true,
 	"aws-secret-access-key": true,
 	"aws-session-token":     true,
 	"github-app-id":         true,
 	"github-app-key":        true,
 	"wardyn-ssh-host-key":   true,
+	"wardyn-internal-ca":    true,
 	"bedrock-api-key":       true,
+	// The hybrid device credential: no grant may hand it into a sandbox.
+	"wardyn-org-device-credential": true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
 // static keys above PLUS the managed-harness OAuth-blob pattern
-// (wardyn-harness-<provider>-oauth). The static map alone missed the pattern, so
+// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name. The static map alone missed the pattern, so
 // a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
 // secret and have the broker resolve the resident OAuth token into the sandbox.
 func reservedBrokerSecret(name string) bool {
 	if reservedBrokerSecretNames[name] {
 		return true
 	}
-	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
+	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
+		strings.HasPrefix(name, providerSecretPrefix)
 }
+
+// providerSecretPrefix mirrors internal/api's: every per-person model-provider
+// credential (wardyn-provider-<uid>-{key,oauth,sso}). A model key is injected
+// proxy-side as a header, never minted, so a git_pat/ssh_key grant naming one
+// could only hand the person's own API key to the sandbox as a git password.
+const providerSecretPrefix = "wardyn-provider-"
 
 // ReservedSecretName reports whether name is a key the broker must never
 // resolve into a sandbox. Exported for the same single caller

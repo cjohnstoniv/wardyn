@@ -15,7 +15,7 @@
 // Usage:
 //
 //	wardyn-runner -spec spec.json [-exec '<argv>'] [-keep] \
-//	  [-control-plane http://wardynd:8080] [-token <run-token>] \
+//	  [-control-plane https://wardynd:8443 -control-plane-ca ca.pem] [-token <run-token>] \
 //	  [-proxy-image wardyn-proxy:dev] [-proxy-binary /path/to/wardyn-proxy]
 //
 // Built only with `-tags docker`: the docker driver is a build-tagged add-on
@@ -74,6 +74,7 @@ func run() error {
 		execArg      = flag.String("exec", "", "space-separated argv to exec in the sandbox after create")
 		keep         = flag.Bool("keep", false, "do not tear down the sandbox on exit")
 		controlPlane = flag.String("control-plane", "", "control plane base URL (passed to the proxy sidecar)")
+		controlCA    = flag.String("control-plane-ca", "", "path to wardynd's internal CA PEM, required by the proxy with an https -control-plane")
 		token        = flag.String("token", "", "run token authenticating sidecars to the control plane")
 		proxyImage   = flag.String("proxy-image", "", "OCI image for the wardyn-proxy sidecar")
 		proxyBinary  = flag.String("proxy-binary", "", "host path to a wardyn-proxy binary to bind-mount into the sidecar (v0 dev)")
@@ -116,6 +117,13 @@ func run() error {
 		return err
 	}
 	spec.ProxyConfig = runner.ProxyConfig{RunToken: *token, ControlPlaneURL: *controlPlane}
+	if *controlCA != "" {
+		b, err := os.ReadFile(*controlCA)
+		if err != nil {
+			return fmt.Errorf("control-plane-ca: %w", err)
+		}
+		spec.ProxyConfig.ControlPlaneCAPEM = string(b)
+	}
 
 	sb, err := run.CreateSandbox(ctx, spec)
 	if err != nil {

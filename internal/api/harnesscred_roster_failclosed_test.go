@@ -16,8 +16,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// siteConfigErrStore answers every roster read with a transient failure — the
-// store blip authorizeHarnessLogin used to swallow.
+// siteConfigErrStore answers every roster read with a transient failure — a
+// store blip authorizeHarnessLogin must not swallow.
 type siteConfigErrStore struct{ *integStore }
 
 func (siteConfigErrStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -29,7 +29,7 @@ func (siteConfigErrStore) GetSiteConfig(context.Context) (types.SiteConfig, erro
 // authorizeHarnessLogin read the roster as `sc, _ := s.siteConfigSnapshot(...)`,
 // so a transient GetSiteConfig error read as "no per_user row": the launch went
 // ahead with an EMPTY pin, stamped an empty sso_account_id/sso_role_name on
-// harness.login.started, and bindCaptureToPin then treated the run as "launched
+// harness.login.start, and bindCaptureToPin then treated the run as "launched
 // unpinned" and accepted whatever account/role the sandbox named. The same read
 // failure also dropped the admin-owned SSOStartURL, so the CALLER's own
 // sso_start_url became the bound portal.
@@ -61,8 +61,8 @@ func TestHarnessLogin_RosterReadFailureFailsClosed(t *testing.T) {
 	if env := rnr.lastSandboxEnv(); env != nil {
 		t.Errorf("a login sandbox was launched on an unreadable roster: env=%v", env)
 	}
-	if rows := audit.find("harness.login.started"); len(rows) != 0 {
-		t.Errorf("harness.login.started rows = %d, want 0 — an empty stamp pin reads as 'launched unpinned' at capture", len(rows))
+	if rows := audit.find("harness.login.start"); len(rows) != 0 {
+		t.Errorf("harness.login.start rows = %d, want 0 — an empty stamp pin reads as 'launched unpinned' at capture", len(rows))
 	}
 }
 
@@ -113,8 +113,8 @@ func TestHarnessLogin_ScopeIsTheAuthorizedReadNotASecondOne(t *testing.T) {
 	srv := New(cfg)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
-	rows := audit.find("harness.login.started")
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
+	rows := audit.find("harness.login.start")
 	if w.Code != http.StatusOK {
 		// Refusing is an acceptable answer — stamping the SHARED credential is not.
 		if len(rows) != 0 {
@@ -123,7 +123,7 @@ func TestHarnessLogin_ScopeIsTheAuthorizedReadNotASecondOne(t *testing.T) {
 		return
 	}
 	if len(rows) != 1 {
-		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+		t.Fatalf("harness.login.start rows = %d, want 1", len(rows))
 	}
 	var data struct {
 		CredentialSource string `json:"credential_source"`

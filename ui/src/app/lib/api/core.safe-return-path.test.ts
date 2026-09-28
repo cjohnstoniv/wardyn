@@ -3,17 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// H2: safeReturnPath is the one gate between a 401's captured
-// `window.location.pathname` and a post-auth `navigate(..., {replace:true})`.
-// `internal/api/ui.go`'s catch-all serves index.html with no path cleaning, so
-// `GET //evil.com` 200s and `window.location.pathname` reads back exactly
-// `//evil.com` — a protocol-relative host a router's replaceState would dial
-// cross-origin. Applied at BOTH capture (core.ts) and restore (App.tsx); this
-// file pins the shared function both call.
+// H2: safeReturnPath is the one gate between the page's pathname and the
+// fresh reload a sign-in by someone else triggers (App.tsx's
+// window.location.assign, #483). `internal/api/ui.go`'s catch-all serves
+// index.html with no path cleaning, so `GET //evil.com` 200s and
+// `window.location.pathname` reads back exactly `//evil.com` — a
+// protocol-relative host a navigation would dial cross-origin. This file pins
+// the function; App.reauth.test.tsx pins its use at the reload.
 import { describe, it, expect } from "vitest";
 import { safeReturnPath } from "./core";
 
-describe("safeReturnPath (H2)", () => {
+describe("safeReturnPath", () => {
+  // ticket: H2
   it("rejects a protocol-relative host (//host)", () => {
     expect(safeReturnPath("//evil.com")).toBe("/runs");
     expect(safeReturnPath("//evil.com/x")).toBe("/runs");
@@ -27,9 +28,11 @@ describe("safeReturnPath (H2)", () => {
     expect(safeReturnPath("https://evil.com/x")).toBe("/runs");
   });
 
-  it("rejects the two landing-decision paths (root and /setup) and absent/empty input", () => {
+  it("rejects the landing-decision paths (root and setup, in either view) and absent/empty input", () => {
     expect(safeReturnPath("/")).toBe("/runs");
     expect(safeReturnPath("/setup")).toBe("/runs");
+    expect(safeReturnPath("/admin")).toBe("/runs");
+    expect(safeReturnPath("/admin/setup")).toBe("/runs");
     expect(safeReturnPath(null)).toBe("/runs");
     expect(safeReturnPath(undefined)).toBe("/runs");
     expect(safeReturnPath("")).toBe("/runs");

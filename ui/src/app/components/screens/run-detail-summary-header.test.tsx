@@ -10,8 +10,9 @@
 // red "requires the admin role" error the instant they open the terminal
 // below it (OverviewTab renders <AttachTerminal> whenever `attachable`).
 import type { ReactElement } from "react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -20,10 +21,15 @@ import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { RUN_FACTS } from "../wardyn/copy/door";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
+  PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
 } from "./run-status-detail";
 
@@ -49,7 +55,8 @@ const runningInteractive: AgentRun = {
   interactive: true,
 };
 
-describe("SummaryHeader — attachable chip predicate (W25-1)", () => {
+describe("SummaryHeader — attachable chip predicate", () => {
+  // ticket: W25-1
   it("shows the plain 'Interactive' chip (no attachable claim) for a member", () => {
     renderHeader(
       <OperatorProvider operator={false}>
@@ -153,7 +160,8 @@ describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)"
 // "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.
-describe("SummaryHeader — clone door (0.7.3 F7)", () => {
+describe("SummaryHeader — clone door", () => {
+  // ticket: 0.7.3 F7
   // The component itself gates on the `terminal` PROP, never on
   // `run.state` directly (run-detail-summary-header.tsx:233) — this loop pins
   // the CALLER's contract (every one of the 5 states in TERMINAL_RUN_STATES
@@ -457,6 +465,76 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
   });
 });
 
+// #125 — PENDING's own first tick, before the substrate has sent anything:
+// statusChip widened from STARTING-only to STARTING || PENDING, and an empty
+// status_detail on PENDING gets its own sentence rather than rendering nothing.
+describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
+  const pending = (extra: Partial<AgentRun>): AgentRun => ({
+    ...runningInteractive,
+    state: "PENDING",
+    interactive: false,
+    ...extra,
+  });
+
+  // SF-25: the mock (packet-4.html state 3) has only the reused Pending
+  // badge plus the visible sentence — no separate "Queued" info chip, which
+  // would say the badge's own fact a second time.
+  it("shows only the Pending badge, no separate info chip, for a PENDING run with no status_detail yet", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).toBeNull();
+  });
+
+  // SF-25: a tooltip alone cannot be read on a touch device — the mock
+  // (packet-4.html state 3) shows the sentence as a visible line under the
+  // header, byte-exact, not only on the chip's `title`.
+  it("also renders the queued sentence as a visible line under the header, not only on the chip's title", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(PENDING_NO_DETAIL)).toBeInTheDocument();
+  });
+
+  it("a real stage line replaces the queued sentence the moment one lands", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={pending({ status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" })}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
+    expect(screen.getByText(CHIP_WAITING_FOR_MACHINE)).toBeInTheDocument();
+  });
+
+  // review defect 3: PENDING_NO_DETAIL is a PENDING-only fact — STARTING's own
+  // empty-detail case was already correctly silent before #125 (no ordinary
+  // wait worth naming before the pod is even scheduled) and must stay that
+  // way; the widened `run.state === "STARTING" || "PENDING"` gate must not
+  // have smuggled the queued sentence into the STARTING arm too.
+  it("never shows the queued sentence for a STARTING run with no status_detail — that stays silent", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "STARTING", interactive: false, status_detail: "" }}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
+    expect(screen.getByTestId("run-summary-header")).not.toHaveTextContent(PENDING_NO_DETAIL);
+  });
+});
+
 // #93/#96 — the run header's autonomy chip, beside ConfinementChip.
 // run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
 // at create time (0.8 #97).
@@ -482,5 +560,112 @@ describe("SummaryHeader — the autonomy chip beside the barrier chip", () => {
     for (const meta of Object.values(AUTONOMY_META)) {
       expect(screen.queryByText(meta.label)).toBeNull();
     }
+  });
+});
+
+// #543 (design §5.7, decision 5): the run's model provider, a neutral chip in
+// the header's chip bar — named from the shell's /setup/status, and marked
+// removed once the provider is gone from it.
+describe("SummaryHeader — the run's model provider chip", () => {
+  const { gateway } = MODEL_PROVIDERS;
+  function withStatus(status: SetupStatus | null, run: AgentRun) {
+    renderHeader(
+      <ModelAccessProvider status={status} onRefresh={() => {}}>
+        <OperatorProvider operator={false}>
+          <SummaryHeader run={run} terminal={false} onKill={() => {}} />
+        </OperatorProvider>
+      </ModelAccessProvider>,
+    );
+  }
+
+  it("names the provider the run chose", () => {
+    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: gateway.id });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.name, false))).toBeInTheDocument();
+  });
+
+  it("a provider deleted since: (removed), by the id the run recorded", () => {
+    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: "old-gateway" });
+    expect(screen.getByText(RUN_FACTS.PROVIDER("old-gateway", true))).toBeInTheDocument();
+  });
+
+  it("claims nothing removed before /setup/status answers", () => {
+    withStatus(null, { ...runningInteractive, model_provider_id: gateway.id });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.id, false))).toBeInTheDocument();
+  });
+
+  it("a run under no provider block has no chip", () => {
+    withStatus(providerStatus([{ provider: gateway }]), runningInteractive);
+    expect(screen.queryByText(/^Model provider · /)).toBeNull();
+  });
+});
+
+// #1197 L2, review round 2 (F3/F5): what the Rename draft is seeded with,
+// and what happens when it is submitted empty.
+describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
+  const user = userEvent.setup();
+  const ownedRun: AgentRun = { ...runningInteractive, created_by: "me" };
+
+  // F3: an untitled run must not seed the draft from the WHOLE task —
+  // runHeadline's own fallback (title, then task, then "—") would seed a
+  // multi-line or 200+-char task verbatim, which the server refuses on
+  // Save, or the literal "—" for a task-less run.
+  it("seeds the draft from the task's first line (word-boundary, 80 chars) for an untitled run", async () => {
+    const run: AgentRun = {
+      ...ownedRun,
+      title: undefined,
+      task: "Fix the flaky test\nSee the CI log for the full stack trace",
+    };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={() => {}} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    expect(screen.getByLabelText("Title")).toHaveValue("Fix the flaky test");
+  });
+
+  it("seeds the draft from the run's own trimmed title when it has one", async () => {
+    const run: AgentRun = { ...ownedRun, title: "  My saved title  ", task: "irrelevant task text" };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={() => {}} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    expect(screen.getByLabelText("Title")).toHaveValue("My saved title");
+  });
+
+  // F5: an emptied draft is Cancel, not a "renamed to blank" success.
+  it("treats an empty draft as Cancel — onRename is never called, and the toast never fires", async () => {
+    const onRename = vi.fn();
+    const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={onRename} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const input = screen.getByLabelText("Title");
+    await user.clear(input);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onRename).not.toHaveBeenCalled();
+    // The form closes like a Cancel would — no lingering edit row.
+    expect(screen.queryByLabelText("Title")).toBeNull();
+  });
+
+  it("still submits a non-empty edited draft", async () => {
+    const onRename = vi.fn();
+    const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={onRename} />
+      </OperatorProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const input = screen.getByLabelText("Title");
+    await user.clear(input);
+    await user.type(input, "A real new title");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onRename).toHaveBeenCalledWith("A real new title");
   });
 });

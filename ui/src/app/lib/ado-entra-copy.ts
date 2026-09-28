@@ -33,7 +33,7 @@
 // §7.1 is REUSED canon (PROVIDERS.*, APPROVAL_BANNER_LABEL.*, APPROVAL_SCOPE_LABEL.*,
 // APPROVAL_SCOPE_HINT.*, APPROVAL.CANCELLED_BODY, CAPABILITY.*, MEMBER_GETTING_STARTED.*,
 // AGENTS.MODEL_ACCESS_EXPIRING_ACTION, OPERATOR_ONLY_REASON, PEOPLE.CANCEL,
-// PROVIDERS.LAUNCH_WARNING_TITLE, AGENTS.OPEN_RUN_CTA) — imported by the consuming
+// PROVIDERS.LAUNCH_WARNING_TITLE) — imported by the consuming
 // screens from its own home, never re-exported or re-frozen here. §7.1's second table
 // (server-composed refusals: ADO_400.*, ADO_422.*, ADO_REFUSE.*, ADO_PAT.*) is also
 // deliberately absent — those are rendered from the wire, verbatim, one Go constants
@@ -154,7 +154,8 @@ export const ADO = {
   CONNECT_CONSENT_BODY: `Microsoft may ask you to allow it once. What you allow is what Wardyn is able to ask Azure DevOps for at all. What any one run may actually do is smaller, and Wardyn holds it there:`,
   CONNECT_APP_NOTE: (app: string) => `The application asking is ${app} — the same one you signed in to this console with. You can withdraw this at any time from your Microsoft account's My Apps page; doing so stops your runs reaching Azure DevOps.`,
   CONNECT_CTA: `Continue to Microsoft`,
-  CONNECT_POPUP_BLOCKED: `Your browser blocked the popup.`,
+  CONNECT_POPUP_BLOCKED: `Your browser blocked the connect popup.`,
+  CONNECT_POPUP_OPEN: `Open Azure DevOps sign-in`,
   GROUP_STARTS_WITH: `Starts with`,
   GROUP_CAN_ASK: `Can ask you for`,
   GROUP_NEVER: `Never`,

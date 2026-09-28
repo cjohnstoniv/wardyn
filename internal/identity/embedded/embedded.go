@@ -126,6 +126,8 @@ type svidClaims struct {
 	Act actClaim `json:"act"`
 	// Sponsor is the accountable human owner.
 	Sponsor string `json:"sponsor"`
+	// OperatorOwned is identity.Claims.OperatorOwned.
+	OperatorOwned bool `json:"wardyn_operator_owned,omitempty"`
 }
 
 type actClaim struct {
@@ -145,9 +147,9 @@ func (p *Provider) CheckGrants(grants []types.GrantSpec) error {
 
 // MintRunIdentity issues a 1h ES256 JWT-SVID for runID. humanSub is the human
 // principal; sponsor is the accountable owner (defaults to humanSub when
-// empty); audience binds the token (RFC 8707). It emits an identity.mint audit
-// event (actor_type system).
-func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string) (identity.RunIdentity, error) {
+// empty); audience binds the token (RFC 8707); operatorOwned is signed in as
+// Claims.OperatorOwned. It emits an identity.mint audit event (actor_type system).
+func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
 	if humanSub == "" {
 		return identity.RunIdentity{}, errors.New("embedded identity: humanSub is required")
 	}
@@ -178,8 +180,9 @@ func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSu
 			Expiry:    jwt.NewNumericDate(exp),
 			NotBefore: jwt.NewNumericDate(now),
 		},
-		Act:     actClaim{Sub: spiffeID},
-		Sponsor: sponsor,
+		Act:           actClaim{Sub: spiffeID},
+		Sponsor:       sponsor,
+		OperatorOwned: operatorOwned,
 	}
 
 	token, err := jwt.Signed(p.signer).Claims(claims).Serialize()
@@ -227,7 +230,7 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		// presented string: a healthy long run whose renews were refused through
 		// a control-plane outage holds a dead token and 401s every /internal/*
 		// call from then on, forever, with nothing in the audit trail naming the
-		// run (see internal/api's run.identity.expired). Expiry is checked here,
+		// run (see internal/api's run.identity.expire). Expiry is checked here,
 		// BEFORE revocation below, so an expired token never reads as a revoked
 		// one; the run id comes from the actor claim, which the signature above
 		// already covered. Everything else — a forged signature, a wrong
@@ -260,12 +263,13 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 	}
 
 	out := &identity.Claims{
-		SPIFFEID: claims.Act.Sub,
-		RunID:    runID,
-		Sub:      claims.Subject,
-		Sponsor:  claims.Sponsor,
-		JTI:      claims.ID,
-		Audience: expectedAudience,
+		SPIFFEID:      claims.Act.Sub,
+		RunID:         runID,
+		Sub:           claims.Subject,
+		Sponsor:       claims.Sponsor,
+		OperatorOwned: claims.OperatorOwned,
+		JTI:           claims.ID,
+		Audience:      expectedAudience,
 	}
 	if claims.IssuedAt != nil {
 		out.IssuedAt = claims.IssuedAt.Time()
@@ -284,6 +288,22 @@ func (p *Provider) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 		return fmt.Errorf("embedded identity: revoke run %s: %w", runID, err)
 	}
 	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.revoke", "", "success")
+	return nil
+}
+
+// RevokeJTI revokes a single token by its own jti, without revoking the
+// whole run (O2, least-privilege credentials): a revive uses this to retire
+// a run's OLD token the moment a fresh one is minted, distinct from RevokeRun
+// (the run-wide kill-switch cascade). Not part of identity.Provider — callers
+// reach it through their own narrow capability interface (internal/api's
+// jtiRevoker), the way every other optional capability in this tree is
+// reached, rather than widening the Provider contract for one caller.
+func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	if err := p.revocations.RevokeJTI(ctx, jti, runID); err != nil {
+		p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "failure")
+		return fmt.Errorf("embedded identity: revoke jti for run %s: %w", runID, err)
+	}
+	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "success")
 	return nil
 }
 

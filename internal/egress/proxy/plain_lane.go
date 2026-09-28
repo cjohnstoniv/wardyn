@@ -5,15 +5,9 @@ package proxy
 
 // The PLAIN forward lane: an absolute-form request URI the sandbox sends
 // straight to the proxy listener (no CONNECT), which ServeHTTP routes here.
-//
-// Split out of proxy.go at the 1000-line gate, and a real seam rather than a
-// size dodge: handleConnect and its TLS-terminated continuation already live
-// beside each other in mitm.go, while this lane's own rules — what port an
-// absolute-form URI means, which inspection core its host earns, and where the
-// generic injector runs — were the one piece of that story still folded into
-// the pipeline file. F103/F104/F141 were all instances of this lane silently
-// diverging from the tunnel; keeping it in one place is how the divergence
-// stays visible.
+// This lane's own rules — what port an absolute-form URI means, which
+// inspection core its host earns, and where the generic injector runs — live
+// together here so any divergence from the tunnel (mitm.go) stays visible.
 
 import (
 	"context"
@@ -28,10 +22,9 @@ import (
 
 const (
 	// ruleSourceRequireTLS marks the one decision this lane makes on its own: a
-	// request refused because its injection rule declares require_tls
-	// (egress.InjectionRule) and the transport is cleartext. It is a `policy:`
-	// value because the operator's authored rule is what denied it — not a
-	// builtin, and not the evaluator, which allowed the host before this arm ran.
+	// request refused because its injection rule declares require_tls and the
+	// transport is cleartext. A `policy:` value since the operator's authored
+	// rule is what denied it, not the evaluator (which already allowed the host).
 	ruleSourceRequireTLS = "policy:require-tls"
 	// injectRequireTLSBody is the 403 body, with the host substituted.
 	//
@@ -40,16 +33,11 @@ const (
 		"this rule sets require_tls and the request was plain HTTP"
 )
 
-// defaultPortForScheme is the port an absolute-form request URI means when its
-// authority carries no explicit one.
-//
-// The port a decision row states has to be the port the proxy actually dials
-// (docs/AUDIT-ACTIONS.md lists `port` as an egress.* detail field), and the
-// allowlist has to be matched against the same one (F141): hardcoding port 80
-// here would evaluate, vet and dial `POST https://api.anthropic.com/v1/messages`
-// as port 80 — the policy port matched against 80, the audit row recording 80,
-// and the transport running TLS against :80 — while the request plainly names
-// the https origin.
+// defaultPortForScheme is the port an absolute-form request URI means when
+// its authority carries no explicit one. The decision row, the allowlist
+// match and the actual dial must all use the same port — hardcoding 80 here
+// would evaluate, vet and dial an https:// request as port 80 while the
+// request plainly names the https origin.
 func defaultPortForScheme(scheme string) int {
 	if strings.EqualFold(scheme, "https") {
 		return 443
@@ -83,9 +71,8 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		// memoed=true for the same reason handleConnect passes it: evaluate's memo
-		// arm is ahead of egressTarget, so a log-less Deny reaches THIS lane too,
-		// and a memoed retry here must get the same 403 as the first attempt.
+		// memoed=true for the same reason handleConnect passes it: a memoed
+		// retry here must get the same 403 as the first attempt.
 		p.writeEgressDeny(w, host, port, log, true)
 		return
 	case egress.Pending:
@@ -97,28 +84,14 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. require_tls (F110's residual half): the operator declared that THIS
-	// host's brokered credential may ride only a transport the proxy runs TLS on,
-	// and this request is cleartext. Unlike injectableTransport's rules — which
-	// are the proxy's own reading of a transport and therefore withhold the
-	// credential silently — an authored require_tls refuses the REQUEST, so the
-	// agent sees why instead of debugging a 401 from the upstream.
-	//
-	// It runs BEFORE the inspection block below, not beside the injection it
-	// guards: a refusal is the end of this request, so buffering and scanning its
-	// body first would spend the scan budget on bytes nothing forwards — and the
-	// blind-coverage marker (emitLLMBlindOnce) would post a row saying a body went
-	// UNINSPECTED to an upstream that never received it. A transport the operator
-	// refused preempts the question of what was in it.
-	//
-	// It writes its OWN 403 rather than going through writeEgressDeny, which
-	// special-cases the two builtin reasons and gives every other one the fixed
-	// "egress denied by policy" body (policy.go) — useless for a transport
-	// mistake an operator can fix in one line. The refusal HEADERS are the same
-	// ones every other refusal on this lane sets, carrying the same rule_source
-	// the decision row does, and the deny row REPLACES the allow row below
-	// (nothing was forwarded, so an allow would be a false record — the same
-	// accuracy rule the dial-failed arm follows).
+	// 4. require_tls: the operator declared that THIS host's brokered
+	// credential may ride only TLS, and this request is cleartext — an
+	// authored require_tls refuses the REQUEST (unlike injectableTransport's
+	// rules, which withhold the credential silently). Runs BEFORE the
+	// inspection block below: a refusal is the end of this request, so
+	// scanning its body first would spend budget on bytes nothing forwards.
+	// Writes its own 403 (not writeEgressDeny's fixed body) since this is a
+	// transport mistake an operator can fix in one line.
 	if p.inject.requiresTLS(host) && !strings.EqualFold(r.URL.Scheme, "https") {
 		if log != nil {
 			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceRequireTLS))
@@ -128,30 +101,22 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Content inspection. TWO lanes converge here and the host decides which,
-	// with the same questions handleConnect/serveMITMRequest ask:
-	//
+	// Content inspection. TWO lanes converge here and the host decides which:
 	//   - A MODEL host (isLLMHost) whose channel we can parse takes the LLM
-	//     per-endpoint classifier — the handleConnect parity this lane never had
-	//     (F103/F141). An absolute-form `POST https://api.anthropic.com/v1/messages`
-	//     is the SAME prompt egress as the tunnel, so without this classifier it
-	//     would forward with the brokered credential, unscanned EVEN IN mode=block,
-	//     under a single `allow / policy:allowed / scan=nil` row: no scan event, no
-	//     blind marker, nothing an auditor could tell apart from a GET. inspectLLM writes its own
-	//     403 and its own scan:blocked decision when it refuses.
+	//     per-endpoint classifier, giving this lane handleConnect's parity —
+	//     without it a prompt would forward unscanned even in mode=block.
+	//     inspectLLM writes its own 403 when it refuses.
 	//   - Every other host keeps the OPTIONAL generic inspection of a custom
-	//     (non-LLM) HTTP connector's body — the walled-garden extension, opt-in via
-	//     inspect_forward_egress. When disabled (the default) or for bodiless
-	//     methods this is a no-op and the path below is byte-for-byte the original
-	//     streaming forward. A confident block writes the 403 itself (before the
-	//     allow decision is emitted).
+	//     HTTP connector's body (inspect_forward_egress). Disabled (default)
+	//     or bodiless, this is a no-op and the path is the original streaming
+	//     forward.
 	var (
 		bodyOverride io.Reader
 		summary      *egress.ScanSummary
 		blocked      bool
 	)
 	// releaseBody returns the inspected body's bytes to maxRetainedScanBytes; it
-	// has to outlive the RoundTrip that reads them (F074).
+	// has to outlive the RoundTrip that reads them.
 	releaseBody := func() {}
 	defer func() { releaseBody() }()
 	channel := p.channelForHost(host)
@@ -168,11 +133,9 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	if summary != nil && log != nil {
 		log.Scan = summary
 	}
-	// Honest coverage, same rule as handleConnect's opaque-tunnel marker: an LLM
-	// host we could NOT inspect on this lane (Bedrock/SigV4 and any gateway whose
-	// channel is generic, when the operator has not opted generic bodies in)
-	// carried a body nothing looked at. Say so once per host rather than letting
-	// the bare allow imply coverage.
+	// Honest coverage, same rule as handleConnect's opaque-tunnel marker: an
+	// LLM host we could NOT inspect on this lane carried a body nothing
+	// looked at. Say so once per host rather than letting the allow imply coverage.
 	if scanning && p.isLLMHost(host) && channel == contentscan.ChannelGeneric &&
 		summary == nil && hasScannableBody(r) {
 		p.emitLLMBlindOnce(host)
@@ -192,9 +155,9 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// on a transport that may carry the credential — see injectableTransport).
 	p.applyInjection(outReq, host, port)
 
-	// 6. Forward to the vetted target over the pinned transport. Its DialContext
-	// dials the vetted ip:port carried on the request context (vettedIPKey), so the
-	// host is never re-resolved. Invoked only post-allow+vet.
+	// 6. Forward over the pinned transport, which dials the vetted ip:port
+	// carried on the request context (vettedIPKey) so the host is never
+	// re-resolved.
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
 		p.failUpstream(w, err, log, host, "upstream error")

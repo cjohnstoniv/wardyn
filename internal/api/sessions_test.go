@@ -8,6 +8,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,11 @@ type sessionTokenStore struct {
 	revoked []uuid.UUID
 }
 
+func (s *sessionTokenStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
+func (s *sessionTokenStore) ListSSHKeysByPrincipal(context.Context, string) ([]types.SSHPublicKey, error) {
+	return nil, nil
+}
+
 func (s *sessionTokenStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
 	return s.toks, nil
 }
@@ -110,15 +116,15 @@ func TestRevokeSessions_AlsoRevokesTokens(t *testing.T) {
 }
 
 func TestRevokeSessions_AdminRevokesSub(t *testing.T) {
-	srv, fake := sessionsTestServer(t)
+	srv, fake, _ := sessionsTestServerWithTokens(t, []types.APIToken{{Principal: "sub-alice", Email: "alice@corp.example"}})
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@corp.example"}`)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusNoContent, w.Body.String())
 	}
-	if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != "alice@corp.example" {
-		t.Errorf("revokedSubs = %v, want [alice@corp.example]", fake.revokedSubs)
+	if len(fake.revokedSubs) != 2 || fake.revokedSubs[0] != "alice@corp.example" || fake.revokedSubs[1] != "sub-alice" {
+		t.Errorf("revokedSubs = %v, want [alice@corp.example sub-alice]", fake.revokedSubs)
 	}
 }
 
@@ -154,7 +160,7 @@ func TestRevokeSessions_AdminRevokesAll(t *testing.T) {
 
 func TestRevokeSessions_MemberForbidden(t *testing.T) {
 	srv, fake := sessionsTestServer(t)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"alice@corp.example"}`)
 	if w.Code != http.StatusForbidden {
@@ -216,7 +222,7 @@ func TestRevokeSessions_NotMountedWithoutStore(t *testing.T) {
 
 func TestRevokeSessions_AuditEmitted(t *testing.T) {
 	h := newHarness(t)
-	cfg := baseTestConfig(h, &sessionTokenStore{})
+	cfg := baseTestConfig(h, &sessionTokenStore{toks: []types.APIToken{{Principal: "sub-alice", Email: "alice@corp.example"}}})
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.SessionRevocations = &fakeSessionRevocations{}
 	srv := New(cfg)
@@ -237,18 +243,18 @@ func TestRevokeSessions_AuditEmitted(t *testing.T) {
 	}
 }
 
-// ─── the SEC-over-SUPER direction (Requirement 3) ────────────────────────────
+// the SEC-over-SUPER direction (Requirement 3)
 
 // TestSecurityAdminRevokesSuperAdmin pins the answer to "may a security_admin
 // revoke a SUPER admin's sessions and tokens". YES — deliberately, and this
 // test is what makes that a decision rather than an accident.
 //
-// It was previously unpinned in BOTH directions: TestSecurityAdminRouteTier
-// (authz_test.go) probes this route with bodyFor("POST") == "{}", which 400s in
-// handleRevokeSessions' default arm before any target is named, so it proves
-// only that the router gate admits a security_admin. Every test in this file
-// used an ADMIN caller. Nothing anywhere named a super admin as the TARGET, so
-// adding a target-role guard would have reddened nothing.
+// TestSecurityAdminRouteTier (authz_test.go) probes this route with
+// bodyFor("POST") == "{}", which 400s in handleRevokeSessions' default arm
+// before any target is named, so it proves only that the router gate admits a
+// security_admin, and the other tests in this file use an admin caller. This
+// one names a super admin as the target, so adding a target-role guard reds
+// here.
 //
 // The reasoning is on handleRevokeSessions; the short form is that revocation
 // only ever SUBTRACTS reach, incident response is this tier's job, and it is
@@ -326,7 +332,7 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	// so this test cannot be read as "the route is simply open".
 	t.Run("a member is still refused", func(t *testing.T) {
 		srv, fake, _ := sessionsTestServerWithTokens(t, nil)
-		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 		if w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"`+superSub+`"}`); w.Code != http.StatusForbidden {
 			t.Errorf("member: status = %d, want 403", w.Code)
 		}
@@ -336,22 +342,21 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	})
 }
 
-// ─── an email names the same human as their sub (F002) ───────────────────────
+// an email names the same human as their sub
 
 // TestRevokeSessions_EmailFormRevokesTheSameHuman: "revoke a human now" is the
-// time-critical half of incident response, and it used to be keyed on the OIDC
-// sub ALONE while both the CLI flag help and OPERATIONS.md advertised
-// "sub/email". On any IdP where the two differ — Entra, whose sub is an opaque
-// per-app identifier, the shape the SSO work targets — naming the email stamped
-// a cutoff that matched nobody and swept no tokens, and the responder's only
-// feedback was 204 plus an append-only outcome=success row.
+// time-critical half of incident response, and both the CLI flag help and
+// OPERATIONS.md advertise "sub/email". On any IdP where the two differ — Entra,
+// whose sub is an opaque per-app identifier, the shape the SSO work targets —
+// keying on the OIDC sub alone would stamp a cutoff for the email that matches
+// nobody and sweeps no tokens, and the responder's only feedback would be 204
+// plus an append-only outcome=success row.
 //
 // Both halves of one revoke have to agree about who was named, so both are
 // asserted here: the cutoff key AND the token sweep.
 //
 // Counterfactual: drop the email fallback in revokeAPITokensFor and the token
-// assertion fails while the cutoff one still passes — which is exactly how this
-// shipped half-working.
+// assertion fails while the cutoff one still passes — a half-working revoke.
 func TestRevokeSessions_EmailFormRevokesTheSameHuman(t *testing.T) {
 	const (
 		aliceSub   = "sub-alice-opaque-entra-identifier"
@@ -385,8 +390,12 @@ func TestRevokeSessions_EmailFormRevokesTheSameHuman(t *testing.T) {
 			}
 			// Half 1: the cutoff is stamped under whatever was named —
 			// IsSessionRevoked is what matches it back to the session.
-			if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != tc.target {
-				t.Errorf("revokedSubs = %v, want [%s]", fake.revokedSubs, tc.target)
+			wantCutoffs := 1
+			if tc.target != aliceSub {
+				wantCutoffs++
+			}
+			if len(fake.revokedSubs) != wantCutoffs || fake.revokedSubs[0] != tc.target || fake.revokedSubs[len(fake.revokedSubs)-1] != aliceSub {
+				t.Errorf("revokedSubs = %v, want named target plus canonical subject %s", fake.revokedSubs, aliceSub)
 			}
 			// Half 2: the tokens. This is the half that does NOT self-heal —
 			// a wdn_ bearer never consults the session cutoff and api_tokens
@@ -422,8 +431,12 @@ func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"nobody@corp.example"}`)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
+	}
+	const wantRefusal = "no known principal matches that email address; name the subject exactly"
+	if !strings.Contains(w.Body.String(), wantRefusal) {
+		t.Errorf("body = %s, want the actionable refusal sentence %q, not the generic message", w.Body.String(), wantRefusal)
 	}
 	if len(st.revoked) != 0 {
 		t.Fatalf("revoked = %v, want none — an unmatched target must not sweep the deployment", st.revoked)

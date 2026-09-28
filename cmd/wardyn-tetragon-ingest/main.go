@@ -35,10 +35,10 @@
 // dropped_unmapped, so "the sensor saw nothing" and "the sensor saw plenty and
 // correlated none" are distinguishable on /healthz rather than both reading
 // observed_total:0. Events that DO correlate to a Wardyn run are NEVER gated — always
-// forwarded. It emits a periodic kernel.sensor.heartbeat (run_id NULL) so
+// forwarded. It emits a periodic kernel.sensor.ping (run_id NULL) so
 // /healthz can report ebpf_groundtruth=healthy ONLY while events are arriving.
 // Host eBPF is blind inside CC3/Kata guests; for such runs a one-time
-// kernel.sensor.blind event is emitted (data.reason=cc3-kata-host-ebpf-blind).
+// kernel.sensor.bypass event is emitted (data.reason=cc3-kata-host-ebpf-blind).
 package main
 
 import (
@@ -48,7 +48,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -71,9 +70,10 @@ func main() {
 func run() error {
 	var (
 		exportPath      = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
-		controlURL      = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
+		controlURL      = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "wardynd's internal TLS listener (WARDYN_INTERNAL_LISTEN); http:// is refused unless the host is loopback")
+		controlCAFile   = flagEnv("control-plane-ca-file", "WARDYN_CONTROL_PLANE_CA_FILE", "", "wardynd's internal CA certificate, the only root trusted for the control plane (wardynd writes control-plane-ca.pem beside WARDYN_GROUNDTRUTH_TOKEN_FILE); required for https")
 		token           = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
-		blindRuns       = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
+		blindRuns       = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.bypass is emitted per id at boot")
 		forwardUnmapped = cliutil.FlagBool("forward-unmapped-host-events", "WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS", false, "opt-in: forward host-wide kernel events this sensor could not correlate to a Wardyn run to the audit sink/SIEM; OFF by default (gated by gatedMapper)")
 		heartbeatFlag   = cliutil.FlagDuration("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", 30*time.Second, "sensor heartbeat interval")
 		refreshFlag     = cliutil.FlagDuration("refresh", "WARDYN_GROUNDTRUTH_REFRESH", 15*time.Second, "container->run index refresh interval")
@@ -85,6 +85,10 @@ func run() error {
 
 	if err := checkBootTokenSource(*token); err != nil {
 		return err
+	}
+	client, err := controlPlaneClient(*controlURL, *controlCAFile)
+	if err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
 	}
 
 	// Env values were parsed strictly at flag registration (cliutil.FlagDuration:
@@ -98,7 +102,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	sink := newEventSink(*controlURL, *token, *bufferSize, *batchSize, 2*time.Second, client)
 	defer func() {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -133,7 +136,7 @@ func run() error {
 			continue
 		}
 		sink.emit(groundtruth.BlindEvent(runID, "cc3-kata-host-ebpf-blind"))
-		slog.InfoContext(ctx, "wardyn-tetragon-ingest: emitted kernel.sensor.blind",
+		slog.InfoContext(ctx, "wardyn-tetragon-ingest: emitted kernel.sensor.bypass",
 			slog.String("run_id", runID.String()),
 		)
 	}

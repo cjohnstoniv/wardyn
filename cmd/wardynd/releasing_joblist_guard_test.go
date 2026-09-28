@@ -7,35 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// RELEASING.md's tag gate names the ci.yml jobs a maintainer must see green
-// before pushing a tag. That list drifted in BOTH directions before 0.7:
-//
-//   - `sbom-stub` was named but had been DELETED along with `make sbom`, so a
-//     maintainer following the list literally waited on a job that can never
-//     report.
-//   - `notices` — the copyleft / unreviewed-dependency gate — was missing
-//     entirely, so the list told them to skip the one job that catches a GPL
-//     regression. On a release that adds an X stack, that is the expensive half.
-//
-// Neither is a typo; both are drift, and drift recurs. This is the check that
-// makes it fail loudly instead.
 func TestReleasingDocNamesEveryCIJob(t *testing.T) {
 	root := repoRoot(t)
-
 	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
 	if err != nil {
-		t.Fatalf("read ci.yml: %v", err)
+		t.Fatal(err)
 	}
-	// Top-level job ids: exactly two spaces of indent, then `<id>:`. Deliberately
-	// not a YAML parse — this guard must not depend on a YAML library being
-	// vendored, and the shape is stable.
+	// Job ids have exactly two spaces; stop at the next top-level key.
 	jobRe := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9-]*):\s*$`)
-	var jobs []string
+	jobs := map[string]bool{}
 	inJobs := false
 	for _, line := range strings.Split(string(wf), "\n") {
 		if line == "jobs:" {
@@ -43,82 +28,68 @@ func TestReleasingDocNamesEveryCIJob(t *testing.T) {
 			continue
 		}
 		if inJobs && len(line) > 0 && line[0] != ' ' && line[0] != '#' {
-			break // a new top-level key ended the jobs block
+			break
 		}
-		if !inJobs {
-			continue
-		}
-		if m := jobRe.FindStringSubmatch(line); m != nil {
-			jobs = append(jobs, m[1])
+		if inJobs {
+			if m := jobRe.FindStringSubmatch(line); m != nil {
+				jobs[m[1]] = true
+			}
 		}
 	}
-	if len(jobs) < 10 {
-		t.Fatalf("parsed only %d ci.yml jobs (%v) — the parse regressed, and this guard would pass vacuously", len(jobs), jobs)
+	if len(jobs) == 0 {
+		t.Fatal("parsed no ci.yml jobs")
 	}
 
-	doc, err := os.ReadFile(filepath.Join(root, "RELEASING.md"))
-	if err != nil {
-		t.Fatalf("read RELEASING.md: %v", err)
-	}
-	text := string(doc)
-
-	var missing []string
-	for _, j := range jobs {
-		if !strings.Contains(text, "`"+j+"`") {
-			missing = append(missing, j)
-		}
-	}
-	sort.Strings(missing)
-	if len(missing) > 0 {
-		t.Errorf("ci.yml jobs absent from RELEASING.md: %v\n"+
-			"A maintainer reads that list to decide what must be green before tagging; a job missing from it is a gate they will skip.", missing)
-	}
-
-	// The other direction: a name in the list that is no longer a ci.yml job —
-	// what `sbom-stub` was, a phantom the maintainer waits on forever because
-	// GitHub never reports a job that cannot run.
-	//
-	// Scoped to the ENUMERATION, not to every backticked token in the file: the
-	// prose around it deliberately names things that are not ci.yml jobs (the
-	// deleted `sbom-stub` it records, the `publish-image` / `release` workflows
-	// it excludes by name), and a whole-file scan therefore had to allowlist
-	// them — which it did by hardcoding `sbom-stub` as the ONLY name it would
-	// ever complain about, so deleting a real job the list still names left
-	// this arm silent. The enumeration runs from the "job list:" marker to the
-	// em-dash that ends it; `gates`' matrix parenthetical is cut because those
-	// are matrix entries, not top-level job ids, and jobRe above never sees them.
-	present := map[string]bool{}
-	for _, j := range jobs {
-		present[j] = true
-	}
-	const marker = "ci.yml` job list:"
-	at := strings.Index(text, marker)
-	if at < 0 {
-		t.Fatal("RELEASING.md no longer introduces the ci.yml job list with \"ci.yml` job list:\" — this guard can no longer see the list it exists to check")
-	}
-	list := text[at+len(marker):]
-	if end := strings.Index(list, " — "); end >= 0 {
-		list = list[:end]
-	}
-	list = regexp.MustCompile(`\(a matrix job:[^)]*\)`).ReplaceAllString(list, "")
-
-	named := regexp.MustCompile("`([a-z][a-z0-9-]*)`").FindAllStringSubmatch(list, -1)
-	if len(named) < 10 {
-		t.Fatalf("parsed only %d job names from RELEASING.md's list — the parse regressed, and this arm would pass vacuously", len(named))
-	}
-	seen := map[string]bool{}
-	var phantom []string
-	for _, m := range named {
-		name := m[1]
-		if seen[name] || present[name] {
-			continue
-		}
-		seen[name] = true
-		phantom = append(phantom, name)
-	}
-	sort.Strings(phantom)
-	if len(phantom) > 0 {
-		t.Errorf("RELEASING.md's ci.yml job list names jobs that no longer exist: %v\n"+
-			"GitHub never reports a job that cannot run, so a maintainer waits on it forever.", phantom)
+	for _, tc := range []struct{ name, path, start, end, pattern string }{
+		{"RELEASING", "RELEASING.md", "ci.yml` job list:", " — ", "`([a-z][a-z0-9-]*)`"},
+		{"docs_CI", "docs/CI.md", "| Check | Runs | Median | Max | Timeout |", "\n\n", "(?m)^\\| `([^`]+)`[^|]*\\|"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := os.ReadFile(filepath.Join(root, tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, list, found := strings.Cut(string(doc), tc.start)
+			if !found {
+				t.Fatalf("%s: job-list anchor missing", tc.path)
+			}
+			list, _, found = strings.Cut(list, tc.end)
+			if !found {
+				t.Fatalf("%s: job-list end missing", tc.path)
+			}
+			// Matrix cells are check names, not additional top-level jobs. The budget
+			// table also retains explicitly marked nightly measurements.
+			list = regexp.MustCompile(`\(a matrix job:[^)]*\)`).ReplaceAllString(list, "")
+			named := map[string]bool{}
+			for _, m := range regexp.MustCompile(tc.pattern).FindAllStringSubmatch(list, -1) {
+				if strings.Contains(m[0], ", nightly") {
+					continue
+				}
+				name, _, _ := strings.Cut(m[1], " (")
+				named[name] = true
+			}
+			if len(named) == 0 {
+				t.Fatalf("%s: parsed no job names", tc.path)
+			}
+			var missing, phantom []string
+			for name := range jobs {
+				if !named[name] {
+					missing = append(missing, name)
+				}
+			}
+			for name := range named {
+				if !jobs[name] {
+					phantom = append(phantom, name)
+				}
+			}
+			slices.Sort(missing)
+			slices.Sort(phantom)
+			if len(missing) > 0 {
+				t.Errorf("%s omits ci.yml jobs: %v", tc.path, missing)
+			}
+			if len(phantom) > 0 {
+				t.Errorf("%s names nonexistent ci.yml jobs: %v", tc.path, phantom)
+			}
+		})
 	}
 }

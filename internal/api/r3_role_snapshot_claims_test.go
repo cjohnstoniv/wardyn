@@ -18,10 +18,8 @@ import (
 // stylistic quibble but a false statement about the system. If the refresh is
 // ever removed, this stops compiling and the claims below are re-opened for
 // review rather than silently inverted a second time.
-var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
+var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
 
-// TestRoleSnapshotClaimsMatchTheRefreshThatShipped is F281.
-//
 // The role-mapping WARN told operators "a token's role is frozen at mint and no
 // sign-in refreshes it" — in the same release that gave the token lane the login
 // hook the key lane had since 0046 (store.RefreshAPITokenRoles; CHANGELOG 0.7
@@ -30,7 +28,7 @@ var refreshAPITokenIdentityExists func(store.Store, context.Context, string, str
 // operator acting on a stale remedy line either does unnecessary work or
 // assumes a bound that is not there.
 //
-// The demotion path has since gained a second, sharper answer (F112: the edit
+// The demotion path has since gained a second, sharper answer (the edit
 // revokes what it demotes), so the line now has THREE true things to keep
 // straight at once. This pins all three rather than banning one sentence.
 func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
@@ -38,7 +36,7 @@ func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
 
 	t.Run("the operator-facing remedy names what actually happens", func(t *testing.T) {
 		for _, want := range []struct{ frag, why string }{
-			{"were revoked", "this edit already revoked the principals it demoted (F112) — an operator told to go revoke them is being sent to do work that is done"},
+			{"were revoked", "this edit already revoked the principals it demoted — an operator told to go revoke them is being sent to do work that is done"},
 			{"next sign-in re-stamps the role", "the stamp is bounded-stale, not frozen: RefreshAPITokenIdentity fires from the OnLogin hook"},
 			{"RefreshAPITokenIdentity", "name the mechanism, so the claim can be checked against the code that makes it true"},
 			{"take effect immediately or the owner will not sign in again", "the two cases where the login bound is not enough are exactly when the lever is the right answer (CHANGELOG 0.7's own wording)"},
@@ -49,12 +47,10 @@ func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
 		}
 	})
 
-	// The inverted claims, banned by their exact wording because that wording
-	// is what shipped. #152/#277 widened the OnLogin re-stamp to cover the
-	// GROUP snapshot too (store.RefreshAPITokenIdentity), so "frozen at
-	// mint"/"signing in again does not refresh it" is now as false for groups
-	// as it always was for role — the distinction accessStaleSnapshotToken
-	// used to draw between the two halves is gone, and every ban below
+	// The inverted claims, banned by their exact wording. The OnLogin
+	// re-stamp covers the group snapshot as well as the role
+	// (store.RefreshAPITokenIdentity), so "frozen at mint"/"signing in again
+	// does not refresh it" is false for both halves, and every ban below
 	// applies to either.
 	t.Run("no source claim contradicts the refresh", func(t *testing.T) {
 		banned := []struct{ frag, why string }{

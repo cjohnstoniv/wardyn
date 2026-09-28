@@ -27,14 +27,22 @@ const defaultSSHKeyPath = "~/.wardyn/id_ed25519"
 
 // sshKeyCmd returns `wardyn ssh-key`: the keys the SSH gateway trusts for the
 // caller's own principal (docs/SSH.md §1). `ensure` is the scriptable half of
-// the console's Account -> SSH keys page — a tool that needs to dial a sandbox
+// the console's Your account page — a tool that needs to dial a sandbox
 // calls it once per machine and gets back the identity file to use.
 func sshKeyCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ssh-key",
 		Short: "Manage the SSH keys the gateway trusts for your account",
+		Long: `Manage the SSH keys the gateway trusts for your account.
+
+A key registered here follows your token's own role: an operator's key can
+carry the admin override, same as a super admin's. The console's Your
+account page instead follows the session's mode — capped to user rights,
+never the admin override, whenever that session is viewing as a member.
+Registering a key with admin reach while staying in Admin view is the Admin
+SSH keys card: Admin view -> Settings, super admins only.`,
 	}
-	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client))
+	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client), sshKeyDeleteCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -66,7 +74,7 @@ the account. Safe to run on every launch: a second call changes nothing.
 Under SSO the key must be registered by YOU, not by the deployment's admin
 token (a key on the admin-token principal can never open a run you created):
 authenticate the CLI with your own API token (WARDYN_TOKEN) or add the key in
-the console under Account -> SSH keys instead.
+the console under Your account instead.
 `,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -119,7 +127,7 @@ func runSSHKeyEnsure(cmd *cobra.Command, c *sdk.Client, path, name string, asJSO
 
 	res := sshKeyEnsureResult{Path: path, PublicKey: line, Fingerprint: fp, Generated: generated, Registered: registered}
 	if asJSON {
-		return emitJSON(res)
+		return emitJSON(cmd.OutOrStdout(), res)
 	}
 	out := cmd.OutOrStdout()
 	switch {
@@ -151,9 +159,9 @@ func sshKeyListCmd(client clientFn) *cobra.Command {
 				if keys == nil {
 					keys = []sdk.SSHPublicKey{}
 				}
-				return emitJSON(keys)
+				return emitJSON(cmd.OutOrStdout(), keys)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "FINGERPRINT\tNAME\tROLE\tCREATED")
 			for _, k := range keys {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", k.Fingerprint, k.Name, k.Role, k.CreatedAt.Format("2006-01-02"))
@@ -162,6 +170,26 @@ func sshKeyListCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	return cmd
+}
+
+// sshKeyDeleteCmd returns `ssh-key delete <fingerprint>`: remove one of the
+// caller's own registered keys, following secret.go's delete pattern
+// (an --rm alias, a plain confirmation line on success).
+func sshKeyDeleteCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "delete <fingerprint>",
+		Aliases: []string{"rm"},
+		Short:   "Delete one of your registered SSH gateway keys",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := client().DeleteSSHKey(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "ssh key %q deleted\n", args[0])
+			return nil
+		},
+	}
 	return cmd
 }
 

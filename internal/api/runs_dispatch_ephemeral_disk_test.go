@@ -34,7 +34,7 @@ func ephemeralDispatch(t *testing.T, policy types.RunPolicySpec, site types.Site
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: site}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
 	})
 	return fr.lastSpec.Resources, audit.events, run.ID
@@ -119,7 +119,7 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 		ceiling: governanceCeiling{Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: 2048}},
 		want:    4096,
 	}, {
-		// PROVENANCE STOPS AT THIS SITE. composer.Clamp's capField already fills a
+		// Provenance stops at this site. composer.Clamp's capField already fills a
 		// zero request UP TO a profile SPEC's resources.disk_mib at create, so a
 		// non-zero size can reach dispatch without the member typing it — and it is
 		// still REQUESTED, not filled: an admin wrote that number on a policy, which
@@ -145,9 +145,9 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 			}
 			// The effective number is DISCLOSED to every caller through the
 			// envelope — the audit is why the clamp can be silent at the API.
-			ev := findAudit(events, runID, "run.policy.effective", "success")
+			ev := findAudit(events, runID, "run.policy.resolve", "success")
 			if ev == nil {
-				t.Fatalf("no run.policy.effective envelope; events=%s", auditDump(events, runID))
+				t.Fatalf("no run.policy.resolve envelope; events=%s", auditDump(events, runID))
 			}
 			var spec types.RunPolicySpec
 			if err := json.Unmarshal(ev.Data, &spec); err != nil {
@@ -158,7 +158,7 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 				got = spec.Resources.DiskMiB
 			}
 			if got != tc.want {
-				t.Errorf("run.policy.effective disk_mib = %d, want %d — the envelope is the only disclosure a member gets", got, tc.want)
+				t.Errorf("run.policy.resolve disk_mib = %d, want %d — the envelope is the only disclosure a member gets", got, tc.want)
 			}
 			// PROVENANCE rides the same envelope, so a reader can tell a size the
 			// org filled in (degrades to uncapped on a host that cannot keep it)
@@ -170,7 +170,41 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 			}
 			filled, present := datum["disk_mib_filled"]
 			if tc.wantFilled != (present && filled == true) {
-				t.Errorf("run.policy.effective disk_mib_filled = %v (present=%v), want filled=%v", filled, present, tc.wantFilled)
+				t.Errorf("run.policy.resolve disk_mib_filled = %v (present=%v), want filled=%v", filled, present, tc.wantFilled)
+			}
+		})
+	}
+}
+
+// TestDispatchEphemeralDisk_PersistsTheEffectiveCap pins what dispatch writes to
+// the run row for the run page's disk bar (RL-13): the EFFECTIVE size after the
+// fill and the clamp, never the request. Persisting the request would store 0
+// for an org-default run (no bar at all) and 8192 for a run clamped to 4096 (a
+// bar at half the real fill as the pod nears eviction).
+func TestDispatchEphemeralDisk_PersistsTheEffectiveCap(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested int
+		site      types.SiteConfig
+		want      int
+	}{
+		{"a zero request filled from the org default", 0, ephemeralSite(2048, 0), 2048},
+		{"a request clamped to the provider maximum", 8192, ephemeralSite(0, 4096), 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
+			srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: tc.site}
+			run.Task = ""
+			policy := types.RunPolicySpec{}
+			if tc.requested > 0 {
+				policy.Resources = &types.ResourceLimits{DiskMiB: tc.requested}
+			}
+			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+				RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
+			})
+			got, _ := st.GetRun(context.Background(), run.ID)
+			if got.DiskMiB != tc.want {
+				t.Errorf("persisted disk_mib = %d, want %d", got.DiskMiB, tc.want)
 			}
 		})
 	}
@@ -193,7 +227,7 @@ func TestDispatchEphemeralDisk_NeverWritesThroughTheCallersResources(t *testing.
 	}
 }
 
-// TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp: run.policy.effective
+// TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp: run.policy.resolve
 // records a policy, not whose ceiling shaped it. When a profile applies, its
 // re-assertion row is where the SIZE half becomes attributable — and it stays
 // absent for a profile that sets no size, so a pre-0.7.2 profile's row is
@@ -245,7 +279,7 @@ func TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp(t *testing.T) {
 //
 // Dispatch binds MaxEphemeralDiskMiB for every lane; a member meets it first in
 // the Review rail and POST /runs/preflight, both of which run their spec through
-// boundMemberSpec → composer.Clamp. The two share one min() (composer.CapDiskMiB),
+// boundUserSpec → composer.Clamp. The two share one min() (composer.CapDiskMiB),
 // so what is left to get wrong — and what this pins — is the THREADING: the
 // member bounding pipeline takes the whole resolved ceiling precisely so the
 // limit beside the spec reaches the clamp instead of a silent zero.
@@ -260,11 +294,11 @@ func TestBoundMemberSpec_PreviewsTheGovernanceEphemeralLimit(t *testing.T) {
 		Profile: &types.GovernanceProfile{Name: "sized"},
 		Limits:  types.GovernanceLimits{MaxEphemeralDiskMiB: 2048},
 	}
-	spec, warns, ok := h.srv.boundMemberSpec(context.Background(), httptest.NewRecorder(), r,
+	spec, warns, ok := h.srv.boundUserSpec(context.Background(), httptest.NewRecorder(), r,
 		types.RunPolicySpec{MinConfinementClass: types.CC2, Resources: &types.ResourceLimits{DiskMiB: 8192}},
 		ceiling, "invalid inline_policy: ", true)
 	if !ok {
-		t.Fatal("boundMemberSpec refused the spec")
+		t.Fatal("boundUserSpec refused the spec")
 	}
 	if spec.Resources == nil || spec.Resources.DiskMiB != 2048 {
 		t.Fatalf("previewed disk_mib = %v, want the same 2048 the run gets", spec.Resources)

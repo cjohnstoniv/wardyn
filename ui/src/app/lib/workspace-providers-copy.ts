@@ -43,6 +43,7 @@
 // as the wording the Go side must emit.
 
 import { absoluteTime } from "./format";
+import { UNSAVED_GUARD } from "../components/wardyn/copy/shell";
 // The two model-access POLICY exports moved to lib/model-access.ts (0.7.6) —
 // re-exported here so every existing import site is untouched. They had to
 // leave: this module carries the whole AGENTS copy table, and the shell's eager
@@ -122,12 +123,11 @@ export const PROVIDERS = {
   LEGACY_OPEN_TITLE: "No git provider rows",
   LEGACY_OPEN_BODY: "Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.",
   LEGACY_OPEN_OTHER_HOSTS: "A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.",
-  SAVED_ELSEWHERE_TITLE: "Someone else saved providers since you loaded this page",
-  // #217: the old sentence ("Reload to see their version before saving
-  // yours.") described the only offered exit — discard and reload — as if it
-  // were the only one. It no longer is: Copy my changes
-  // (PROVIDERS_DRAFT.CONFLICT_COPY) reads the edits out first.
-  SAVED_ELSEWHERE_BODY: "Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version.",
+  // #460 (Q460): reworded from #217's provider-specific sentence to the one
+  // banner shape every 412 conflict now shares (saved-elsewhere-banner.tsx).
+  SAVED_ELSEWHERE_TITLE: "Someone else saved this first",
+  SAVED_ELSEWHERE_BODY:
+    "Your copy is out of date, so saving it would overwrite their change. Copy your edits somewhere safe, then reload and redo them.",
   SAVED_TOAST: "Providers saved.",
   // Inline pluralisation — the PERM.ENFORCE_ON_BODY shape, not a second
   // helper (§5 #9). Stays on the page as an amber note until the next save,
@@ -212,7 +212,7 @@ export const PROVIDER_MEMBER = {
   ADMIT_MEMBER: "this repository's host is not an enabled git provider — ask an admin",
   AGENT_NOT_ENABLED: (id: string) => `agent: "${id}" is not an enabled agent on this deployment — ask an admin`,
   LLM_MECHANISM_DEAD: (mechanism: string, ts: string) =>
-    `this run's model access is configured as ${mechanism}, and that credential expired at ${ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.`,
+    `This run's model access is configured as ${mechanism}, and that credential expired at ${ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.`,
 } as const;
 
 // §7.7 — AGENTS
@@ -275,12 +275,12 @@ export const AGENTS = {
   // New Run rail's preflight block — one key so the two can't drift into two
   // spellings of the same sentence.
   EFFECTIVE_NONE: "No adjustments.",
-  // The 201's advisory `warnings[]`, inline in the New Run rail. The run
-  // LAUNCHED; these are advisories, so the screen holds rather than navigating,
-  // and OPEN_RUN_CTA becomes its primary button until the member is done
-  // reading (no timer ever moves them).
+  // The 201's advisory `warnings[]`. #125: launch always navigates straight to
+  // the run, in the same tick, so this title no longer lives in the New Run
+  // rail — it is REUSED verbatim on the run page's own advisory block
+  // (RUN_DETAIL in wardyn/copy/run-cockpit.ts), one string so the two can't
+  // spell "launched with a warning" two different ways.
   LAUNCH_WARNING_TITLE: "Run launched with a warning",
-  OPEN_RUN_CTA: "Open run",
   // The off row's neutral chip. Its own key rather than AGENT_ROW_DISABLED_HINT
   // sliced at its colon — a reworded hint must not silently reword a chip.
   AGENT_ROW_DISABLED_CHIP: "Off",
@@ -407,14 +407,18 @@ export const PROVIDERS_DRAFT = {
   // document is never last-writer-wins from this banner. #217: now a ghost
   // button, not the banner's only exit — Copy my changes sits before it.
   DISCARD_AND_RELOAD: "Discard mine and reload",
-  // #217: the 412 banner's FIRST control — the changed fields, as readable
-  // text (lib/readable-diff.ts), never the whole draft as JSON (issue #217's
-  // binding default: the person is about to paste this somewhere human).
+  // #460 (Q460-3): the 412 banner's FIRST control — reversed from #217's
+  // "changed fields only" rule. It now copies the WHOLE document as the
+  // editor holds it (saved-elsewhere-banner.tsx), so nothing typed is left
+  // out of what "Copy my changes" saves.
   CONFLICT_COPY: "Copy my changes",
-  CONFLICT_COPIED_TOAST: "Copied — your changes are on the clipboard.",
-  // #217: beside Save whenever the draft differs from what loaded — the same
-  // fact the unsaved-navigation guard (lib/use-unsaved-guard.tsx) is armed on.
-  UNSAVED_MARKER: "Unsaved changes",
+  CONFLICT_COPIED_TOAST: "Changes copied",
+  // #217/#460: beside Save whenever the draft differs from what loaded — the
+  // same fact the unsaved-navigation guard (lib/use-unsaved-guard.tsx) is
+  // armed on, and the same text every dirty chip on this screen shows
+  // (reused from wardyn/copy/shell.ts's UNSAVED_GUARD.DIRTY_CHIP, its home —
+  // see that constant's own comment for why).
+  UNSAVED_MARKER: UNSAVED_GUARD.DIRTY_CHIP,
   // F6-F6: PUT /site-config's dangling_secret_refs, surfaced in the
   // Corporate-network save toast — an ADDITIONAL warning beside whatever
   // success toast the saving step already shows, never a replacement for it.

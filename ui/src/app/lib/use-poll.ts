@@ -39,6 +39,10 @@ import * as React from "react";
 //      immediately so the view is fresh on the first frame the human sees rather
 //      than up to intervalMs later.
 //
+// PollPauseContext holds EVERY poll below it (#483): while the console is
+// signed out mid-page, each tick would only collect another 401.
+export const PollPauseContext = React.createContext(false);
+
 // `fn` may return a promise; when it does, that promise is what the in-flight
 // guard waits on. A caller whose fn returns void keeps exactly today's
 // behaviour (nothing to wait for, so nothing is ever skipped) — which is why
@@ -49,10 +53,11 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     fnRef.current = fn;
   });
 
-  const pausedRef = React.useRef(paused);
+  const held = React.useContext(PollPauseContext);
+  const pausedRef = React.useRef(paused || held);
   React.useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+    pausedRef.current = paused || held;
+  }, [paused, held]);
 
   const inFlight = React.useRef(false);
   // Set when a refocus arrives while a read is already in flight. The
@@ -63,6 +68,12 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
   // when that read settles, no matter how many refocus events arrived while
   // it was outstanding.
   const refocusPending = React.useRef(false);
+  // #510-F5 — settle()'s coalesced refocus follow-up used to fire unconditionally,
+  // including after the hook's own cleanup ran: a refocus arriving while a read
+  // is in flight, followed by an unmount before that read settles, ran the
+  // caller's fetch chain (and every setState inside it) against a dead screen.
+  // Set true in cleanup so settle can skip the follow-up instead.
+  const disposed = React.useRef(false);
 
   // One tick. Kept in a ref so the visibility listener and the interval invoke
   // the SAME guarded call rather than two copies of the rule.
@@ -90,7 +101,7 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
       // back.
       if (refocusPending.current) {
         refocusPending.current = false;
-        tick.current();
+        if (!disposed.current) tick.current();
       }
     };
     // A REJECTED poll clears the guard too: a failing endpoint must not
@@ -112,8 +123,13 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
 
   React.useEffect(() => {
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    disposed.current = false;
     const id = setInterval(() => tick.current(), intervalMs);
-    if (typeof document === "undefined") return () => clearInterval(id);
+    if (typeof document === "undefined")
+      return () => {
+        disposed.current = true;
+        clearInterval(id);
+      };
     // Coming back to the tab refreshes NOW: the alternative is a human staring
     // at up to intervalMs of state that was frozen while they were away.
     const onVisible = () => {
@@ -127,6 +143,8 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     // "stops polling on unmount" and "replaces the timer when intervalMs
     // changes" cases — before those, deleting it kept 64 tests green.
     return () => {
+      disposed.current = true;
+      refocusPending.current = false;
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };

@@ -2,9 +2,9 @@
 
 This is the mock round for the Azure DevOps surfaces of 0.7.10 — the design gate before any console
 code (owner law: the mock is UI source of truth; canon strings are app strings). The model is decided
-in `~/.claude/plans/bubbly-stargazing-duckling.md` (workstream A, §§1–10) and corrected by live
-measurement against a real Microsoft Entra tenant (`FINDINGS.md`, F-LIVE-1 to F-LIVE-4). Nothing here
-is open for re-design, only for drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
+by the workstream A design plan (§§1–10) and corrected by live measurement against a real Microsoft
+Entra tenant (each measurement is cited inline as F-LIVE-n). Nothing here is open for re-design, only for
+drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
 drawing-level calls Q1–Q11 are resolved in §9, with the owner's answers in Adjudication.
 
 One round covers five surfaces:
@@ -25,7 +25,7 @@ states side by side, so there is no clickable prototype); `mock.css` is the work
 round's stylesheet verbatim plus four listed idioms. Frozen strings: §7 below. No TS copy module
 exists yet. The implementation stage creates `ui/src/app/lib/ado-entra-copy.ts` **from §7 verbatim**;
 every product string in the mock matches §7 byte-for-byte (checked mechanically, see §7's freeze note), and §7.2 onwards is exactly two columns,
-`Key` and `String`, so `parseFrozenTables()` clones over it the way `user-drives-copy.test.ts` does.
+`Key` and `String`, so `parseFrozenTables()` (now shared: `ui/src/app/lib/copy-doc-parity.ts`) clones over it the way `user-drives-copy.test.ts` does.
 
 ---
 
@@ -448,9 +448,9 @@ the Go constants block.
 | Tenant shape (400) | `validateProviderEntra` | entra: tenant_id must be a GUID |
 | `per_user` without the lane (400) | `validateProviderEntra` | credential_source: per_user needs the entra lane on this row |
 | An always-denied capability on the ceiling (400) | `validateProviderEntra` | entra: "{capability}" can't be put on capability_ceiling — creating and revoking Azure DevOps tokens is refused on every row |
-| Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | git_credential: you are not connected to Azure DevOps — connect and start the run again |
-| Connection ended, at run create (422, `reason: git_credential`) | `runs_create_validate.go` | git_credential: your Azure DevOps connection ended — connect and start the run again |
-| Connection doesn't cover the run's baseline, at run create (422, `reason: git_credential`) | `scmaccess.go` | git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again |
+| Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | you are not connected to Azure DevOps — connect and start the run again |
+| Connection ended, at run create (422, `reason: git_credential`) | `runs_create_validate.go` | your Azure DevOps connection ended — connect and start the run again |
+| Connection doesn't cover the run's baseline, at run create (422, `reason: git_credential`) | `scmaccess.go` | your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again |
 | Repository outside the row's org (403, proxy) | `ADO_REFUSE.*`, `proxy/ado_gate.go` | this run may only reach {org} on Azure DevOps |
 | Token creation attempted (403, proxy) | `proxy/ado_gate.go` | creating or revoking Azure DevOps tokens is refused for every run |
 | Capability refused after a decision (403, proxy) | `proxy/ado_gate.go` | {capability} was denied for this run |
@@ -584,7 +584,8 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `CONNECT_CONSENT_BODY` | Microsoft may ask you to allow it once. What you allow is what Wardyn is able to ask Azure DevOps for at all. What any one run may actually do is smaller, and Wardyn holds it there: |
 | `CONNECT_APP_NOTE(app)` | The application asking is {app} — the same one you signed in to this console with. You can withdraw this at any time from your Microsoft account's My Apps page; doing so stops your runs reaching Azure DevOps. |
 | `CONNECT_CTA` | Continue to Microsoft |
-| `CONNECT_POPUP_BLOCKED` | Your browser blocked the popup. |
+| `CONNECT_POPUP_BLOCKED` | Your browser blocked the connect popup. |
+| `CONNECT_POPUP_OPEN` | Open Azure DevOps sign-in |
 | `GROUP_STARTS_WITH` | Starts with |
 | `GROUP_CAN_ASK` | Can ask you for |
 | `GROUP_NEVER` | Never |
@@ -900,7 +901,9 @@ not only in a lane's commit message. It is not a copy decision and this document
 10. **`CONNECT_POPUP_BLOCKED` was added to §7.5 after the freeze** (implementation review, #386): a
     popup a browser refuses to open needs a plain-link fallback wherever CONNECT_CTA's popup can be
     blocked, and the fallback line was shipping as three copies of hand-typed, unfrozen text before
-    this row existed. One sentence, approved at the same gate as the rest of §7.5.
+    this row existed. One sentence, approved at the same gate as the rest of §7.5. The sign-in
+    progress packet (#628) redrew that fallback as a sentence and a button: `CONNECT_POPUP_BLOCKED`
+    now names the connect popup, and `CONNECT_POPUP_OPEN` is the fallback's own label everywhere.
 
 Not drawn, deliberately: a second forge, a second identity provider, multi-party approval, a
 per-capability application registration, device code, a "tell my admin" action on the above-ceiling

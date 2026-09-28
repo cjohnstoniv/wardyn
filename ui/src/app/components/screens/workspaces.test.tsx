@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { Workspace, WorkspaceProfile } from "../../lib/types";
+import type { SetupModelProvider, Workspace, WorkspaceProfile } from "../../lib/types";
+import { baseStatus } from "../../lib/test-fixtures";
 
 // The workspaces LIST: a single table, four columns (Workspace / Source /
 // Image / Model) + an overflow kebab. Stage 2 dropped the tier tabs (Sources
@@ -34,10 +35,21 @@ vi.mock("../../lib/api/integrations", async () => {
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
+// #922 review F5: the list now ALSO checks the "workspace" capability arm
+// (a plain ungranted workspace, no provider pin involved). Mocking the HOOK
+// itself, not the underlying fetch — the same choice new-run-screen-form.test.tsx
+// made, since a MeCapabilities fixture is otherwise the whole point of the case.
+const myCapabilitiesMock = vi.fn();
+vi.mock("../../lib/capabilities", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/capabilities")>("../../lib/capabilities");
+  return { ...actual, useMyCapabilities: (...a: unknown[]) => myCapabilitiesMock(...a) };
+});
 
 import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
+import { DENIED } from "../../lib/permissions-copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 
@@ -76,8 +88,10 @@ describe("WorkspacesScreen — list columns", () => {
   });
 
   it("Source column: a multi-source workspace shows the composition summary instead", async () => {
-    const w = ws({}, { status: "scanned" }) as unknown as Workspace & { sources: unknown[] };
-    w.sources = [{ type: "local_dir", path: "/a" }, { type: "local_dir", path: "/b" }, { type: "repo", source: "acme/x" }];
+    const w = ws({}, {
+      status: "scanned",
+      sources: [{ type: "local_dir", path: "/a" }, { type: "local_dir", path: "/b" }, { type: "repo", source: "acme/x" }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     expect(await screen.findByText("2 dirs · 1 repo")).toBeInTheDocument();
@@ -135,8 +149,8 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
       kind: "repo",
       source: REPO_URL,
       status: "scanned",
-    }) as unknown as Workspace & { sources: unknown[] };
-    w.sources = [{ type: "repo", source: REPO_URL, admitted: false }];
+      sources: [{ type: "repo", source: REPO_URL, admitted: false }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     const text = await screen.findByText(PROVIDERS.CARD_NOT_ADMITTED);
@@ -151,10 +165,12 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
   });
 
   it("a row with admitted:true renders no sentence", async () => {
-    const w = ws({}, { kind: "repo", source: "acme/payments", status: "scanned" }) as unknown as Workspace & {
-      sources: unknown[];
-    };
-    w.sources = [{ type: "repo", source: "acme/payments", admitted: true }];
+    const w = ws({}, {
+      kind: "repo",
+      source: "acme/payments",
+      status: "scanned",
+      sources: [{ type: "repo", source: "acme/payments", admitted: true }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     await screen.findByText("payments");
@@ -162,14 +178,92 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
   });
 
   it("an older daemon's absent `admitted` key (undefined, never false) renders no sentence", async () => {
-    const w = ws({}, { kind: "repo", source: "acme/payments", status: "scanned" }) as unknown as Workspace & {
-      sources: unknown[];
-    };
-    w.sources = [{ type: "repo", source: "acme/payments" }];
+    const w = ws({}, {
+      kind: "repo",
+      source: "acme/payments",
+      status: "scanned",
+      sources: [{ type: "repo", source: "acme/payments" }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     await screen.findByText("payments");
     expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
+  });
+});
+
+// #922 (UT-7c): a workspace pinned to a model provider the caller's own
+// filtered /setup/status.model_providers doesn't carry.
+describe("WorkspacesScreen — a workspace is pinned to an unavailable model provider (#922)", () => {
+  // undefined means "no provider block at all" (setup.go's `omitzero` key
+  // absent) — never pass `[]` for that state; `[]` means a block exists and
+  // this caller is granted none of it, a different, LOADED answer.
+  function renderWithStatus(modelProviders?: SetupModelProvider[]) {
+    return render(
+      <MemoryRouter>
+        <ModelAccessProvider status={baseStatus({ model_providers: modelProviders })} onRefresh={() => {}}>
+          <WorkspacesScreen />
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("renders the generic consequence under Model, naming nothing", async () => {
+    const w = ws({}, { llm_cred: { provider_ref: "bloomberg-gateway" } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }]);
+    const text = await screen.findByText(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).toBe(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).not.toContain("bloomberg-gateway");
+  });
+
+  it("says nothing when the pin IS in the caller's own filtered list", async () => {
+    const w = ws({}, { llm_cred: { provider_ref: "corp-gateway" } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }]);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  it("says nothing for a workspace with no provider pin at all", async () => {
+    const w = ws({});
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([]);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  // review round 3, R3-1: undefined (no provider block at all) says nothing
+  // even for a PINNED workspace — distinct from `[]` (a block exists, granted
+  // none), which names the consequence just above.
+  it("says nothing for a pinned workspace when there is no provider block at all", async () => {
+    const w = ws({}, { llm_cred: { provider_ref: "bloomberg-gateway" } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus(undefined);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+});
+
+// review round 3, R3-5 ("list-admin"): the list's capability-arm check is
+// gated `!operator && ...` (workspaces.tsx) — unpinned until now. A DENYING
+// caps answer proves the operator guard itself, not merely that the default
+// null caps happens to fail open.
+describe("WorkspacesScreen — the capability arm is operator-exempt (#922)", () => {
+  afterEach(() => {
+    myCapabilitiesMock.mockReset();
+  });
+
+  it("an admin sees no consequence even when caps would deny this exact workspace", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1" })]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 });
 
@@ -286,16 +380,18 @@ describe("WorkspacesScreen — Add workspace dialog opens from both the header b
 // M3 (0027f514): POST /workspaces is member-allowed now — the header "Add
 // workspace" button used to be operator-only. Pin that a MEMBER role sees it
 // enabled, not gated behind the operator-only chip/disabled state.
-describe("WorkspacesScreen — M3 member workspace access", () => {
+describe("WorkspacesScreen — member workspace access", () => {
+  // ticket: M3
   beforeEach(() => {
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     createWorkspaceMock.mockReset();
+    myCapabilitiesMock.mockReset().mockReturnValue(null);
   });
 
   function renderAsMember() {
     return render(
       <OperatorProvider operator={false} memberLocalDirRoot="/home/agent-projects">
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <MemoryRouter>
             <WorkspacesScreen />
           </MemoryRouter>
@@ -310,7 +406,7 @@ describe("WorkspacesScreen — M3 member workspace access", () => {
   });
 
   // add-workspace-dialog.tsx:168 — the writable checkbox unmounts (not
-  // resets) once role==="member" && kind==="local_dir", so a box checked
+  // resets) once role==="user" && kind==="local_dir", so a box checked
   // while Repository was still selected must not ride along into the
   // submitted local_dir source.
   it("a member's local_dir submit drops writable even if it was checked under Repository first", async () => {
@@ -330,6 +426,44 @@ describe("WorkspacesScreen — M3 member workspace access", () => {
     await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());
     const [payload] = createWorkspaceMock.mock.calls[0] as [{ sources: Array<{ writable?: boolean }> }];
     expect(payload.sources[0].writable).toBeUndefined();
+  });
+
+  // review F5: a plain ungranted workspace (no provider pin at all) got no
+  // line in the list before this — only the provider-pin arm rendered here.
+  it("names a plain ungranted workspace under its own name, not just a provider pin", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-ungranted", name: "payments" })]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember();
+    const text = await screen.findByText(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).toBe(DENIED.WORKSPACE_NOT_AVAILABLE);
+  });
+
+  it("says nothing for a workspace an allow names", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-granted", name: "payments" })]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user_type",
+          subject: "standard",
+          capability: "workspace",
+          value: "ws-granted",
+          effect: "allow",
+          created_at: "",
+        },
+      ],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember();
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 });
 
@@ -420,7 +554,7 @@ describe("WorkspacesScreen — the User drives door", () => {
   it("a member never sees it — /drives is SUPER and the entry points say so", async () => {
     render(
       <OperatorProvider operator={false}>
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <MemoryRouter>
             <WorkspacesScreen />
           </MemoryRouter>

@@ -416,7 +416,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // deleted Network dialog's own Save button — the panel has no separate save
   // step, and the JSON edit above IS the save, so the line pointed at nothing
   // on screen. Replaced with a drafted pair that names what the edit produced
-  // and ties it back to 05's spec beat. See local/light-episodes-dialog-flags.md.
+  // and ties it back to 05's spec beat.
   await caption(page, "Save the spec.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That spec is the contract — the same four lines we read in 'What it stops'.");
@@ -986,11 +986,11 @@ test("V08 beat 10 — borrowed, never held", async () => {
   // verified event pair): the workspace granted it, Wardyn read it. No owner
   // line names this pair explicitly this pass, so it stays a silent check.
   const reqEvents = await (
-    await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}&action=run.workspace.requirement.secret`, { headers })
+    await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}&action=run.requirement.grant`, { headers })
   ).text();
   expect(
     reqEvents.includes(PROOF_SECRET),
-    `no run.workspace.requirement.secret event for ${PROOF_SECRET} on ${proofRunId}`,
+    `no run.requirement.grant event for ${PROOF_SECRET} on ${proofRunId}`,
   ).toBe(true);
 
   // The deterministic negative, searched for ON CAMERA rather than only

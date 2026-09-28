@@ -31,17 +31,11 @@ var runLayoutPresets = []string{"live", "finished"}
 // knows how to render. This is HALF of the contract with the console's own
 // widget registry (ui/src/app/components/screens/run-detail/widgets/) and the
 // two must be kept in sync by hand until a shared source of truth exists.
-//
-// Rejecting an id outside this set at WRITE time, rather than storing it, means
-// a saved layout can never name a widget the current build cannot render — the
-// alternative is a widget that silently vanishes on restore with nothing to
-// explain why.
+// Rejecting an unknown id at WRITE time means a saved layout never names a
+// widget the build cannot render (it would silently vanish on restore).
 //
 // NOT in this list, deliberately:
-//   - "timeline" — the run timeline was DELETED from this screen by the
-//     terminal-first redesign; the Audit tab owns the trail. Accepting the id
-//     would let a client persist a layout slot for a widget that no longer
-//     exists.
+//   - "timeline" — removed from this screen; the Audit tab owns the trail.
 //   - "approvals"/"audit"/"recording" — those are TABS, not widgets on the
 //     Overview canvas. A tab has no x/y/w/h to save.
 var runLayoutWidgetIDs = []string{

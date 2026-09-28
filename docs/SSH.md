@@ -26,18 +26,29 @@ surface: the daemon does not even generate a host key.
 
 ## 1. Register a public key
 
-**SSO deployment (OIDC configured):** Account menu → **SSH keys** → **Add
-key** — paste your public key (the console never asks for a private key; the
-paste field's own helper line says so, and pasting one is refused
-server-side with a specific error). A key registered against your SSO
-session lands under your OIDC `sub` — the only principal the gateway's
-owner check (below) will ever match against a run you created.
+**SSO deployment (OIDC configured):** User view sidebar → **Your account**
+(`/account`) → **Add key** — paste your public key (the console never asks
+for a private key; the paste field's own helper line says so, and pasting
+one is refused server-side with a specific error). A key registered against
+your SSO session lands under your OIDC `sub` — the only principal the
+gateway's owner check (below) will ever match against a run you created. A
+key added here is capped: it never carries the admin override, even for a
+super admin — see [Bounds](#bounds).
+
+**Registering an override key that reaches other people's runs (break-glass)
+is a separate, admin-view-only door:** Admin view → Settings → **Admin SSH
+keys** — super admins only. It reuses the same Add-key dialog; the server
+stamps the key `admin` because the Admin view session isn't clamped to user
+rights, exactly as [Bounds](#bounds) describes.
 
 **Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
 registers the key against the shared, non-human `admin-token` principal, not
 any human's own identity. With OIDC configured, `POST` from a bare admin
 token now 422s for exactly this reason instead of silently writing a key
-that can never authorize anyone's run — use the console (above) instead:
+that can never authorize anyone's run — use the console (above) instead. A
+key already stored under a reserved principal (`admin-token`, the local
+operator seat, a `device:` name) is refused at the gateway while OIDC is
+configured; without OIDC it keeps working:
 
 ```sh
 curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
@@ -82,33 +93,53 @@ key belongs to, not just running the query.
 
 ### Revoking access during an incident
 
-Registered SSH keys are independent credentials. A per-user API token can
-register one through `wardyn ssh-key ensure`; revoking that token, or running
-`wardyn sessions revoke --sub '<subject-or-email>'` (including its `--all`
-alternative), does **not** remove the key or prevent SSH authentication with
-it. The SSH gateway does not consult the session-revocation cutoff.
-`WARDYN_SSH_ROLE_TTL` bounds only the admin override, not access to runs the
-key's principal owns.
+A per-user API token can register an SSH key through `wardyn ssh-key ensure`.
+Deleting that token alone leaves the key registered. Revoking the person's
+sessions with `wardyn sessions revoke --sub '<subject-or-email>'` also revokes
+their API tokens and removes their registered SSH keys. `--all` applies those
+three actions deployment-wide, including the calling admin's credentials.
+A registration already in flight cannot escape that cutoff: registration time
+is stamped before reading the request body, and SSH authentication and new
+channels check it against session revocation. A fresh sign-in can register a
+new key after the cutoff; revocation does not disable the account.
 
-Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-user-api-tokens-stop-sharing-the-admin-token):
+For incident response or offboarding:
 
-- Prevent further sign-in or key registration through the deployment's
-  identity/access controls when offboarding or containing a compromised account.
-- Inspect the person's registered keys. `wardyn ssh-key list --json` lists
-  only the caller's keys; the owner can remove them in **Account → SSH keys**
-  or with `DELETE /api/v1/me/ssh-keys/{fingerprint}`. Percent-encode the
-  fingerprint as one path segment. There is no `ssh-key delete` command and
-  no admin API for another person's keys; an operator with database access
-  must identify that principal's keys and remove their registrations directly,
-  as in [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
-- End access to affected sandboxes with `wardyn run kill <run-id>` and verify
-  teardown succeeded. Deleting a key prevents subsequent authentications;
-  it does not disconnect an already-authenticated SSH connection or stop it
-  opening more channels into the same running sandbox. Include foreign runs
-  reached through an admin override when determining which runs are affected.
+1. Prevent further sign-in or key registration through the deployment's
+   identity/access controls.
+2. Revoke the person's sessions and check the result. A `500` can mean the
+   named session cutoff succeeded but a token, canonical-subject cutoff or
+   SSH-key operation failed; the
+   `session.revoke` audit records `tokens_revoked` and `ssh_keys_deleted` for
+   the completed work. Resolve the failure and retry.
+3. To remove only SSH keys, an admin or `security_admin` can call
+   `DELETE /api/v1/people/{principal}/ssh-keys`. Percent-encode the principal
+   as one path segment. The route resolves a known subject or email and
+   returns `200` with `{"count": N}`. An unresolved email or ambiguous name is `422`;
+   a lookup or deletion failure is `500`. Owners can still remove individual
+   keys through **Your account** (`/account`), `wardyn ssh-key delete <fingerprint>`,
+   or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
+4. End existing access with `wardyn run kill <run-id>` and verify teardown
+   succeeded. Include foreign runs reached through an admin override. Key
+   deletion prevents new authentication and new `session` or `direct-tcpip`
+   channels on an established connection; an already-open shell, transfer or
+   forward continues until it closes or the run is torn down.
+5. Erase the person's stored credentials with
+   `DELETE /api/v1/people/{principal}/credentials` and follow the
+   [workspace and drive offboarding procedure](OPERATIONS.md#multi-user-who-can-change-what).
+   Disabling sign-in and deleting SSH keys do not erase stored model or forge
+   credentials or reclaim workspace data.
 
-The `ssh_key.add`, `ssh_key.delete`, and `ssh.auth` events help identify the
-registered keys and accessed runs; see [Audit actions](AUDIT-ACTIONS.md).
+The gateway rechecks the authenticated registration before each new channel.
+A missing, changed, cut-off or unreadable key is refused; an unreadable
+session cutoff also refuses access. Registering the same public
+key again does not restore an old connection. Admin override role, cap and
+freshness checks apply at this point too. `WARDYN_SSH_ROLE_TTL` still bounds
+only the admin override, not access to runs the key's principal owns.
+
+The `ssh_key.add`, `ssh_key.delete`, `session.revoke`, `ssh.authenticate` and
+`ssh.channel.reject` events identify registrations, completed revocations and
+refused access; see [Audit actions](AUDIT-ACTIONS.md).
 
 ## 2. Connect
 
@@ -276,7 +307,7 @@ Idempotent, so a script can run it on every launch with no "already done"
 branch to write — a second call neither regenerates the key nor re-registers
 it. `--path` picks a different keypair; the default is deliberately **not**
 `~/.ssh/id_ed25519` — a key an external tool dials sandboxes with should be
-revocable from Settings → SSH keys without touching your everyday identity.
+revocable from Your account (`/account`) without touching your everyday identity.
 
 **`wardyn run wait-ready <run-id>`** (`cmd/wardyn/run_wait_ready.go`) blocks
 past what `run --wait` waits for. `--wait` waits for a TERMINAL state (and is
@@ -380,7 +411,7 @@ the clear until retention deletes it.
 
 **Auth.** Registered public keys only — no password, no keyboard-interactive.
 `MaxAuthTries` is bounded per connection; an unknown key or a malformed
-username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
+username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
 **Owner-or-admin, and the admin half is a bounded-stale stamp — weaker than
@@ -400,23 +431,38 @@ consults the human's role live at connect time — SSH carries no session for
 the browser terminal's `requireOperator` gate, which reads the session's role
 fresh on every attach. What bounds the staleness now: **a demoted admin's
 already-registered key keeps its override only until whichever comes first —
-their own next login (re-stamping `role=member`), `role_checked_at` aging past
+their own next login (re-stamping `role=user`), `role_checked_at` aging past
 `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
 key being deleted/re-registered.** An operator who wants the override gone
-immediately (rather than waiting out the TTL, or waiting for the demoted human
-to log in) has the same lever as before: delete that principal's key
-(`DELETE /me/ssh-keys/{fingerprint}`, self-service only — there is no admin
-view of another human's keys, so this means asking them, or an operator with
-direct store access, to remove it). Re-registration (delete, then re-`POST`)
+immediately can use `DELETE /people/{principal}/ssh-keys` as an admin or
+`security_admin`, or revoke the person's sessions to remove their tokens and
+keys together. Owners can remove individual keys through
+`DELETE /me/ssh-keys/{fingerprint}`. Existing channels still require teardown
+as described under [incident revocation](#revoking-access-during-an-incident).
+Re-registration (delete, then re-`POST`)
 still works too, and still re-stamps immediately; it is no longer the ONLY way
 to force a refresh, just the immediate one that does not wait on either a
 login or the TTL. There is still no in-place "update this key's role"
 endpoint.
 
-**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `member`
+**A key registered in the user view is capped, for good.** An admin whose
+console session is in the user view (member mode) can register a key; it is
+stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role
+`user`. A capped key never gains the admin override: the sign-in re-stamp
+(`RefreshSSHKeyRoles`) refreshes its `role_checked_at` but leaves its role
+`user`, the database refuses a capped row that reads `admin`, and the gateway
+refuses the override for a capped key before it reads the role. The refusal is
+audited as `ssh.authenticate`, `outcome=failure`, reason "capped key (registered in the
+user view): no admin override". The key still reaches its owner's own runs. A
+break-glass key that reaches other people's runs is registered outside the
+user view, from the Admin SSH keys card (Admin view → Settings, super admins
+only — [§1](#1-register-a-public-key)). The `ssh_key.add` audit row marks a
+capped key with `capped: true`.
+
+**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
 key, and even an `admin`-stamped key loses the override until it is
 refreshed.** `role` is stamped at registration, and migration `0043`
-backfilled every pre-0.6 row as `member` — the fail-closed value, because
+backfilled every pre-0.6 row as `member` (`0074` renames it `user`) — the fail-closed value, because
 nothing in the schema knows what role a pre-0.6 registrant actually held, and
 guessing `admin` would hand every key already in the deployment a cross-user
 reach it was never granted. Migration `0046` adds a second fail-closed
@@ -428,16 +474,16 @@ log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both
 re-registration needed) **or `DELETE`/`POST` the key again** (still supported,
 still immediate, useful when you want the refresh before your next login
 rather than after). Which of your own keys carries the `admin` stamp is
-visible without reading the database: Settings → SSH keys badges the row
-**Admin override**. That badge reflects the STORED `role` only — it does not
+visible without reading the database: Your account (`/account`) badges the
+row **Admin override**. That badge reflects the STORED `role` only — it does not
 currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
 so a badged key can still be refused by the gateway once its stamp goes stale;
-the audit log (`ssh.auth`, `outcome=failure`, reason "admin override stale")
+the audit log (`ssh.authenticate`, `outcome=failure`, reason "admin override stale")
 is the authoritative signal for that, not the badge. It is still a
 self-service view only — there is no console listing of another human's keys,
 for the same reason the API has none.
 
-An override connection is audited distinctly: the `ssh.auth` success event
+An override connection is audited distinctly: the `ssh.authenticate` success event
 carries `override:true` in its data whenever the owner check did NOT match
 and the admin-role check is what let the connection through — so "who used
 the override, and when" is a normal audit-log query, not something you have
@@ -472,10 +518,10 @@ shell.
 `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
 else the client's shell happens to export reaches the sandbox.
 
-**Audit actions**: `ssh.auth` (every attempt, including failures),
+**Audit actions**: `ssh.authenticate` (every attempt, including failures),
 `session.attach` with `transport:ssh` in its data (the shell path — same
 action name the browser terminal uses, so both show up together in a run's
-timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp` (`bytes` transferred),
+timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp.transfer` (`bytes` transferred),
 `ssh.forward` (`port`, `bytes`). This is the source of record for these four;
 [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
 every other audit action in the system and points back here for these.

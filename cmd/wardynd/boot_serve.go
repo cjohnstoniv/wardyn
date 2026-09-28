@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -49,6 +50,8 @@ import (
 //     via the recordingSweepable interface in adapters.go; a future
 //     object-storage backend would use its own bucket lifecycle rules
 //     instead).
+//   - Credential expiry sweeper: delete stored sign-ins past their expires_at,
+//     daily (api.Server.SweepExpiredCredentials).
 //   - Boot-time reconciliation (C3): re-derive the state of any run left
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
@@ -113,6 +116,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
+	go goSafe("credential.sweeper", func() { runCredentialSweeper(rootCtx, srv, credentialSweepInterval) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
@@ -199,12 +203,24 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 	})
 }
 
+// forwarderJoinWait bounds serveAndShutdown's wait for the org federation
+// forwarder (issue #1131): it observes the same rootCtx.Done() this function's
+// select does, so it is already stopping by the time we wait on it, and only a
+// wedged store or client call would ever make this matter.
+const forwarderJoinWait = 5 * time.Second
+
 // serveAndShutdown runs the HTTP(S) server until a shutdown signal or a serve
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are
 // produced). Every exit path must Close the sinks, or the final batch is
-// abandoned. Extracted verbatim from run(); fan may be nil.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout) error {
+// abandoned. Extracted verbatim from run(); fan may be nil. The proxy-facing
+// TLS listener (hop, internal_tls.go) shares this lifecycle: its serve error
+// ends the daemon like the console's, and it drains in the same Shutdown pass.
+// orgFederation is nil unless hybrid enrolment (issue #103) is on; when set,
+// it is joined (not merely cancelled) before this returns, so the process
+// never exits while its goroutine might still be logging or touching the
+// store.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, hop *hopTLS, orgFederation *federation.Forwarder) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -217,12 +233,13 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	internalSrv := startInternalListener(hop, f, srv.InternalHandler(), errCh)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
 			slog.Info("wardynd: listening with built-in TLS",
-				slog.String("version", version.Version),
+				slog.String("version", version.String()),
 				slog.String("listen", *f.listen),
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),
@@ -232,7 +249,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 			}
 		default:
 			slog.Info("wardynd: listening",
-				slog.String("version", version.Version),
+				slog.String("version", version.String()),
 				slog.String("listen", *f.listen),
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),
@@ -270,10 +287,19 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
-	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	if internalSrv != nil {
+		_ = internalSrv.Shutdown(shutCtx)
+	}
+	// A timed-out HTTP drain (shutErr != nil) must not skip what follows: an
+	// early return here would answer the "shutdown is done" question honestly
+	// for HTTP, but still drop the run.kill row and both revocations the same
+	// way a SIGKILL would (see WaitBackground below), on precisely the slow
+	// shutdown where they matter most.
+	shutErr := httpSrv.Shutdown(shutCtx)
+	if shutErr != nil {
+		slog.Warn("wardynd: HTTP drain hit its budget", slog.Any("err", shutErr))
 	}
 
 	// httpSrv.Shutdown only waits for in-flight HANDLERS to return — it knows
@@ -288,13 +314,31 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	// into a hang.
 	srv.WaitBackground()
 
+	// The forwarder goroutine bootHybrid started on rootCtx is already
+	// stopping (it selects on the same rootCtx.Done() this function's own
+	// select did, above), so this only waits for it to actually finish rather
+	// than abandoning it mid-run — the gap that left one still logging past a
+	// test's end in issue #1131. Bounded so a wedged store or client call
+	// cannot turn an orderly stop into a hang.
+	if orgFederation != nil {
+		select {
+		case <-orgFederation.Done():
+		case <-time.After(forwarderJoinWait):
+			slog.Warn("wardynd: shutdown budget hit with the org federation forwarder still running; abandoning it",
+				slog.Duration("budget", forwarderJoinWait))
+		}
+	}
+
 	// BETWEEN the two, deliberately: the server has stopped accepting requests
-	// (so no new auth.failed can open a streak) and the sinks are still open (so
+	// (so no new auth.fail can open a streak) and the sinks are still open (so
 	// the summary row this emits is actually delivered). Same slot the proxy
 	// flushes its private-IP memo in.
 	srv.FlushAuthFailedStreak()
 
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
+	if shutErr != nil {
+		return fmt.Errorf("shutdown: %w", shutErr)
+	}
 	return nil
 }

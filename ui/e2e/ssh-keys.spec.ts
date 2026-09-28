@@ -5,13 +5,16 @@
 
 import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute } from "./fixtures";
 
-// E2E coverage for /ssh-keys (src/app/components/screens/ssh-keys.tsx) —
+// E2E coverage for Your SSH keys (src/app/components/screens/ssh-keys.tsx) —
 // X2-F2: this screen had ZERO e2e; its own component test
 // (ssh-keys.test.tsx) mocks the api module wholesale, so nothing proved the
 // real round trip against the seeded backend. GET/POST/DELETE
 // /api/v1/me/ssh-keys are self-service (server-side, keyed off the caller's
 // own principal) — the bearer-token harness is always the same principal, so
 // this spec exercises the real add/list/delete wiring end to end.
+//
+// M-5 (#636): /ssh-keys is gone (no alias) — SshKeysPane is mounted at
+// /account now, as an h3 card rather than the standalone page's own h1.
 //
 // A real, parseable ed25519 public key (server-side sshkeys.go rejects a
 // private key or anything unparseable, 422) — the exact fixture
@@ -23,11 +26,12 @@ const KEY_NAME = "e2e-laptop";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
-test.describe("SSH keys — add, reload, delete (X2-F2)", () => {
+test.describe("SSH keys — add, reload, delete", () => {
+  // ticket: X2-F2
   test("a key added here persists across a reload and is truly gone after delete", async ({ page }) => {
     await gotoConsole(page);
-    await navToRoute(page, "/ssh-keys");
-    await expect(page.getByRole("heading", { name: "Your SSH keys", level: 1 })).toBeVisible();
+    await navToRoute(page, "/account");
+    await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
 
     await page.getByRole("button", { name: "Add key" }).first().click();
     const addDialog = page.getByRole("dialog");
@@ -46,7 +50,7 @@ test.describe("SSH keys — add, reload, delete (X2-F2)", () => {
     // Reload: proves the key was actually STORED server-side, not merely
     // held in the dialog's onAdded() client-side reload of the same load().
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Your SSH keys", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
     await expect(page.getByRole("row").filter({ hasText: KEY_NAME })).toBeVisible();
 
     // Delete — the icon button in the row, then the confirm dialog. The

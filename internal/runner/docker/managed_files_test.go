@@ -129,7 +129,7 @@ func managedSpec() runner.SandboxSpec {
 	return spec
 }
 
-// THE ORDERING IS THE CONTRACT. A copy that lands after ContainerStart races
+// The ordering is the contract. A copy that lands after ContainerStart races
 // the agent's own first instruction: the agent can read the absence, or act,
 // before the ceiling exists. This is the assertion a "read the file back" test
 // cannot make — by the time anything reads it, the copy has happened either
@@ -207,6 +207,52 @@ func TestCreateSandbox_FailsClosedWhenDeliveryFails(t *testing.T) {
 	}
 	if _, ok := f.networks[internalNetName(spec.RunID)]; ok {
 		t.Error("the per-run network survived a failed managed-file delivery; the rollback must be complete")
+	}
+}
+
+// The exec-less (krun/CC3) twin of the test above. There the agent is created
+// and started by Exec, with the workload as the container's MAIN process, so
+// there is no later window to deliver in: a failed delivery must fail Exec,
+// never start the container, force-remove it, and release the ref's claim so
+// nothing reads the half-made sandbox as still being created.
+func TestExecLessPath_FailsClosedWhenDeliveryFails(t *testing.T) {
+	f := newManagedFake()
+	f.info = infoWithRuntimes("krun")
+	d := newTestDriver(f)
+
+	spec := managedSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	f.mu.Lock()
+	f.failCopyToContainer = true
+	f.mu.Unlock()
+
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err == nil {
+		t.Fatal("Exec must fail when the exec-less agent's managed-file delivery fails")
+	}
+	agent := agentContainerName(spec.RunID)
+	if slices.Contains(f.startedNames, agent) {
+		t.Errorf("the exec-less agent was STARTED after a failed managed-file delivery (started: %v)", f.startedNames)
+	}
+	c := f.containers[agent]
+	if c == nil {
+		t.Fatal("the exec-less agent container was never created; the delivery this test fails was not reached")
+	}
+	if !c.removed || !c.forceRemoved {
+		t.Errorf("the undelivered agent container must be force-removed (removed=%v force=%v)", c.removed, c.forceRemoved)
+	}
+	d.mu.Lock()
+	creating, running := d.creating[sb.Ref], d.mainProc[sb.Ref]
+	d.mu.Unlock()
+	if creating {
+		t.Error("d.creating still claims the ref after the failed delivery")
+	}
+	if running {
+		t.Error("d.mainProc marks the ref as a running agent after the failed delivery")
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -40,7 +41,7 @@ import (
 // different answers to the caller: the stale one is "we cannot tell whether you
 // have a drive" (403, sign in again), this one is "you are authorized and there
 // is simply nothing mountable" (422, no audit) — the split
-// denyMemberRunQuota already draws between a refusal and an unmet precondition.
+// denyUserRunQuota already draws between a refusal and an unmet precondition.
 // The wrapped cause names the field an admin has to fix.
 var errDriveUnmountable = errors.New("drive_unmountable")
 
@@ -107,6 +108,8 @@ func driveUnavailableReason(err error) string {
 		return driveUnavailableUnknown
 	case errors.Is(err, errGroupsSnapshotStale):
 		return driveUnavailableGroups
+	case errors.Is(err, errUserTypeUnknown):
+		return driveUnavailableUserType
 	case errors.Is(err, errDriveUnmountable):
 		return driveUnavailableUnmountable
 	default:
@@ -126,14 +129,17 @@ func driveUnavailableReason(err error) string {
 // says 403 groups_snapshot_stale (sign in again) — showing the member the one
 // remedy that is not theirs.
 //
-// Two arms only, and deliberately not driveUnavailableReason's three: what
-// failed here is the CEILING, so "the allocation could not be read" is not one
-// of the answers. Everything that is not the stale snapshot is
+// Only the refusals about the caller get their own arm — the stale snapshot
+// and the unknown user type; what failed here is the CEILING, so "the
+// allocation could not be read" is not one of the answers. Everything else is
 // governance_unavailable — the token whose documented meaning is "nothing is
 // wrong with the allocation; what is unknown is permission".
 func ceilingUnavailableReason(err error) string {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		return driveUnavailableGroups
+	}
+	if errors.Is(err, errUserTypeUnknown) {
+		return driveUnavailableUserType
 	}
 	return driveUnavailableGovernance
 }
@@ -145,6 +151,9 @@ const (
 	// driveUnavailableGroups: the caller's group snapshot cannot answer the
 	// group tier, so an allocation may exist and be invisible. 403 at launch.
 	driveUnavailableGroups = "groups_snapshot_stale"
+	// driveUnavailableUserType: the caller's stamped user type no longer
+	// exists, so nothing a type names can be resolved. 403 at launch.
+	driveUnavailableUserType = "user_type_unknown"
 	// driveUnavailableUnmountable: an allocation EXISTS and cannot be mounted —
 	// a home name that cannot name a directory, a share that is not there. 422
 	// at launch, and the one state whose remedy is an admin's, not the member's.
@@ -157,7 +166,7 @@ const (
 	driveUnavailableGovernance = "governance_unavailable"
 )
 
-func writeDriveError(w http.ResponseWriter, err error) {
+func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errDrivesDisabled):
 		// The same bytes the launch door refuses with (seedRequestDrive composes
@@ -167,6 +176,8 @@ func writeDriveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
 	case errors.Is(err, errGroupsSnapshotStale):
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+	case errors.Is(err, errUserTypeUnknown):
+		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
 	case errors.Is(err, errDriveUnmountable):
 		// The sentinel's own name is stripped: what is left is the frozen
 		// MEMBER sentence (docs/design/user-drives-prompt.md's DRIVE_MEMBER
@@ -176,7 +187,7 @@ func writeDriveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity,
 			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:
-		writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve user drive", err))
+		writeServerError(w, r, "resolve user drive", err)
 	}
 }
 
@@ -212,8 +223,11 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 	if s.cfg.Store == nil {
 		return nil, nil
 	}
-	users, groups, stale := capabilitySubjects(ctx)
-	if len(users) == 0 {
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(subj.users) == 0 {
 		return nil, nil
 	}
 	ceiling, err := s.driveSizeCeilingFor(ctx, profileMaxDriveMiB)
@@ -225,86 +239,36 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 	// in enough groups holds one that is present, non-nil and INCOMPLETE — and
 	// the group whose grant carries their drive is exactly as likely to be
 	// missing as any other.
-	if stale || oidcGroupsTruncatedFromContext(ctx) {
-		return s.driveWithUnusableGroups(ctx, users, ceiling)
+	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
+		return s.driveWithUnusableGroups(ctx, subj.users, subj.userType, ceiling)
 	}
-	return s.resolveUserDriveFor(ctx, users, groups, ceiling)
+	return s.resolveUserDriveFor(ctx, subj.users, subj.groups, subj.userType, ceiling)
 }
 
 // driveWithUnusableGroups is step 3: the caller's group identity cannot be
-// evaluated, so resolve on their user subjects alone and decide whether that
-// answer is trustworthy anyway.
-//
-// It is trustworthy in exactly two shapes, and the scoping is the whole point —
-// a blanket 403 here would lock every pre-0.6 cookie out of every deployment,
-// including the ones that have never allocated a drive:
-//
-//   - A USER-TIER row matched. user > group > all, so an explicitly named
-//     principal's drive is FULLY determined whatever their groups are —
-//     INCLUDING when that row is paused, which is an answer and not an absence:
-//     no group-tier grant can outrank it, so nothing the snapshot is hiding
-//     could change it.
-//   - no group-tier grant exists at all. Nothing an unknown group could have
-//     matched, so nothing a nil snapshot could be hiding.
-//
-// Otherwise it refuses, and the refusal is the honest answer: with the group
-// tier unreadable, an `all`-tier grant would win by default and could hand this
-// member a WRITABLE drive where their group's row says read-only — a widening
-// decided by alphabetical luck.
-//
-// HasGroupTierDriveGrants stays a SEPARATE read, deliberately: the case that
-// most needs it is the one where the resolver matched NOTHING, and a zero-row
-// result carries no columns to have piggybacked the answer on.
-func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
-	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+// evaluated, so resolve on their user subjects and type alone and let
+// selectByTier's one stale rule decide whether that answer is trustworthy
+// (target runs.drive, matching denyUserDrive, the other refusal this seam
+// writes). The drive preview enters here too.
+func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
+	type pick struct {
+		d *types.UserDrive
+		g *types.UserDriveGrant
+	}
+	p, tier, err := selectByTier(ctx, s, authz.Deny(authz.ReasonGroupsSnapshotStale, "runs.drive", ""),
+		func() (pick, types.CapabilitySubjectType, error) {
+			d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil, userType)
+			return pick{d, g}, tier, err
+		}, s.cfg.Store.HasGroupTierDriveGrants)
+	switch {
+	case errors.Is(err, errGroupsSnapshotStale):
+		return nil, err
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil // no group tier could have been hiding one
+	case err != nil:
 		return nil, fmt.Errorf("api: resolve user drive: %w", err)
 	}
-	if err == nil && tier == types.CapabilitySubjectUser {
-		return newResolvedDrive(d, g, tier, users, ceiling)
-	}
-	hasGroupTier, herr := s.cfg.Store.HasGroupTierDriveGrants(ctx)
-	if herr != nil {
-		return nil, fmt.Errorf("api: resolve user drive: %w", herr)
-	}
-	if hasGroupTier {
-		// Audited, at the SECOND site that decides this refusal.
-		//
-		// This branch is the mirror image of ceilingWithUnusableGroups' own, and
-		// it was the silent one: docs/AUDIT-ACTIONS.md and OPERATIONS.md both
-		// described groups_snapshot_stale as emitted "at the ONE site that
-		// decides it", naming the governance resolver — while the DRIVES
-		// resolver raised the identical 403 from here and recorded nothing. On
-		// the deployment shape that has group-tier DRIVE grants and no
-		// group-tier governance assignment, that made the whole denial stream
-		// empty: executed, 0 authz.denied rows out of 0 events for a member the
-		// launch door refuses 403.
-		//
-		// HERE rather than at writeDriveError, for the reason the governance
-		// twin gives: writeDriveError is a free function with no server and no
-		// context, and auditing at the write sites would mean one emit per seam.
-		// This is the only place the drive refusal is DECIDED.
-		//
-		// runs.drive is the target, matching denyMemberDrive — the other refusal
-		// this seam writes — rather than governance.ceiling. The two rows say
-		// different things: one is "your profile shuts the drive door", the
-		// other "nobody can tell whether it is shut", and an operator filtering
-		// by target is asking about the drive either way.
-		//
-		// Guarded on the SINK for the reason the twin states: auditEvent is
-		// evaluated as recordAudit's ARGUMENT, so a Server assembled without
-		// New() would still build the row and stamp it from a nil cfg.Now.
-		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "runs.drive", "denied",
-				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
-		}
-		return nil, errGroupsSnapshotStale
-	}
-	if err != nil {
-		return nil, nil // ErrNotFound, and no group tier could have been hiding one
-	}
-	return newResolvedDrive(d, g, tier, users, ceiling)
+	return newResolvedDrive(p.d, p.g, tier, users, ceiling)
 }
 
 // displayReadCtxKey marks a resolve made to DISPLAY a state, not to enforce one.
@@ -360,11 +324,11 @@ func isDisplayRead(ctx context.Context) bool {
 // The nil-store guard is repeated here rather than left to resolveUserDrive
 // because THIS is the door the preview handler enters through, and the ~30
 // nil-store doubles in this package must not start panicking on it.
-func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
+func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	if s.cfg.Store == nil {
 		return nil, nil
 	}
-	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, groups)
+	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, groups, userType)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("api: resolve user drive: %w", err)
 	}
@@ -644,7 +608,8 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		// REFUSED_HOME_INVALID says "your {claim}", which is the wrong subject,
 		// and REFUSED_BACKEND is the deployment-capability sentence, which
 		// carries no remedy for a case that has one. That is new member copy, so
-		// it is FILED (local/FILED-COPY.md) rather than invented at a call site.
+		// it is filed for the owner's canon sitting rather than invented at a
+		// call site.
 		//
 		// The FROZEN sentence first, byte-for-byte, then the substrate's own
 		// clause when the substrate is stricter than the sentence describes.

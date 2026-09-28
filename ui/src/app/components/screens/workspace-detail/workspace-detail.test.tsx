@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
+import type { RecordResult, SetupModelProvider, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 const getWorkspaceMock = vi.fn();
@@ -41,8 +42,22 @@ vi.mock("../../../lib/api/setup", () => ({
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+const getAvailabilityMock = vi.fn();
+const getMyCapabilitiesMock = vi.fn();
+vi.mock("../../../lib/api/permissions", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
+  return {
+    ...actual,
+    permissions: {
+      ...actual.permissions,
+      getAvailability: (...a: unknown[]) => getAvailabilityMock(...a),
+      getMyCapabilities: (...a: unknown[]) => getMyCapabilitiesMock(...a),
+    },
+  };
+});
 
 import { toast } from "sonner";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
@@ -83,8 +98,19 @@ function RunsRouteProbe() {
   return <div>runs screen{state?.openNewRun ? " (openNewRun)" : ""}</div>;
 }
 
-function renderDetail(id = "ws-1", operator = true, securityOperator = operator) {
-  return render(
+// modelProviders is undefined by default — no <ModelAccessProvider> mounted
+// at all, the exact shape every case but #922's model-provider-arm ones
+// renders (and behaviorally identical to a mounted Provider whose own status
+// carries no model_providers key: both mean "no answer", resolvedModelProviders's
+// own fail-open). Pass an array (including `[]`, a REAL loaded answer) to
+// mount one, matching workspaces.test.tsx's own idiom.
+function renderDetail(
+  id = "ws-1",
+  operator = true,
+  securityOperator = operator,
+  modelProviders?: SetupModelProvider[],
+) {
+  const screen = (
     <MemoryRouter initialEntries={[`/workspaces/${id}`]}>
       {/* 0.7 §B: the Sessions pane and both host cards moved to
           useSecurityOperator, so this fixture's viewer must be a MEMBER on
@@ -101,13 +127,37 @@ function renderDetail(id = "ws-1", operator = true, securityOperator = operator)
           <Route path="/runs/:id" element={<div>run detail screen</div>} />
         </Routes>
       </OperatorProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
+  );
+  if (modelProviders === undefined) return render(screen);
+  return render(
+    <ModelAccessProvider status={setupStatus({ model_providers: modelProviders })} onRefresh={() => {}}>
+      {screen}
+    </ModelAccessProvider>,
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   getSetupStatusMock.mockResolvedValue(setupStatus());
+  // Never settles by default, so the Availability card stays empty in every
+  // test that isn't about it.
+  getAvailabilityMock.mockReturnValue(new Promise(() => {}));
+  // Same idiom, same reason (#922): a test that isn't about "Start a run"'s
+  // own availability must render byte-identical to before this hook existed —
+  // caps stays null forever, and capabilityAllowed's own fail-open default
+  // (null caps => allowed) is what that renders as.
+  getMyCapabilitiesMock.mockReturnValue(new Promise(() => {}));
+});
+
+// The F031 case below queues two mockResolvedValueOnce answers on
+// getWorkspaceMock. vi.clearAllMocks() above clears calls/results, not a
+// queued ONCE implementation, so a failure before both are consumed (e.g. the
+// first findByTestId times out) would otherwise leave the second queued and
+// leak it into the very next test's first getWorkspace() call, failing it for
+// an unrelated reason. Reset it every time, pass or fail.
+afterEach(() => {
+  getWorkspaceMock.mockReset();
 });
 
 describe("WorkspaceDetailScreen — not found", () => {
@@ -130,6 +180,93 @@ describe("WorkspaceDetailScreen — header: name, source line, and Start a run",
     expect(screen.getByText("repo · acme/payments · main")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^start a run$/i }));
     expect(await screen.findByText("runs screen (openNewRun)")).toBeInTheDocument();
+  });
+});
+
+// #922 (UT-7c), the person side: "Start a run" only NAVIGATES (it launches
+// nothing itself), so this is the one place on this page a member-facing
+// launch consequence belongs. Both reasons fold into the SAME generic
+// sentence — see DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment
+// (permissions-copy.ts) for why neither ever names the resource.
+describe("WorkspaceDetailScreen — Start a run, unavailable to this person (#922)", () => {
+  it("disables Start a run and names the consequence when this workspace carries no allow for a non-operator caller", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getMyCapabilitiesMock.mockResolvedValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderDetail("ws-1", false);
+    expect(await screen.findByRole("heading", { name: "payments" })).toBeInTheDocument();
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled for the same caller once an allow names them", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getMyCapabilitiesMock.mockResolvedValue({
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user_type",
+          subject: "standard",
+          capability: "workspace",
+          value: "ws-1",
+          effect: "allow",
+          created_at: "",
+        },
+      ],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderDetail("ws-1", false);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("stays enabled for an operator regardless — never asks /me/capabilities", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    expect(button).toBeEnabled();
+    expect(getMyCapabilitiesMock).not.toHaveBeenCalled();
+  });
+});
+
+// review round 3 (R3-1, R3-5): the model-provider arm had no coverage on
+// this page at all. R3-6: this page has no run-type of its own — "Start a
+// run" only NAVIGATES to New Run, it never picks Shell vs Agent itself — so,
+// unlike the picker card and New Run's own Launch button, there is no
+// isAgent to gate this arm on here; it applies unconditionally.
+describe("WorkspaceDetailScreen — Start a run, the model-provider arm (#922)", () => {
+  it("disables and names the consequence when a provider block exists but the pin isn't in it", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "bloomberg-gateway" } }));
+    renderDetail("ws-1", true, true, []);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled when the pin IS in the caller's own filtered list", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "corp-gateway" } }));
+    renderDetail("ws-1", true, true, [
+      { id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" },
+    ]);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("stays enabled for a pinned workspace when there is no provider block at all", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "bloomberg-gateway" } }));
+    renderDetail("ws-1", true, true, undefined);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
   });
 });
 
@@ -347,8 +484,84 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
   });
 });
 
+// T-68 / F031 (workspace-detail.tsx:238-254) — approveHosts re-fetches the
+// workspace at CLICK time and merges onto THAT overlay, not the `ws` this
+// screen mounted with. The confirm dialog can sit open for minutes, and the
+// PUT is a full replacement, so approving a caught host while a concurrent
+// write has landed elsewhere must not silently revert it.
+describe("WorkspaceDetailScreen — approveHosts merges onto the freshest overlay, not a stale one (F031)", () => {
+  it("re-fetches the workspace right before the PUT, so a write that landed while the confirm dialog was open survives", async () => {
+    const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    // A settled confined replay with ONE off-policy, blocked host — the same
+    // shape record-pane.test.tsx's "confined replay" fixture uses to reach
+    // CaughtHosts' single-host Approve button.
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 0, deny_count: 2, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    const recordResults = { "build-test": learning, "verify:build-test": confinedRR };
+    const mounted = ws({ record_results: recordResults, requirements: {} });
+    // The CONCURRENT write: a different operator approved a different host
+    // between this screen's mount and the click below. approveHosts' own
+    // fresh fetch (its second call to getWorkspace) must return this, and its
+    // key must survive into the PUT.
+    const concurrent = ws({
+      record_results: recordResults,
+      requirements: { "egress:concurrent.example.com": { level: "required", provenance: "operator_set" } },
+    });
+    getWorkspaceMock.mockResolvedValueOnce(mounted).mockResolvedValueOnce(concurrent);
+    setRequirementsMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    const blocked = await screen.findByTestId("verify-session-blocked");
+    await user.click(within(blocked).getByRole("button", { name: /^approve$/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    // Both the concurrent write's own key (proving the merge read the FRESH
+    // fetch, not the empty requirements map this screen mounted with) and the
+    // just-approved host are in the one PUT.
+    expect(setRequirementsMock).toHaveBeenCalledWith("ws-1", {
+      "egress:concurrent.example.com": { level: "required", provenance: "operator_set" },
+      "egress:evil.example.com": { level: "required", provenance: "operator_set" },
+    });
+  });
+});
+
 // This screen never read useOperator at all — a viewer saw enabled
 // Delete/lane toggles/record controls that all 403 server-side.
+// UT-7b: GET /permissions/availability is securityOps, so the card (and its
+// read) is only there for a security admin or a super admin. A person who can
+// open their own workspace's page gets neither a card nor a 403.
+describe("WorkspaceDetailScreen — the Availability card", () => {
+  it("is absent, and never read, for a caller below the security tier", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail("ws-1", false);
+
+    await screen.findByText("Recorded sessions");
+    expect(screen.queryByText(AVAILABILITY.WORKSPACE_CARD_TITLE)).not.toBeInTheDocument();
+    expect(getAvailabilityMock).not.toHaveBeenCalled();
+  });
+
+  it("is there for a security admin, reading this workspace's own id", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    getAvailabilityMock.mockResolvedValue({ kind: "workspace", value: "ws-1", restricted: false, allowed_by: [] });
+    renderDetail("ws-1", false, true);
+
+    expect(await screen.findByText(AVAILABILITY.WORKSPACE_CARD_TITLE)).toBeInTheDocument();
+    expect(await screen.findByText(AVAILABILITY.LABEL)).toBeInTheDocument();
+    expect(getAvailabilityMock).toHaveBeenCalledWith("workspace", "ws-1");
+  });
+});
+
 describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () => {
   it("disables the Sessions card's session controls, the Allowed hosts remove control, and the Denied hosts remove control", async () => {
     getWorkspaceMock.mockResolvedValue(
@@ -581,7 +794,8 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
 // least-privilege policy" — it writes `egress:` requirement rows; the policy
 // hand-off is the separate optional "Save session profile" action. The
 // retired sentence must appear nowhere.
-describe("WorkspaceDetailScreen — F5-F10: the Recorded-sessions subtitle stops overclaiming", () => {
+describe("WorkspaceDetailScreen — the Recorded-sessions subtitle stops overclaiming", () => {
+  // ticket: F5-F10
   it("never says the loop writes the least-privilege policy", async () => {
     getWorkspaceMock.mockResolvedValue(ws());
     renderDetail();
@@ -595,7 +809,8 @@ describe("WorkspaceDetailScreen — F5-F10: the Recorded-sessions subtitle stops
 // always false, so `.then((s) => setLlmReady(hasLlmPath(s)))` alone would
 // tell an operator "no model provider configured" for a daemon that simply
 // never answered. `unreachable` must read as unknown, not "no".
-describe("WorkspaceDetailScreen — F6-F3 site 2: an unreachable setup status never claims no model provider", () => {
+describe("WorkspaceDetailScreen — an unreachable setup status never claims no model provider", () => {
+  // ticket: F6-F3 (site 2)
   it("shows no model-provider warning when the setup status is the synthetic unreachable fallback", async () => {
     getSetupStatusMock.mockResolvedValue(setupStatus({ unreachable: true }));
     getWorkspaceMock.mockResolvedValue(ws());
@@ -627,7 +842,8 @@ function NavButton({ to }: { to: string }) {
   );
 }
 
-describe("WorkspaceDetailScreen — F5-F7: a stale load can't clobber a newer one", () => {
+describe("WorkspaceDetailScreen — a stale load can't clobber a newer one", () => {
+  // ticket: F5-F7
   it("renders workspace B even when A's load resolves after B's", async () => {
     let resolveA: (w: ReturnType<typeof ws>) => void = () => {};
     const aPromise = new Promise<ReturnType<typeof ws>>((res) => {

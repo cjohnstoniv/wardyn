@@ -13,17 +13,17 @@ import (
 	"testing"
 )
 
-// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool is F280.
+// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool pins the cursor identity
+// check.
 //
-// The cursor sidecar used to be trusted on a SIZE BOUND alone (`n < 0 || n >
-// size`), while the comment above it claimed something a size bound cannot say:
-// that "a cursor past the end of the file describes a file that no longer
+// A size bound alone (`n < 0 || n > size`) cannot say what the cursor code must
+// hold: that "a cursor past the end of the file describes a file that no longer
 // exists … and honouring it would SKIP un-replayed events, which is the one
 // direction this file never errs in". An offset left over a REPLACED spool that
-// happens to be at least as large is IN range, so it was honoured, and Drain
-// began past lines nothing had replayed. Executed on the shipped code: 4 of 5
-// events replayed, one credential.mint silently lost — a C1 violation, the
-// invariant the whole file exists to hold.
+// happens to be at least as large is in range, so a size-bound-only check
+// honours it and Drain begins past lines nothing has replayed — 4 of 5 events
+// replayed, one credential.mint silently lost: a C1 violation, the invariant
+// the whole file exists to hold.
 //
 // The sidecar is written the way the daemon itself would have written it for the
 // ORIGINAL file — a well-formed, in-range, correctly-fingerprinted cursor — so
@@ -90,7 +90,7 @@ func TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool(t *testing.T) {
 	}
 }
 
-// TestSpoolCursorRefusesAStaleCursorOverACompactedSpool is F280's other arm: the
+// TestSpoolCursorRefusesAStaleCursorOverACompactedSpool covers the second arm: the
 // crash window inside compact() itself.
 //
 // compact() renames a rewritten spool over the old one and only then retires the
@@ -160,7 +160,7 @@ func TestSpoolCursorRefusesAStaleCursorOverACompactedSpool(t *testing.T) {
 
 // A cursor that still describes the file is still HONOURED. Without this the
 // fix could be "always replay from 0", which trades a silent loss for the
-// duplicate storm F219 measured (~32k duplicate rows on one restart of a 64k
+// duplicate storm that was measured (~32k duplicate rows on one restart of a 64k
 // backlog) — and the pin above could not tell the two apart.
 func TestSpoolCursorHonoursACursorThatStillDescribesTheFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
@@ -226,7 +226,7 @@ func TestSpoolCursorRefusesThePreIdentitySidecar(t *testing.T) {
 	}
 	if got := seedSpoolCursor(path+".consumed", path, int64(len(buf))); got != 0 {
 		t.Errorf("a one-field (pre-identity) sidecar seeded %d, want 0 — an offset with nothing tying it to "+
-			"this file's content is exactly the trust F280 removed", got)
+			"this file's content is exactly the trust the cursor's file identity removed", got)
 	}
 
 	// A fingerprint that does not match the file is refused too, which is the

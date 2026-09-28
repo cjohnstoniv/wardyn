@@ -24,7 +24,7 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 	t.Helper()
 	b, err := json.Marshal(map[string]any{
 		"run_id":             uuid.New().String(),
-		"control_plane_url":  "http://wardynd:8080",
+		"control_plane_url":  "http://127.0.0.1:8080", // loopback: this probe is about the upstream proxy
 		"run_token":          "tok",
 		"upstream_proxy_url": raw,
 	})
@@ -35,7 +35,7 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 	return lerr
 }
 
-// TestUpstreamProxyGateMatchesSidecar is the pin for F028: every
+// TestUpstreamProxyGateMatchesSidecar pins the gate agreement: every
 // upstream_proxy_url the CONTROL PLANE accepts must be one the SIDECAR accepts.
 //
 // Two validators sat over one operator-authored value. The dispatch-side gate
@@ -57,8 +57,8 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 // The pin holds the property, not the current input list: if the control-plane
 // gate ever re-widens (or the sidecar tightens), one of these fires.
 func TestUpstreamProxyGateMatchesSidecar(t *testing.T) {
-	// Values a corporate operator can plausibly type, each one previously
-	// accepted by the scheme-only gate and refused by the sidecar. wantReason is
+	// Values a corporate operator can plausibly type that a scheme-only gate
+	// would accept and the sidecar refuses. wantReason is
 	// the audited `reason` on the run.upstream_proxy.resolve failure ("" = the
 	// value must resolve).
 	for _, c := range []struct{ raw, wantReason string }{
@@ -113,7 +113,7 @@ func resolveUpstreamProxyLane(t *testing.T, raw string, viaSecret bool) (string,
 
 // TestValidateSiteConfigRejectsSidecarKillingProxyURL pins the same property at
 // the WRITE boundary: PUT /api/v1/site-config must not persist a value that
-// makes the sidecar exit(1). Before F028 this returned nil.
+// makes the sidecar exit(1). It used to return nil.
 func TestValidateSiteConfigRejectsSidecarKillingProxyURL(t *testing.T) {
 	for _, raw := range []string{"http://proxy.corp:0", "http://proxy.corp:99999"} {
 		err := validateSiteConfig(types.SiteConfig{UpstreamProxyURL: raw})

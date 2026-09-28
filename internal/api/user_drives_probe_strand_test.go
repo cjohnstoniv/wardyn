@@ -17,11 +17,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDriveShareProbeDoesNotStackBehindAStrandedOne is F295.
+// TestDriveShareProbeDoesNotStackBehindAStrandedOne.
 //
-// F269 gave GET /me the launch door's own bind DECISION so the console would
+// GET /me was given the launch door's own bind DECISION so the console would
 // stop offering a mount the create path refuses. What came with it is that a
-// DISPLAY READ ON A TIMER now performs the share probe: up to two uncancellable
+// Display read on a timer now performs the share probe: up to two uncancellable
 // filesystem syscalls, each bounded at five seconds, on a path the operator
 // mounted. The syscall takes no context, so every probe the bound gives up on
 // leaves a thread in the kernel until the mount answers — and on a hard mount
@@ -154,7 +154,7 @@ func TestDriveShareProbeDoesNotStackBehindAStrandedOne(t *testing.T) {
 		if !present {
 			t.Fatal("a concurrent reader DELETED the mark of a probe that is still outstanding: the next " +
 				"reader will start a second uncancellable syscall behind the first, which is the accumulation " +
-				"F295 removes")
+				"the probe mark exists to prevent")
 		}
 		if still != owned {
 			t.Errorf("the mark changed from %v to %v — a loser must not reset the clock either, or a queue of "+
@@ -182,7 +182,7 @@ func TestDriveShareProbeDoesNotStackBehindAStrandedOne(t *testing.T) {
 // …and the route the finding is actually about. A GET /me for a host_path
 // allocation whose share has already stranded a probe answers from memory: it
 // does not stat, and it reports the SAME state the launch door reports for the
-// same subject, which is the agreement F269 exists to hold.
+// same subject, which is the agreement the bind decision exists to hold.
 //
 // The home directory here EXISTS, so a /me that reached the filesystem would
 // offer the drive. That it does not is the whole observation.
@@ -197,7 +197,7 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 	})
 	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 	srv, _ := driveShareServer(st, []string{root})
-	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleUser), nil)
 
 	// The control first: with nothing stranded, this member's drive binds and
 	// /me offers it. A test that only asserted the withheld case would pass on a
@@ -229,7 +229,7 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 		t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile is involved", denied)
 	}
 
-	// AND THE TWO DOORS STILL AGREE, asserted rather than assumed: /me withheld
+	// And the two doors still agree, asserted rather than assumed: /me withheld
 	// it because the launch would refuse it, not instead of the launch refusing.
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
 	if ok || mount != nil {
@@ -240,8 +240,8 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 	}
 }
 
-// TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded is B5-F1: the
-// member doors have been bounded since F295, and the ADMIN doors over the same
+// TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded documents that
+// the member doors were already bounded, and the ADMIN doors over the same
 // shares were not.
 //
 // GET /drives asks whether any configured host root could hold a drive, and the
@@ -256,7 +256,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 	root := t.TempDir()
 	body := `{"name":"Shares","backend":"host_path","home_template":"sub","host_root":"` + root + `"}`
 
-	// THE CONTROL FIRST: a live root is usable and a drive rooted at it is
+	// The control first: a live root is usable and a drive rooted at it is
 	// created. A test that only asserted the withheld case would pass on doors
 	// that withhold everything.
 	srv, _ := driveAdminServer(newDriveCRUDStore(), []string{root})
@@ -300,7 +300,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 			"this field exists to prevent")
 	}
 
-	// AND THE WRITE DOOR DECIDES, rather than hanging: 503, because nothing is
+	// And the write door decides, rather than hanging: 503, because nothing is
 	// wrong with the request and the remedy is the operator's mount.
 	start = time.Now()
 	w = driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil)
@@ -317,21 +317,21 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 	}
 }
 
-// TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot is R-03: the bound
-// this file's header promises is per REQUEST, and the loops were per ROOT.
+// TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot: the bound this file's
+// header promises is per request, not per root.
 //
 // driveShareProbe bounds each probe at driveShareProbeTimeout and remembers the
 // strand — but that memory only short-circuits the SECOND request. On the FIRST
-// request after a mount hangs, a deployment with N distinct dead roots paid N
-// times the timeout, on a server that sets no WriteTimeout. Both admin loops now
-// run under one context deadline, and driveShareProbe already selects on
-// ctx.Done, so every probe after the first strand returns at once.
+// request after a mount hangs, per-root bounds would make a deployment with N
+// distinct dead roots pay N times the timeout, on a server that sets no
+// WriteTimeout. Both admin loops run under one context deadline, and
+// driveShareProbe selects on ctx.Done, so every probe after the first strand
+// returns at once.
 //
-// HONEST ABOUT WHAT THIS PINS: no unit test can make EvalSymlinks/stat actually
+// Honest about what this pins: no unit test can make EvalSymlinks/stat actually
 // block (that needs a real hung NFS mount), so the elapsed assertion below is a
-// FORWARD regression pin over the strand short-circuit and the deadline
-// together, not a reproduction of the multi-root wait. It is green on both
-// sides of the deadline change; what the deadline buys is stated at
+// forward pin over the strand short-circuit and the deadline together, not a
+// reproduction of the multi-root wait. What the deadline buys is stated at
 // userDriveHostRootsUsableWithin and driveHostRootNesting.
 func TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot(t *testing.T) {
 	stranded, live := t.TempDir(), t.TempDir()

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// B11a-F13. The upload target is the run's OWN wardyn-proxy — a known
+// The upload target is the run's OWN wardyn-proxy — a known
 // on-segment address — yet this client used http.DefaultTransport, whose Proxy
 // is ProxyFromEnvironment. Every sandbox carries HTTP_PROXY=$WARDYN_PROXY_URL,
 // so with the DEFAULT proxy URL the control-plane PUT went to the proxy anyway
@@ -23,7 +23,7 @@ import (
 // helper already set Proxy: nil for exactly this reason; sidecar and toolgate
 // did not.
 //
-// WHY THIS IS NOT AN END-TO-END PROXY TEST. It cannot be, in process:
+// Why this is not an end-to-end proxy test. It cannot be, in process:
 // httpproxy's matcher exempts every LOOPBACK destination from proxying, and an
 // httptest server is always 127.0.0.1, so no client configuration makes a local
 // request proxied. A "does it reach the server" test therefore cannot tell

@@ -201,3 +201,7 @@ describe("toolRulesProblem — malformed documents refuse, never throw", () => {
     expect(toolRulesProblem([{ tool: "Bash", effect: 1 }])).toMatch(/is not an effect/);
   });
 });
+
+// pushRulesIsSet's own tests moved to new-run-rail-push.test.tsx (bundle-split
+// fix, #181): the function now lives in new-run-rail.tsx, not here — see its
+// own doc for why.

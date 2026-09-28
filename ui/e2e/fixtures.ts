@@ -4,13 +4,13 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
 import {
   test as base,
   expect,
   type Locator,
   type Page,
 } from "@playwright/test";
-import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
 // seeded test backend booted by scripts/e2e-backend.sh (real wardynd + Postgres +
@@ -20,24 +20,96 @@ import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 // localStorage["wardyn_admin_token"] and probes /api/v1/runs on mount to decide
 // auth; injecting it before first navigation boots the app already signed in.
 export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
-const TOKEN_KEY = "wardyn_admin_token";
+// #510-F11 — exported so no OTHER e2e file has to re-type this literal (it
+// mirrors lib/api/core.ts's own private TOKEN_KEY; a rename there that this
+// file's own hand-typed copy missed used to make the two-tabs case in
+// attach-stub.ts sign in nowhere, failing with an unrelated-looking auth error
+// instead of a clear mismatch).
+export const TOKEN_KEY = "wardyn_admin_token";
+
+// Synthetic credentials: e2e-backend.sh stores only their SHA-256 hashes.
+export const MEMBER_TOKEN = `wdn_${"1".repeat(64)}`;
+const SECURITY_ADMIN_TOKEN = `wdn_${"2".repeat(64)}`;
+export const MEMBER_PRINCIPAL = "e2e-member";
+
+// T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
+// error or tripped the CSP fails silently everywhere else: the click that
+// caused it still "worked" (React error boundaries and the browser both eat
+// it), so nothing but the browser's own devtools console would ever have
+// shown it. Every spec importing `test` from here gets it collected and
+// checked for free.
+//
+// Named by spec basename (no extension) — a debt list, not a convenience: a
+// spec joins it only when it has no narrower way to explain ITS OWN noise.
+// A spec that already asserts on the same CSP/console noise itself does NOT
+// belong here even though it trips the same page-health signal — adding this
+// file-wide gate on top would just double-report the same finding. That is
+// why the set below does NOT include recording.spec.ts: its WASM-player test
+// already asserts on a filtered CSP/WASM pattern of its own, so the finding
+// stays scoped to that one assertion instead of failing every check in the
+// spec.
+//
+// episode-catalog: its "configured video source" describe block DELIBERATELY
+// drives an unadmitted media-src host so the browser's own CSP blocks it —
+// the spec's own comment calls this out, and its assertions are that the
+// configured-source error copy renders and the mirror host never leaks into
+// text (Q145-2). The violation this trips IS the thing under test.
+const PAGE_HEALTH_ALLOWLIST = new Set<string>(["episode-catalog"]);
+
+function pageHealthAllowed(testFile: string): boolean {
+  return PAGE_HEALTH_ALLOWLIST.has(basename(testFile).replace(/\.spec\.ts$/, ""));
+}
 
 // `test` boots the app pre-authenticated so each spec lands directly in the
 // console. Auth-flow specs that exercise sign-in/sign-out should import the raw
 // `test` from "@playwright/test" instead and manage storage themselves.
 export const test = base.extend({
-  page: async ({ page }, use) => {
+  page: async ({ page }, use, testInfo) => {
     await page.addInitScript(
       ([key, tok]) => {
         try {
-          localStorage.setItem(key, tok);
+          // Keep a real actor selected before navigation; one initializer owns auth.
+          if (!sessionStorage.getItem(key) && !localStorage.getItem(key)) {
+            localStorage.setItem(key, tok);
+          }
         } catch {
           /* private mode — ignore */
         }
       },
       [TOKEN_KEY, ADMIN_TOKEN],
     );
+
+    // pageerror: a real, Playwright-native page event — no init script needed.
+    const pageErrors: string[] = [];
+    page.on("pageerror", (err) => pageErrors.push(err.stack || err.message));
+
+    // securitypolicyviolation is a DOM event, not a Playwright page event, so
+    // the only channel back to this Node-side collector is a page-JS listener
+    // reporting through an exposed binding. addInitScript re-installs it on
+    // every document the page navigates to (a fresh document has no listeners
+    // of its own), and exposeBinding must be wired before that script can call
+    // it — order below matters.
+    const cspViolations: string[] = [];
+    await page.exposeBinding("__wardynReportCSPViolation", (_source, detail: string) => {
+      cspViolations.push(detail);
+    });
+    await page.addInitScript(() => {
+      document.addEventListener("securitypolicyviolation", (e) => {
+        (window as unknown as { __wardynReportCSPViolation: (d: string) => void }).__wardynReportCSPViolation(
+          `${e.violatedDirective} blocked ${e.blockedURI} (${e.sourceFile}:${e.lineNumber})`,
+        );
+      });
+    });
+
     await use(page);
+
+    if (pageHealthAllowed(testInfo.file)) return;
+    if (pageErrors.length > 0) {
+      throw new Error(`uncaught page error(s) during "${testInfo.title}":\n${pageErrors.join("\n---\n")}`);
+    }
+    if (cspViolations.length > 0) {
+      throw new Error(`CSP violation(s) during "${testInfo.title}":\n${cspViolations.join("\n---\n")}`);
+    }
   },
 });
 
@@ -56,13 +128,22 @@ export type NavLabel =
   // the three read as one narrowing sequence. Never in MEMBER_NAV_PATHS.
   | "Governance"
   | "Permissions"
+  // 0.8 (UT-7a) — both admin tiers, beside Permissions.
+  | "User types"
+  // CS-8 (design F-1) — right after Permissions, both admin tiers too.
+  | "Credentials"
   | "Secrets"
   | "Audit"
   | "Recordings"
-  // #217 — last, under a divider (app-shell.tsx#SidebarNav): the account
-  // menu keeps its own Settings entry too, so this is a SECOND way in, not a
-  // replacement for it.
-  | "Settings";
+  // A security admin's Admin view only (packet M-A).
+  | "Drives"
+  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Setup and
+  // Settings in the Admin view, Getting started and Your account in the User
+  // view.
+  | "Setup"
+  | "Settings"
+  | "Getting started"
+  | "Your account";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/
@@ -74,15 +155,18 @@ export function sidebarLink(page: Page, label: NavLabel): Locator {
 }
 
 // gotoConsole loads the app shell (pre-authed) and waits for the sidebar.
-export async function gotoConsole(page: Page): Promise<void> {
-  await page.goto("/");
+// The harness is a single-operator install (a bare admin bearer, no SSO), so
+// "/" lands in the User view once onboarded (D1); pass "admin" to land in the
+// Admin view, whose sidebar carries Policies, Permissions, Audit and the rest.
+export async function gotoConsole(page: Page, view: "user" | "admin" = "user"): Promise<void> {
+  await page.goto(view === "admin" ? "/admin" : "/");
   // "/" never stays "/": FirstRunLanding redirects to /runs or /setup once
   // status and role resolve. The sidebar mounts BEFORE that redirect fires, so
   // waiting on the sidebar alone returns with a Navigate still pending — and a
   // test that immediately pushes its own route can then have it clobbered by
   // the stale redirect (a race that widens under suite load; it cost a
   // member-console run at /runs/new). Console-ready means the landing settled.
-  await page.waitForURL((u) => u.pathname !== "/");
+  await page.waitForURL((u) => u.pathname !== "/" && u.pathname !== "/admin");
   await expect(sidebarLink(page, "Runs")).toBeVisible();
 }
 
@@ -100,27 +184,13 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // that has already installed a failing route intercept would never mount the
 // shell at all. React Router listens to popstate, so pushState + popstate is
 // exactly what a <NavLink> click does.
-// launchRun clicks the wizard's Launch and lands on the run's detail page,
-// through EITHER shape the product has: a clean 201 navigates by itself; a 201
-// carrying `warnings[]` HOLDS the screen (the warnings listed under
-// AGENTS.LAUNCH_WARNING_TITLE, Launch replaced by AGENTS.OPEN_RUN_CTA) until
-// the person clicks through. This harness seeds no model credential, so a
-// task launch here carries the no-model-access advisory and holds; a developer
-// box with a managed Claude credential gets the clean 201. Both are real —
-// a spec that pins one shape would be true on one machine and false on the
-// other, so the helper accepts both and asserts the destination.
+// launchRun clicks the wizard's Launch and lands on the run's detail page.
+// #125: a launch that answers 2xx always navigates in the same tick now,
+// warnings or not — there is no longer a held screen to click through, so
+// this is just the click and the wait.
 export async function launchRun(page: Page): Promise<void> {
-  const detail = /\/runs\/[0-9a-f-]{8,}/;
   await page.getByRole("button", { name: "Launch run" }).click();
-  const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
-  await expect
-    .poll(async () => detail.test(page.url()) || (await openRun.isVisible()), { timeout: 15_000 })
-    .toBe(true);
-  if (!detail.test(page.url())) {
-    await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
-    await openRun.click();
-  }
-  await expect(page).toHaveURL(detail, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
 }
 
 export async function navToRoute(page: Page, path: string): Promise<void> {
@@ -130,29 +200,51 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
   }, path);
 }
 
-// Member console (B3) — the seeded e2e backend authenticates every spec with a
-// bare admin bearer token (ADMIN_TOKEN above), and isOperator
-// (internal/api/http.go) reads "no session role to demote" for any caller with
-// no OIDC human session — so a bearer-token caller is ALWAYS admin
-// server-side; there is no way to reach a genuine member session through this
-// harness without standing up OIDC. GET /api/v1/me's `role`/`operator` fields
-// are spliced onto the REAL response (route.fetch() + patch + refulfill —
-// same technique settings-connections.spec.ts and workspace-detail.spec.ts
-// already use) so principal/method stay
-// genuine while the client believes it is signed in as a member. Everything
-// else (runs list, secrets, approvals list) still comes from the real,
-// unmodified, admin-scoped backend — specs using this prove the RENDER
-// behavior a member role drives, not server-side ownership scoping itself
-// (that's proven server-side: B2's own tests, and
-// internal/api/runs_policy.go's handleListRuns / approvals.go's
-// handleListApprovals creator-pager branches). Shared here (not declared in
-// one spec file) because Playwright refuses a spec that imports another spec
-// file (`--list` collects zero tests when it sees one).
+// Uses the browser's actual stored credential, including token-field sign-ins.
+// Returning only the response keeps bearer values out of assertion diagnostics.
+export async function consoleAPI(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> {
+  return page.evaluate(async ({ key, method, path, body }) => {
+    const token = sessionStorage.getItem(key) ?? localStorage.getItem(key);
+    const response = await fetch(path, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: response.status, text: await response.text() };
+  }, { key: TOKEN_KEY, method, path, body });
+}
+
+async function asRealPerson(page: Page, token: string, principal: string, role: string): Promise<void> {
+  // A same-origin document lets us select storage before any console request.
+  await page.goto("/healthz");
+  await page.evaluate(([key, token]) => {
+    sessionStorage.removeItem(key);
+    localStorage.setItem(key, token);
+  }, [TOKEN_KEY, token]);
+  const response = await consoleAPI(page, "GET", "/api/v1/me");
+  expect(response.status, response.text).toBe(200);
+  expect(JSON.parse(response.text)).toMatchObject({
+    principal, method: "token", role, operator: false,
+    security_operator: role === "security_admin",
+    user_type: { id: "standard" },
+  });
+}
+
+export async function asRealMember(page: Page): Promise<void> {
+  await asRealPerson(page, MEMBER_TOKEN, MEMBER_PRINCIPAL, "user");
+}
+
+export async function asRealSecurityAdmin(page: Page): Promise<void> {
+  await asRealPerson(page, SECURITY_ADMIN_TOKEN, "e2e-security-admin", "security_admin");
+}
+
+// Render-only splices for specs that supply deliberately hypothetical states.
+// Requests still carry the operator token; use asRealMember for authorization.
 export async function mockMemberRole(page: Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     await route.fulfill({ response, json });
@@ -171,7 +263,7 @@ export async function mockMemberRole(page: Page): Promise<void> {
 // ever arrived UNREDACTED, so the member specs could not exercise any of them,
 // which is how W6-3's security-admin twin survived a green suite.
 //
-// A MIRROR of redactSetupStatusForMember's structural drops, not a re-derivation
+// A MIRROR of redactSetupStatusForUser's structural drops, not a re-derivation
 // of its value projections: `integrations`, `harness` and `model_access` are
 // reduced server-side by rules whose inputs (own-AWS-row scoping, the graded
 // blob's tier) this side cannot see, and inventing them here would prove a
@@ -211,18 +303,8 @@ export async function mockMemberSetupStatus(page: Page): Promise<void> {
   });
 }
 
-// Security-admin console (0.7's third tier) — the same splice technique and the
-// same harness ceiling as mockMemberRole above: the bearer-token backend is
-// always admin server-side, so this proves the RENDER behavior the tier drives,
-// never server-side authorization (that is pinned in Go — internal/api's
-// isSecurityOperator tests and authz_test.go's route matrix).
-//
-// The three fields together ARE the tier's contract, and the asymmetry is the
-// point: operator FALSE (the super-admin surfaces — secrets, LLM credential,
-// setup, workspace writes, run attach — stay hidden) with security_operator
-// TRUE (approvals, audit, permissions, governance profiles are offered). A
-// fixture setting both true would prove nothing this tier does not already
-// share with an admin.
+// Render-only security tier: server authorization is unchanged by this splice.
+// Use asRealSecurityAdmin when a refusal or ownership check is under test.
 export async function mockSecurityAdminRole(page: Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
@@ -257,6 +339,8 @@ export function sql(statement: string): string {
       "wardyn",
       "-d",
       PG_DBNAME,
+      "-v",
+      "ON_ERROR_STOP=1",
       "-tAc",
       statement,
     ],

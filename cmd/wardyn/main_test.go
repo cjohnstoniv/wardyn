@@ -94,11 +94,11 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
 	}
-	// W4-S1-7 regression: `wardyn setup` is a subcommand group, so a bare
-	// invocation prints help and exits 0 — it never starts wardynd, so the
-	// recovery hint must not send an operator there. `make setup` is a live
-	// alternative. (F009 gave every group a help-only RunE so a MISTYPED
-	// subcommand exits non-zero; the bare invocation is unchanged, and
+	// `wardyn setup` is a subcommand group, so a bare invocation prints
+	// help and exits 0 — it never starts wardynd, so the recovery hint must
+	// not send an operator there. `make setup` is a live alternative.
+	// (Every group has a help-only RunE so a mistyped subcommand exits
+	// non-zero; the bare invocation still succeeds, and
 	// TestBareGroupStillPrintsHelpAndSucceeds pins that.)
 	if hint := dialHint(err); strings.Contains(hint, "`wardyn setup`") {
 		t.Errorf("dialHint(refused) = %q, must not point at `wardyn setup` (a dead end: it only prints help)", hint)
@@ -118,7 +118,7 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(fmt.Errorf("list: %w", &sdk.APIError{Status: 401})); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
 		t.Errorf("dialHint(wrapped 401) = %q, want the token hint via errors.As", hint)
 	}
-	// B12a-F7: PersistentPreRun resolves --token's default from
+	// PersistentPreRun resolves --token's default from
 	// WARDYN_ADMIN_TOKEN OR WARDYN_TOKEN (rootCmd below) — the 401 hint must
 	// name BOTH ways to supply one, not just the first.
 	if hint := dialHint(&sdk.APIError{Status: 401}); !strings.Contains(hint, "WARDYN_TOKEN") {
@@ -173,12 +173,12 @@ func TestWarnPlaintextToken(t *testing.T) {
 	}
 }
 
-// R5 F167: the whole status taxonomy in one table, so a class can't silently
-// fall through to 1 again. pkg/client mints an *sdk.APIError for EVERY non-2xx
-// (client.go: `StatusCode < 200 || > 299`), 3xx included — nothing follows
-// redirects — so an interposed proxy's 302 used to land on the catch-all 1,
-// the code docs/CI.md reserves for a FAILED run's own task exit code. Every
-// typed API error is a request-level failure and must classify as 2/3/4.
+// The whole status taxonomy in one table, so no class falls through to 1.
+// pkg/client mints an *sdk.APIError for every non-2xx (client.go: `StatusCode
+// < 200 || > 299`), 3xx included — nothing follows redirects — so an
+// interposed proxy's 302 must not land on the catch-all 1, the code docs/CI.md
+// reserves for a FAILED run's own task exit code. Every typed API error is a
+// request-level failure and must classify as 2/3/4.
 func TestExitCodeFor_EveryStatusClass(t *testing.T) {
 	for _, tc := range []struct {
 		status int
@@ -205,7 +205,7 @@ func TestExitCodeFor_EveryStatusClass(t *testing.T) {
 	}
 }
 
-// ─── the admin bearer must never reach --help or a usage dump (F221) ─────────
+// the admin bearer must never reach --help or a usage dump
 //
 // cobra prints `(default "<value>")` for every non-empty string flag default,
 // so seeding --token's DEFAULT from WARDYN_ADMIN_TOKEN/WARDYN_TOKEN put the

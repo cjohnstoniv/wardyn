@@ -17,12 +17,14 @@ vi.mock("../../../../lib/api/runs", () => ({
 }));
 
 import { HttpError } from "../../../../lib/api/core";
+import { fmtBytes } from "../../../../lib/format";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { EgressWidget } from "./egress";
 import { FilesChangedWidget } from "./files-changed";
 import { SandboxWidget } from "./sandbox";
 import { CredentialsWidget } from "./credentials";
 import { IdentityWidget } from "./identity";
+import { aheadByHours } from "../../../../lib/test-clock";
 
 beforeEach(() => {
   getFilesMock.mockReset();
@@ -35,7 +37,7 @@ describe("SandboxWidget", () => {
     // so a stray "0" in the DOM can only have come from the memory metric.
     getResourcesMock.mockResolvedValue({
       cpu_percent: 38,
-      disk_written_bytes: 2_000_000_000,
+      disk_used_bytes: 2_000_000_000,
       process_count: 14,
     });
     render(<SandboxWidget runId="r1" live={true} />);
@@ -49,6 +51,48 @@ describe("SandboxWidget", () => {
     getResourcesMock.mockRejectedValue(new HttpError(501, "no exec primitive"));
     render(<SandboxWidget runId="r1" live={true} />);
     expect(await screen.findByText(RUN_COCKPIT.execUnsupported)).toBeInTheDocument();
+  });
+
+  // RL-13 (long-holds design rev 4 §8): "a warning at 80% where the cap is
+  // enforced" — the disk_cap_bytes backend sends ONLY when a driver actually
+  // enforces one.
+  it("warns at >=80% of disk_cap_bytes, when the backend sent one", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_used_bytes: 900,
+      disk_cap_bytes: 1000, // 90%
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText(RUN_COCKPIT.diskNearCap)).toBeInTheDocument();
+  });
+
+  it("does not warn below 80%, even with a cap present", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_used_bytes: 500,
+      disk_cap_bytes: 1000, // 50%
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    await screen.findByText("Disk");
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
+  });
+
+  it("never warns with no disk_cap_bytes, however high disk_used_bytes is — an unenforced cap is not a denominator", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_used_bytes: 999_000_000_000,
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    await screen.findByText("Disk");
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
+  });
+
+  it("falls back to disk_written_bytes, labeled written, when disk_used_bytes is absent", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_written_bytes: 2_000_000_000,
+      disk_cap_bytes: 1000, // never a denominator without a used reading
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    await screen.findByText("Disk");
+    expect(screen.getByText(`${fmtBytes(2_000_000_000)} ${RUN_COCKPIT.diskWrittenSuffix}`)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
   });
 });
 
@@ -110,7 +154,7 @@ describe("CredentialsWidget", () => {
     const audit: AuditEvent[] = [
       {
         id: "e1",
-        time: "2026-08-16T12:00:00Z",
+        time: aheadByHours(-1),
         actor_type: "system",
         actor: "broker",
         action: "credential.mint",
@@ -129,7 +173,7 @@ describe("CredentialsWidget", () => {
     const audit: AuditEvent[] = [
       {
         id: "e2",
-        time: "2026-08-16T12:00:00Z",
+        time: aheadByHours(-1),
         actor_type: "system",
         actor: "broker",
         action: "credential.mint",
@@ -156,12 +200,12 @@ describe("EgressWidget", () => {
   });
 
   // B3 — the finding, written as the case that used to fail. The audit trail is
-  // APPEND-ONLY (0001_init.sql, chained by 0047), so an egress.pending row is a
+  // APPEND-ONLY (0001_init.sql, chained by 0047), so an egress.hold row is a
   // historical EVENT and never stops being one: deriving the chip from those
   // rows counted a request approved an hour ago, forever, on the one surface
   // whose entire job is to be the alarm. The row still renders as history; only
   // the NUMBER moved to the live derivation (isHeld, live-approvals.tsx).
-  it("does not count an egress.pending ROW whose approval has since been APPROVED", () => {
+  it("does not count an egress.hold ROW whose approval has since been APPROVED", () => {
     const egress: EgressDecision[] = [
       {
         id: "e1",
@@ -225,5 +269,36 @@ describe("IdentityWidget", () => {
     render(<IdentityWidget run={{ ...run, task: "", description: "" }} />);
     expect(screen.queryByText("Task")).not.toBeInTheDocument();
     expect(screen.queryByText("Why")).not.toBeInTheDocument();
+  });
+
+  // UT-7a — "Ran as {type}", named by GET /runs/{id}'s user_type_name.
+  it("shows Ran as with the type's name when the run carries one", () => {
+    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+    expect(screen.getByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.getByText("Ran as")).toBeInTheDocument();
+  });
+
+  it("renders no row for a run with no stamped type", () => {
+    render(<IdentityWidget run={run} />);
+    expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
+  });
+
+  it("renders no row for a type the server could not name (deleted) — never the raw id", () => {
+    render(<IdentityWidget run={{ ...run, user_type: "deleted-type" }} />);
+    expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
+    expect(screen.queryByText("deleted-type")).not.toBeInTheDocument();
+  });
+
+  // GET /user-types is securityOps: a user-tier owner's run page asking for it
+  // is a 403 and an authz.denied audit row on every visit.
+  it("issues no /user-types request", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+      expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes("/user-types"))).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

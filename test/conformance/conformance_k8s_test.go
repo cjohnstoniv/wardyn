@@ -19,9 +19,9 @@ package conformance_test
 //
 // Agent image: WARDYN_TEST_K8S_AGENT_IMAGE — must be built from
 // deploy/kind/Dockerfile.conformance-agent (busybox:1.36 + a real wardyn-rec
-// binary; `make build-conformance-agent-image`), NOT bare busybox. k8s's
-// SessionRecording is unconditionally true (exec.go's recordCmd has no
-// docker-style opt-out) — a bare busybox agent image fails EVERY Exec closed
+// binary; `make build-conformance-agent-image`), NOT bare busybox. The suite
+// builds the substrate with Record: true, the production default (recording is
+// off only under WARDYN_RECORDING_STORE=off) — a bare busybox agent image fails EVERY Exec closed
 // (no wardyn-rec on PATH), so this suite would never reach a real verdict
 // with one; review round 2 (H1) caught a first version of this file that
 // silently took that failure as "conformance passed" via a since-reverted
@@ -66,7 +66,7 @@ func TestConformanceK8s(t *testing.T) {
 	}
 	agentImage := os.Getenv("WARDYN_TEST_K8S_AGENT_IMAGE")
 	if agentImage == "" {
-		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (`make build-conformance-agent-image`) — a recorder-less image (e.g. bare busybox) fails every Exec closed under this substrate's unconditional SessionRecording, which would make the gate meaningless; see this file's doc comment")
+		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (`make build-conformance-agent-image`) — a recorder-less image (e.g. bare busybox) fails every Exec closed under this suite's Record: true, which would make the gate meaningless; see this file's doc comment")
 	}
 
 	// Namespace: the substrate's own real config knob (WARDYN_K8S_NAMESPACE),
@@ -76,6 +76,7 @@ func TestConformanceK8s(t *testing.T) {
 	sub, err := k8s.New(k8s.Config{
 		Namespace:  os.Getenv("WARDYN_K8S_NAMESPACE"),
 		ProxyImage: proxyImage,
+		Record:     true, // the production default; see the doc comment above
 		// ConfinementRuntimes deliberately nil: this suite proves CC1 (the
 		// unconditional floor); CC2/CC3 need a RuntimeClass pin this
 		// throwaway conformance cluster does not provision (see A1's
@@ -187,10 +188,10 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner, agentImage str
 		// ProxyConfig ("control_plane_url is required", proxy.LoadConfigBytes)
 		// — confirmed empirically: every OTHER subtest here never notices
 		// because none of them ever dial the proxy, only this one does.
-		// ControlPlaneURL only needs to be non-empty to satisfy startup, not
-		// reachable — Injection stays empty, so nothing tries to actually
-		// call it.
-		ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080", RunToken: "conformance"},
+		// ControlPlaneURL only needs to pass startup, not be reachable —
+		// Injection stays empty, so nothing tries to actually call it. Loopback,
+		// because the proxy refuses plaintext to any other host (hoptls.CheckURL).
+		ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:9", RunToken: "conformance"},
 	}
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {
@@ -231,7 +232,7 @@ exit 0`
 // that a REAL apiserver accepts the ephemeral container Exec builds for a run
 // whose disk_mib is set.
 //
-// WHY IT IS ITS OWN CASE. A disk budget makes CreateSandbox mount the two scratch
+// Why it is its own case. A disk budget makes CreateSandbox mount the two scratch
 // emptyDirs on the main container, and Exec copies that container's VolumeMounts
 // VERBATIM onto the ephemeral container. The apiserver refuses mount shapes THERE
 // that it accepts on an ordinary container — a subPath above all ("Subpath mounts
@@ -242,8 +243,8 @@ exit 0`
 // error as EXPECTED, because on a substrate that does enforce, the exec transport
 // dies with the pod it is filling.
 //
-// It is a REGRESSION PIN — green the day it was written — and it deliberately
-// says nothing about enforcement, only about admission and writability.
+// It is a standing pin, and it deliberately says nothing about enforcement,
+// only about admission and writability.
 func testExecIsAcceptedWithADiskBudget(t *testing.T, r runner.Runner, agentImage string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

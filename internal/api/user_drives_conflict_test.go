@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// TestWriteUserDriveTellsItsThree409sApart is R1 F177 and F284, and B5-F5.
+// TestWriteUserDriveTellsItsThree409sApart is R1.
 //
 // UpsertUserDrive returns three different conflicts and all three WRAP
 // store.ErrConflict, so the status was already right and the sentence was not:
@@ -30,27 +30,27 @@ func TestWriteUserDriveTellsItsThree409sApart(t *testing.T) {
 		err        error
 	}{
 		{
-			// F284. The name is free; what is taken is types.DriveSlug(name),
+			// The name is free; what is taken is types.DriveSlug(name),
 			// the fragment every minted object name is built from.
 			name: "a name that folds onto another drive's storage object",
 			err:  store.ErrDriveSlugConflict,
 			want: "folds to the same storage-object name",
 		},
 		{
-			// F177. Two host_path drives over one host_root deriving homes by
+			// Two host_path drives over one host_root deriving homes by
 			// different rules allocate two members the same directory.
 			name: "two shares over one host root with different home rules",
 			err:  store.ErrDriveHomeNamespaceConflict,
 			want: "derives home directory names by a different rule",
 		},
 		{
-			// B5-F5. The FOURTH: the drive was refused because somebody was
-			// allocated it while the edit was in flight, and re-sending is the
-			// whole remedy — the guard then meets the allocation on its own read
-			// and says what re-homing would cost. The store's attribution used to
-			// fall through to the home-namespace answer whenever its re-read
-			// could not confirm the grant, which renders as `another host_path
-			// drive on ""` for a drive with no host root at all.
+			// The fourth: the drive was refused because somebody was allocated it
+			// while the edit was in flight, and re-sending is the whole remedy —
+			// the guard then meets the allocation on its own read and says what
+			// re-homing would cost. The store's attribution must not fall through
+			// to the home-namespace answer whenever its re-read cannot confirm
+			// the grant, which would render as `another host_path drive on ""`
+			// for a drive with no host root at all.
 			name: "somebody was allocated the drive while it was being edited",
 			err:  store.ErrDriveAllocated,
 			want: "send the same request again",
@@ -80,7 +80,7 @@ func TestWriteUserDriveTellsItsThree409sApart(t *testing.T) {
 					w.Body.String(), tc.want)
 			}
 			// …and the two specific arms must NOT reach the name-taken
-			// sentence, which is the exact regression: the name is free.
+			// sentence: the name is free.
 			if tc.err != store.ErrConflict && strings.Contains(w.Body.String(), "already exists") {
 				t.Errorf("body = %s — this refusal is not about the name, and the drive it points at is a row "+
 					"the admin will not find: the name is free", w.Body.String())

@@ -42,7 +42,7 @@ func (s *alwaysFailSiteConfigStore) GetSiteConfig(context.Context) (types.SiteCo
 	return types.SiteConfig{}, errors.New("pool is down")
 }
 
-// TestSiteConfigForDispatch_RetriesOnce is B2-F1 per owner decision 3.
+// TestSiteConfigForDispatch_RetriesOnce is per owner decision 3.
 //
 // The dispatch-time site-config read decides WHOSE model credential a run may
 // use, and a failed read is REFUSED downstream (enforceReadableRosterForCredential)
@@ -67,7 +67,7 @@ func TestSiteConfigForDispatch_RetriesOnce(t *testing.T) {
 	}
 }
 
-// TestSiteConfigForDispatch_StillFailsClosed is B2-F1's negative control: a
+// TestSiteConfigForDispatch_StillFailsClosed is the negative control: a
 // roster that really cannot be read still surfaces as an error, so the refusal
 // downstream is unchanged and a per_user member is never served the
 // deployment-wide session.
@@ -84,7 +84,7 @@ func TestSiteConfigForDispatch_StillFailsClosed(t *testing.T) {
 	}
 }
 
-// TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv is B2-F1's
+// TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv is the
 // serving-door half: when the retry does not help and the run WOULD have been
 // served a Bedrock credential, the dispatch is refused with nothing resident.
 func TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv(t *testing.T) {
@@ -98,7 +98,7 @@ func TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv(t *testing.T) {
 	sandboxEnv := map[string]string{}
 
 	if _, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
-		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false); ok {
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false, bedrockCredUngraded()); ok {
 		t.Fatal("dispatch went ahead on an unreadable roster")
 	}
 	for k := range sandboxEnv {

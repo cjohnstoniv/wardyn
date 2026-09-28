@@ -6,20 +6,11 @@ package adoscope
 // Azure DevOps project and repository names in URLs — the ONE rule every site
 // that builds, reads or compares one goes through.
 //
-// Microsoft's naming rules (learn.microsoft.com/azure/devops/organizations/
-// settings/naming-restrictions) permit a space and most printable punctuation
-// in both: a project forbids \ / : * ? " ' < > ; # $ { } , + = [ ] |, a
-// repository the same set minus the apostrophe, and neither may hold a control
-// character, start with "_", or start or end with ".". An organisation is
-// letters, digits and "-" only, so it never needs any of this.
-//
-// A name therefore reaches Wardyn in more than one spelling — typed with its
-// space, pasted from Azure DevOps as %20, or escaped wholesale by a client
-// library — and every spelling decodes, by the same strict rule the REST gate
-// already applied to its paths, to one name. "+" is a literal "+" here, never
-// a space: this is PATH grammar, which is how Azure DevOps itself routes it.
-// The one place a name travels in a query string, where "+" does mean a space,
-// is spelled and read by net/url on both ends.
+// A name reaches Wardyn in more than one spelling — typed with its space,
+// pasted from Azure DevOps as %20, or escaped wholesale by a client library —
+// and every spelling decodes to one name. "+" is a literal "+" here, never a
+// space: this is PATH grammar, how Azure DevOps itself routes it (the query
+// string, where "+" does mean a space, is spelled and read by net/url).
 
 import (
 	"fmt"
@@ -30,13 +21,11 @@ import (
 )
 
 // UnescapeName decodes one URL path segment into the name Azure DevOps routes
-// it as, refusing every spelling the service would route differently from how
-// it reads.
-//
-// It decodes by hand rather than through url.PathUnescape for one reason:
-// PathUnescape leaves an encoded "/" as a literal slash in its output, which
-// then has to be re-detected, and the two-step version of that rule is exactly
-// where a laundering bug hides. Here the byte is refused where it is decoded.
+// it as, refusing every spelling the service would route differently from
+// how it reads. It decodes by hand rather than through url.PathUnescape,
+// which leaves an encoded "/" as a literal slash that then has to be
+// re-detected — a laundering bug hides in that two-step version. Here the
+// byte is refused where it is decoded.
 func UnescapeName(raw string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(raw); i++ {
@@ -59,6 +48,9 @@ func UnescapeName(raw string) (string, error) {
 		i += 2
 	}
 	seg := b.String()
+	if !utf8.ValidString(seg) {
+		return "", fmt.Errorf("adoscope: path segment %q decodes to invalid UTF-8", raw)
+	}
 	if hazard := segmentHazard(seg); hazard != "" {
 		return "", fmt.Errorf("adoscope: path segment %q %s", raw, hazard)
 	}
@@ -69,16 +61,11 @@ func UnescapeName(raw string) (string, error) {
 }
 
 // EscapeName is the ONE spelling of a name as a URL path segment:
-// UnescapeName(EscapeName(n)) == n for every name the service permits.
-//
-// It escapes as LITTLE as it can — whitespace, control characters, "%", and
-// the four characters that would end the segment or the path — and leaves every
-// other character literal. That is deliberate: a repository URL with "(", "&",
-// "'" or "é" in it was already accepted verbatim before this rule existed, so
-// escaping those too would give a stored row a second spelling of itself. What
-// it does escape is exactly what a stored field must not carry (a space breaks
-// the tab-framed WARDYN_REPOS and every whitespace guard) and what a URL cannot
-// hold unescaped.
+// UnescapeName(EscapeName(n)) == n for every name the service permits. It
+// escapes as LITTLE as it can — whitespace, control characters, "%", and the
+// four characters that would end the segment or the path — leaving every
+// other character literal, so a name already accepted verbatim (e.g. with
+// "(", "&", "é") does not get a second spelling of itself.
 func EscapeName(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); {
@@ -125,14 +112,11 @@ func CanonicalPath(path string) (string, bool) {
 	return strings.Join(segs, "/"), true
 }
 
-// CanonicalRepoURL is CanonicalURL for an Azure DevOps repository address: one
-// whose host is an Azure DevOps service host (dev.azure.com and its
-// subdomains, or <org>.visualstudio.com) or one of serverHosts — the Azure
-// DevOps Server hosts a caller knows from its own configuration, lowercased.
-// ok=false for anything else — another forge's URL above all — which callers
-// leave untouched. There is deliberately no "the path has a _git segment"
-// guess: a name rule applied to a forge that is not Azure DevOps would admit
-// escapes that forge never needs.
+// CanonicalRepoURL is CanonicalURL for an Azure DevOps repository address:
+// one whose host is an Azure DevOps service host (dev.azure.com and its
+// subdomains, or <org>.visualstudio.com) or one of serverHosts. ok=false for
+// anything else — another forge's URL above all — which callers leave
+// untouched.
 func CanonicalRepoURL(raw string, serverHosts []string) (string, bool) {
 	_, _, host, ok := splitRepoAddress(raw)
 	if !ok || !(azureDevOpsHost(host) || slices.Contains(serverHosts, host)) {
@@ -142,11 +126,10 @@ func CanonicalRepoURL(raw string, serverHosts []string) (string, bool) {
 }
 
 // CanonicalURL is CanonicalPath applied to the path of an https:// or ssh://
-// URL, or of scp-form [user@]host:path. The scheme, userinfo and host are left
-// exactly as written, and none may hold a "%": the name rule covers the path
-// alone, and an escape anywhere else is one no caller reads the way a server
-// would. ok=false for that, a query or fragment, a URL with no path, or a
-// segment that does not decode.
+// URL, or of scp-form [user@]host:path. The scheme, userinfo and host are
+// left exactly as written and none may hold a "%": the name rule covers the
+// path alone. ok=false for that, a query or fragment, a URL with no path, or
+// a segment that does not decode.
 func CanonicalURL(raw string) (string, bool) {
 	head, path, _, ok := splitRepoAddress(raw)
 	if !ok || strings.Contains(head, "%") {
@@ -168,8 +151,12 @@ func splitRepoAddress(raw string) (head, path, host string, ok bool) {
 		if i == 0 || strings.ContainsFunc(raw[:i], func(r rune) bool { return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') }) {
 			return "", "", "", false
 		}
-		j := strings.IndexByte(raw[i+3:], '/')
-		if j < 0 {
+		// The host ends at the first "/", "?" or "#". A "?"/"#" before any "/"
+		// is refused rather than read as host: otherwise a query/fragment on a
+		// non-Azure-DevOps address could smuggle an "@host" that the later
+		// "@"-strip reads back out as the real host (host confusion).
+		j := strings.IndexAny(raw[i+3:], "/?#")
+		if j < 0 || raw[i+3+j] != '/' {
 			return "", "", "", false
 		}
 		head, path = raw[:i+3+j], raw[i+3+j:]
@@ -190,22 +177,14 @@ func splitRepoAddress(raw string) (head, path, host string, ok bool) {
 }
 
 // segmentHazard names why a decoded segment would not be routed the way it
-// reads, or "" when it would.
-//
-// Every case is a spelling the SERVICE normalises before it routes, so the
-// text here and the route there disagree:
-//   - "." and ".." are resolved outright;
-//   - leading or trailing whitespace, and a trailing dot, are trimmed first —
-//     Windows path canonicalisation — so ".. " is "..", "..." is "..", and
-//     "hooks." is the denied "hooks" area. Refusing the edge characters is the
-//     fail-closed reading, and no name on this API legitimately ends in one;
-//   - a control character, which no Azure DevOps name may hold;
-//   - a separator still inside the segment. While the split in decodeSegments
-//     is correct nothing reaches this case: the split removed every raw
-//     separator and UnescapeName refuses every decoded one. It is a SECOND,
-//     INDEPENDENT LINE — with the split reverted to "/" alone and this kept,
-//     every separator evasion is still refused, and the only cost is that a
-//     legitimate backslash-delimited path is refused too.
+// reads, or "" when it would. Every case is a spelling the SERVICE
+// normalises before it routes, so the text here and the route there
+// disagree: "." and ".." are resolved outright; leading/trailing whitespace
+// and a trailing dot are trimmed first (Windows path canonicalisation, so
+// ".. " is "..", "hooks." is the denied "hooks" area); a control character,
+// which no Azure DevOps name may hold; or a separator still inside the
+// segment — a SECOND, INDEPENDENT line behind the split in decodeSegments,
+// so a separator-evasion is still refused even if that split regressed.
 func segmentHazard(seg string) string {
 	switch {
 	case seg == "." || seg == "..":
@@ -227,20 +206,16 @@ func segmentHazard(seg string) string {
 // further rounds is refused rather than followed.
 const maxDecodeDepth = 4
 
-// hidesStructure reports whether decoding seg AGAIN — as any layer between here
-// and the service that decodes once more would — yields any segmentHazard at
-// any depth.
+// hidesStructure reports whether decoding seg AGAIN — as any layer between
+// here and the service that decodes once more would — yields any
+// segmentHazard at any depth. It exists because "%252F" decodes once to the
+// literal text "%2F": harmless to a service that decodes once, a separator
+// to one that decodes twice, and whether such a layer exists is not knowable
+// from here, so refusing the segment is the answer that cannot be wrong.
 //
-// It exists because "%252F" decodes once to the literal text "%2F": harmless
-// to a service that decodes once, and a separator to anything that decodes
-// twice. Whether such a layer sits in the path is not knowable from here, so
-// the answer that cannot be wrong is to refuse the segment.
-//
-// The re-decode is LENIENT on purpose — valid escapes decoded, malformed ones
-// kept as literal text — because that is the most dangerous decoder a request
-// could meet: a strict one refuses "%2F%zz" outright, a lenient one decodes it
-// to "/%zz". Assuming the lenient one is the fail-closed reading, and it costs
-// no legitimate name anything: "100%" and "50%off" reach a fixpoint unchanged.
+// The re-decode is LENIENT on purpose (valid escapes decoded, malformed ones
+// kept literal) since a lenient decoder is the most dangerous one a request
+// could meet, and it costs no legitimate name anything.
 func hidesStructure(seg string) bool {
 	for range maxDecodeDepth {
 		next := percentDecodeLenient(seg)

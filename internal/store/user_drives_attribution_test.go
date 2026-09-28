@@ -3,7 +3,7 @@
 
 package store
 
-// PIN for B5-F5: the refusal-attribution fallback answered
+// PIN for the refusal-attribution fallback answered
 // ErrDriveHomeNamespaceConflict unconditionally, so a drive the ALLOCATION guard
 // refused could be reported with the home-namespace sentence — which names a
 // rule that does not exist for its backend ("another host_path drive on …" for a
@@ -89,7 +89,7 @@ func TestUpsertAttributionNamesTheAllocationWhenTheNamespaceGuardCannotHaveFired
 		}
 	})
 
-	// THE NEGATIVE CONTROLS, and they are what keep this from becoming "every
+	// The negative controls, and they are what keep this from becoming "every
 	// refusal is an allocation".
 	t.Run("a share keeps the namespace answer", func(t *testing.T) {
 		share := types.UserDrive{ID: uuid.New(), Name: "Corp NAS",

@@ -36,7 +36,7 @@ func newPATBrokerUpstream(t *testing.T, token, username string) *gitBrokerUpstre
 // operator's GrantSpec.TTLSeconds up to the 1h cap, so an operator can author a
 // grant whose whole life is shorter than a cache margin. The fixture that
 // stated NO expiry exercised only brokeredToken's unparseable-response arm
-// (expiresAt == 0, cache forever), which is why the 5-minute margin bug (F120)
+// (expiresAt == 0, cache forever), which is why the 5-minute margin bug
 // survived a green cache pin.
 func newPATBrokerUpstreamTTL(t *testing.T, token, username string, ttl time.Duration) *gitBrokerUpstream {
 	t.Helper()
@@ -69,6 +69,7 @@ func newPATBrokerProxySpec(t *testing.T, spec types.RunPolicySpec, grants map[st
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		PATGrants:       grants,
 	})
 	return p, buf
@@ -131,7 +132,7 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	if up.mintCalls != 1 {
 		t.Fatalf("mintCalls = %d, want 1 (the PAT is minted server-side and cached per grant)", up.mintCalls)
 	}
-	// F014: the row must name the FORGE it dialled. Logged through
+	// the row must name the FORGE it dialled. Logged through
 	// emitLocalDecision it named the CONTROL PLANE, so a clone of gitlab.com and
 	// a credential mint were the same row, and two granted forges could not be
 	// told apart at all — in the one stream an egress review reads.
@@ -230,6 +231,7 @@ func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		PATGrants:       map[string]PATGrant{"gitlab.com": {GrantID: grantID}},
 	})
 
@@ -250,10 +252,10 @@ func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 	}
 }
 
-// F085: the smart-HTTP verb check reads the DECODED path, so a '#' (%23) or '?'
-// (%3F) inside the sandbox-supplied rest used to satisfy the "/info/refs" suffix
-// and then re-split the concatenated upstream URL — the brokered PAT delivered
-// to an arbitrary path on the granted forge (the forge's REST API included),
+// The smart-HTTP verb check reads the decoded path, so a '#' (%23) or '?' (%3F)
+// inside the sandbox-supplied rest must not satisfy the "/info/refs" suffix and
+// then re-split the concatenated upstream URL — that would deliver the brokered
+// PAT to an arbitrary path on the granted forge (the forge's REST API included),
 // which is exactly what handlePATBroker's own comment forbids and what the
 // GitHub-lane sibling prevents by building the URL from validated pieces.
 //
@@ -362,15 +364,13 @@ func newPATApprovalUpstream(t *testing.T, token string, approvalID uuid.UUID, ap
 	return u
 }
 
-// F120: ONE clone is ONE mint on the git_pat lane too.
+// One clone is one mint on the git_pat lane too.
 //
-// patToken used to call the control-plane mint route on every sub-request, and
-// a clone is two of them (GET info/refs, then POST git-upload-pack). An
-// approval-gated git_pat grant is SINGLE-USE, so the second mint 409s
-// ErrAlreadyMinted and the clone dies half-way — the default posture
-// (WARDYN_GIT_PAT_BROKER=on) for every ADO/GitLab run. The GitHub lane has
-// carried the per-grant cache + single-flight for exactly this reason since it
-// shipped; this pins that the sibling lane now shares it.
+// A clone is two sub-requests (GET info/refs, then POST git-upload-pack), and
+// an approval-gated git_pat grant is single-use, so minting per sub-request
+// would 409 the second mint ErrAlreadyMinted and kill the clone half-way —
+// the default posture (WARDYN_GIT_PAT_BROKER=on) for every ADO/GitLab run.
+// patToken shares the GitHub lane's per-grant cache + single-flight.
 func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
 	up := newPATBrokerUpstream(t, "T", "oauth2")
 	p, _ := newPATBrokerProxy(t,
@@ -394,16 +394,16 @@ func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
 	}
 }
 
-// TestPATBrokerCachesAShortTTLMintAcrossOneClone is the same contract for the
-// grant shape the cache used to fail on outright (F120 fix-up).
+// TestPATBrokerCachesAShortTTLMintAcrossOneClone is the same contract for a
+// short-TTL grant.
 //
-// The freshness margin was injectRefreshMargin (5m), sized for a rotating
-// INJECTED credential. A git_pat grant states a real expiry and an operator may
-// author ttl_seconds as low as they like, so any grant with ttl <= 5m was born
-// INSIDE the margin: `time.Now().Before(exp - 5m)` was false on the very next
-// sub-request, the second half of one clone re-minted, and a single-use grant
-// 409'd ErrAlreadyMinted. Two mints for one clone is exactly the failure this
-// lane's cache exists to prevent.
+// A git_pat grant states a real expiry and an operator may author ttl_seconds
+// as low as they like, so a freshness margin of injectRefreshMargin (5m) —
+// sized for a rotating injected credential — would leave any grant with ttl <=
+// 5m born inside the margin: `time.Now().Before(exp - 5m)` would be false on
+// the very next sub-request, the second half of one clone would re-mint, and a
+// single-use grant would 409 ErrAlreadyMinted. Two mints for one clone is
+// exactly the failure this lane's cache exists to prevent.
 func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 	for _, ttl := range []time.Duration{2 * time.Minute, 45 * time.Second, time.Hour} {
 		t.Run(ttl.String(), func(t *testing.T) {
@@ -433,10 +433,10 @@ func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 	}
 }
 
-// F120: a PENDING credential approval must be waited out, not returned as a 502.
+// a PENDING credential approval must be waited out, not returned as a 502.
 //
 // The broker mints server-side with no caller able to retry, so the GitHub lane
-// polls the same approval itself (W23-S1-1 / W19-W19a-1). patToken returned an
+// polls the same approval itself. patToken returned an
 // error on any non-200, which made the FIRST clone against an approval-gated
 // git_pat grant fail before a human could possibly have approved it.
 func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {
@@ -468,6 +468,21 @@ func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {
 	}
 }
 
+// setPATBranchNS sets the merged WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS var's
+// `pat` scope, standing in for the pre-#203 standalone
+// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS these tests used to set directly.
+// An empty/whitespace-only value means "unset" — set the WHOLE var to it
+// (there is no scope to unset independently any more) rather than wrapping it
+// in "pat:", which would be a malformed scoped value, not an unset one.
+func setPATBranchNS(t *testing.T, v string) {
+	t.Helper()
+	if strings.TrimSpace(v) == "" {
+		t.Setenv(envEnforceBranchNS, v)
+		return
+	}
+	t.Setenv(envEnforceBranchNS, "pat:"+v)
+}
+
 // TestPATBranchNSEnforcedEnv: the opt-IN env is the App-lane switch's mirror —
 // OFF when unset (so nothing a 0.7.1 deployment pushed changes), off on an
 // explicit disable word, on for the enable words, and FAIL CLOSED (on) for
@@ -485,7 +500,7 @@ func TestPATBranchNSEnforcedEnv(t *testing.T) {
 		{"maybe", true}, // garbage => enforce, never silently off
 	} {
 		t.Run("val="+tc.val, func(t *testing.T) {
-			t.Setenv(envEnforcePATBranchNS, tc.val)
+			setPATBranchNS(t, tc.val)
 			if got := PATBranchNSEnforced(); got != tc.want {
 				t.Fatalf("PATBranchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
 			}
@@ -499,7 +514,7 @@ func TestPATBranchNSEnforcedEnv(t *testing.T) {
 // The confinement is opt-in, and "opt-in" has to mean the default deployment
 // sees no change at all.
 func TestPATBrokerPushUnconfinedByDefault(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "") // never inherit an operator's setting
+	setPATBranchNS(t, "") // never inherit an operator's setting
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -530,7 +545,7 @@ func TestPATBrokerPushUnconfinedByDefault(t *testing.T) {
 // minted and before a byte reaches the forge. The decision row names the FORGE,
 // not github.com: that is the one thing the two lanes must NOT share.
 func TestPATBrokerDeniesOutOfNamespacePushWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -566,7 +581,7 @@ func TestPATBrokerDeniesOutOfNamespacePushWhenEnforcing(t *testing.T) {
 // forwarded with the command section re-prepended byte-for-byte ahead of the
 // still-streaming pack, and keeps the ordinary brokered:git-pat allow.
 func TestPATBrokerForwardsInNamespacePushWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "1")
+	setPATBranchNS(t, "1")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -593,7 +608,7 @@ func TestPATBrokerForwardsInNamespacePushWhenEnforcing(t *testing.T) {
 // opted in, refs discovery and upload-pack are pure streaming — nothing
 // buffered, nothing refused, no new row.
 func TestPATBrokerFetchUnaffectedWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -615,7 +630,7 @@ func TestPATBrokerFetchUnaffectedWhenEnforcing(t *testing.T) {
 // cannot be ref-checked on this lane either, so it is refused (415) rather than
 // waved through unparsed — the same silent-bypass rule, the same words.
 func TestPATBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -643,7 +658,7 @@ func TestPATBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
 // marker, since a push on a proxy whose switch is off was never confined and
 // keeps the ordinary brokered:git-pat allow.
 func TestPATBrokerPushPolicyOptOut(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxySpec(t, types.RunPolicySpec{GitPushAnyBranch: true},
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))

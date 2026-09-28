@@ -7,20 +7,17 @@ package proxy
 // its operator-declared bypass list (SiteConfig.UpstreamProxyNoProxy), the
 // operator-declared internal-host SSRF-guard lift (SiteConfig.InternalHosts),
 // and the operator-configured internal model gateway's own per-request vet
-// (vetTrustedHost). Split out of proxy.go at the 1000-line gate — a real seam
-// (this is the ONE decision every forward-egress caller shares), not a size
-// dodge.
+// (vetTrustedHost). This is the ONE decision every forward-egress caller
+// shares.
 //
-// The composition worth holding in one place: the guard runs on BOTH branches
-// and InternalHosts is what lifts it on either. Under the corp upstream this
-// file resolves the name for the guard alone, denies an answer in a blocked
-// range, and on a lift stamps site-config:internal-host on the HOSTNAME it then
-// hands the corp proxy — which still has to be able to dial that address, and
-// on the private-endpoint estates this branch exists for it cannot. With the
-// bypass the dial is made locally instead, where the same unconditional
-// private/reserved-IP guard denies RFC 6598 — and InternalHosts is what lifts
-// THAT. So on such an estate the two fields are one configuration: Bypass
-// routes, InternalHosts admits.
+// Composed here: the guard runs on BOTH branches and InternalHosts is what
+// lifts it on either. Under the corp upstream this file resolves the name for the guard
+// alone, and on a lift stamps site-config:internal-host on the HOSTNAME it
+// then hands the corp proxy — which still has to be able to dial that
+// address, since the guard binds the name at CHECK time only — the corp
+// proxy resolves again for the dial. With the bypass, the dial is made
+// locally instead, where the same guard denies RFC 6598 unless InternalHosts
+// lifts it. Bypass routes, InternalHosts admits.
 
 import (
 	"errors"
@@ -38,42 +35,28 @@ const (
 	// SiteConfig.InternalHosts lift of the private/reserved-IP guard.
 	ruleSourceInternalHost = "site-config:internal-host"
 	// ruleSourceEgressRedirect attributes an allow to the operator-authored
-	// EXACT literal-IP allow entry that trusted a private/reserved address —
-	// the grant an egress redirect makes, so it is visible in the trail rather
-	// than reading as an ordinary policy:allowed.
-	//
-	// Honest about what it can and cannot tell apart: the proxy sees the
-	// compiled allowlist, not the site-config rows behind it, and
-	// substituteArtifactEgress (internal/api) is the only thing in the product
-	// that writes a literal IP into a run's allowed_domains — for exactly the
-	// runs a redirect is in scope for. An operator who hand-pastes the same
-	// literal into allowed_domains gets the same label, which is the same grant
-	// by hand.
+	// EXACT literal-IP allow entry that trusted a private/reserved address,
+	// so an egress redirect's grant is visible in the trail rather than
+	// reading as an ordinary policy:allowed. An operator who hand-pastes the
+	// same literal into allowed_domains gets the same label.
 	ruleSourceEgressRedirect = "site-config:egress-redirect"
 )
 
-// errHostUnresolved is egressTarget's sentinel for the three outcomes that are
-// NOT private-IP blocks — a resolver outage, NXDOMAIN, and a zero-answer lookup
-// — so a caller can attribute them honestly instead of folding them into
-// builtin:private-ip. Same reason errGatewayVet exists.
-//
-// It matters because the two denials have OPPOSITE fixes: a private-address
-// block is fixed in site config (internal_hosts), a name that never resolved is
-// fixed at the sandbox's resolver. Audited as the first, an operator reads a DNS
-// outage as an SSRF-guard hit and goes to widen an SSRF control over it.
-//
-// Wrapped, never returned bare, so the vet's own Reason still reaches the log.
+// errHostUnresolved is egressTarget's sentinel for the three outcomes that
+// are NOT private-IP blocks — a resolver outage, NXDOMAIN, and a zero-answer
+// lookup — so a caller can attribute them honestly instead of folding them
+// into builtin:private-ip: the two denials have OPPOSITE fixes (site config
+// vs. the sandbox's resolver), and audited as the first an operator would
+// widen an SSRF control over a DNS outage. Wrapped, never returned bare, so
+// the vet's own Reason still reaches the log.
 var errHostUnresolved = errors.New("proxy: host did not resolve")
 
-// hostBlockedError is egressTarget's address-range refusal, carrying WHICH guard
-// class fired. The class is the whole point: only blockPrivate is liftable by
-// SiteConfig.InternalHosts, so a refusal that collapses every class into one
-// error (as this did, a plain fmt.Errorf) leaves writeEgressDeny no way to tell
-// an operator whose loopback/metadata/NAT64 target is unreachable forever apart
-// from one whose RFC1918 endpoint is one site-config line away.
-//
-// A struct rather than a sentinel per class: the classes already exist as
-// blockKind, and errors.As reads the field without a switch over five sentinels.
+// hostBlockedError is egressTarget's address-range refusal, carrying WHICH
+// guard class fired — only blockPrivate is liftable by
+// SiteConfig.InternalHosts, so writeEgressDeny needs to tell an operator
+// whose target is unreachable forever apart from one that is one site-config
+// line away. A struct rather than a sentinel per class so errors.As reads the
+// field without a switch over five sentinels.
 type hostBlockedError struct {
 	kind blockKind
 	msg  string
@@ -92,119 +75,59 @@ func blockKindOf(err error) blockKind {
 }
 
 // egressTarget resolves host:port to the dial target a forward-egress call
-// site should use for THIS proxy's mode — hiding the corp-upstream branch so
-// every forward-egress caller (evaluate, serveMITMRequest, handleGitBroker,
-// handleGitPATBroker) makes the SAME choice instead of each re-deriving it. A
-// site that forgot the branch (the brokered LLM routes and the git broker
-// both did) unconditionally required local DNS +ran the
-// full private-IP guard even under an operator upstream — where the sandbox
-// host frequently CANNOT resolve external names at all — and then handed the
-// corp proxy a resolved IP LITERAL to CONNECT instead of the real hostname.
-// With an operator upstream configured, the corp proxy — not this process —
-// resolves and dials, so the target is the real HOSTNAME:port sent by name
-// (see dialThroughUpstream / egressDial); otherwise the full local
+// site should use for THIS proxy's mode, so every forward-egress caller
+// (evaluate, serveMITMRequest, handleGitBroker, handleGitPATBroker) makes the
+// SAME choice instead of each re-deriving it. With an operator upstream
+// configured, the corp proxy — not this process — resolves and dials, so the
+// target is the real HOSTNAME:port sent by name; otherwise the full local
 // private-IP-guarded resolve+pin (Proxy.vetHost) applies as always.
 //
-// This does NOT special-case a configured LLM gateway host: a sandbox that
-// names the gateway on an ordinary CONNECT/MITM path is just another host —
-// gatewayTarget (proxyLLMRequest's own resolver) is the ONLY place a gateway
-// gets vetTrustedHost's relaxed per-request vet, and only for the brokered
-// /wardyn/llm/* route the proxy itself dials. Folding that branch in here
-// would lift the private-IP guard for the gateway HOSTNAME on every
-// forward-egress path (evaluate, serveMITMRequest), not just the brokered
-// route.
+// This does NOT special-case a configured LLM gateway host: gatewayTarget is
+// the ONLY place a gateway gets vetTrustedHost's relaxed vet, and only for
+// the brokered /wardyn/llm/* route. Folding that in here would lift the
+// private-IP guard for the gateway hostname on every forward-egress path.
 //
-// ruleSource is "" except "site-config:internal-host" when the address was
-// admitted only via the internal-host lift, or "site-config:egress-redirect"
-// when a literal IP was admitted as an operator-authored exact allow entry;
-// only evaluate() consumes it — the other three callers (serveMITMRequest,
-// handleGitBroker, handleGitPATBroker) discard it, unaffected.
+// ruleSource is "" except "site-config:internal-host" or
+// "site-config:egress-redirect"; only evaluate() consumes it.
 func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
-	// The operator's OWN exactly-allowed literal is answered FIRST, before the
-	// upstream branch and before the vet — for the same reason evaluate() step 0
-	// trusts it: an egress-redirect "To" on RFC1918/CGNAT space
-	// (substituteArtifactEgress writes that address, port-qualified, onto
-	// allowed_domains for exactly the runs the redirect covers) has no hostname
-	// behind it to rebind.
-	//
-	// ABOVE the upstream branch, not below it: that branch returns early, so on
-	// a corp-proxy estate with no bypass entry — the normal private-endpoint
-	// shape — placing this check below would let evaluate() ALLOW the
-	// redirect's literal while every re-vet path that reaches here without
-	// going through evaluate (serveMITMRequest, i.e. the token-injecting
-	// redirect lane itself, plus the two brokers) re-derives the same address
-	// and hard-denies it: an `allow` row followed by "vet failed" on the same
-	// tunnel, the operator's own mirror audited as reachable and never reached.
-	//
-	// It only ADDS an admission, on either side of the branch: a literal that is
-	// not an exactly-allowed blockPrivate address falls through unchanged, and
-	// trustsExactLiteralIP gates on blockPrivate AND onOwnSubnetOrControlPlane —
-	// the same pair liftInternalHost gates on — so loopback, link-local, metadata,
-	// NAT64, this proxy's own subnet and its control-plane host are refused
-	// however they are allow-listed. Deny still beats allow (AllowsLiteralIP
-	// checks the deny lists first). Hoisting changes no dialed bytes for a host
-	// the upstream branch would have allowed: a canonical literal is sent as the
-	// same address either way, and the corp proxy was never going to add anything
-	// to a decision evaluate() had already made.
+	// The operator's OWN exactly-allowed literal is answered FIRST, before
+	// the upstream branch and the vet, since it has no hostname behind it to
+	// rebind. ABOVE the upstream branch, not below it, so every re-vet path
+	// that reaches here without going through evaluate (serveMITMRequest,
+	// the two brokers) does not hard-deny the same address evaluate()
+	// already allowed. It only ADDS an admission: trustsExactLiteralIP gates
+	// on blockPrivate AND onOwnSubnetOrControlPlane, so loopback,
+	// link-local, metadata, NAT64 and this proxy's own network are refused
+	// however they are allow-listed, and deny still beats allow.
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.trustsExactLiteralIP(ip, port) {
 		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
 	}
-	// Upstream-first (a stated ceiling, least code): with a corporate upstream
-	// configured, EVERY forward dial is CONNECTed through it by the transport,
-	// not only by this branch (see egressDial/dialThroughUpstream) — UNLESS the
-	// operator declared this destination on the upstream's bypass list, which is
-	// decided HERE, once, for every forward-egress caller.
-	//
-	// A bypassed host deliberately falls THROUGH to p.vetHost below, exactly as
-	// an unproxied dial does. That ordering is the safety property: the bypass
-	// changes which hop dials, never what the SSRF guard permits, so a bypassed
-	// host with no SiteConfig.InternalHosts declaration covering its address is
-	// still denied. The bypass also grants no policy allow — evaluate() already
-	// ran allow/deny/approval/method before reaching here.
+	// Upstream-first: with a corporate upstream configured, EVERY forward
+	// dial is CONNECTed through it UNLESS the operator declared this
+	// destination on the upstream's bypass list, decided HERE once for every
+	// forward-egress caller. A bypassed host falls THROUGH to p.vetHost
+	// below like an unproxied dial: the bypass changes which hop dials,
+	// never what the SSRF guard permits, and grants no policy allow.
 	if p.upstream != nil && !p.bypassUpstream(host) {
 		// The one thing the upstream hop cannot be trusted to re-derive: a
-		// NON-CANONICAL literal — an inet_aton IPv4 spelling (127.1, 0x7f000001,
-		// 2130706433 = 127.0.0.1; 0251.0376.0.1 = 169.254.0.1) or a
-		// zone-suffixed IPv6 literal (fe80::1%eth0, fe80::1%25eth0).
-		// net.ParseIP refuses all of those, so evaluate's step-0 literal-IP
-		// guard never saw them and the string would be forwarded to the corp
-		// proxy verbatim — where inet_aton (or the dialer's own zone-aware
-		// parser) turns it back into loopback/link-local/metadata.
-		// Checked HERE as well as at step 0 because serveMITMRequest and the two
-		// brokers reach this function without going through evaluate.
-		// Canonical literals are deliberately NOT re-vetted here: evaluate has
-		// already decided them, including the operator's egress-redirect trust.
+		// NON-CANONICAL literal (inet_aton spelling, zone-suffixed IPv6) that
+		// net.ParseIP refuses, so evaluate's step-0 guard never saw it, and
+		// the corp proxy's own parser would turn it back into
+		// loopback/link-local/metadata. Canonical literals are NOT re-vetted
+		// here since evaluate has already decided them.
 		if ip := nonCanonicalLiteralIP(host); ip != nil {
 			if kind, why := isBlockedIP(ip); kind != blockNone {
 				return "", "", &hostBlockedError{kind: kind,
 					msg: fmt.Sprintf("host %q denied: non-canonical literal for %s: %s", host, ip, why)}
 			}
 		}
-		// The corp proxy dials, but the SSRF guard still binds the NAME. Without
-		// this the "unconditional" private/loopback/link-local/metadata guard
-		// (policy.go's SECURITY INVARIANTS, THREAT-MODEL.md L2) held only for the
-		// LITERAL spelling under an upstream: evaluate()'s step 0 guards literals,
-		// this branch returned before p.vetHost, and a name the agent controls
-		// that resolves to 169.254.169.254 was handed to the corp proxy to resolve
-		// and dial for it. So resolve HERE for the guard only, and keep sending
-		// the HOSTNAME onward — an upstream that was handed a resolved literal
-		// refuses it, which is what this branch exists for.
-		//
-		// Unresolved is the one denial that does NOT bite: on a private-endpoint
-		// estate the sandbox host frequently cannot resolve external names at all,
-		// and turning that into a deny would break every upstream deployment. That
-		// residual is stated in policy.go's invariants and in THREAT-MODEL.md
-		// rather than papered over: under an upstream the guard binds every name
-		// this proxy CAN resolve, and a name only the corp proxy can resolve is
-		// left to the corp proxy's own egress controls.
-		//
-		// The SECOND residual, for the same reason the pin is gone: the guard
-		// binds the name at CHECK time only — the corp proxy resolves again for
-		// the dial, so a name that answers differently to the two resolvers
-		// (short-TTL rebinding, or a split-horizon zone only the corp proxy can
-		// see) is not bound at dial time. The direct-dial path below closes that
-		// by pinning the vetted address; this branch cannot. THREAT-MODEL.md §4.2
-		// states both.
+		// The corp proxy dials, but the SSRF guard still binds the NAME:
+		// resolve HERE for the guard only, and keep sending the HOSTNAME
+		// onward. Two stated residuals (THREAT-MODEL.md §4.2): a name only
+		// the corp proxy can resolve is left to its own egress controls
+		// (Unresolved does not deny), and the guard binds the name at CHECK
+		// time only — a name that answers differently to the two resolvers
+		// is not bound at dial time, unlike the direct-dial path below.
 		if guard := p.vetHost(host); guard.Denied && !guard.Unresolved {
 			return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason)}
 		} else if guard.Lifted {
@@ -214,11 +137,9 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	}
 	guard := p.vetHost(host)
 	if guard.Denied {
-		// Unresolved is the vet's own "no address was ever learned" — the same
-		// field the upstream branch above reads to excuse the case. Here it
-		// still DENIES (fail closed: a direct dial has no second resolver to
-		// defer to), but as itself, so evaluate can audit it as a resolver
-		// fault instead of as the private-address guard.
+		// Unresolved still DENIES here (fail closed: a direct dial has no
+		// second resolver to defer to), but as itself, so evaluate can audit
+		// it as a resolver fault instead of the private-address guard.
 		if guard.Unresolved {
 			return "", "", fmt.Errorf("host %q: %s: %w", host, guard.Reason, errHostUnresolved)
 		}
@@ -231,24 +152,16 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 }
 
 // trustsExactLiteralIP reports whether ip — a bare literal an agent or a
-// redirect named — may skip the SSRF guard because the operator declared that
-// EXACT address in an AllowedDomains entry. Only blockPrivate (RFC1918/ULA/
-// CGNAT) qualifies, the same ceiling SiteConfig.InternalHosts lifts (see
-// liftInternalHost): loopback, link-local/metadata, NAT64 and the other
-// reserved ranges are NEVER trusted even when explicitly allow-listed, so an
-// operator cannot hand the sandbox 169.254.169.254 by typing it into
-// allowed_domains. Deny still beats allow — AllowsLiteralIP checks the deny
-// lists first.
+// redirect named — may skip the SSRF guard because the operator declared
+// that EXACT address in an AllowedDomains entry. Only blockPrivate
+// (RFC1918/ULA/CGNAT) qualifies, the same ceiling SiteConfig.InternalHosts
+// lifts: loopback, link-local/metadata, NAT64 and other reserved ranges are
+// NEVER trusted even when explicitly allow-listed. Deny still beats allow.
 //
-// onOwnSubnetOrControlPlane is refused HERE for the same reason liftInternalHost
-// refuses it: this is the SECOND admin-authored exception to the IP guard, and
-// an exception that stopped at "is it private?" would hand a run the proxy's own
-// docker-network neighbours (Postgres/Dex/registry) — the exact reach the
-// InternalHosts lift was written to withhold. The two exceptions are authored by
-// the same admin through the same site-config document, so they share the
-// ceiling; without this a literal `to` on the sidecar's own subnet (or an
-// allowed_domains entry naming the control-plane address) was trusted straight
-// through while the hostname spelling of the very same address was denied.
+// onOwnSubnetOrControlPlane is refused HERE too, for the same reason
+// liftInternalHost refuses it: without this a literal on the proxy's own
+// subnet was trusted straight through while the hostname spelling of the
+// same address was denied.
 func (p *Proxy) trustsExactLiteralIP(ip net.IP, port int) bool {
 	kind, _ := isBlockedIP(ip)
 	return kind == blockPrivate && !p.onOwnSubnetOrControlPlane(ip) &&
@@ -551,7 +464,7 @@ func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
 // internal-host declaration must never let a run reach the proxy's own network
 // neighbors.
 //
-// TRUST BOUNDARY (F002): this is the CLAMP on both admin-authored exceptions to
+// TRUST BOUNDARY: this is the CLAMP on both admin-authored exceptions to
 // the private-IP guard — liftInternalHost and trustsExactLiteralIP — and on the
 // gateway's own vet (vetTrustedHost). Its inputs are captured best-effort at
 // startup, and when that capture FAILED an empty clamp silently answered "no"

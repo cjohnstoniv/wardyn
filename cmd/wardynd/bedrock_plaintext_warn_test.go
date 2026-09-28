@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 )
 
-// TestBedrockPlainHTTPIsAudibleAtBoot (W6-S7) pins the runtime signal for the
+// TestBedrockPlainHTTPIsAudibleAtBoot pins the runtime signal for the
 // SECOND relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks.
 //
 // Only the AWS SSO override was audible: it WARNs on every boot that carries it
@@ -44,7 +45,10 @@ func TestBedrockPlainHTTPIsAudibleAtBoot(t *testing.T) {
 			allowTestEndpoints:     &ack,
 			awsSSOEndpointOverride: &override,
 		}
-		_, _, _, _, err := validateModelEndpoints(f)
+		// runnerTarget "none": these fixtures pin the plaintext-hatch WARN, not
+		// the #1198 proxy-subnet check (bedrock_subnet_guard_test.go), and "none"
+		// keeps that check a no-op regardless of the endpoint under test here.
+		_, _, _, _, err := validateModelEndpoints(context.Background(), f, "none")
 		return buf.String(), err
 	}
 

@@ -12,7 +12,7 @@
 //
 // It is the "did the agent really do the work, and were the walls real?" layer
 // that test/e2e/e2e.sh (security invariants only, with a fail-fast print task)
-// never covered. See the plan: buzzing-twirling-stonebraker.md.
+// never covered.
 //
 // Target stack: start it with `scripts/run-host.sh` (host-mode, docker runner,
 // oracle + claude-code images mapped). The orchestrator runs on the HOST, so it
@@ -362,7 +362,7 @@ func (h *harness) buildManualPolicy(task Task, class, wsDir string, wantModel, i
 	// Default unattended posture: an unknown host HARD-denies (always_deny — never
 	// blocks on an approval nobody will answer). The egress-boundary task instead
 	// uses deny_with_review so a denied host is HELD with a clean 403 (the
-	// documented e2e.sh behavior its grader asserts) + an egress.pending audit
+	// documented e2e.sh behavior its grader asserts) + an egress.hold audit
 	// event, without blocking the short probe. (first_use_approval became a
 	// three-mode enum; legacy true→deny_with_review, false→always_deny.)
 	firstUse := types.FirstUseAlwaysDeny
@@ -514,7 +514,7 @@ func (h *harness) auditEgress(id uuid.UUID) (allow, deny, pending int) {
 			allow++
 		case "egress.deny":
 			deny++
-		case "egress.pending":
+		case "egress.hold":
 			pending++
 		}
 	}

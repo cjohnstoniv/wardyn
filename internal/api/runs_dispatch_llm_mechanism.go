@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,7 +45,7 @@ const (
 	//
 	// The third %s is the REMEDY clause (llmMechanismRemedy): the destination is
 	// the one part of this sentence that depends on who is reading it.
-	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — %s " +
+	llmMechanismDeadSentence = "This run's model access is configured as %s, and that credential %s — %s " +
 		"Wardyn does not substitute a different model provider."
 
 	// llmMechanismPinContradictedSentence is the refusal for a stored AWS SSO
@@ -59,7 +60,7 @@ const (
 	// again, and a sign-in is genuinely all it takes — a new login run stamps
 	// the CURRENT pin and its capture replaces the stored blob. %s = the stored
 	// account, role; then the allowed account, role.
-	llmMechanismPinContradictedSentence = "this run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
+	llmMechanismPinContradictedSentence = "This run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
 		"nothing was started. To replace it, %s Wardyn does not rewrite a stored sign-in."
 
 	// llmMechanismStateNotConfigured is the state above when NOTHING credentials
@@ -94,15 +95,12 @@ const (
 	// case, as the nav item and the page title are.
 	llmMechanismRemedyPerUser = "sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page."
 
-	// llmMechanismRemedyShared is the ADMIN's destination, unchanged: under a
-	// shared row the one credential is theirs and Settings → Model provider is
-	// where they replace it.
-	llmMechanismRemedyShared = "sign in again under Settings → Model provider."
-
-	// llmMechanismRemedySharedFirst is the same destination without "again":
-	// "again" is a claim about the reader's past, and the not-configured arm is
-	// the one state that says nothing ever fired here.
-	llmMechanismRemedySharedFirst = "sign in under Settings → Model provider."
+	// llmMechanismRemedySharedFmt is the ADMIN's destination: under a shared row
+	// the one credential is theirs and Settings → Model provider is where they
+	// replace it. The one blank is "again" — a claim about the reader's past
+	// that the not-configured arm must not make, since that is the one state
+	// where nothing ever fired here.
+	llmMechanismRemedySharedFmt = "sign in%s under Settings → Model provider."
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
@@ -227,14 +225,14 @@ const llmRefusalAuditReason = "model_credential"
 // `configured` is whether ANY lane fired — the one state where nothing ever
 // did is also the one where "again" would be false.
 func llmMechanismRemedy(perUser, configured bool) string {
-	switch {
-	case perUser:
+	if perUser {
 		return llmMechanismRemedyPerUser
-	case !configured:
-		return llmMechanismRemedySharedFirst
-	default:
-		return llmMechanismRemedyShared
 	}
+	again := " again"
+	if !configured {
+		again = ""
+	}
+	return fmt.Sprintf(llmMechanismRemedySharedFmt, again)
 }
 
 // llmMechanismRefusal is the sentence for a declared lane that is not carrying
@@ -381,6 +379,9 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 // code's own predicate (bedrockLaneSelectable, runs_bedrock.go): a deployment
 // with no Bedrock region/model, a non-model run, a login box, a subscription
 // run and every non-claude-code agent dispatch exactly as before, blip or no.
+// A model run of an agent Wardyn credentials never gets here on an unreadable
+// roster: providerGovernsDispatch cannot rule out a model-provider block, so
+// the provider arm refuses it first.
 func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run types.AgentRun,
 	p dispatchParams, policy *types.RunPolicySpec, siteCfgOK bool,
 ) bool {
@@ -399,14 +400,32 @@ func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run typ
 	return false
 }
 
+// createDoorIsModelRun answers isModelRun's own question for a create-door
+// REQUEST rather than a resolved run: workspace id AND source id are nil by
+// construction on this door (seedRequestWorkspace, runs_create.go, never sets
+// run.WorkspaceID from req.WorkspaceID — that column is the TRUSTED
+// scan/verify/record linkage a user-facing create must never claim — and a
+// source-bound run, record/verify/build, is launched by newStepRun, never
+// decoded from this door's body), so this door can never produce the
+// (workspace_id/source_id + non-interactive) shape isModelRun reads as a scan.
+// Passing req.WorkspaceID through used to tell a caller of this an ordinary
+// `--workspace` launch (docs/OPERATIONS.md, the console's workspace_id) was a
+// scan, while dispatch — reading the run's own, never-set WorkspaceID —
+// decided the opposite and dispatched it as a model run anyway. A login run
+// is also never a model run here, whatever isModelRun would answer.
+//
+// llmMechanismGateApplies and enforceRunModelProvider (run_model_provider.go)
+// both ask exactly this (#767 step 2): one predicate, so a fix to one can no
+// longer leave the other asking the old, wrong question.
+func createDoorIsModelRun(req createRunRequest) bool {
+	return req.Task != harnessLoginTask && isModelRun(req.TaskMode, nil, nil, req.Interactive)
+}
+
 // llmMechanismGateApplies is enforceConfiguredLLMMechanism's three-term gate
 // asked of a run REQUEST instead of a resolved transport, so create and Review
 // refuse exactly the runs dispatch would. See that function for each term.
 func llmMechanismGateApplies(req createRunRequest) bool {
-	// Source id is nil by construction: a source-bound run (record/verify/build)
-	// is launched by newStepRun, never decoded from this door's body.
-	if req.Task == harnessLoginTask ||
-		!isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive) {
+	if !createDoorIsModelRun(req) {
 		return false
 	}
 	_, needsModel := agentLLMProvider(req.Agent)
@@ -458,15 +477,23 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	//
 	// modelRun is THIS RUN's own answer, hoisted so the Bedrock probe and the
 	// managed lane below cannot disagree. Hard-coding it true here would make a
-	// scan run (workspace_id + non-interactive) or a task_mode=exec
-	// run — the two shapes isModelRun exists to exclude — read as a ready Bedrock
-	// lane at create and at Review, with the 201 saying "Amazon Bedrock … this run
-	// uses it automatically" about a run dispatch hands no model credential at
-	// all. Source id is nil by construction on this door (a source-bound run is
-	// launched by newStepRun, never decoded from a create body) — the same term
-	// llmMechanismGateApplies passes.
-	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
+	// task_mode=exec run — the one shape isModelRun exists to exclude ON THIS
+	// DOOR — read as a ready Bedrock lane at create and at Review, with the 201
+	// saying "Amazon Bedrock … this run uses it automatically" about a run
+	// dispatch hands no model credential at all. Workspace id AND source id are
+	// nil by construction here (seedRequestWorkspace never sets run.WorkspaceID
+	// from req.WorkspaceID, and a source-bound run is launched by newStepRun,
+	// never decoded from a create body) — the same terms llmMechanismGateApplies
+	// passes, and the reason this door has no scan shape of its own to exclude
+	// (#767).
+	modelRun := isModelRun(req.TaskMode, nil, nil, req.Interactive)
+	// refresh may redeem and rotate the captured SSO session, so those reads are
+	// not a mere status check.
+	purpose := secretstore.PurposeStatus
+	if refresh {
+		purpose = secretstore.PurposeSSORefresh
+	}
+	l.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, purpose), req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -500,7 +527,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 // the resident lane. Left untouched (residency stays "") wherever nothing was
 // resolved, so the caller omits the field rather than publishing a guess.
 //
-// Returns ok=false when it has already written the 422.
+// Returns ok=false when it has already written the 422, or the 500 below.
 func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseWriter, req createRunRequest,
 	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts, refresh bool,
 ) bool {
@@ -509,9 +536,18 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		// Admitting on a read failure is the same call dispatch's own
-		// site-config consumers make: refusing would blame the caller for an
-		// outage, and dispatch reads the roster again on the way to the sandbox.
+		// Fail CLOSED, as the SCM lane's own site-config read does
+		// (scmLaneSiteConfig) — admitting here graded this run ungraded, and it
+		// then only fails at DISPATCH, with bedrockCredGradeHolds' detail
+		// ("the configuration changed between then and now"), which is untrue
+		// for a store blip: nothing changed, the roster just could not be read
+		// (#518). A 500 here blames the actual cause instead.
+		writeError(w, http.StatusInternalServerError, loggedMsg(ctx, "get site config", err))
+		return false
+	}
+	// Under a model-provider block the run's provider decides its lane, and
+	// enforceRunModelProvider already judged it (and its credential).
+	if sc.ModelProviders != nil {
 		return true
 	}
 	row, declared := agentProviderFor(sc, req.Agent)
@@ -527,6 +563,9 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if out != nil {
 		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
+		if ok && selected.ProviderType() == types.AgentProviderTypeBedrock {
+			out.bedrockHost = lanes.bedrock.runtimeHost
+		}
 	}
 	if !declared {
 		return true
@@ -563,7 +602,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 // second vocabulary; it never names WHICH lane — the console reads the current
 // roster row for that, exactly as the failure block does.
 func writeLLMRefusal(w http.ResponseWriter, msg string) {
-	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Reason: llmRefusalAuditReason})
+	writeErrorReason(w, http.StatusUnprocessableEntity, llmRefusalAuditReason, msg)
 }
 
 // llmUnavailableDetail is what the proxy's brokered-LLM 404 says when this run
@@ -597,7 +636,7 @@ func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, l
 	// The run's OWN scope: under per_user the expiry worth naming is this
 	// principal's, and the operator's says nothing about why their run has no
 	// credential.
-	blob, found, err := s.readAWSSSOBlob(ctx, sso)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sso)
 	if err != nil || !found || blob.ExpiresAt.IsZero() {
 		return ""
 	}

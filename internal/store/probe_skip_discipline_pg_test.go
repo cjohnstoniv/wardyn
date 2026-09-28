@@ -3,17 +3,17 @@
 
 package store_test
 
-// THE SKIP DISCIPLINE FOR THIS PACKAGE'S PROBES, derived rather than declared.
+// The skip discipline for this package's probes, derived rather than declared.
 //
 // A test that skips produces `--- SKIP` -> `ok` -> exit 0, scripts/test-report.sh
 // graded on the exit code alone, and nothing inspected the JSON stream for
 // skips — so a probe that quietly stopped running looked exactly like a probe
 // that passed, and the invariant it proves (audit_events is append-only) was
-// unfalsifiable from CI's own output. internal/db's F11 probes were given this
+// unfalsifiable from CI's own output. internal/db's probes were given this
 // treatment; this package's were not, and its tamper probes skip on precisely
 // the precondition CI's lane always satisfies.
 //
-// DERIVED FROM THE CONNECTION, not only from a marker: a role that can bypass
+// Derived from the connection, not only from a marker: a role that can bypass
 // the append-only triggers, over a URL-form DSN, can satisfy every precondition
 // these probes guard on, and any failure after that is a real one. Requiring an
 // env marker alone would leave the hole open on every lane nobody remembered to
@@ -32,10 +32,12 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 // storeProbeSkipMarker lets an operator ASSERT that this lane is fully
-// provisioned, turning every precondition guard in the F11 probes into a failure
+// provisioned, turning every precondition guard in these probes into a failure
 // instead of a skip.
 const storeProbeSkipMarker = "WARDYN_TEST_PG_SUPERUSER"
 
@@ -70,15 +72,18 @@ func storeSkipOrFatal(t *testing.T, pool *pgxpool.Pool, format string, args ...a
 	t.Skipf(format, args...)
 }
 
-// TestPG_ProbeF11_StoreLaneCannotSilentlySelfSkip pins the derivation itself, the
+// TestPG_StoreLaneCannotSilentlySelfSkip pins the derivation itself, the
 // way internal/db's sibling does. On the lane CI actually runs — superuser, URL-
-// form DSN — every F11 probe in this package MUST be in fail-not-skip mode; if
+// form DSN — every audit-chain probe in this package MUST be in fail-not-skip mode; if
 // that stops being true, the tamper and splice probes can go back to reporting
 // `ok` while proving nothing.
 //
-// Its own name matches the skip floor scripts/test-report.sh applies to the pg
-// suite, so a lane that cannot even run THIS is caught by the tooling.
-func TestPG_ProbeF11_StoreLaneCannotSilentlySelfSkip(t *testing.T) {
+// It calls testfloor.Mark(t, "pg"), the skip floor scripts/test-report.sh
+// applies to the pg suite, so a lane that cannot even run THIS is caught by
+// the tooling.
+func TestPG_StoreLaneCannotSilentlySelfSkip(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	if !storeProbeMustNotSkip(t, pool) {
 		u, _ := url.Parse(os.Getenv("WARDYN_TEST_PG"))

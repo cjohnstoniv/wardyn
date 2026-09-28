@@ -39,10 +39,10 @@ import (
 //
 // It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
 // severity ranking. Two families must never carry it. Rows graded through the
-// CALLER's own credential rather than the install: llmProviderCheck's and
-// bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
-// the caller's own AWS SSO session. Confiscating the console over a fact about
-// one person is exactly what this flag exists to prevent. And advisory
+// CALLER's own credential rather than the install: llmProviderCheck's per_user
+// and provider arms, bedrockProviderCheck's per_user arm, providerAccessCheck and
+// awsSSOCredentialRow (the caller's own AWS SSO session). Confiscating the console
+// over a fact about one person is exactly what this flag exists to prevent. And advisory
 // install rows, whose grade belongs on every surface that renders them but
 // whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
 // key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
@@ -56,6 +56,12 @@ type SetupCheck struct {
 	Detail   string `json:"detail,omitempty"`
 	Fix      string `json:"fix,omitempty"`
 	Blocking bool   `json:"blocking,omitempty"`
+	// Cause narrows a row that can warn for more than one reason, the same
+	// shape as SCMAccess.cause on the wire (ui/src/app/lib/types/setup.ts) — a
+	// machine key, never prose, so a console reader can pick per-cause copy
+	// without string-matching Detail. Only sso_rbac sets it today ("default_role",
+	// #491): #484's original no-role-map-and-no-admin-list warn leaves it empty.
+	Cause string `json:"cause,omitempty"`
 }
 
 // runnerCheck grades the sandbox runner: no runner (or no live class) is the one
@@ -242,10 +248,24 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 // from the plan, byte-checked by TestBedrockProviderCheck_* /
 // TestLLMProviderCheck_*.
 const (
-	// DRAFT (M2 canon pending)
+	// DRAFT (M2 canon pending) — the SSO row's wording; unchanged (#320).
 	bedrockPerUserDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you sign in to AWS yourself — this agent's roster row gives each person their own session."
-	// DRAFT (M2 canon pending)
+	// DRAFT (M2 canon pending) — the bearer twin of bedrockPerUserDetail (#153,
+	// #320): under a per_user row whose roster mechanism is bedrock_bearer,
+	// signing in to AWS is not the remedy — storing a bedrock-api-key of their
+	// own is, so this says that instead.
+	bedrockPerUserBearerDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you store your own Bedrock API key — this agent's roster row gives each person their own credential."
+	// DRAFT (M2 canon pending) — the SSO row's wording; unchanged (#320).
 	bedrockPerUserMissingCredential = "a credential — your own AWS sign-in (Settings → Model provider → \"Sign in to AWS\"); this deployment gives each person their own, so a read-only ~/.aws mount, a bedrock-api-key bearer secret and aws-access-key-id + aws-secret-access-key cannot carry your runs"
+	// DRAFT (M2 canon pending) — the bearer twin of bedrockPerUserMissingCredential
+	// (#153, #320). Under a per_user row whose roster mechanism is
+	// bedrock_bearer the bearer is exactly what carries a member's runs, so this
+	// says storing one is the remedy instead of naming it among the things that
+	// cannot — the sentence bedrockPerUserMissingCredential told a bearer caller,
+	// which was backwards.
+	bedrockPerUserMissingCredentialBearer = "a credential — your own Bedrock API key bearer (set it with `wardyn secret set bedrock-api-key`); " +
+		"this deployment gives each person their own, so storing one is what carries your runs — an AWS sign-in, a read-only ~/.aws mount " +
+		"and aws-access-key-id + aws-secret-access-key cannot"
 	// DRAFT (M2 canon pending)
 	bedrockMechanismDetail = "Bedrock is configured for this deployment and model access here is per person. This request arrived on the shared admin token, which is not a person, so this row cannot say whose sign-in is missing."
 	// DRAFT (M2 canon pending)
@@ -254,6 +274,15 @@ const (
 	llmProviderPerUserDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person, and yours is not connected yet — agent-harness runs will be refused until you sign in to AWS."
 	// DRAFT (M2 canon pending)
 	llmProviderPerUserFix = "Sign in to AWS on the provider step (Settings → Model provider)."
+	// DRAFT (M2 canon pending) — the bearer twin of llmProviderPerUserDetail
+	// (#153, #320): under a per_user row whose roster mechanism is
+	// bedrock_bearer, signing in to AWS is not the remedy — storing a
+	// bedrock-api-key of their own is, so this says that instead. Same defect
+	// as bedrockPerUserDetail/bedrockPerUserMissingCredential, on the sibling
+	// llm_provider row.
+	llmProviderPerUserBearerDetail = "This deployment reaches models through AWS Bedrock with a bearer credential per person, and yours is not stored yet — agent-harness runs will be refused until you store your own Bedrock API key."
+	// DRAFT (M2 canon pending) — the bearer twin of llmProviderPerUserFix (#153, #320).
+	llmProviderPerUserBearerFix = "Store your own Bedrock API key (set it with `wardyn secret set bedrock-api-key`)."
 	// DRAFT (M2 canon pending)
 	llmProviderMechanismDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person. This request arrived on the shared admin token, which owns no sign-in — a person's own console session answers this row."
 	// bedrockUnenforcedPinDetail/Fix: the residual of the roster pin gap made audible
@@ -314,8 +343,8 @@ const (
 // detail, "" when there is none). INFO when there is NO model provider at
 // all — it is OPTIONAL, needed only for agent-harness runs, so "no model" is
 // a deliberate non-blocking state, never a gap the operator must clear. WARN
-// is reserved for the per_user arm below: there a provider IS declared and
-// THIS person's half of it is missing, which is a real, actionable gap.
+// is reserved for the per_user and provider arms below: there a provider IS
+// declared and THIS person's half of it is missing, a real, actionable gap.
 //
 // bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
 // signal always outranks it (unchanged), and the "no provider configured"
@@ -324,7 +353,8 @@ const (
 // fact than "nothing is configured" (a cross-row contradiction:
 // bedrock_provider says Bedrock IS configured two rows down), so it gets its
 // own per-principal sentence instead of the generic optional-provider one.
-func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
+// access (provider_access) is read last: granted providers aren't "nothing configured".
+func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProviderAccess) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
 	}
@@ -332,10 +362,21 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "info", Detail: llmProviderMechanismDetail}
 	}
 	if bedrock.configured() && bedrock.PerUser {
+		// PerUserBearer branches this the same way bedrockProviderRow does
+		// (#320): the roster row's own mechanism decides whether the remedy is
+		// signing in to AWS or storing a bearer, and naming the wrong one here
+		// is the same defect that row had.
+		detail, fix := llmProviderPerUserDetail, llmProviderPerUserFix
+		if bedrock.PerUserBearer {
+			detail, fix = llmProviderPerUserBearerDetail, llmProviderPerUserBearerFix
+		}
 		return SetupCheck{
 			ID: "llm_provider", Label: "LLM access", Status: "warn",
-			Detail: llmProviderPerUserDetail, Fix: llmProviderPerUserFix,
+			Detail: detail, Fix: fix,
 		}
+	}
+	if chk, ok := providerAccessLLMCheck(access); ok {
+		return chk
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
@@ -432,12 +473,22 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	}
 	credentialMissing := !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent && !bedrock.SSOPresent
 	if bedrock.PerUser {
+		// PerUserBearer branches BOTH the Detail and the missing-credential
+		// clause: the roster row's own mechanism decides what a member's real
+		// remedy is (sign in to AWS vs store a bearer), and naming the wrong one
+		// is exactly the bug #320 fixes.
+		detail := bedrockPerUserDetail
+		missingCredential := bedrockPerUserMissingCredential
+		if bedrock.PerUserBearer {
+			detail = bedrockPerUserBearerDetail
+			missingCredential = bedrockPerUserMissingCredentialBearer
+		}
 		if credentialMissing {
-			missing = append(missing, bedrockPerUserMissingCredential)
+			missing = append(missing, missingCredential)
 		}
 		return SetupCheck{
 			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-			Detail: bedrockPerUserDetail,
+			Detail: detail,
 			Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
 		}, true
 	}
@@ -451,8 +502,12 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	}, true
 }
 
-// ageKeyCheck warns when the secret store's age key is EPHEMERAL: stored secrets
-// become unreadable after a restart.
+// ageKeyCheck warns when the secret store's age key is EPHEMERAL: a fresh
+// identity is minted at every boot with none configured, so what is stored now
+// is lost at the next restart, and that boot refuses to start over the rows it
+// cannot decrypt (convertSecretStore). No earlier ephemeral key's rows can be
+// present while this row shows, since that same refusal kept them from booting;
+// the refusal is where the operator learns those are unrecoverable (#755).
 //
 // The Fix must never offer `helm: env.WARDYN_AGE_KEY` as the cluster
 // answer: it renders the secret store's MASTER key as a plaintext literal in
@@ -473,11 +528,65 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
-		Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
+		Detail: "The secret store uses an EPHEMERAL age key generated at boot: everything stored under it (API keys, GitHub App credentials) is lost at the next restart — no key set afterward can decrypt it — and the next boot refuses to start until those rows are deleted.",
 		Fix: "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: " +
 			"on a host, -age-key or the env var; " +
 			"on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. " +
 			"Not env.WARDYN_AGE_KEY — that renders the master key as a plaintext literal in the Deployment.",
+	}
+}
+
+// secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}") when a key service wraps every data
+// key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
+// reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
+// the age key then also forges run identities and sessions).
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
+	if external != "" {
+		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
+	}
+	if keyService != "" {
+		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
+				" and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log."}}
+	}
+	checks := []SetupCheck{ageKeyCheck(durable)}
+	if durable && multiUser {
+		checks = append(checks, SetupCheck{
+			ID: "kek_local", Label: "Credential key", Status: "warn",
+			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
+			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+		})
+	}
+	if !platformSeparate {
+		checks = append(checks, SetupCheck{
+			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
+			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
+			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
+		})
+	}
+	return checks
+}
+
+// credentialStorageMode names the kind of store this deployment keeps
+// people's credentials in, for /setup/status's credential_storage field
+// (design F-3, packet F): "local" | "key_service" | "vault" | "key_vault" —
+// never a host, path or vault name. external and keyService are the same two
+// Server-config strings secretStoreChecks (above) grades; the store kind rides
+// on which of the store's two Describe() spellings external carries ("Vault
+// at …" for vaultkv, "Key Vault …" for azurekv, secretstore/vaultkv and
+// /azurekv), so telling them apart needs no third Server field.
+func credentialStorageMode(external, keyService string) string {
+	switch {
+	case strings.HasPrefix(external, "Key Vault"):
+		return "key_vault"
+	case external != "":
+		return "vault"
+	case keyService != "":
+		return "key_service"
+	default:
+		return "local"
 	}
 }
 
@@ -558,19 +667,6 @@ func internalHostsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		ID: "internal_hosts", Label: internalHostsCheckLabel, Status: "info",
 		Detail: internalHostsDeclaredSentence(sc.InternalHosts),
 	}, true
-}
-
-// siteConfigStatusChecks bundles the /setup/status rows derived from one
-// site-config read — siteConfigCheck, artifactRepoCheck, the conditional
-// internalHostsCheck — into a single call. Factored out of handleSetupStatus
-// (setup.go) to keep that function under the funlen gate as this list grows;
-// purely mechanical, no behavior beyond what three separate append calls had.
-func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
-	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-	if chk, ok := internalHostsCheck(sc); ok {
-		checks = append(checks, chk)
-	}
-	return checks
 }
 
 // platformChecks are the platform rows — permanent and non-fixable, so always
@@ -689,64 +785,6 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 		}
 	}
 	return ""
-}
-
-// ssoRBACCheck warns when OIDC is configured but no role mapping resolves
-// role from claims — neither the chart's WARDYN_OIDC_ROLE_MAP nor a
-// console-managed row (migration 0051, the People step): every signed-in
-// human then derives role "admin" (internal/auth/oidc's deriveRole,
-// upgrade-safe default) — fine for a single-operator deployment, but
-// silently grants admin to everyone the moment a second human signs in.
-// consoleRows is whether the store currently holds at least one People-step
-// row (the same nil-Store guard setup.go's own read of it applies —
-// unreadable/absent reads as false, the conservative direction: it surfaces
-// the warning rather than hiding it). Only surfaced when OIDC is configured
-// (mirrors bedrockProviderCheck's own "worth showing at all" gate).
-//
-// Wording per docs/design/people-access-prompt.md §7.8 (transcribed
-// verbatim, not re-derived — that doc's reworded strings are the frozen
-// copy this check must carry).
-func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows bool) (SetupCheck, bool) {
-	if !oidcConfigured {
-		return SetupCheck{}, false
-	}
-	if roleMapConfigured || consoleRows {
-		return SetupCheck{
-			ID: "sso_rbac", Label: "SSO role mapping", Status: "ok",
-			Detail: "Role mapping is configured — from WARDYN_OIDC_ROLE_MAP, the People step, or both — so signed-in humans are assigned admin/member from their IdP roles/groups/email.",
-		}, true
-	}
-	return SetupCheck{
-		ID: "sso_rbac", Label: "SSO role mapping", Status: "warn",
-		Detail:   "No role mapping is configured — neither WARDYN_OIDC_ROLE_MAP in your chart nor a mapping added on the People step — so every SSO user is an admin, unless your operator allowlist already splits admins from members.",
-		Fix:      "Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP), or add a mapping on the People step (Setup → People → Role mappings), to map IdP roles/groups/emails to \"admin\" or \"member\".",
-		Blocking: true,
-	}, true
-}
-
-// tlsCookiePostureCheck warns when the OIDC redirect URL is https — evidence
-// that TLS terminates somewhere in front of this deployment — but wardynd
-// still computed secureCookies=false (validateConfig, cmd/wardynd/main.go: the
-// exact condition this inverts is tlsEnabled||WARDYN_TLS_TERMINATED), so the
-// session cookie is issued without the Secure attribute: the classic
-// behind-an-ingress misconfiguration where WARDYN_TLS_TERMINATED was never
-// set. Only surfaced when OIDC is configured AND the redirect URL is https —
-// there is nothing to warn about otherwise.
-func tlsCookiePostureCheck(oidcConfigured bool, redirectURL string, secureCookies bool) (SetupCheck, bool) {
-	if !oidcConfigured || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(redirectURL)), "https://") {
-		return SetupCheck{}, false
-	}
-	if secureCookies {
-		return SetupCheck{
-			ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "ok",
-			Detail: "The OIDC redirect URL is https and wardynd knows the connection is TLS-protected; session cookies are marked Secure.",
-		}, true
-	}
-	return SetupCheck{
-		ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "warn",
-		Detail: "The OIDC redirect URL is https but WARDYN_TLS_TERMINATED is not set, so wardynd still thinks it is serving plain HTTP: the session cookie is issued WITHOUT the Secure attribute.",
-		Fix:    "Set WARDYN_TLS_TERMINATED=true (helm: env.WARDYN_TLS_TERMINATED) when TLS terminates at an upstream reverse proxy/ingress.",
-	}, true
 }
 
 // scmProviderCheck grades the SCM credential posture against the safest-path
@@ -929,7 +967,7 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 // permissionsPostureCheck grades the four capability-enforcement
 // switches (capabilityKinds — egress_host, secret, workspace, image;
 // capabilities.go) that gate member-narrowing/widening grants. An absent
-// switch is capEnforced's own documented default: FAIL-OPEN, i.e. that kind
+// switch is capBatch.enforced's own documented default: FAIL-OPEN, i.e. that kind
 // behaves exactly as an un-gated pre-0.6 deployment (capAllowed's doc
 // comment). That is a deliberate, upgrade-safe DEFAULT, not a
 // misconfiguration — a single-operator deployment may legitimately never

@@ -10,19 +10,19 @@ import (
 	"testing"
 )
 
-// TestLLMUpstreamPathIsTheClassifiedPath pins F035: the path content inspection
-// JUDGED and the path the upstream RECEIVES must be the same bytes.
+// TestLLMUpstreamPathIsTheClassifiedPath: the path content inspection judged
+// and the path the upstream receives must be the same bytes.
 //
 // classifyLLM keys on `rest`, which is derived from r.URL.Path — the
-// PERCENT-DECODED path. forwardInspectedLLM used to rebuild the upstream URL by
-// string-concatenating that decoded value and handing it to
-// http.NewRequestWithContext, which re-PARSES it: a decoded "#" became a
-// FRAGMENT and a decoded "?" a QUERY. So a sandbox POST to
-// /wardyn/llm/anthropic/v1/messages%23z classified as "v1/messages#z"
-// (scanNone — streamed through unscanned, no scan summary) while the wire
-// carried POST /v1/messages, the exact endpoint the operator asked to have
-// scanned. That is a bypass of block mode from inside the sandbox, on both the
-// brokered route and — through this same shared tail — the TLS-MITM lane.
+// percent-decoded path. Rebuilding the upstream URL by string-concatenating
+// that decoded value and handing it to http.NewRequestWithContext would
+// re-parse it: a decoded "#" becomes a fragment and a decoded "?" a query. So
+// a sandbox POST to /wardyn/llm/anthropic/v1/messages%23z would classify as
+// "v1/messages#z" (scanNone — streamed through unscanned, no scan summary)
+// while the wire carried POST /v1/messages, the exact endpoint the operator
+// asked to have scanned: a bypass of block mode from inside the sandbox, on
+// both the brokered route and — through this same shared tail — the TLS-MITM
+// lane.
 func TestLLMUpstreamPathIsTheClassifiedPath(t *testing.T) {
 	for _, tc := range []struct {
 		name string

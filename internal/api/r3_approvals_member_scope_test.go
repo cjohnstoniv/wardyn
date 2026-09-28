@@ -68,8 +68,6 @@ func (s *scopedApprovals) ListApprovalsPage(_ context.Context, state types.Appro
 	return out, nil
 }
 
-// TestMemberApprovalListIsOwnershipScoped is F125's missing counterfactual.
-//
 // handleListApprovals narrows a member's UNSCOPED GET /approvals to approvals on
 // runs they created, and fails CLOSED with 500 when the backend cannot do it.
 // Neither arm was exercised anywhere in internal/api, internal/store or
@@ -105,7 +103,7 @@ func TestMemberApprovalListIsOwnershipScoped(t *testing.T) {
 		srv := New(cfg)
 
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals",
-			ssoSession(t, mine, "owner@corp.example", oidc.RoleMember), "")
+			ssoSession(t, mine, "owner@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("member GET /approvals = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -131,7 +129,7 @@ func TestMemberApprovalListIsOwnershipScoped(t *testing.T) {
 		srv := New(cfg)
 
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals",
-			ssoSession(t, mine, "owner@corp.example", oidc.RoleMember), "")
+			ssoSession(t, mine, "owner@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("member GET /approvals on an unscopable backend = %d, want 500; body=%s", w.Code, w.Body.String())
 		}

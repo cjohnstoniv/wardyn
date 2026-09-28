@@ -11,36 +11,24 @@ import (
 )
 
 // privateIPMemoMax bounds the per-run memo. Its keys are host:port strings the
-// SANDBOX chooses, so an agent looping over generated names is the same memory
-// argument internal/api's authFailedLimiter makes about attacker-influenced
-// keys: a map fed from the untrusted side needs a ceiling it cannot be pushed
-// past. Small on purpose — a run's set of refused private endpoints is a handful
-// — and evicting the wrong entry costs nothing but correctness-neutral work: its
-// next attempt re-resolves and emits a fresh row, which is exactly the
-// behaviour before this memo existed.
+// SANDBOX chooses, so — like internal/api's authFailedLimiter — a map fed from
+// the untrusted side needs a ceiling it cannot be pushed past. Small on
+// purpose; evicting the wrong entry costs nothing but a re-resolve and a fresh
+// row, the pre-memo behaviour.
 const privateIPMemoMax = 64
 
 // privateIPMemo remembers, for the life of ONE run, that (host, port) was
-// refused builtin:private-ip after resolution — and how many identical attempts
-// have since been refused straight out of the memo.
+// refused builtin:private-ip after resolution — and how many identical
+// attempts have since been refused straight out of the memo. Without it, the
+// agent CLI's ten retries of a denial would each re-resolve and re-emit an
+// egress.deny, filling the run's evidence rail with duplicates. Only this
+// verdict is memoed: it is the one refusal that cannot change its mind
+// mid-run (the internal_hosts lift is compiled into the sidecar at dispatch),
+// while a resolve failure or an approval-pending hold must keep asking.
 //
-// Why this verdict and no other (B6): the agent CLI retries a denial ten times
-// (that loop is the CLI's — the proxy has none), and without this memo each
-// retry would re-resolve the name, re-vet it and emit another egress.deny, so
-// a single misconfigured private endpoint would fill the run's evidence rail
-// with ten identical denials. The private-address guard is the one refusal that cannot
-// change its mind mid-run: the internal_hosts lift that would lift it is
-// compiled into this sidecar's config at dispatch and read once at startup, so
-// no site-config change reaches the run being refused (the 403 body says so, in
-// egressDenialSuffix). A builtin:resolve-failed is a DNS fault that may clear on
-// the next attempt and an approval-pending hold is waiting for a human — both
-// MUST keep asking, and neither is memoed. Step 0's literal-IP guard is not
-// memoed either: it resolves nothing, so there is nothing to save.
-//
-// Stated ceiling (docs/OPERATIONS.md's Network section says this to operators):
-// the memo is per run, so a name that flips from a private to a public address
-// mid-run stays refused until the run ends. The remedy is the one the 403
-// already gives — declare it under internal_hosts — and a new run re-resolves.
+// Stated ceiling (docs/OPERATIONS.md): the memo is per run, so a name that
+// flips from private to public mid-run stays refused until the run ends;
+// declare it under internal_hosts, and a new run re-resolves.
 //
 // ponytail: eviction linear-scans at most privateIPMemoMax entries for the
 // oldest hit instead of maintaining an intrusive LRU list. At 64 entries the
@@ -51,24 +39,19 @@ type privateIPMemo struct {
 	m  map[string]*privateIPStreak
 }
 
-// privateIPStreak is one memoed refusal: the request that earned it (so the
-// summary row describes a real attempt rather than a synthesised one), how many
+// privateIPStreak is one memoed refusal: the request that earned it, how many
 // identical attempts have been answered from the memo since, and when the last
-// one arrived — which is both the summary row's timestamp and the eviction pick.
-//
-// The count is per (host, port), the granularity the guard's own verdict has, so
-// a streak mixing CONNECT and GET against the same host:port reports the first
-// attempt's method. Deliberate: the count answers "how many times did this
-// refusal repeat", not "which verbs asked".
+// one arrived (both the summary row's timestamp and the eviction pick). The
+// count is per (host, port): a streak mixing CONNECT and GET against the same
+// host:port reports the first attempt's method, since the count answers "how
+// many times did this repeat", not "which verbs asked".
 type privateIPStreak struct {
 	req     egress.Request
 	repeats int
 	last    time.Time
-	// kind is the guard class that refused this host:port — carried so
-	// writeEgressDeny can tell a LIFTABLE refusal (RFC1918, one internal_hosts
-	// line away) from one no site-config entry can lift, without resolving the
-	// name a second time. The memo is already the "we refused this before" record
-	// for exactly the verdict whose detail sentence needs it.
+	// kind is the guard class that refused this host:port, carried so
+	// writeEgressDeny can tell a LIFTABLE refusal from one nothing can lift
+	// without resolving the name a second time.
 	kind blockKind
 }
 
@@ -76,14 +59,11 @@ type privateIPStreak struct {
 // returns the summary row of an entry it had to EVICT to make room, if any, so
 // a repeat count is never dropped on the floor — the caller emits it.
 //
-// RACE, documented because it is harmless and not worth a lock across the whole
-// decision: two requests for the same (host, port) that BOTH miss the memo
-// before either records will each resolve, each be refused, and each emit an
-// opening row — two rows for one verdict instead of one. Every attempt after
-// them is memoed. The lock here makes the MAP safe, not the check-then-act
-// across evaluate(); widening it would serialise every denied request behind
-// one mutex to save, at most, one duplicate row at the start of a streak. Over-
-// reporting a denial is the safe direction for an audit trail.
+// Harmless documented RACE: two requests for the same (host, port) that BOTH
+// miss the memo before either records will each emit an opening row instead of
+// one; every attempt after them is memoed. The lock here only makes the MAP
+// safe, not the check-then-act across evaluate() — over-reporting a denial is
+// the safe direction for an audit trail.
 func (mo *privateIPMemo) record(req egress.Request, kind blockKind) *egress.DecisionLog {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
@@ -160,10 +140,9 @@ func (mo *privateIPMemo) drain() []egress.DecisionLog {
 }
 
 // closeStreak turns a closing streak into the ONE extra decision row it
-// produces: a NEW egress.deny carrying the repeat count. Never an update of the
-// row that opened the streak — the audit chain is append-only, and a decision
-// already recorded is not rewritten because it happened again. A streak with no
-// repeats produced no suppressed attempts and so produces no row.
+// produces: a NEW egress.deny carrying the repeat count, never an update of the
+// row that opened the streak (the audit chain is append-only). A streak with
+// no repeats produces no row.
 func closeStreak(s *privateIPStreak) *egress.DecisionLog {
 	if s == nil || s.repeats == 0 {
 		return nil
@@ -183,22 +162,11 @@ func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind) {
 }
 
 // privateIPMemoHit answers an identical repeat from the memo, counting it.
-//
-// Called before the first-use approval flow, not after it: calling it after
-// would let a memoed host carrying an `unknown` policy verdict re-enter
-// Resolve/ResolveWait on every one of the CLI's ten retries — spending a
-// scope=once grant, POSTing a fresh egress_domain question to a human, or
-// PARKING the connection in ResolveWait until the hold deadline — for a
-// request the memo then refuses straight out with a NIL decision log, so a
-// human decision would be spent on a request denied with no decision row at
-// all. A private-IP target can never be approved into reachability: the
-// address guard is unconditional and the internal_hosts lift that would
-// change it is compiled into this sidecar at dispatch, so the question can
-// only ever be answered "yes" and then overruled. F032 moved the method check
-// above the raise to stop exactly this wasted question.
-//
-// It stays BELOW policy:denied and policy:method: both name a more specific rule
-// for this request, and neither costs a human anything.
+// Called before the first-use approval flow, not after: a private-IP target
+// can never be approved into reachability, so calling it after would spend a
+// human decision (or a scope=once grant) on a request the memo then refuses
+// anyway with a nil decision log. It stays BELOW policy:denied and
+// policy:method, which both name a more specific rule and cost a human nothing.
 func (p *Proxy) privateIPMemoHit(host string, port int) bool {
 	return p.privIP.hit(host, port, p.now())
 }
@@ -209,25 +177,21 @@ func (p *Proxy) privateIPMemoed(host string, port int) bool {
 }
 
 // privateIPBlockKind is writeEgressDeny's read of the guard class behind a
-// builtin:private-ip refusal of host:port. See privateIPMemo.kindOf for why
-// blockNone (never refused here — e.g. step 0's literal guard, which resolves
-// nothing and is not memoed) is the safe answer: the literal arm re-derives the
-// class from the address itself, and a hostname falls back to today's wording.
+// builtin:private-ip refusal of host:port. blockNone is the safe fallback for
+// an unmemoed refusal (e.g. step 0's literal guard, which resolves nothing).
 func (p *Proxy) privateIPBlockKind(host string, port int) blockKind {
 	return p.privIP.kindOf(host, port)
 }
 
-// flushPrivateIPMemo emits every open streak's summary row and empties the memo.
-// Called at run end (Server.Shutdown, before the decision sink drains) so a
-// repeat count is not lost to the sandbox simply stopping.
+// flushPrivateIPMemo emits every open streak's summary row and empties the
+// memo. Called at run end (Server.Shutdown, before the decision sink drains) so
+// a repeat count is not lost to the sandbox simply stopping.
 //
-// Ceiling, stated rather than implied: this runs on the ORDERLY stop —
-// cmd/wardyn-proxy's signal handler calls Shutdown with a 15 s budget, so a
-// SIGTERM flushes. A SIGKILL at grace expiry, an OOM kill, or a pod deleted out
-// from under the sidecar drops whatever streaks were still open. What is lost is
-// only the repeat COUNT: the row that OPENED each streak was emitted when the
-// refusal was first decided and is already in the trail, so a hard kill
-// under-reports how many times a denial repeated and never loses the denial.
+// Ceiling: this only runs on the ORDERLY stop (SIGTERM, 15s budget); a SIGKILL,
+// OOM kill or deleted pod drops whatever streaks were still open. Only the
+// repeat COUNT is lost then — the opening row was already emitted when the
+// refusal was first decided, so a hard kill under-reports repeats and never
+// loses the denial itself.
 func (p *Proxy) flushPrivateIPMemo() {
 	if p.sink == nil {
 		return

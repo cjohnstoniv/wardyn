@@ -7,11 +7,12 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-// TestRegistryAddDeduplicates pins F076's growth half. Registry.Add appended
+// TestRegistryAddDeduplicates pins the growth half. Registry.Add appended
 // unconditionally while its sibling AddGlobal de-duplicated, and AddGlobal's own
 // doc comment names exactly the hazard the per-run lane still had: "duplicates
 // would grow globals without bound — Snapshot clones and NewMasker sorts the
@@ -44,7 +45,7 @@ func TestRegistryAddDeduplicates(t *testing.T) {
 
 	// A value already registered process-globally is not re-added per-run.
 	glob := []byte("a-process-global-subscription-blob")
-	r.AddGlobal(glob)
+	r.AddGlobal("", "test-credential", time.Now(), glob)
 	r.Add(runID, glob)
 	if n := len(r.Snapshot(runID)); n != 7 {
 		t.Errorf("Snapshot after re-adding a global per-run = %d entries, want 7", n)

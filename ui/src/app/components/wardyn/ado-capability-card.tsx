@@ -39,7 +39,7 @@
 //
 // WHO MAY DECIDE (round-2 fix): canDecideAdoCapability(securityOperator,
 // isRunOwner) — the run's OWNER or a security operator, mirroring
-// authorizeMemberDecision/ownsRunOrAdmin exactly. securityOperator already
+// authorizeUserDecision/ownsRunOrAdmin exactly. securityOperator already
 // INCLUDES a plain admin: isSecurityOperator (internal/api/http.go) is true
 // for oidc.RoleAdmin as well as oidc.RoleSecurityAdmin ("a super admin is a
 // security admin too — the tiers overlap on this surface"). There is no
@@ -50,7 +50,12 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
-import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, type AdoConsentScope } from "../../lib/types/approvals";
+import {
+  canDecideAdoCapability,
+  isAdoConsentRequest,
+  type AdoCapabilityScope,
+  type AdoConsentScope,
+} from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
 import { Button } from "../ui/button";
@@ -117,18 +122,6 @@ function adoDecisionArgs(scope: "once" | "run"): [DecisionOptions] {
 }
 
 const SCOPE_LABEL: Record<"once" | "run", string> = { once: "Once", run: "This run" };
-
-// A request is still HELD (the proxy is parked on it) for up to four
-// minutes from when it was raised — the same ceiling REQ_HELD's own text
-// names. No expiry timestamp reaches the client (unlike egress's
-// HOLD_TIMEOUT_MS), so this is derived from requested_at, exactly the way
-// isHeld (lib/types/approvals.ts) derives egress's own HOLD_TIMEOUT_MS check.
-const HOLD_WINDOW_MS = 240_000;
-
-function stillHeld(requestedAt: string): boolean {
-  const at = Date.parse(requestedAt);
-  return Number.isNaN(at) ? true : Date.now() - at < HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
-}
 
 // boldFirstWord — round-2 fix N2: REQ_APPROVING_ONCE/RUN and REQ_DENYING
 // already OPEN with "Approving"/"Denying" (the mock, index.html:512, bolds
@@ -210,19 +203,19 @@ export function AdoCapabilityCard({
 }) {
   const [scope, setScope] = React.useState<"once" | "run">("run");
   const [menuOpen, setMenuOpen] = React.useState(false);
-  // The hold window's own timer (#458): stillHeld(requested_at) was read only
-  // at render, so REQ_HELD survived past its own 4-minute window until some
-  // UNRELATED re-render happened to catch it up. `held` is seeded from the
-  // same check and then flipped false by a timer sized to the remaining
-  // window, so the card corrects itself with no other trigger needed.
-  const [held, setHeld] = React.useState(() => stillHeld(item.requested_at));
+  // The hold window's own timer (#458, #1197): `held`/`held_until` are
+  // now server fields (internal/approval.Hold's projection) — reading
+  // item.held at render alone would let REQ_HELD survive past its own
+  // 4-minute window until some UNRELATED re-render happened to catch it up,
+  // so `held` is seeded from the server's own answer and then flipped false
+  // by a timer sized to held_until, the same self-correcting shape as before.
+  const [held, setHeld] = React.useState(() => item.held ?? false);
   React.useEffect(() => {
     if (isAdoConsentRequest(item)) return; // this card's own timer, not the consent card's
-    setHeld(stillHeld(item.requested_at));
-    const at = Date.parse(item.requested_at);
-    if (Number.isNaN(at)) return;
-    const msLeft = HOLD_WINDOW_MS - (Date.now() - at);
-    if (msLeft <= 0) return; // already past the window — no timer to set
+    setHeld(item.held ?? false);
+    if (!item.held_until) return;
+    const msLeft = Date.parse(item.held_until) - Date.now();
+    if (!(msLeft > 0)) return; // already past the window (or unparseable) — no timer to set
     const timer = setTimeout(() => setHeld(false), msLeft);
     return () => clearTimeout(timer);
   }, [item]);
@@ -458,7 +451,7 @@ function AdoScopeMenu({
 // (or "you allowed it") the wire scope cannot back on every path — see its
 // own doc note in ado-entra-copy.ts.
 //
-// REQ_CONSENT_CTA links to /settings#azure-devops, not a route of its own:
+// REQ_CONSENT_CTA links to /account#azure-devops, not a route of its own:
 // F9 (S10 round 3) pointed it at the same Azure DevOps connection surface
 // #415 built (screens/settings/ado-connection.tsx's AdoConnectionCard,
 // mounted unconditionally on the one settings-screen.tsx page — no tabs, no
@@ -466,7 +459,10 @@ function AdoScopeMenu({
 // label to that card's own CTA ("Connect Azure DevOps", CONNECT_ADO) — a
 // bare `<Link to="/settings">` landed at the top of a five-card page with
 // no way to find the one card this door is actually about, and the two CTAs
-// named the same act two different ways.
+// named the same act two different ways. M-1b: it's your own connection
+// (#386), so the anchor moved to /account when /settings was deleted. M-5
+// (#636) later split that page in two; AdoConnectionCard is your-account-
+// screen.tsx's now — still your own connection, still at /account.
 function AdoConsentCard({
   item,
   viewerPrincipal,
@@ -507,7 +503,7 @@ function AdoConsentCard({
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings#azure-devops">{copy.cta}</Link>
+            <Link to="/account#azure-devops">{copy.cta}</Link>
           </Button>
         </div>
       )}

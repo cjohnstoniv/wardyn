@@ -26,9 +26,10 @@ import * as React from "react";
 import { AlertTriangle, Info, Loader2, RotateCw, ShieldOff } from "lucide-react";
 import { access as api, AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import type { AccessMapping, AccessResponse, AccessRole } from "../../../lib/types";
+import type { AccessMapping, AccessResponse, AccessRole, AccessUserType } from "../../../lib/types";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
 import {
   AlertDialog,
@@ -80,11 +81,29 @@ function roleLabel(role: string): string {
       return PEOPLE.ROLE_ADMIN;
     case "security_admin":
       return PEOPLE.ROLE_SECURITY_ADMIN;
-    case "member":
-      return PEOPLE.ROLE_MEMBER;
+    case "user":
+      return PEOPLE.ROLE_USER;
     default:
       return role;
   }
+}
+
+// The name of a user type, from GET /access's list: the id itself when the
+// list doesn't hold it (a chart value naming a type not created yet), and the
+// built-in type's frozen name when no list came at all.
+type TypeNames = ReadonlyMap<string, string>;
+function typeName(id: string, names: TypeNames): string {
+  return names.get(id) ?? (id === "standard" ? PEOPLE.TYPE_STANDARD : id);
+}
+
+// The chip for a role-map target — a row's role and type, or the default
+// role, which may itself be a type id. A user target shows its TYPE's name
+// (packet A: "Wardyn.Member · Standard user", "pm-group · Portfolio
+// manager"); the two admin tiers keep roleLabel().
+function targetLabel(role: string, userType: string | undefined, names: TypeNames): string {
+  if (role === "admin" || role === "security_admin") return roleLabel(role);
+  if (role === "user") return typeName(userType || "standard", names);
+  return typeName(role, names); // a default role naming a type id
 }
 
 // The same closed set as roleLabel(), in the ONE casing the preview sentences
@@ -103,7 +122,7 @@ function roleLabelInSentence(role: string): string {
   switch (role) {
     case "admin":
     case "security_admin":
-    case "member":
+    case "user":
       return roleLabel(role).toLowerCase();
     default:
       return role;
@@ -241,7 +260,7 @@ export function AccessPanel({
   return (
     <div className="space-y-6">
       <MappingsTable access={access} onReload={onReload} />
-      <PreviewPanel mapEmpty={access.posture.map_empty} />
+      <PreviewPanel mapEmpty={access.posture.map_empty} userTypes={access.user_types ?? []} />
       <p className="flex max-w-[82ch] items-start gap-2 text-body text-muted-foreground">
         <Info className="mt-0.5 size-3.5 shrink-0" />
         <span>{withMono(PEOPLE.IDP_NOTE)}</span>
@@ -252,6 +271,10 @@ export function AccessPanel({
 
 // Role mappings table + add form + Defaults block
 function MappingsTable({ access, onReload }: { access: AccessResponse; onReload: () => void }) {
+  const names: TypeNames = React.useMemo(
+    () => new Map((access.user_types ?? []).map((t) => [t.id, t.name])),
+    [access.user_types],
+  );
   const [toDelete, setToDelete] = React.useState<AccessMapping | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [dialogError, setDialogError] = React.useState<WriteErrorKind | null>(null);
@@ -315,6 +338,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
             <MappingCard
               key={`${m.source}:${m.id ?? m.value}`}
               mapping={m}
+              label={targetLabel(m.role, m.user_type, names)}
               allowEmailMappings={access.allow_email_mappings}
               emailDomainsConfigured={access.email_domains_configured}
               onDelete={() => openDelete(m)}
@@ -330,7 +354,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
           <dd className="text-foreground">
             {access.default_role ? (
               <Chip tone="neutral">
-                {roleLabel(access.default_role)}
+                {targetLabel(access.default_role, undefined, names)}
               </Chip>
             ) : (
               <span className="text-muted-foreground">{PEOPLE.DEFAULT_ROLE_UNSET}</span>
@@ -416,11 +440,14 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
 // per-row notes had to float full-width between rows and misaligned the columns.
 function MappingCard({
   mapping: m,
+  label,
   allowEmailMappings,
   emailDomainsConfigured,
   onDelete,
 }: {
   mapping: AccessMapping;
+  // The chip: targetLabel() of the row, computed where the type list is.
+  label: string;
   allowEmailMappings: boolean;
   emailDomainsConfigured: boolean;
   onDelete: () => void;
@@ -446,7 +473,7 @@ function MappingCard({
     >
       <div className="flex items-start justify-between gap-3">
         <Mono className="min-w-0 break-all text-foreground">{m.value}</Mono>
-        <Chip tone="neutral">{roleLabel(m.role)}</Chip>
+        <Chip tone="neutral">{label}</Chip>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Chip tone="neutral">{m.source === "chart" ? PEOPLE.SOURCE_CHART : PEOPLE.SOURCE_CONSOLE}</Chip>
@@ -484,6 +511,12 @@ function AddMappingForm({
 }) {
   const [value, setValue] = React.useState("");
   const [role, setRole] = React.useState<AccessRole>("admin");
+  // UT-7a: only meaningful at role "user", and only OFFERED once the org has
+  // a real choice to make — a single-option dropdown ("Standard user", and
+  // nothing else) is the plain toggle the design's own switch rule uses
+  // (user-types-design.md rev 4 §2.6: "a plain toggle with one type"). Empty
+  // means "let the server default to Standard user".
+  const [userType, setUserType] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<WriteErrorKind | null>(null);
   const [guardOpen, setGuardOpen] = React.useState(false);
@@ -503,9 +536,11 @@ function AddMappingForm({
       const res = await api.upsertMapping({
         value: value.trim(),
         role,
+        user_type: role === "user" && userType ? userType : undefined,
         acknowledge_access_change: acknowledge || undefined,
       });
       setValue("");
+      setUserType("");
       setGuardOpen(false);
       setAck(false);
       setTokensRevoked(res.tokensRevoked ?? null);
@@ -559,7 +594,7 @@ function AddMappingForm({
               // WARDYN_OIDC_DEFAULT_ROLE.
               { value: "admin", label: PEOPLE.ROLE_ADMIN },
               { value: "security_admin", label: PEOPLE.ROLE_SECURITY_ADMIN },
-              { value: "member", label: PEOPLE.ROLE_MEMBER },
+              { value: "user", label: PEOPLE.ROLE_USER },
             ]}
           />
         </Field>
@@ -570,6 +605,26 @@ function AddMappingForm({
           </Button>
         </div>
       </div>
+      {/* Offered only at role "user", and only once there is a real choice
+          beyond Standard user — see userType's own doc comment above. */}
+      {role === "user" && (access.user_types ?? []).length > 1 && (
+        <div className="mt-4 max-w-xs">
+          <Field label={PEOPLE.FIELD_USER_TYPE} htmlFor="access-user-type">
+            <Select value={userType} onValueChange={setUserType}>
+              <SelectTrigger id="access-user-type">
+                <SelectValue placeholder={PEOPLE.TYPE_STANDARD} />
+              </SelectTrigger>
+              <SelectContent>
+                {(access.user_types ?? []).map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+      )}
       {error && <Note tone="red">{writeErrorNote(error)}</Note>}
       {/* R1-F112: the server demoted this value's role and revoked its
           outstanding tokens as part of the SAME write — the count only
@@ -611,7 +666,7 @@ function AddMappingForm({
 }
 
 // Preview panel — a dry run, never saved (POST /access/preview).
-function PreviewPanel({ mapEmpty }: { mapEmpty: boolean }) {
+function PreviewPanel({ mapEmpty, userTypes }: { mapEmpty: boolean; userTypes: AccessUserType[] }) {
   const [claims, setClaims] = React.useState("");
   const [running, setRunning] = React.useState(false);
   const [result, setResult] = React.useState<React.ReactNode | null>(null);
@@ -643,9 +698,26 @@ function PreviewPanel({ mapEmpty }: { mapEmpty: boolean }) {
   // and is only true once a non-empty map's fallthrough decided it.
   function renderPreviewResult(res: Awaited<ReturnType<typeof api.previewRole>>): React.ReactNode {
     if (res.error) return PREVIEW.RESULT_UNKNOWN;
-    const label = roleLabelInSentence(res.role);
+    const names: TypeNames = new Map(userTypes.map((t) => [t.id, t.name]));
+    if (res.denial === "user_type_ambiguous" && res.tied?.length) {
+      const pairs = res.tied.map((id) => {
+        const values = res.matched.filter((m) => m.user_type === id).map((m) => m.value);
+        return `${values.join(", ") || id} (${typeName(id, names)})`;
+      });
+      const priority = userTypes.find((t) => t.id === res.tied?.[0])?.priority ?? 0;
+      return PREVIEW.RESULT_TIED(pairs.length, joinAnd(pairs), priority);
+    }
+    if (res.denial === "user_type_unknown" && res.unknown?.length) {
+      return PREVIEW.RESULT_TYPE_MISSING(joinAnd(res.unknown.map((id) => `"${id}"`)));
+    }
+    // A custom type reads as its own name; the tiers and the built-in type
+    // keep the tier word, so a deployment with no types reads as before.
+    const custom = res.role === "user" && res.user_type && res.user_type !== "standard";
+    const label = custom ? typeName(res.user_type!, names) : roleLabelInSentence(res.role);
     if (res.ok && res.matched.length > 0) {
-      return PREVIEW.RESULT_MATCHED(label, res.matched.map((m) => m.value).join(", "));
+      const sentence = PREVIEW.RESULT_MATCHED(label, res.matched.map((m) => m.value).join(", "));
+      const lost = custom ? res.matched.filter((m) => m.user_type === "standard").map((m) => m.value) : [];
+      return lost.length > 0 ? `${sentence} ${PREVIEW.STANDARD_LOST(joinAnd(lost))}` : sentence;
     }
     if (res.ok) return mapEmpty ? PREVIEW.RESULT_LEGACY(label) : PREVIEW.RESULT_DEFAULT(label);
     return PREVIEW.RESULT_DENIED;
@@ -686,6 +758,12 @@ function PreviewPanel({ mapEmpty }: { mapEmpty: boolean }) {
       {result && <Note>{result}</Note>}
     </div>
   );
+}
+
+// "a", "a and b", "a, b and c" — the tie and missing-type sentences name
+// every item.
+function joinAnd(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 // Re-exported so unit tests can exercise the classification/render helpers

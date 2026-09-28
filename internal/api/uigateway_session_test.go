@@ -1,8 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The relay SESSION's own tests: which app a cookie is for (B3-F1 + B3-F8) and
-// how long, and under whose authority, it keeps working (B3-F5). The transport
+// The relay SESSION's own tests: which app a cookie is for and
+// how long, and under whose authority, it keeps working. The transport
 // matrix — header hygiene, launcher exit codes, the connection cap — lives in
 // uigateway_test.go and is untouched by these.
 package api
@@ -33,7 +33,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// helpers
 
 // uiRevocations is an oidc.SessionRevocations double whose answer a test flips
 // mid-flight, which is what a real revoke looks like to the gateway: nothing
@@ -129,7 +129,7 @@ func uiEnterApp(t *testing.T, h *uiHarness, app string) (*http.Cookie, string) {
 	t.Helper()
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {app},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
 		t.Fatalf("enter %q: %d %s", app, rec.Code, rec.Body.String())
@@ -155,9 +155,9 @@ func uiGet(h *uiHarness, path string, c *http.Cookie) *httptest.ResponseRecorder
 	return rec
 }
 
-// ─── B3-F1 + B3-F8: one cookie per app, and a canonical run id ───────────────
+// one cookie per app, and a canonical run id
 
-// TestUIGateway_SecondAppDoesNotHijackTheFirstApp pins B3-F1. The relay cookie
+// TestUIGateway_SecondAppDoesNotHijackTheFirstApp pins the following. The relay cookie
 // was keyed per RUN (one name, Path=/r/<run>/) but pinned ONE app and port, so
 // entering a second declared app on the same run OVERWROTE the first app's
 // cookie in the browser: the still-open first tab's XHR then dialed the second
@@ -240,7 +240,7 @@ func TestUIGateway_SecondAppDoesNotHijackTheFirstApp(t *testing.T) {
 	}
 }
 
-// TestUIGateway_NonCanonicalRunIDIsNotARelayPath pins B3-F8: uuid.Parse accepts
+// TestUIGateway_NonCanonicalRunIDIsNotARelayPath pins uuid.Parse accepts
 // upper-case and braced spellings, but the prefix trim only ever removed the
 // canonical lower-case one — so a non-browser client could make the gateway
 // forward the /r/<id> prefix into the app. The path segment must BE the
@@ -259,7 +259,7 @@ func TestUIGateway_NonCanonicalRunIDIsNotARelayPath(t *testing.T) {
 	}
 }
 
-// ─── B3-F5: the cookie is not a frozen 8h bearer ─────────────────────────────
+// the cookie is not a frozen 8h bearer
 
 // signUISessionPayload signs a RAW payload the way encodeUISession does, so a
 // test can mint a cookie in a format the current code does not write — here,
@@ -279,7 +279,7 @@ func TestUIGateway_PreIssuedAtCookieFailsClosed(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	old := signUISessionPayload(h.srv.cfg.UISessionKey, fmt.Sprintf(
 		`{"r":%q,"a":"code","p":%d,"s":%q,"o":%q,"e":%d}`,
-		h.run.ID, uiTestPort, h.owner, oidc.RoleMember, time.Now().Add(time.Hour).Unix()))
+		h.run.ID, uiTestPort, h.owner, oidc.RoleUser, time.Now().Add(time.Hour).Unix()))
 	rec := uiGet(h, uiRunPrefix+h.run.ID.String()+"/code/ide",
 		&http.Cookie{Name: uiCookieName, Value: old})
 	if rec.Code != http.StatusForbidden {
@@ -288,7 +288,7 @@ func TestUIGateway_PreIssuedAtCookieFailsClosed(t *testing.T) {
 }
 
 // TestUIGateway_RevokedSessionIsRefusedOnTheNextConnection pins the first half
-// of B3-F5: the relay session was a bearer frozen at enter, and uiDial re-checked
+// of the relay session was a bearer frozen at enter, and uiDial re-checked
 // only that the run was alive — so "revoke this human now" (D16), which stops
 // their console session on the very next request, left them an editor with an
 // in-sandbox terminal for the rest of the session TTL.
@@ -415,7 +415,7 @@ func TestUIGateway_EstablishedConnectionOutlivesTheRevoke(t *testing.T) {
 	}
 }
 
-// ─── the TTL knob ────────────────────────────────────────────────────────────
+// the TTL knob
 
 // TestUIGateway_SessionTTLIsAnOperatorBound: WARDYN_UI_SANDBOX_SESSION_TTL is
 // the relay's sibling of WARDYN_SSH_ROLE_TTL — the operator's bound on how
@@ -453,7 +453,7 @@ func TestUIGateway_DefaultSessionTTLIsTheShippedBound(t *testing.T) {
 	}
 }
 
-// ─── parse ───────────────────────────────────────────────────────────────────
+// parse
 
 // TestParseUIRunPath is the table for the one function that decides what a
 // relay path even is — and therefore the one place the canonical-id and
@@ -483,7 +483,7 @@ func TestParseUIRunPath(t *testing.T) {
 	}
 }
 
-// ─── UG-1: a reused pooled connection is re-checked too ─────────────────────
+// UG-1: a reused pooled connection is re-checked too
 
 // countingSocat wraps the harness's fake runner so a test can see how many
 // relay DIALS actually happened. net/http pools the relay connection, so the
@@ -614,11 +614,11 @@ func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
 	}
 }
 
-// ─── UG-2: a refused re-check is in the audit trail ──────────────────────────
+// UG-2: a refused re-check is in the audit trail
 
 // TestUIGateway_RefusedReassertIsAuditedWithItsReason: "someone is driving a
 // revoked relay credential" has to be visible. Each refusal arm writes one
-// ui.auth/denied naming which arm it was — the same shape every other refusal
+// ui.authorize/denied naming which arm it was — the same shape every other refusal
 // on this listener already uses.
 func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 	for _, tc := range []struct {
@@ -650,8 +650,8 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 			if rec := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/ide", cookie); rec.Code == http.StatusOK {
 				t.Fatalf("the refusal arm did not refuse: %d", rec.Code)
 			}
-			if got := strings.Join(h.audit.actions(), " "); !strings.Contains(got, "ui.auth/denied") {
-				t.Fatalf("audit %q has no ui.auth/denied row for a refused relay connection", got)
+			if got := strings.Join(h.audit.actions(), " "); !strings.Contains(got, "ui.authorize/denied") {
+				t.Fatalf("audit %q has no ui.authorize/denied row for a refused relay connection", got)
 			}
 			if !h.audit.hasDataValue("reason", tc.reason) {
 				t.Fatalf("no audit row carries reason=%q; rows: %s", tc.reason, h.audit.dataReasons())

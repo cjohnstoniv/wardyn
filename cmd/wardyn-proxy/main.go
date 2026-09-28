@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/nodump"
 )
 
 // egressCanaryTimeout bounds the TCP dial the -egress-canary flag performs.
@@ -34,7 +35,12 @@ import (
 const egressCanaryTimeout = 5 * time.Second
 
 func main() {
-	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides WARDYN_PROXY_CONFIG_JSON)")
+	// First, before any credential is resolved: no core dump, no same-uid ptrace.
+	if err := nodump.Disable(); err != nil {
+		slog.Error("wardyn-proxy: fatal", slog.Any("err", err))
+		os.Exit(1)
+	}
+	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides "+configStdinEnv+" and WARDYN_PROXY_CONFIG_JSON)")
 	// egressCanary is the k8s substrate's boot-time NetworkPolicy-enforcement
 	// probe (see internal/runner/k8s): launched as a throwaway pod with this
 	// flag instead of the normal proxy entrypoint, it TCP-dials host:port (the
@@ -45,6 +51,16 @@ func main() {
 	// anyway) — see substrate.ClassSupport.NetworkPolicy's doc. Not a normal
 	// proxy invocation: no config is loaded, nothing else in main runs.
 	egressCanary := flag.String("egress-canary", "", "internal: TCP-dial host:port, exit 0 on connect / 1 on refuse-or-timeout (k8s substrate canary only)")
+	// stageConfigSrc/stageConfigDst are the k8s substrate's init-container
+	// mode (T-28, issue #688): this binary, run once as an init container
+	// with the SAME image the sidecar itself uses, stages the proxy config
+	// JSON from a Secret-projected volume (src) into a shared in-memory
+	// emptyDir (dst) as an owner-only 0400 file, then exits. The main
+	// container mounts only dst, read-only, and reads it back via -config —
+	// no secret-backed environment variable ever reaches the sidecar's own
+	// process environment. See StageProxyConfig.
+	stageConfigSrc := flag.String("stage-config-src", "", "internal: read the proxy config JSON from this path and stage it (k8s init container only; requires -stage-config-dst)")
+	stageConfigDst := flag.String("stage-config-dst", "", "internal: destination path for -stage-config-src (k8s init container only)")
 	flag.Parse()
 
 	if *egressCanary != "" {
@@ -56,6 +72,18 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *stageConfigSrc != "" || *stageConfigDst != "" {
+		if *stageConfigSrc == "" || *stageConfigDst == "" {
+			slog.Error("wardyn-proxy: -stage-config-src and -stage-config-dst must both be set")
+			os.Exit(2)
+		}
+		if err := StageProxyConfig(*stageConfigSrc, *stageConfigDst); err != nil {
+			slog.Error("wardyn-proxy: stage config failed", slog.Any("err", err))
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	var (
 		cfg *proxy.Config
 		err error
@@ -63,12 +91,18 @@ func main() {
 	switch {
 	case *configPath != "":
 		cfg, err = proxy.LoadConfig(*configPath)
+	case os.Getenv(configStdinEnv) == "1":
+		// Docker sidecar path: the driver writes the full config (incl. the
+		// run's egress policy) to stdin once at start.
+		var raw []byte
+		if raw, err = readStdinConfig(os.Stdin, stdinConfigTimeout); err == nil {
+			cfg, err = proxy.LoadConfigBytes(raw)
+		}
 	case os.Getenv("WARDYN_PROXY_CONFIG_JSON") != "":
-		// Sidecar path: the runner driver delivers the full config (incl. the
-		// run's egress policy) as one env var at container create.
+		// A host-run or hand-started proxy: the whole config in one env var.
 		cfg, err = proxy.LoadConfigBytes([]byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON")))
 	default:
-		slog.Error("wardyn-proxy: -config or WARDYN_PROXY_CONFIG_JSON is required")
+		slog.Error("wardyn-proxy: -config, " + configStdinEnv + "=1 or WARDYN_PROXY_CONFIG_JSON is required")
 		os.Exit(1)
 	}
 	if err != nil {
@@ -76,32 +110,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Per-proxy kill-switch: WARDYN_LLM_SCAN=off forces THIS proxy process's
-	// outbound content inspection OFF regardless of policy. It can only DISABLE
-	// (fail-safe direction), never enable beyond what the policy authorizes.
-	// NOTE: this is a per-proxy env read — the docker/k8s runner drivers copy
-	// it from wardynd's OWN process env into every sidecar they create
-	// (runner.ProxySidecarEnvKnobs), and compose now forwards it from the
-	// operator's shell into wardynd's env too (deploy/compose/docker-
-	// compose.yaml), so setting it once per wardynd instance now reaches
-	// every sidecar that instance creates; Helm still requires env.WARDYN_LLM_SCAN
-	// set explicitly in values (R-09).
-	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))); v {
-	case "off", "0", "false", "no", "disable", "disabled", "none":
-		if cfg.Policy.LLMInspection != nil {
-			slog.Info("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
-			cfg.Policy.LLMInspection = nil
-		}
-	case "", "on", "1", "true", "yes", "enable", "enabled":
-		// Unset or an explicit "leave as policy" token: the switch only DISABLES,
-		// so these are a no-op — inspection stays exactly as the policy authorizes.
-	default:
-		// A value that is neither a disable token nor an enable token states no
-		// intent this kill-switch can honor. Fail loud rather than silently
-		// ignore it (the operator may have typo'd "of" and think scanning is off).
-		slog.Error("wardyn-proxy: WARDYN_LLM_SCAN has an unrecognized value; want off/0/false/no/disable to disable, or on/1/true/yes to leave as policy",
-			slog.String("value", v))
-		os.Exit(2)
+	if code := applyLLMScanSwitch(cfg, os.Getenv("WARDYN_LLM_SCAN")); code != 0 {
+		os.Exit(code)
 	}
 
 	// Tell the Go runtime about the sidecar's cgroup ceiling BEFORE any request
@@ -160,6 +170,41 @@ func main() {
 	}
 }
 
+// applyLLMScanSwitch is the per-proxy kill-switch: WARDYN_LLM_SCAN=off forces
+// THIS proxy process's outbound content inspection OFF regardless of policy.
+// It can only DISABLE (fail-safe direction), never enable beyond what the
+// policy authorizes.
+// NOTE: this is a per-proxy env read — the docker/k8s runner drivers copy
+// it from wardynd's OWN process env into every sidecar they create
+// (runner.ProxySidecarEnvKnobs), and compose now forwards it from the
+// operator's shell into wardynd's env too (deploy/compose/docker-
+// compose.yaml), so setting it once per wardynd instance now reaches
+// every sidecar that instance creates; Helm still requires env.WARDYN_LLM_SCAN
+// set explicitly in values (R-09).
+//
+// It returns the process exit code main must use: 0 to carry on, 2 for a value
+// that states no intent the switch can honor.
+func applyLLMScanSwitch(cfg *proxy.Config, v string) int {
+	switch v := strings.ToLower(strings.TrimSpace(v)); v {
+	case "off", "0", "false", "no", "disable", "disabled", "none":
+		if cfg.Policy.LLMInspection != nil {
+			slog.Info("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
+			cfg.Policy.LLMInspection = nil
+		}
+	case "", "on", "1", "true", "yes", "enable", "enabled":
+		// Unset or an explicit "leave as policy" token: the switch only DISABLES,
+		// so these are a no-op — inspection stays exactly as the policy authorizes.
+	default:
+		// A value that is neither a disable token nor an enable token states no
+		// intent this kill-switch can honor. Fail loud rather than silently
+		// ignore it (the operator may have typo'd "of" and think scanning is off).
+		slog.Error("wardyn-proxy: WARDYN_LLM_SCAN has an unrecognized value; want off/0/false/no/disable to disable, or on/1/true/yes to leave as policy",
+			slog.String("value", v))
+		return 2
+	}
+	return 0
+}
+
 // logBranchNSPosture states the git-broker push branch-namespace posture ONCE
 // at boot, and only when it is OFF — the sibling of the WARDYN_LLM_SCAN line
 // in main, for the one control in that path that is ON by default. WARN, not
@@ -178,13 +223,13 @@ func logBranchNSPosture(runID uuid.UUID) {
 		slog.Warn("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false — push branch-namespace confinement is OFF for this proxy; a brokered git push may update ANY ref in a granted repo, including the default branch",
 			slog.String("run_id", runID.String()))
 	}
-	// The git_pat lane's switch is the MIRROR of the one above: default OFF, so
+	// The git_pat lane's scope is the MIRROR of the one above: default OFF, so
 	// the state worth a boot line is the state the operator turned ON. Info, not
 	// Warn — nothing is weakened here — but stated for the same reason: a
 	// confinement that is invisible until a push is refused reads, to whoever
 	// gets the 403, like a bug in the forge.
 	if proxy.PATBranchNSEnforced() {
-		slog.Info("wardyn-proxy: WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS is on — brokered git_pat pushes are confined to this run's branch namespace",
+		slog.Info("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (pat scope) is on — brokered git_pat pushes are confined to this run's branch namespace",
 			slog.String("run_id", runID.String()))
 	}
 }
@@ -214,7 +259,7 @@ func applyCgroupMemoryLimit() {
 	if os.Getenv("GOMEMLIMIT") != "" {
 		return
 	}
-	limit, ok := cgroupMemoryLimitBytes()
+	limit, ok := cgroupMemoryLimitBytes(cgroupMemoryFiles...)
 	if !ok {
 		return
 	}
@@ -227,14 +272,17 @@ func applyCgroupMemoryLimit() {
 		slog.Int64("cgroup_bytes", limit), slog.Int64("gomemlimit_bytes", soft))
 }
 
-// cgroupMemoryLimitBytes reads this process's memory ceiling from cgroup v2
-// (memory.max) or v1 (memory.limit_in_bytes). "max" — and v1's
-// effectively-unlimited sentinel — report no limit.
-func cgroupMemoryLimitBytes() (int64, bool) {
-	for _, path := range []string{
-		"/sys/fs/cgroup/memory.max",
-		"/sys/fs/cgroup/memory/memory.limit_in_bytes",
-	} {
+// cgroupMemoryFiles are where this process's memory ceiling lives: cgroup v2
+// (memory.max), then v1 (memory.limit_in_bytes).
+var cgroupMemoryFiles = []string{
+	"/sys/fs/cgroup/memory.max",
+	"/sys/fs/cgroup/memory/memory.limit_in_bytes",
+}
+
+// cgroupMemoryLimitBytes reads the first usable ceiling from paths. "max" —
+// and v1's effectively-unlimited sentinel — report no limit.
+func cgroupMemoryLimitBytes(paths ...string) (int64, bool) {
+	for _, path := range paths {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			continue

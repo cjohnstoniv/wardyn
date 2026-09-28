@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestFieldPathIsBoundedInBytes pins the F075 fix-up's first half: the
+// TestFieldPathIsBoundedInBytes pins the fix-up's first half: the
 // per-request cap bounds the NUMBER of findings, and nothing bounded their
 // SIZE.
 //
@@ -103,15 +103,15 @@ func isValidUTF8(s string) bool {
 	return true
 }
 
-// TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise pins the F075
-// fix-up's second half: severity priority in EVERY mode.
+// TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise pins severity
+// priority in every mode.
 //
-// The keep-back used to be `e.mode == ModeBlock && …`, so in alert mode —
-// whose ONLY product is the alert — findings were dropped strictly by arrival
-// order. An agent that fans out cheap low-severity noise ahead of its real
-// secret evicted the high-severity finding from the row a human reads:
-// measured findings=500 dropped=401 with high-or-critical-present=false, on a
-// body the pre-cap base alerted on.
+// A keep-back gated on `e.mode == ModeBlock && …` would drop findings in
+// alert mode — whose only product is the alert — strictly by arrival order,
+// so an agent that fans out cheap low-severity noise ahead of its real secret
+// evicts the high-severity finding from the row a human reads (findings=500
+// dropped=401 with high-or-critical-present=false, on a body an uncapped scan
+// alerts on).
 //
 // The report must stay bounded (the cap is the point) AND contain the finding
 // that matters.
@@ -167,7 +167,7 @@ func TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise(t *testing.T) {
 	}
 }
 
-// TestFindingsCappedIsRecordedBehindAnEarlierSkipReason pins the F075 fix-up's
+// TestFindingsCappedIsRecordedBehindAnEarlierSkipReason pins the fix-up's
 // fourth item: SkipReason holds ONE value and the first writer keeps it, so a
 // body whose first span was oversize reported span_oversize and said nothing at
 // all about the truncation that followed. The flag has to be separate.

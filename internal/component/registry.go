@@ -1,25 +1,15 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package component provides the shared registry that backs Wardyn's pluggable
-// component seams: identity provider, secret store, recording store, and the
-// confinement substrate. NOT the policy evaluator — this doc used to list it and
-// no evaluator registry exists; egress.Evaluator has an interface and a
-// conformance suite but exactly one implementation and no selector, which is why
-// /healthz reports policy_engine with no `available` list.
-// One generic implementation of name→constructor registration,
-// default resolution, and duplicate detection, so every seam selects an
-// implementation uniformly via a WARDYN_<SEAM> name while keeping a type-safe,
-// seam-specific constructor signature.
+// Package component provides the shared name→constructor registry backing
+// Wardyn's pluggable seams (identity provider, secret store, recording store,
+// confinement substrate), so each seam selects an implementation uniformly
+// via a WARDYN_<SEAM> name while keeping a type-safe constructor signature.
+// NOT the policy evaluator: egress.Evaluator has no registry or selector.
 //
-// Implementations self-register at init() time (like database/sql drivers): a
-// blank import of an impl package makes it selectable. The registered default
-// name maps to the current built-in, so an unset selector reproduces today's
-// behavior exactly.
-//
-// A registered implementation is not "blessed" until it passes its seam's
-// RunConformance suite (see the per-seam *test packages) — registration makes an
-// impl selectable; conformance makes it trustworthy.
+// Implementations self-register at init() time (like database/sql drivers):
+// a blank import makes one selectable. Registration alone doesn't "bless" an
+// impl — it must also pass its seam's RunConformance suite.
 package component
 
 import (

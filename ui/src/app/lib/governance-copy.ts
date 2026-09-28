@@ -34,6 +34,7 @@ import {
   type AutonomyLevel,
   type AutonomyRubric,
   type AutonomyRubricRowKey,
+  type RunLimits,
 } from "./api/governance";
 import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 
@@ -46,7 +47,7 @@ import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 //   PERM.COL_WHO / FIELD_WHO / COL_ADDED / SUBJECT_USER / SUBJECT_GROUP /
 //   SUBJECT_ALL / HINT_USER / HINT_GROUP / HINT_ALL / REMOVE — the assignments
 //     table's "Who" column, its three subject kinds, and their hints.
-//   PEOPLE.CANCEL / ROLE_ADMIN / ROLE_MEMBER / FIELD_VALUE / ADD_CTA /
+//   PEOPLE.CANCEL / ROLE_ADMIN / ROLE_USER / FIELD_VALUE / ADD_CTA /
 //     FIELD_ROLE.
 //   PREVIEW.FIELD_CLAIMS / FIELD_CLAIMS_HINT — the resolved preview takes the
 //     claims a token would carry, which is exactly what the People step's
@@ -122,7 +123,7 @@ export const GOVERNANCE = {
   ASSIGNED_COUNT: (n: number) => `${n} subject${n === 1 ? "" : "s"}`,
   // ADDITION to §7.2 (R4/F032): the Limits cell must also account for a run
   // quota, not just the three BOOLEAN doors — otherwise a profile whose one
-  // limit is a run quota reads "None" while denyMemberRunQuota (internal/api/
+  // limit is a run quota reads "None" while denyUserRunQuota (internal/api/
   // runs_create_validate.go) still refuses that member's fourth run with a
   // 422. Same inline pluralisation as ASSIGNED_COUNT; the wording tracks the
   // server's own "too many runs at once".
@@ -223,6 +224,9 @@ export const GOVERNANCE = {
   // ENFORCE_OFF_TITLE was.
   MATCHED_USER: "a user assignment",
   MATCHED_GROUP: "a group assignment",
+  // 0.8: the user type tier (user > group > user type > all), in the same
+  // shape as its neighbours. Not in §7.3's prose, which predates user types.
+  MATCHED_USER_TYPE: "a user type assignment",
   MATCHED_ALL: "the everyone assignment",
   PREVIEW_RESULT_DEFAULT: "These claims resolve to the deployment ceiling — no assignment matches them.",
   PREVIEW_RESULT_UNKNOWN: "Couldn't resolve this — try again.",
@@ -278,6 +282,8 @@ export const GOVERNANCE = {
 //     when a redeploy removes a pairing from WARDYN_DEFAULT_POLICY that a
 //     stored profile still names: the grant is dropped rather than the run
 //     failed, and the member is told.
+//     WARN_PUSH_RULES_DROPPED is its push_rules mirror (droppedPushRulesWarning,
+//     same file), fired at the same resolve seam (#272).
 // DENIED_CODEX_HOLD sits BESIDE, never replaces, runs_create_validate.go's
 // existing explicit-hold refusal (§7.1) — one refuses a hold the caller asked
 // for, the other a hold their profile derived. WARN_STORED_CLAMPED is the
@@ -305,13 +311,15 @@ export const MEMBER = {
     `workspace host "${host}" is denied by your governance profile "${name}" — the run launches, but that host is refused at the proxy`,
   WARN_GRANT_DROPPED: (name: string, kind: string, reason: string) =>
     `governance profile "${name}": dropped ${kind} grant no longer within the deployment's eligible grants (${reason})`,
+  WARN_PUSH_RULES_DROPPED: (name: string) =>
+    `governance profile "${name}": push_rules dropped — this profile's ceiling sets none, so the deployment default's content rules do not apply to members of it`,
   DENIED_STALE_GROUPS:
     "groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved",
 
   // The two CAPABILITY refusals, which is why — alone in this group — they name
   // no profile: they fire whether or not the caller has one. Both close a door a
   // member could otherwise walk through AFTER the explicit check had already run
-  // (denyMemberSeededImage, runs_create_validate.go; handleCreateWorkspace,
+  // (denyUserSeededImage, runs_create_validate.go; handleCreateWorkspace,
   // workspaces.go). The `{id}` below is a literal route segment, not a parameter.
   DENIED_SEEDED_IMAGE: (image: string) =>
     `image ${image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image`,
@@ -347,7 +355,7 @@ export const POSITIONING = {
 export const DIRECTORY = {
   // RE-EXPORTED, never retyped: §7.9 freezes this as the picker option, the
   // table chip AND the mapped-role label — one string for all three — and puts
-  // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it
+  // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_USER, which is why it
   // is title case AS THE CHIP; a sentence takes its lowercase
   // (people-access-prompt.md §7.2, access-panel.tsx's roleLabelInSentence).
   // Two homes for one frozen label is how they drift
@@ -362,12 +370,14 @@ export const DIRECTORY = {
   LOOKUP_FAILED: "Couldn't check your directory — type the value yourself.",
 } as const;
 
-// #96/#93 — the autonomy rubric (0.8, #77). The mock round's frozen strings
-// table (autonomy-launch.html surface 1), transcribed verbatim — not parsed
-// back out of a doc like §7.2-§7.9 above, because the mock lives in a
-// scratchpad rather than in this repo's docs/. Two rulings from #96's review
-// (recorded on #96, applied here rather than in the mock, which froze before
-// they were made):
+// #96/#93 — the autonomy rubric (0.8, #77). Transcribed verbatim from #96's
+// mock (autonomy-launch.html surface 1, a scratchpad, never landed in this
+// repo). #768 backfilled docs/design/governance-prompt.md §7.10-§7.13 from
+// THIS module rather than the mock — the owner's 2026-09-23 ruling on #768
+// makes the strings as shipped here (in #339) canon — so governance-copy.
+// test.ts now parses §7.10-§7.13 back out the same way it parses §7.2-§7.9
+// above. Two rulings from #96's review (recorded on #96, applied here rather
+// than in the mock, which froze before they were made):
 //
 //   1. bound_by is a LIST. A tie at the resolved level names EVERY cause, not
 //      the first — autonomyBoundSentence below composes it.
@@ -432,6 +442,97 @@ export const LIMITS_CHIP = {
   // level's AUTONOMY_META label (e.g. "Attended"), looked up by the caller.
   AUTONOMY: (label: string) => `Autonomy: ${label} at the strictest`,
 } as const;
+
+// RL-14 (0.8, #579) — the profile editor's Run limits section
+// (long-holds-design.md rev 4 §2.2/§6, long-holds-packet.html "Run limits for
+// a user type"). Transcribed from the mock packet, the same way RUBRIC above
+// is: the packet lives in a scratchpad, not docs/, so these are pinned
+// directly in governance-copy.test.ts rather than parsed out of a doc.
+//
+// The seven fields ride on GovernanceLimits (embedding types.RunLimits) via
+// the profile a person is assigned to — the packet's "for a user type" is
+// where this rides once user types exist (a separate, not-yet-built design);
+// today a profile is the only assignable ceiling, so the section is titled
+// plainly rather than naming a concept this console doesn't have yet.
+export const RUN_LIMITS = {
+  SECTION_TITLE: "Run limits",
+  MAX_END_LABEL: "Longest a run can be set to last",
+  MAX_END_HINT: "Measured from now. People extend before it ends. Leave blank for no limit.",
+  DEFAULT_END_LABEL: "Default end",
+  ALLOW_NO_END_LABEL: "Allow no end",
+  ALLOW_NO_END_HINT:
+    "Runs keep going until someone ends them. They still pause when nobody is there, and keep their memory. Set a concurrent-run limit too.",
+  MAX_WAIT_LABEL: "Longest wait for a decision",
+  MAX_WAIT_HINT:
+    "How long a run may keep a request open (a push, a tool call, a new site, a sign-in) before it's refused. Tool calls wait at most 27 hours.",
+  DEFAULT_WAIT_LABEL: "Default wait",
+  USER_CHANGES_LABEL: "People may change their run's end and wait",
+  USER_CHANGES_HINT:
+    "Anyone can extend within the limit. This also lets them shorten it, choose no end, and change the wait.",
+  PAUSE_IDLE_LABEL: "Pause a run nobody is using after",
+  PAUSE_IDLE_HINT:
+    "No typing, no network traffic (downloads in progress count), and a quiet CPU. Leave blank to pause only runs waiting for a decision.",
+  // The editor's unit picker has no visible label of its own; this is its
+  // accessible name, so it never shares the input's.
+  UNIT_PICKER_LABEL: (label: string) => `${label}: unit`,
+} as const;
+
+// The units a run-limit duration is written in, largest first — the packet's
+// own examples ("30 days", "8 hours", "30 minutes"), plus seconds for a value
+// only the API can produce. The chip below and the editor's unit picker share
+// this one table.
+export const RUN_LIMIT_UNITS = [
+  { sec: 86400, one: "day", many: "days" },
+  { sec: 3600, one: "hour", many: "hours" },
+  { sec: 60, one: "minute", many: "minutes" },
+  { sec: 1, one: "second", many: "seconds" },
+] as const;
+
+export type RunLimitUnit = (typeof RUN_LIMIT_UNITS)[number];
+
+// runLimitUnit is the largest unit a seconds value is a whole number of — so
+// 1800 reads "30 minutes", never "1 hour" or "0 hours".
+export function runLimitUnit(sec: number): RunLimitUnit {
+  return RUN_LIMIT_UNITS.find((u) => sec % u.sec === 0)!;
+}
+
+function humanizeRunLimitSec(sec: number): string {
+  const u = runLimitUnit(sec);
+  const n = sec / u.sec;
+  return `${n} ${n === 1 ? u.one : u.many}`;
+}
+
+// setsRunLimits is whether a profile sets ANY of the seven run-limit fields —
+// not just the three runLimitsChip names. A profile with only a default end
+// still ends every run, so the Limits column must not read "None" for it (the
+// R4/F032 class: a limit that binds while the list says there is none).
+export function setsRunLimits(l: RunLimits): boolean {
+  return !!(
+    l.max_end_ahead_sec ||
+    l.default_end_sec ||
+    l.allow_no_end ||
+    l.max_wait_sec ||
+    l.default_wait_sec ||
+    l.user_changes_limits ||
+    l.pause_idle_after_sec
+  );
+}
+
+// runLimitsChip composes the profiles-list summary chip the packet's
+// "Summary chip" line previews ("Ends within 30 days · waits up to 8 hours ·
+// people may change these") — the same "category · value" join MEMBER.GS_CHIP
+// uses. Only the fields actually SET contribute a clause (0/false is "no
+// limit" everywhere else in this module, and a clause claiming a bound that
+// doesn't exist would be a lie); null when the profile sets none of the three.
+// Whether the list reads "None" is setsRunLimits' call, not this one's.
+export function runLimitsChip(l: RunLimits | undefined): string | null {
+  if (!l) return null;
+  const parts: string[] = [];
+  if (l.max_end_ahead_sec) parts.push(`Ends within ${humanizeRunLimitSec(l.max_end_ahead_sec)}`);
+  if (l.max_wait_sec) parts.push(`waits up to ${humanizeRunLimitSec(l.max_wait_sec)}`);
+  if (l.user_changes_limits) parts.push("people may change these");
+  return parts.length ? parts.join(" · ") : null;
+}
 
 // ---- the New Run rail's Autonomy section + the run header (new-run-rail.tsx
 // / run-detail-summary-header.tsx) ----

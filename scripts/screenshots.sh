@@ -12,6 +12,7 @@ cd "${REPO_ROOT}"
 
 # One daemon everywhere: `up.sh pg` and the spec's `docker exec` must hit the
 # daemon e2e-backend.sh provisions on.
+WARDYN_LOG_TAG="[screenshots]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
@@ -28,7 +29,7 @@ export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/wardyn_shots?sslm
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:8098"
 
-log() { printf '\033[1;34m[screenshots]\033[0m %s\n' "$*"; }
+# log() uses WARDYN_LOG_TAG="[screenshots]" set before sourcing common.sh above.
 
 # The spec self-skips without this (so a bare `pnpm e2e` can never clobber the
 # tracked docs/img PNGs from the wrong backend).

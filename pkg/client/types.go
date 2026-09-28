@@ -65,9 +65,14 @@ type (
 	WorkspaceMount = types.WorkspaceMount
 
 	// PushRulesSpec declares content rules for a run's brokered git pushes,
-	// carried in RunPolicySpec.PushRules. Phase one only: deny_paths and
-	// max_inspect_pack_mib are stored and validated; nothing reads them yet.
+	// carried in RunPolicySpec.PushRules: deny_paths refuse, and
+	// require_review_paths hold the push for an admin's decision for up to
+	// hold_seconds.
 	PushRulesSpec = types.PushRulesSpec
+
+	// PushContentScope is a push_content approval's requested_scope: the
+	// held push's repository, refs, credential, matched paths and commits.
+	PushContentScope = types.PushContentScope
 
 	// ApprovalRequest is a human-in-the-loop approval gate. Returned by
 	// ListApprovals, Approve, and Deny.
@@ -138,6 +143,17 @@ type (
 	// without a nameable element type a caller could not author one at all.
 	EgressRedirect = types.EgressRedirect
 
+	// ModelProviders is the admin's model-provider configuration, carried in
+	// SiteConfig.ModelProviders; the types below are its parts. Aliased so a
+	// caller can author the block through PutSiteConfig. Configuration only:
+	// no credential lives on a record.
+	ModelProviders    = types.ModelProviders
+	ModelProvider     = types.ModelProvider
+	ModelProviderKind = types.ModelProviderKind
+	ProviderAuth      = types.ProviderAuth
+	BedrockSettings   = types.BedrockSettings
+	ProviderHarness   = types.ProviderHarness
+
 	// UserDrive is one admin-registered drive (migration 0054's user_drives
 	// row), embedded in UserDriveListItem. Written via DriveRequest.
 	UserDrive = types.UserDrive
@@ -149,6 +165,31 @@ type (
 	// UserDriveGrant allocates one drive to one subject (DrivesDocument.Grants).
 	// Written via DriveGrantRequest.
 	UserDriveGrant = types.UserDriveGrant
+
+	// GovernanceProfile is one named, assignable ceiling (migration 0052's
+	// governance_profiles row), carried in GovernanceDocument.Profiles.
+	// Returned by GetGovernance and ApplyGovernance.
+	GovernanceProfile = types.GovernanceProfile
+
+	// GovernanceAssignment binds one profile to one subject
+	// (GovernanceDocument.Assignments). Returned by GetGovernance and
+	// ApplyGovernance.
+	GovernanceAssignment = types.GovernanceAssignment
+
+	// GovernanceLimits carries the request-shape autonomy switches a
+	// GovernanceProfile bounds a principal by, carried in
+	// GovernanceProfile.Limits. Aliased so a caller can author one through
+	// GovernanceProfileRequest.
+	GovernanceLimits = types.GovernanceLimits
+
+	// AutonomyRubric is GovernanceLimits.AutonomyRubric's pointed-to type.
+	// Aliased for the same reason as ArtifactOverride: without a nameable
+	// type a caller could not author one at all.
+	AutonomyRubric = types.AutonomyRubric
+
+	// AutonomyLevel is one rung on AutonomyRubric's ladder (see the AutonomyL0
+	// .. AutonomyL3 values below).
+	AutonomyLevel = types.AutonomyLevel
 )
 
 // Enumerated string types named in exported signatures and struct fields.
@@ -280,6 +321,7 @@ const (
 	ApprovalCredential   = types.ApprovalCredential
 	ApprovalEgressDomain = types.ApprovalEgressDomain
 	ApprovalToolCall     = types.ApprovalToolCall
+	ApprovalPushContent  = types.ApprovalPushContent
 )
 
 // ActorType values.
@@ -336,7 +378,16 @@ const (
 
 // CapabilitySubjectType values.
 const (
-	CapabilitySubjectUser  = types.CapabilitySubjectUser
-	CapabilitySubjectGroup = types.CapabilitySubjectGroup
-	CapabilitySubjectAll   = types.CapabilitySubjectAll
+	CapabilitySubjectUser     = types.CapabilitySubjectUser
+	CapabilitySubjectGroup    = types.CapabilitySubjectGroup
+	CapabilitySubjectAll      = types.CapabilitySubjectAll
+	CapabilitySubjectUserType = types.CapabilitySubjectUserType
+)
+
+// AutonomyLevel values.
+const (
+	AutonomyL0 = types.AutonomyL0
+	AutonomyL1 = types.AutonomyL1
+	AutonomyL2 = types.AutonomyL2
+	AutonomyL3 = types.AutonomyL3
 )

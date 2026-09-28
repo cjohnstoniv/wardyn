@@ -239,6 +239,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run has no sandbox to read (state="+string(run.State)+")")
 		return
 	}
+	if run.PausedAt != nil {
+		writeError(w, http.StatusConflict, runPausedReadMsg)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), runFilesTimeout)
 	defer cancel()
@@ -355,11 +359,11 @@ func repoCloneLeaf(repo string) string {
 	return repoDirName(repo)
 }
 
-// auditRunFilesFailure records the FAILURE-only run.files audit row (see
+// auditRunFilesFailure records the FAILURE-only run.files.fail audit row (see
 // handleRunFiles' doc for why success is silent).
 func (s *Server) auditRunFilesFailure(r *http.Request, runID uuid.UUID, err error) {
 	s.recordAudit(r.Context(), s.auditEvent(&runID, actorTypeFromRequest(r), principalFromRequest(r),
-		"run.files", runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		"run.files.fail", runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 }
 
 // parseRunFiles reads runFilesScript's stdout — the numstat section, the

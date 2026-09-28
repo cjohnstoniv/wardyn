@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -187,7 +188,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// upgrade with 404/409, or an authz.denied row, instead of the refusal.
 	if s.attachOriginRefused(r) {
 		// Audited like the REST guard's two arms (http.go), on the same
-		// auth.failed action, reason and actor — a control that refuses
+		// auth.fail action, reason and actor — a control that refuses
 		// silently cannot answer either question an operator has at 3am
 		// (csrf.go), and that argument started applying to this socket the
 		// moment the decision moved out of the library and into our code.
@@ -236,6 +237,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
+	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	if runIsKept(run) {
+		writeError(w, http.StatusConflict, "run has ended; cannot attach")
+		return
+	}
 	if run.SandboxRef == "" {
 		writeError(w, http.StatusConflict, "run has no sandbox; cannot attach")
 		return
@@ -249,6 +255,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	principalType, principal := actorFromRequest(r)
+
+	// A paused run is thawed before the exec: the daemon refuses one into a
+	// paused container (run_pause.go).
+	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
+		writeError(w, http.StatusBadGateway, "run is paused and could not be resumed; try again")
+		return
+	}
 
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
@@ -307,6 +320,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		actorType: principalType,
 		since:     s.cfg.Now().UTC(),
 		source:    attachSourceWeb,
+		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
 		cols:      opts.Cols,
 		rows:      opts.Rows,
 		// Promotion: the SAME socket is told it may now type. attach-terminal
@@ -377,7 +391,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// memory for the session's lifetime and written once at close, which is fine
 	// for human-length interactive sessions but is not a streaming sink — past
 	// maxSessionCastBytes the recording keeps its head and drops the rest, and
-	// says so in the session.recording audit.
+	// says so in the session.recording.write audit.
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
@@ -424,7 +438,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// observer so is a write to a FOREIGN socket — never on this goroutine.
 	releaseAttach(releaseHolder)
 
-	// Persist the recording (best-effort) and emit session.recording when one was
+	// Persist the recording (best-effort) and emit session.recording.write when one was
 	// actually written. finishRecording is a no-op when recording is disabled.
 	// Use the daemon-lifetime BaseCtx (not the request ctx, which is typically
 	// cancelled the instant the WebSocket closes) so the provenance write + audit
@@ -432,6 +446,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	finishCtx := s.cfg.BaseCtx
 	if finishCtx == nil {
 		finishCtx = context.Background()
+	}
+	if via, ok := audit.DelegationFrom(ctx); ok {
+		finishCtx = audit.WithDelegation(finishCtx, via) // the close rows name the portal too (#1142)
 	}
 	finishRecording(finishCtx, principalType, principal)
 
@@ -562,6 +579,20 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 			if rerr != nil {
 				if errors.Is(rerr, io.EOF) {
 					reasonCh <- "shell exited"
+					// A real close handshake BEFORE cancelling ctx (#1112): the
+					// client->server goroutine below is blocked in c.Read(ctx) on
+					// the SAME ctx this func cancels just below, and coder/websocket
+					// arms that Read call to forcibly tear down the raw connection
+					// (c.close(), no close frame) the instant ctx is Done —
+					// cancelling first would race that teardown and the client
+					// would see a bare EOF ("failed to read frame header: EOF")
+					// instead of a clean detach. c.Close writes the close frame,
+					// then blocks briefly for the peer's echo before tearing the
+					// connection down itself, so a normal shell exit reaches the
+					// client as an actual StatusNormalClosure. Best-effort: if the
+					// peer is already gone, this is a no-op and cancel() below
+					// still reaps the goroutines.
+					_ = c.Close(websocket.StatusNormalClosure, "shell exited")
 				} else {
 					reasonCh <- "session read error"
 				}
@@ -631,7 +662,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 // credential verbatim into a replayable artifact that long outlives the run —
 // and no masking can prevent it (the token is unknown to wardynd until the
 // operator pastes it back, by which point the cast already holds it). Dropping
-// the cast costs no provenance: harness.login.started and session.attach still
+// the cast costs no provenance: harness.login.start and session.attach still
 // record who attached, when, and why.
 func runIsUnrecordable(run types.AgentRun) bool {
 	return run.Task == harnessLoginTask
@@ -647,7 +678,7 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //     works unchanged in headless/no-store mode.
 //   - finish flushes the masker tail and persists the buffered asciicast to the
 //     RecordingStore under a per-run+session key (so it never clobbers the batch
-//     run's cast or a concurrent attach), then emits a session.recording audit
+//     run's cast or a concurrent attach), then emits a session.recording.write audit
 //     event. It is best-effort: a persist failure is audited as a failure but
 //     never fails the detach.
 //
@@ -676,7 +707,7 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //
 // ponytail: past the cap the recording keeps its HEAD and drops the rest —
 // smallest thing that keeps a valid, replayable artifact plus an honest
-// truncated:true in the session.recording audit. A ring buffer that keeps the
+// truncated:true in the session.recording.write audit. A ring buffer that keeps the
 // TAIL instead is the upgrade path if operators ask for the end of long
 // sessions; a streaming sink is the one after that.
 const maxSessionCastBytes = 8 << 20
@@ -756,7 +787,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			outcome = "failure"
 			data["error"] = err.Error()
 		}
-		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording",
+		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording.write",
 			key, outcome, mustJSON(data)))
 	}
 

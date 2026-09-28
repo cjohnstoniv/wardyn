@@ -95,6 +95,85 @@ jobs:
           path: test/reports/e2e/task-e2e.log
           if-no-files-found: error
 
+  # The Wall tier (CC2) on a runner that really has gVisor. Every other docker
+  # lane runs on a daemon with runc only, so CC2 there is only ever the
+  # fail-closed 422 — confinement under runsc was never exercised by anything
+  # scheduled. This installs a pinned, hash-checked runsc, registers it with
+  # dockerd, and runs the docker conformance suite (every case at the strongest
+  # advertised class, so ManagedFiles, L0StructuralEgress and ExecStream run
+  # under runsc) and the live task e2e (the oracle corpus at every installed
+  # tier). WARDYN_TEST_REQUIRE_CLASS=CC2 turns a runsc that did not register
+  # into a red job instead of a green one that proved runc again. No KVM is
+  # needed: runsc's default systrap platform runs in an ordinary VM.
+  gvisor-cc2-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUNSC_RELEASE: "20260601"
+      RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install runsc (pinned release, sha512-checked) and register it with dockerd
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o runsc "https://storage.googleapis.com/gvisor/releases/release/${RUNSC_RELEASE}/x86_64/runsc"
+          echo "${RUNSC_SHA512}  runsc" | sha512sum -c -
+          sudo install -m 0755 runsc /usr/local/bin/runsc
+          rm runsc
+          sudo /usr/local/bin/runsc install
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | jq -e 'has("runsc")' >/dev/null
+          # The runtime answers, not just its registration: gVisor's dmesg is
+          # its own, never the host kernel's.
+          # Captured first: `| grep -q` under pipefail can fail on dmesg's SIGPIPE.
+          boot="$(docker run --rm --runtime=runsc busybox:latest dmesg)"
+          grep -q gVisor <<<"${boot}" || { echo "::error::--runtime=runsc did not boot gVisor: ${boot}"; exit 1; }
+      - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
+        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+      - name: Build agent-claude-code image (local only — the boot under measurement)
+        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        run: make build-conformance-agent-image
+      - name: Docker conformance at CC2 (runsc)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_TEST_REQUIRE_CLASS: CC2
+        shell: bash # pipefail — see the e2e-live job above
+        run: |
+          mkdir -p test/reports/e2e
+          make test-conformance-docker 2>&1 | tee test/reports/e2e/cc2-conformance.log
+      - name: Live task e2e with CC2 required (oracle lane)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_TEST_REQUIRE_CLASS: CC2
+        shell: bash # pipefail — see the e2e-live job above
+        # The conformance step above creates `wardyn-internal` itself, with no
+        # compose labels, and it outlives the test; compose then refuses to
+        # adopt it and postgres never starts. Only the conformance leftover is
+        # removed here — nothing else on this runner is attached to it.
+        run: |
+          docker network rm wardyn-internal 2>/dev/null || true
+          make test-e2e-live 2>&1 | tee test/reports/e2e/cc2-task-e2e.log
+      - name: Upload CC2 results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gvisor-cc2-live-results
+          path: test/reports/e2e/cc2-*.log
+          if-no-files-found: error
+
   # Live SSH gateway e2e (C5): exec/sftp/-L forward/recording/denial/concurrency
   # against a real `ssh`/`sftp` client. Ran in NO CI workflow before this job —
   # `make test-e2e-ssh` / scripts/run-e2e-ssh.sh existed but nothing invoked
@@ -227,6 +306,17 @@ jobs:
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        run: make build-conformance-agent-image
+      # #703 (T-43): test/awsssofake.requireDockerBinary skips (not fails) every
+      # test that needs wardyn/agent-aws-sso:local when the image is absent —
+      # TestDeviceCodeLoginRealCLI here, and TestParseRealAWSCLICacheFile /
+      # TestAWSSSOConfigAcceptedByRealBotocore in the other packages this suite
+      # also covers. Nothing built it here before, so the "fake lane" never ran
+      # for real in this job. scripts/test-report.sh's new REQUIRE_ALL floor for
+      # suite "docker" (below) is what turns a silent skip back into red.
+      - name: Build agent-aws-sso image (local only — the real AWS CLI these tests drive)
+        run: docker build -f deploy/images/aws-sso/Dockerfile -t wardyn/agent-aws-sso:local .
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -251,21 +341,39 @@ jobs:
   #                             been run live.
   #   make test-e2e-subscription  needs a real vendor subscription credential,
   #                             which no CI runner has or should have.
-  #   make test-e2e-concurrent  not wired; no blocker other than runner time.
   #
   # A regression in any of those still ships silently.
+  #
+  # `make test-e2e-concurrent` (#697, T-37) is wired below as its own job —
+  # it needed no blocker to clear, only a job. It is NOT the ui/e2e/walk
+  # kind-cluster sign-in concurrency spec #697 also names (two Dex members
+  # signing in to AWS SSO at once, per-owner /_seen attribution, the
+  # L-identity-1 lock): that spec is real, separate follow-on work this PR
+  # does not build — see the PR body. This job proves the OTHER half of
+  # #697's ask that was already sitting finished and unwired: the compose
+  # control plane's own shared-host concurrency safety (scripts/test-concurrent.sh).
+  test-e2e-concurrent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Docker available
+        run: docker --version
+      - name: Shared-host concurrency test (two project-scoped stacks up at once)
+        run: make test-e2e-concurrent
 
   # ── B7a: the BYOI wrap lane ────────────────────────────────────────────────
   # `make test-e2e-byoi` ran in NO workflow. It is also the lane that reproduces
-  # the `desktop-envelope` failure locally — the wrap producing an image that
-  # cannot pass its own agent-run --selftest kept that job red on EVERY run since
-  # it was added, and nothing scheduled would have caught the regression coming
-  # back.
+  # the old `desktop-envelope` job's failure locally — the wrap producing an
+  # image that cannot pass its own agent-run --selftest kept that job red on
+  # EVERY run since it was added, and nothing scheduled would have caught the
+  # regression coming back.
   #
   # Unlike ssh-e2e-live and ui-sandbox-e2e-live below, run-e2e-byoi.sh does NOT
   # start a control plane — its own header says so ("Requires a wardynd already
   # started with -envbuild and WARDYN_ENVBUILD_TOOLS_DIR"). So this job brings
-  # one up, the same way ci.yml's desktop-envelope does.
+  # one up, the same way ci.yml's helm-install-test does in its desktop-envelope
+  # half.
   byoi-e2e-live:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -378,10 +486,10 @@ jobs:
             dockerfile: deploy/images/aws-sso/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Build both platforms (no push, no load — the result is discarded)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -433,12 +541,11 @@ jobs:
   # untouched by this job.
   #
   # WARDYN_TEST_K8S is set on THIS STEP, not the job: an unset one makes
-  # kind-sso-walk.sh print "skipping" and exit 0 before it ever creates its
-  # evidence directory — a permanently green job that proves nothing, which is
-  # worse than no job at all because it reads as coverage. The step after this
-  # one asserts the walk actually reached its own PASS line and reported at
-  # least one executed spec file, rather than trusting kind-sso-walk.sh's exit
-  # code alone.
+  # kind-sso-walk.sh print "skipping" and exit 77 (common.sh's skip_lane,
+  # never 0 — #463) before it ever creates its evidence directory. The step
+  # after this one asserts on that exit code directly, plus that the walk
+  # actually reached its own PASS line and reported at least one executed
+  # spec file — belt and suspenders, neither one a grep of the skip message.
   kind-sso-walk:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -486,29 +593,76 @@ jobs:
           WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso
         shell: bash
         run: |
+          set +e   # capture the real exit code below instead of failing the step on it
           mkdir -p test/reports/e2e
           ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-walk.log
-      # THE LOAD-BEARING CHECK. kind-sso-walk.sh exits 0 in two shapes that
-      # look identical to `if: always()` below: a genuine PASS, and an unset
-      # WARDYN_TEST_K8S self-skip. Fail the job unless the log shows the walk
-      # actually ran specs and reached its own closing PASS line.
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      # THE LOAD-BEARING CHECK. Asserts on the walk's own exit code — 77 is
+      # common.sh's skip_lane, reserved for "opted out, proved nothing", never
+      # reused for a pass or a real failure (#463) — plus that the log shows
+      # the walk actually ran specs and reached its own closing PASS line.
       - name: Assert the walk actually executed specs (not a self-skip)
         shell: bash
         run: |
           set -euo pipefail
           log=test/reports/e2e/kind-sso-walk.log
-          if grep -q 'set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)' "$log"; then
-            echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-sso-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
             exit 1
           fi
-          if ! grep -qE 'UI e2e summary: [1-9][0-9]* spec file\(s\) passed' "$log"; then
-            echo "::error::no spec file was reported as executed and passed — see the uploaded log"
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-sso-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
             exit 1
           fi
-          if ! grep -q '^kind-sso-walk: PASS' "$log"; then
-            echo "::error::the walk never reached its own closing PASS line — see the uploaded log"
-            exit 1
-          fi
+          # T-08 (G9): "[1-9][0-9]* spec file(s) passed" alone let a run with real
+          # failures or skips through — the 09-22 log showed "1 spec file(s)
+          # passed, 1 failed, 4 test(s) skipped" and this regex still matched it.
+          # So require the exact line from each of the walk's three run-ui-e2e.sh
+          # calls, read from the file each one tees ALONE: $log interleaves all
+          # three summaries, and its last one is always a roles leg's.
+          # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 above fixes the AWS walk to exactly
+          # sso-member + sso-member-recovery; each roles leg runs sso-roles alone.
+          # Every one of those specs' WARDYN_TEST_K8S guard is satisfied here, so
+          # "0 failed, 0 skipped" is what this job's own configuration implies.
+          evidence=test/reports/e2e/kind-sso
+          expect_summary() { # <log> <spec count>
+            local got
+            got="$(grep -oE 'UI e2e summary: [0-9]+ spec file\(s\) passed, [0-9]+ failed, [0-9]+ test\(s\) skipped.*' "$1" | tail -1 || true)"
+            echo "$1: ${got:-<no UI e2e summary line>}"
+            if ! grep -qE "^UI e2e summary: $2 spec file\(s\) passed, 0 failed, 0 test\(s\) skipped" <<<"$got"; then
+              echo "::error::$1: expected exactly $2 spec file(s) passed, 0 failed, 0 test(s) skipped — got: ${got:-no summary line}"
+              exit 1
+            fi
+          }
+          # walk.log is different: kind-sso-walk.sh (#804) now calls
+          # run-ui-e2e.sh once PER SPEC and tee -a's every call into the same
+          # file, so a green run holds one "1 spec file(s) passed" summary
+          # PER SPEC, never a single "<spec count> spec file(s) passed" line —
+          # expect_summary's own shape can never match here. Require every
+          # summary line in the file to read exactly "1 spec file(s) passed, 0
+          # failed, 0 test(s) skipped", and require there to be exactly
+          # <spec count> of them (so a spec that silently stopped running
+          # still reddens the count, same law expect_summary enforces).
+          expect_per_spec_summaries() { # <log> <spec count>
+            local lines got_count bad
+            lines="$(grep -oE 'UI e2e summary: [0-9]+ spec file\(s\) passed, [0-9]+ failed, [0-9]+ test\(s\) skipped.*' "$1" || true)"
+            echo "$1:"
+            echo "${lines:-<no UI e2e summary line>}"
+            got_count=$(grep -cE '^UI e2e summary: 1 spec file\(s\) passed, 0 failed, 0 test\(s\) skipped' <<<"$lines" || true)
+            bad="$(grep -vE '^UI e2e summary: 1 spec file\(s\) passed, 0 failed, 0 test\(s\) skipped' <<<"$lines" | grep . || true)"
+            if [ -n "$bad" ] || [ "$got_count" != "$2" ]; then
+              echo "::error::$1: expected exactly $2 per-spec summaries, each '1 spec file(s) passed, 0 failed, 0 test(s) skipped' — got $got_count matching (of $(grep -c . <<<"$lines" || echo 0) total)"
+              exit 1
+            fi
+          }
+          expect_per_spec_summaries "$evidence/walk.log" 2
+          expect_summary "$evidence/roles-sso.log" 1
+          expect_summary "$evidence/roles-sso-only.log" 1
+          # Shared with kind-sso-ado-walk below (scripts/test-kind-sso-walk-log.sh
+          # proves it profile-aware, red on self-skip, green on PASS) — the
+          # per-spec counts above are this job's own extra rigor (T-08/G9),
+          # unrelated to the profile drift this script exists to close (#695).
+          ./scripts/check-kind-sso-walk-log.sh default "$log"
       - name: Upload walk evidence (log + manifest + per-spec results)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -519,25 +673,494 @@ jobs:
             test/reports/e2e/kind-sso/**
           if-no-files-found: error
 
+  # ── Live Kubernetes Azure DevOps SSO walk (kind, ado profile) ───────────────
+  # #476: 0.7.10 shipped WARDYN_KIND_SSO_PROFILE=ado, but the job above only
+  # ever ran the default Dex profile, so an Azure DevOps regression — the
+  # per-login credential capture, the run's REST + `git ls-remote` through the
+  # broker — was found only by hand. This runs
+  # scripts/lib/kind-sso-walk-ado.sh, curl+jq only (no Playwright, no UI deps),
+  # which the walk's own header and deploy/kind/sso/README.md "The Azure DevOps
+  # profile" describe in full.
+  #
+  # Own cluster, image tag and port (wardyn-ado / kind-ado / :8580, the fake's
+  # one pinned callback — see overlay.sh and the walk script's own checks) so
+  # this job can never collide with kind-sso-walk above.
+  #
+  # WARDYN_KIND_SSO_REBUILD=1: same reasoning as the default profile's job —
+  # certify the tip this workflow checked out. overlay.sh's ado branch already
+  # rebuilds wardynd/proxy/the fake unconditionally, so this is belt-and-
+  # suspenders, not load-bearing, here.
+  #
+  # THE LOAD-BEARING CHECK, same shape as kind-sso-walk's: kind-sso-walk.sh
+  # exits 0 on both a genuine PASS and an unset WARDYN_TEST_K8S self-skip
+  # (the self-skip happens before the script dispatches to the ado profile, so
+  # the message names only "the AWS SSO walk" — that's expected, not a bug).
+  kind-sso-ado-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      WARDYN_QUICKSTART_CLUSTER: wardyn-ado
+      WARDYN_QUICKSTART_IMAGE_TAG: kind-ado
+      WARDYN_QUICKSTART_HTTP_PORT: "8580"
+      WARDYN_QUICKSTART_SSH_PORT: "2522"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Bring up the kind quickstart cluster (ado profile's pinned ports — see deploy/kind/sso/README.md)
+        run: make kind-quickstart
+      - name: Add the Azure DevOps SSO overlay (fake Entra + fake Azure DevOps)
+        run: WARDYN_KIND_SSO_PROFILE=ado make kind-sso
+      - name: Live kind Azure DevOps SSO walk (member login capture + REST/git redemption)
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_KIND_SSO_PROFILE: ado
+          WARDYN_KIND_SSO_REBUILD: "1"
+          WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso-ado
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-ado-walk.log
+      # THE LOAD-BEARING CHECK — shared with kind-sso-walk above via
+      # scripts/check-kind-sso-walk-log.sh (profile-aware: default and ado
+      # close on different PASS lines — see that script's own header).
+      - name: Assert the walk actually ran (not a self-skip)
+        shell: bash
+        run: ./scripts/check-kind-sso-walk-log.sh ado test/reports/e2e/kind-sso-ado-walk.log
+      - name: Upload walk evidence (log + per-step evidence)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-sso-ado-walk-results
+          path: |
+            test/reports/e2e/kind-sso-ado-walk.log
+            test/reports/e2e/kind-sso-ado/**
+          if-no-files-found: error
+
+  # ── Compose role walk (both SSO-shaped deployments, hermetic) ───────────────
+  # #476: scripts/compose-sso-roles.sh (mprime + compose-sso, each signing
+  # every Dex identity — admin, allowlist-only operator, security admin, two
+  # members and one that matches no role — through the real console) never ran
+  # anywhere; role-map regressions on either shape were found only by hand. See
+  # the script's own header for the isolation guarantees (own compose project,
+  # own ports, `down -v` on exit, refuses to start beside another e2e backend).
+  #
+  # No kind cluster here — this is compose-only. It needs the SAME
+  # wardyn/wardynd:quickstart + wardyn/wardyn-proxy:quickstart tags
+  # kind-sso-walk builds, built fresh in this job (nightly jobs run on separate
+  # runners, so there is nothing to reuse from the job above).
+  compose-sso-roles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Docker available
+        run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build wardynd + wardyn-proxy (:quickstart, the tag the script defaults to)
+        run: |
+          docker build -f deploy/compose/Dockerfile.wardynd -t wardyn/wardynd:quickstart .
+          docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:quickstart .
+      - name: Compose SSO role walk (mprime + compose-sso)
+        env:
+          WARDYN_TEST_SSO_ROLES: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          ./scripts/compose-sso-roles.sh 2>&1 | tee test/reports/e2e/compose-sso-roles.log
+      # THE LOAD-BEARING CHECK, same shape as kind-sso-walk's: the script exits
+      # 0 on both a genuine PASS and an unset WARDYN_TEST_SSO_ROLES self-skip.
+      - name: Assert the walk actually ran (not a self-skip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/compose-sso-roles.log
+          if grep -q 'set WARDYN_TEST_SSO_ROLES=1 to bring up the compose SSO role walk (skipping)' "$log"; then
+            echo "::error::compose-sso-roles.sh self-skipped — WARDYN_TEST_SSO_ROLES did not reach the walk step"
+            exit 1
+          fi
+          if ! grep -q '^compose-sso-roles: PASS' "$log"; then
+            echo "::error::the compose role walk never reached its own closing PASS line — see the uploaded log"
+            exit 1
+          fi
+      - name: Upload walk evidence (log + per-shape results)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: compose-sso-roles-results
+          path: |
+            test/reports/e2e/compose-sso-roles.log
+            local/evidence/compose-sso-roles/**
+          if-no-files-found: error
+
+  # T-40 (#700), kind leg: scripts/kind-survival-walk.sh against the SAME
+  # `make kind-quickstart` cluster kind-sso-walk reuses. NEVER RUN BEFORE — see
+  # NOTIFY_EXEMPT in scripts/test-repo-guards.sh — kept out of
+  # notify-new-lanes' needs and release.yml's watched= until it has gone green
+  # here at least once, the same posture PR #1245 gave daemon-proxy-secret-kind.
+  kind-survival-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: Bring up the kind quickstart cluster
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+        run: make kind-quickstart
+      - name: kind survival walk (control-plane pod delete; cordoned-node run-pod eviction)
+        env:
+          WARDYN_TEST_K8S: "1"
+          # This runner's wardyn-quickstart cluster was just created by the
+          # step above and belongs to nothing else — safe to mutate here. See
+          # scripts/kind-survival-walk.sh's own guard for why a hand run must
+          # set this explicitly.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/kind-survival-walk.sh 2>&1 | tee test/reports/e2e/kind-survival-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-survival-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-survival-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-survival-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^kind-survival-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-survival-walk-results
+          path: test/reports/e2e/kind-survival-walk.log
+          if-no-files-found: error
+
+  # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
+  # `make kind-quickstart` cluster as the job above; the laptop is its own
+  # dedicated compose project this job builds fresh (nightly runners share
+  # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
+  # kind-survival-walk above.
+  hybrid-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: Bring up the kind quickstart cluster (the "org")
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+        run: make kind-quickstart
+      - name: Hybrid federation walk (laptop compose <-> org kind)
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_TEST_DOCKER: "1"
+          # This runner's wardyn-quickstart cluster was just created by the
+          # step above and belongs to nothing else — safe to mutate here. See
+          # scripts/hybrid-walk.sh's own guard for why a hand run must set
+          # this explicitly.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/hybrid-walk.sh 2>&1 | tee test/reports/e2e/hybrid-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/hybrid-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::hybrid-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S/WARDYN_TEST_DOCKER did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::hybrid-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^hybrid-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence (log + relay/wardynd logs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: hybrid-walk-results
+          path: |
+            test/reports/e2e/hybrid-walk.log
+            local/evidence/hybrid-walk/**
+          if-no-files-found: error
+
+  # T-30 (#690): scripts/kind-upgrade-walk.sh — the PUBLISHED v0.7.11 chart,
+  # upgraded in place to this tree's own tip, then a rollback recorded as
+  # evidence (informational — see that script's header on why no published
+  # release yet lets this assert a specific pass/fail outcome).
+  # Owns a THROWAWAY kind cluster end to end (create/delete), never
+  # `make kind-quickstart`'s shared one — see that script's own header for
+  # what is and is not built. Needs read access to this repo's own published
+  # ghcr.io packages (the chart + wardynd images), hence packages: read below.
+  # NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as the two jobs above.
+  kind-upgrade-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Log in to ghcr.io (read access to this repo's own published chart/images)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Log in helm's own registry client (OCI chart pull)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: kind upgrade/rollback walk
+        env:
+          WARDYN_TEST_K8S: "1"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/kind-upgrade-walk.sh 2>&1 | tee test/reports/e2e/kind-upgrade-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-upgrade-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-upgrade-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-upgrade-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^kind-upgrade-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-upgrade-walk-results
+          path: test/reports/e2e/kind-upgrade-walk.log
+          if-no-files-found: error
+
+  # ── Key services: Vault + OpenBao dev servers, and Vault on kind (T-33) ─────
+  # The docker leg is the PR `conformance` job's step, run again here against
+  # the same pins; the kind leg installs Vault from its Helm chart and logs in
+  # with Kubernetes auth and a projected service-account token.
+  kek-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Vault + OpenBao dev servers
+        run: make test-kek-conformance
+      - name: Vault on kind with Kubernetes auth
+        run: make test-kek-conformance-kind
+      - name: Upload kek-conformance test reports (docker + kind legs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kek-conformance-reports
+          path: test/reports/go/kek-*/**
+
+  # WARDYN_DAEMON_PROXY_SECRET on Kubernetes (T-59, #719): a throwaway kind
+  # cluster, two helm installs of the SAME chart with
+  # daemonProxySecret.existingSecret pointed at an operator Secret — once at
+  # its default defaultMode (0440) and once at 0400 — asserting both boot AND
+  # log wiring the var (installDaemonProxySecret's own unit test,
+  # TestInstallDaemonProxySecret_GroupReadableUnderFsGroupAccepted, pins the
+  # Go-level rule this proves reaches the CHART). The OG walk variant (a
+  # credentialed squid proving OIDC discovery through the proxy) is a
+  # separate owner step against the owner's own live estate, not this job.
+  #
+  # NOT in notify-new-lanes.needs / release.yml's watched= yet (PR #1245
+  # review F2): it has never run, so watching it from day one would block a
+  # release on a job that might fail deterministically. Add it to BOTH lists
+  # together (guard 13) once it has gone green on a real nightly run.
+  daemon-proxy-secret-kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: WARDYN_DAEMON_PROXY_SECRET on kind, defaultMode 0440 + 0400
+        run: make test-daemon-proxy-secret-kind
+
+  # Coverage-guided fuzzing of the session-cookie decoder: a cookie whose HMAC
+  # does not verify must never decode into a session. Every PR runs the seed
+  # corpus as an ordinary test; this lane searches past it.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Fuzz the session decoder
+        run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
+
   # ── The notification this workflow never had ───────────────────────────────
   # Nothing in .github/workflows/ used `if: failure()`, opened an issue, or
   # notified anywhere, and no nightly job is a branch-protection context — so a
   # red nightly blocked nothing and told nobody.
   #
   # SCOPED TO EVERY LANE WITH NO CHARACTERISED NOISE — which is every job in this
-  # workflow except `e2e-live`. The flagship `e2e-live` job carries pre-existing
-  # failures that have never been re-characterised; wiring a notification to it
+  # workflow except `e2e-live`. The flagship `e2e-live` job's failure is now
+  # CHARACTERISED (T-06, #666) as TWO known-fails, not one: step (i) fails
+  # because no model credential resolves for "claude-code" in the nightly
+  # estate, so the run never exits and its recording is never delivered
+  # (#965); step (g), the OIDC login flow, separately fails behind a curl
+  # blank-argument error in its own helper script, unrelated to the model
+  # credential (#1181). Wiring a notification to e2e-live before both close
   # would fire every night, and an alert that always fires is one everybody
-  # filters by week two — the same end state as no alert, reached expensively.
-  # Add e2e-live once it is green or its failures are characterised.
+  # filters by week two — the same end state as no alert, reached
+  # expensively. Add e2e-live to notify-new-lanes' needs: once #965 and
+  # #1181 both close.
   #
   # It was scoped to two lanes for the same reason and never widened as lanes
   # were added, so six of eight failed SILENTLY — `test-drive` included, the only
   # CI home of the guided first-run and of scripts/test-reset-all-sandbox-reap.sh.
   # A new lane joins this list; scripts/test-repo-guards.sh (in `make
   # test-scripts`) fails the build if one does not.
+  # T-07: the collision scripts/check-migration-numbers.sh (make lint) cannot
+  # see — two PRs open at once, each picking the next free migration number
+  # off origin/main as it stood when THAT PR's own gate ran, both green in
+  # isolation. It flags two open main-targeted PRs adding the same migration
+  # prefix (no merge needed), then merges every open, non-draft, main-targeted
+  # PR together, one at a time, in a throwaway worktree and runs go vet (all
+  # tag sets), `go test ./internal/db -run Migrat`, and the internal/api AST
+  # guards over the result. A binary search over the merge sequence names each
+  # PR that breaks them; PRs that conflict with an earlier one are set aside
+  # and listed. Also flags any open PR stacked on a branch that is no longer
+  # open (merged/closed) and so should have been retargeted to main. psql
+  # (preinstalled on ubuntu-latest) resets the database between check runs.
+  #
+  # Informational: it never merges or pushes anything for real, only reports.
+  # No measured baseline yet (new job) — 180 min budgets for about 30 check
+  # runs (a live dry run against 92 open PRs: 4 bad PRs, a binary search
+  # each); re-measure and tighten once nightly runs exist (docs/CI.md).
+  migration-merge-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      pull-requests: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Octopus scratch merge + stacked-base retarget check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        run: ./scripts/nightly-migration-merge-check.sh
+
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -547,6 +1170,7 @@ jobs:
       - name: Open or update the nightly-failure issue
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -558,9 +1182,9 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk or compose-sso-roles." \
               "" \
-              "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
+              "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
               "Run: $RUN_URL")
             gh issue create --title "$title" --body "$body"

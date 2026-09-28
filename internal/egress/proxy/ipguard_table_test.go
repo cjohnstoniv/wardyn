@@ -51,7 +51,7 @@ func TestBlockedRangesMatchPreExtractionLists(t *testing.T) {
 }
 
 // TestBlockedRangesCoverNonCanonicalSpellings is the same table asked in the
-// spelling the RESOLVER accepts and net.ParseIP does not (F143). Every case
+// spelling the RESOLVER accepts and net.ParseIP does not. Every case
 // above reaches isBlockedIP through net.ParseIP, so the whole table only ever
 // spoke about the canonical dotted-quad: `grep -rn '127\.1|0x7f000001|2130706433|0177\.'`
 // over the tree returned nothing, test or source. inet_aton(3) — and therefore

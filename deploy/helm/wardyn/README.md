@@ -4,7 +4,7 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 
 > **Published automatically — but only for a released version.** CI
 > ([.github/workflows/publish-image.yml](../../../.github/workflows/publish-image.yml))
-> builds and pushes `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+> builds and pushes `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main`
 > (`:latest`, `:sha-<commit>`); every `vX.Y.Z` release tag is
 > [release.yml](../../../.github/workflows/release.yml)'s job (the bare
 > semver — matching this chart's default `image.tag`, i.e. `Chart.yaml`'s own
@@ -62,7 +62,9 @@ install.
   older image needs `readinessProbe.path` pinned back, see
   [Installation](#installation)); `WARDYN_PG_DSN` and
   `WARDYN_ADMIN_TOKEN` sourced from Secrets.
-- **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
+- **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`) and
+  the `internal` port (`service.internalPort`, 8443: the proxy-facing TLS
+  listener — see [Control-plane to proxy TLS](#control-plane-to-proxy-tls)), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
   [Split SSH exposure](#split-ssh-exposure) to expose it differently) and a UI
   port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see
@@ -75,8 +77,8 @@ install.
 - **NetworkPolicy** — default-deny ingress/egress (Wardyn's L0 egress posture),
   re-opening DNS, Postgres egress, HTTP (+ SSH and + the UI-sandbox gateway,
   when enabled) ingress from this
-  namespace, and (`k8s.enabled`) API-server egress plus an ingress peer for a
-  separate `k8s.runsNamespace`.
+  namespace, and (`k8s.enabled`) the `internal` TLS port, API-server egress, and
+  an ingress peer for a separate `k8s.runsNamespace`.
 - **Role/RoleBinding + ClusterRole/ClusterRoleBinding** (`k8s.enabled` only,
   unless `k8s.rbac.create=false`) — least-privilege RBAC for the k8s runner
   substrate; see
@@ -289,10 +291,49 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
+## Boot secrets as files (Vault Agent / CSI)
+
+By default the chart hands wardynd its DSN, admin token and age key as
+`env.valueFrom.secretKeyRef`. Two things a security review often asks for rule
+that out: secrets delivered dynamically at runtime, and no pod with a secret in
+an env var (cloud posture scanners flag it). Every secret-carrying wardynd
+setting therefore has a `<VAR>_FILE` twin holding a **path**; wardynd reads the
+file once at boot. Setting a variable both ways refuses boot (and the render),
+and so does an empty, unreadable, group- or world-writable file, or one
+wardynd's own non-root uid owns that others can read.
+
+**Same Secrets, as files.** `secretFiles.enabled=true` projects the Secrets
+the chart already wires (either DSN mode above, `auth.adminToken`, the age
+key) into one read-only volume at `secretFiles.mountPath` (default
+`/etc/wardyn/secrets`, mode `0440`, readable through
+`podSecurityContext.fsGroup`) and sets `WARDYN_PG_DSN_FILE`,
+`WARDYN_ADMIN_TOKEN_FILE` and `WARDYN_AGE_KEY_FILE` instead. No secretKeyRef
+env is rendered. It is **off by default** because it needs a wardynd image
+that reads `*_FILE` (0.7.12 or later): an older pinned `image.tag`/`image.digest`
+would boot with no DSN. Turning it on for an existing install changes only the
+delivery.
+
+```bash
+helm upgrade wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
+  --reuse-values --set secretFiles.enabled=true
+```
+
+**Vault Agent injector or Secrets Store CSI.** Point `env.WARDYN_<NAME>_FILE`
+at the path the agent or CSI volume writes, and leave the matching chart
+source empty. For the DSN that means `postgres.dsn.secretRef.name=""`, since
+it has a non-empty default. A CSI volume goes in through `extraVolumes` /
+`extraVolumeMounts`. The chart counts a `_FILE` entry in `env`/`extraEnv` as
+that secret being wired: it satisfies the auth and age-key render checks, and
+naming it beside the chart's own source is refused. The non-chart secrets
+(`WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`,
+`WARDYN_AUDIT_SINKS`, `WARDYN_PG_MIGRATE_DSN`) take the same route. Full Vault
+Agent and CSI examples:
+[docs/OPERATIONS.md "Secrets from files"](../../../docs/OPERATIONS.md#secrets-from-files-vault-agent--csi).
+
 ## Multi-user (admin/member RBAC)
 
 > This is the multi-user path. Admins read on; a member joining this
-> deployment wants docs/MEMBERS.md.
+> deployment wants docs/USERS.md.
 
 Wardyn has a real two-role model — every OIDC session carries an **admin** or
 **member** role, derived at login (`internal/auth/oidc`'s `deriveRole`).
@@ -314,8 +355,8 @@ allowlist kept as a safety net:
 ```yaml
 env:
   WARDYN_OIDC_ISSUER: "https://login.microsoftonline.com/<tenant-id>/v2.0"
-  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=member"
-  WARDYN_OIDC_DEFAULT_ROLE: "member"          # unmatched users land here instead of being denied
+  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=user"
+  WARDYN_OIDC_DEFAULT_ROLE: "user"          # unmatched users land here instead of being denied
   WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
 
 extraEnv:
@@ -460,8 +501,11 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   chart never creates or labels it — and gets its own Role/RoleBinding plus
   an extra NetworkPolicy ingress peer (matched on the namespace's built-in
   `kubernetes.io/metadata.name` label, since an operator-created namespace
-  carries no chart labels) so its proxy sidecars can still reach wardynd for
-  credential mints, approval checks, and recording uploads.
+  carries no chart labels) so its proxy sidecars can still reach wardynd's
+  `internal` TLS port for credential resolves and mints, approval checks, and
+  recording uploads. That port has its own NetworkPolicy rule (this namespace
+  plus the runs namespace) and never inherits `networkPolicy.ingress.from`.
+  The runs namespace is granted that port only, never `http`.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
   also what the boot-time egress canary launches. **Required — the chart
   refuses to render without it** (like `serviceAccount.automount` above): the
@@ -515,11 +559,14 @@ networkpolicies create/list/delete/deletecollection — deliberately **no**
 body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
 `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run
 whose pods are both gone, and it is asked for best-effort — a Role without it
-degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
+degrades the sweep rather than killing it; `events` list only, so an image
+pull reads as "Downloading the image" rather than ContainerCreating — a Role
+without it keeps the old wording and nothing else changes); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
-only ever resolves one by name). One rule is conditional:
-`persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
-see [User drives](#user-drives-userdrivesenabled) below. A run's `disk_mib`
+only ever resolves one by name). One rule is conditional, and it is the only
+one switched twice: `persistentvolumeclaims` get+create, rendered only with
+`drives.enabled`, plus `delete` only with `drives.reclaim.enabled` —
+see [User drives](#user-drives-drivesenabled) below. A run's `disk_mib`
 cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the
 runner already creates, and eviction is read back through the `pods: get` the
 Role already has.
@@ -535,7 +582,14 @@ uninstalling either would take the other's RuntimeClass read permission with it
 Upgrading a release installed before 0.7 renames both objects in place, which
 Helm handles as an ordinary create-then-prune.
 
-### User drives (`userDrives.enabled`)
+### User drives (`drives.enabled`)
+
+Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no
+alias — a `--reuse-values` upgrade from an older release must set `drives`
+explicitly; see docs/sdk.md's "Renamed in 0.8" table. The chart refuses to
+render while the old `userDrives.enabled` is `true`, since nothing reads it any
+more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the
+`userDrives` block from your values file).
 
 A **user drive** is per-person storage a run mounts at `/home/agent/drive`. An
 admin registers a drive and allocates it in the console; a member ticks a box on
@@ -547,19 +601,32 @@ and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
 | `k8s_pvc` (managed) | looks the claim up by name, creates it on first use as `wardyn-drive-<drive-slug>-<home>` with `accessModes: [ReadWriteOnce]` and the allocation as `requests.storage` | `get` + `create` |
 | `k8s_pvc_static` (share) | looks the claim up by name; a missing one fails the run | `get` |
 
-`userDrives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
+`drives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
 to the namespaced Role. Leave it on for **any** drive at all: a static share
 needs `get`, and with the rule absent the LOOKUP is what the apiserver refuses
 first. Off, any drive's run fails at dispatch with a hint naming this switch.
 
-**There is no `delete` verb, on purpose.** A drive outlives every run that mounts
-it, and the claim carries no `wardyn.run-id` label, so the per-run teardown sweep
-cannot select it. Reclaiming a departed person's storage is an operator command,
-run once, deliberately:
+**The `delete` verb is off by default, and it is a second switch.** A drive
+outlives every run that mounts it, and the claim carries no `wardyn.run-id`
+label, so no per-run teardown sweep can ever select it — that holds on every
+setting. What `drives.reclaim.enabled=true` adds is `delete` on the same
+rule, for exactly one caller: the operator's explicit
+`POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim`), super-admin only,
+refused while a pod still mounts the claim, and audited as `drive.reclaim` on
+every attempt that reaches the cluster. **It destroys a member's stored bytes and nothing undoes it**, so
+it is opt-in: leave the value unset and this Role is byte-for-byte the one it
+has always been, every reclaim attempt ends in the apiserver's own `403`, and
+reclaiming a departed person's storage stays an operator command, run once,
+deliberately:
 
 ```sh
 kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
+
+Turn it on when your offboarding runbook calls the API instead. Both paths stay
+supported; only one is the default. `deletecollection` is still never granted —
+a label-scoped sweep would reclaim every claim matching a selector in one call,
+and a reclaim is one person's object at a time, by name, or it is not reviewable.
 
 The console's drive preview prints the object name for a principal — paste the
 sign-in subject FIRST: on a `hash`/`sub` drive the name keys on the first claim,
@@ -642,13 +709,12 @@ mount point `/home/agent/drive`, and hide the read-only `~/.claude` bind the sub
 uses. `readOnlyRootFilesystem` would close the residual and is deliberately not set, because the
 agent legitimately writes those paths.
 
-**Risk carried by the cache volume specifically:** an `emptyDir` mounted at `/home/agent/.cache`
-shadows the full image's pre-created, agent-owned `/home/agent/.cache/go-build`
-(`deploy/images/full/Dockerfile`) with a fresh directory whose ownership the kubelet decides —
-`FSGroup` is only applied to a pod that has a drive attached (`internal/runner/k8s/drives.go`), so
-a run with `disk_mib` set and no drive can get a root-owned mount the uid-1000 agent cannot write
-into. Only `test/conformance`'s `ephemeralFillTargets` "Cache" target, run against a real cluster,
-catches this — a fake-clientset unit test cannot see real `emptyDir` ownership.
+**The cache volume starts cold:** an `emptyDir` mounted at `/home/agent/.cache` shadows the full
+image's pre-created `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`), so the Go
+build cache is rebuilt from empty. The mount is writable without `FSGroup`: the kubelet creates an
+`emptyDir` root-owned but `0777`, the same mode `/tmp` and `/home/agent/work` have been written
+through by the uid-1000 agent since 0.7.5. `test/conformance`'s `ephemeralFillTargets` "Cache"
+target writes it against a real cluster.
 
 Each volume AND their sum are capped at `disk_mib`: the kubelet counts `emptyDir` usage toward the
 pod's `ephemeral-storage` total as well, so a pod with the run's shape writing 40Mi into each
@@ -743,6 +809,13 @@ The chart refuses to render `ingress.enabled: true` with no `ingress.hosts`
 deliberately not offered yet: this chart's CI has no Gateway controller to
 render it against, and an untested template is worse than none.
 
+Managed laptops (`deploy/desktop`, the `m'` member-mode envelope) enrol
+against this same control plane over this Ingress: `POST
+/api/v1/devices/enrol` is the anonymous endpoint a device's first boot calls
+with its MDM-minted enrolment token, so it has to be reachable through
+whatever `ingress.hosts` name you set above — there is no separate device
+listener or port to open.
+
 ## Default policy
 
 `defaultPolicy` bakes an operator-chosen policy into a ConfigMap and mounts
@@ -777,6 +850,30 @@ always wins over the ConfigMap-backed path (the chart omits its own entry
 when `env.WARDYN_DEFAULT_POLICY` is set, same as `WARDYN_RECORDING_DIR`/
 `WARDYN_AUDIT_SPOOL`, see [Values](#values) below).
 
+## Control-plane to proxy TLS
+
+Every run's proxy resolves credential values from wardynd, so that hop is TLS.
+The chart renders `WARDYN_CONTROL_PLANE_URL` as
+`https://<release>.<namespace>.svc.cluster.local:<service.internalPort>` and
+passes `-internal-listen=:<service.internalPort>` (default 8443). The
+certificate comes from wardynd's **own** internal CA, minted on first boot into
+its secret store (age-encrypted in Postgres, beside the signing key) and kept
+across restarts and upgrades — so there is no CA Secret, no cert-manager
+dependency and nothing to rotate by hand, and a GitOps render (`helm template`,
+Argo CD, Flux) cannot churn it the way a chart-generated certificate would.
+Each proxy gets the CA certificate in its sealed per-run Secret and trusts it
+alone. `/healthz` reports `"proxy_hop_tls": true`.
+
+`service.internalPort` must differ from the other wardynd ports (the render
+refuses a collision). Never route it through an Ingress. Its NetworkPolicy rule
+admits only this namespace and `k8s.runsNamespace` — the peers you add to
+`networkPolicy.ingress.from` for the console (an ingress controller, a
+scraper) are not granted it. If a cluster-wide
+policy outside this chart (a baseline default-deny, a mesh authorization
+policy) restricts pod-to-pod ports, allow the runs namespace to reach wardynd
+on this port. Details, the per-shape table and rotation:
+[docs/OPERATIONS.md § Control-plane to proxy TLS](../../../docs/OPERATIONS.md#control-plane-to-proxy-tls).
+
 ## Corporate CA trust
 
 `trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap
@@ -787,7 +884,8 @@ cluster's egress passes through a TLS-inspecting corporate middlebox: without
 it, `wardynd`'s own outbound TLS (OIDC discovery, the GitHub App transport,
 the audit webhook sink), the `wardyn-proxy` sidecar's forwarding transport,
 and every sandbox's own TLS clients on a passthrough CONNECT tunnel all fail
-certificate verification against that middlebox.
+certificate verification against that middlebox. It never widens what a proxy
+trusts for its calls to wardynd (see above).
 
 ```bash
 helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
@@ -807,6 +905,42 @@ ConfigMap-backed path, same as `env.WARDYN_DEFAULT_POLICY` above — the escape
 hatch for a CA delivered your own way (e.g. `extraEnv` + `secretKeyRef`
 pointing `WARDYN_TRUSTED_CA_FILE` at a path a volume you wire yourself
 mounts, rather than this chart's own ConfigMap).
+
+## Daemon egress proxy
+
+`WARDYN_DAEMON_PROXY_URL` (plain) and `WARDYN_DAEMON_PROXY_SECRET` (a file
+holding a proxy URL that may embed `user:pass@`) route `wardynd`'s own
+outbound calls — OIDC discovery/JWKS, audit webhooks, GitHub App token
+minting, AWS SSO renewal, Entra directory sync — through a forward proxy; see
+[docs/ENV.md](../../../docs/ENV.md). The plain form is `env.WARDYN_DAEMON_PROXY_URL`;
+for the credentialed form, `daemonProxySecret.existingSecret` mounts a Secret
+**you manage** (this chart never creates or reads it) read-only and wires
+`WARDYN_DAEMON_PROXY_SECRET` at the mounted path:
+
+```bash
+kubectl create secret generic wardyn-daemon-proxy -n wardyn \
+  --from-literal=proxy-url='http://user:pass@proxy.corp.example:3128'
+helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
+  --set daemonProxySecret.existingSecret=wardyn-daemon-proxy \
+  ...
+```
+
+`existingSecretKey` (default `proxy-url`) names the key inside it.
+`defaultMode` (default `0440`, octal) is a chart-render-time default, not a
+boot-time guarantee — `wardynd`'s own `daemonProxySecretMode` rule
+(`cmd/wardynd/daemon_proxy.go`) independently refuses only a group- or
+world-**writable** file at boot, and refuses **other**-readable only when the
+file is owned by `wardynd`'s own non-root uid. A Kubernetes Secret volume is
+always root-owned, never `wardynd`'s uid, so that second refusal never fires
+here: `0440`, `0400` and even a wider `0644`/`0444` all boot. Under this
+chart's own `podSecurityContext.fsGroup` the kubelet additionally ORs in
+group-read regardless of `defaultMode`, so `0400` and `0440` are the SAME
+mode `wardynd` actually opens (`0440`) — `0400` only differs without an
+`fsGroup` of your own. An operator-set `env.WARDYN_DAEMON_PROXY_SECRET` always
+wins over the Secret-backed path — the escape hatch for a Vault Agent / CSI
+shape via `extraVolumes` instead. Setting both `daemonProxySecret.existingSecret`
+and a `WARDYN_DAEMON_PROXY_URL` renders fine, but `wardynd` itself refuses to
+boot on it: the two name one proxy two different ways.
 
 ## Split SSH exposure
 
@@ -1025,6 +1159,12 @@ See `values.yaml` for all options. Key settings:
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
   you **pin an `image.tag` at or below `0.5.0`**, which serves none: see
   [Installation](#installation) for what that failure looks like.
+- `basePath`: serve the console, API, sign-in and health endpoints under a
+  sub-path behind a reverse proxy (`WARDYN_BASE_PATH`, e.g. `/wardyn`). The
+  three probes move under it (`readinessProbe.path` stays relative to it), and
+  so must `WARDYN_OIDC_REDIRECT_URL`. Empty (default) => the host root. See
+  [docs/OPERATIONS.md "Serving the console under a
+  sub-path"](../../../docs/OPERATIONS.md#serving-the-console-under-a-sub-path).
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see
@@ -1034,6 +1174,12 @@ See `values.yaml` for all options. Key settings:
   secret-bearing variables docs/ENV.md marks 🔒: `WARDYN_OIDC_CLIENT_SECRET`,
   and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM
   `bearer_token`).
+- `secretFiles.enabled` / `secretFiles.mountPath`: deliver the chart-wired DSN,
+  admin token and age key as files instead of env. Off by default. See
+  [Boot secrets as files](#boot-secrets-as-files-vault-agent--csi).
+- `extraVolumes` / `extraVolumeMounts`: pod volumes and wardynd mounts, rendered
+  verbatim. Use them for a Secrets Store CSI volume or your own Secret volume
+  behind a `WARDYN_*_FILE` path.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs`
   with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off`
   (no recording, no replay) when off. wardynd's own default directory writes to the
@@ -1051,11 +1197,15 @@ See `values.yaml` for all options. Key settings:
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
-- `userDrives.enabled`: adds `persistentvolumeclaims: get, create` to the
+- `drives.enabled`: adds `persistentvolumeclaims: get, create` to the
   k8s-runner Role so runs can mount per-person storage, off by default — see
-  [User drives](#user-drives-userdrivesenabled) above. It is the only key in the
-  block: a drive's storage class is a per-drive field in the console, not a chart
-  value.
+  [User drives](#user-drives-drivesenabled) above.
+- `drives.reclaim.enabled`: adds `delete` on that same rule, also off by
+  default, and **it is the one value in this chart that can destroy a member's
+  stored bytes** — it exists only so the operator's explicit
+  `POST /api/v1/drives/{id}/reclaim` can work. Same section above. Those two are
+  the whole block: a drive's storage class is a per-drive field in the console,
+  not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
 - `replicas`: **leave at 1 — the chart refuses anything higher.** A render with

@@ -1,0 +1,200 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// Lost runs (long-holds design rev 4, §4 rows 2–3, RL-9). A run outlives its
+// sandbox: instead of failing and tearing down, an interactive run is KEPT,
+// like an ended one (run_lease.go), with its proxy stopped so it has no
+// egress, its approvals cancelled and its broker credentials revoked. Its run
+// identity is kept for a later revive to mint from; nothing holds its token.
+//
+//   - reboot: the watcher saw the agent container exited but still there (a
+//     host reboot, a Docker Desktop restart, a long suspend). The agent stays
+//     stopped and its writable layer is the kept files.
+//   - outage: the run's token lapsed because the control plane was unreachable
+//     past the proxy's renew window. The proxy then gives up renewing but keeps
+//     forwarding allowlisted egress on a dead identity, audit-dark
+//     (egress/proxy/renew.go), so it is removed; the agent keeps running.
+//
+// A lost run is kept while its lease or its ended-run grace is live: until its
+// end plus the grace, or until someone kills it when it has no end. Everything
+// that cannot be kept fails closed and is torn down as before: a headless run
+// (the completion watcher that would finish it skips kept runs), a run past
+// its end and grace, or a substrate that cannot keep a sandbox (Kubernetes).
+// A proxy stop that fails any other way keeps the run with its containment
+// unresolved (containment_error) for the lease sweep to retry (#1060): a
+// teardown on the same failing daemon would lose the files and contain nothing.
+
+// runTokenLapseAfter is how long a RUNNING run may go without a renew before
+// its identity is dead. The proxy renews at least every 30 minutes and gives
+// up an hour after its last good renew (egress/proxy/renew.go
+// renewGiveUpAfter, which mirrors the embedded provider's 1 h tokenTTL); the
+// five minutes cover the stamp landing a moment after the mint and a small
+// clock difference between the database and the minting replica.
+const runTokenLapseAfter = time.Hour + 5*time.Minute
+
+// sweepLapsedRunTokens is the boot and sweep check: every RUNNING run whose
+// token lapsed is marked lost (outage) with its proxy stopped, or torn down.
+func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
+	loser, ok := s.cfg.Store.(store.RunLoser)
+	leaser, lok := s.cfg.Store.(store.RunLeaser)
+	if !ok || !lok || s.cfg.Runner == nil {
+		return nil
+	}
+	runs, err := loser.ListLapsedTokenRuns(ctx, runTokenLapseAfter)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		func() {
+			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+			defer cancel()
+			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, s.cfg.Now()) {
+				return
+			}
+			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
+				"run token lapsed: the control plane was unreachable past its renew window")
+		}()
+	}
+	return nil
+}
+
+// keepRebootedRun is the watcher's side: an agent it observed terminal whose
+// container still exists (the probe carries an exit code; a gone container
+// does not) is marked lost (reboot) rather than finalized. false leaves the
+// caller's finalize as before. A substrate that cannot keep it (Kubernetes)
+// tears it down in the state the exit code says, as the finalize would have.
+func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st runner.Status) bool {
+	// F2 (Fable review): a revive already in flight owns this run — a watcher
+	// sweep that lands mid-revive (its claim cleared lost_at, but the new proxy
+	// or agent is not up yet) must leave it alone, never lose it again.
+	if _, busy := s.reviving.Load(run.ID); busy {
+		return true
+	}
+	loser, ok := s.cfg.Store.(store.RunLoser)
+	leaser, lok := s.cfg.Store.(store.RunLeaser)
+	if !ok || !lok || st.ExitCode == nil {
+		return false
+	}
+	terminal := types.RunFailed
+	if *st.ExitCode == 0 {
+		terminal = types.RunCompleted
+	}
+	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0, s.cfg.Now())
+}
+
+// loseRun marks run lost for reason and stops its proxy. false means the run
+// cannot be kept, and the caller's fail-closed arm applies. true means it is
+// taken care of: kept (with its containment unresolved when the stop failed),
+// torn down (as terminal) because its substrate cannot keep a sandbox, or left
+// alone because the claim did not land (another replica took
+// it, a renew landed, or it went terminal) or could not be written (the next
+// pass retries). tokenLife > 0 also requires the run's token to be lapsed by
+// that much still (MarkRunLost), so the sweep's mark loses to a renew. at is
+// the mark's time: now, except for an ended run put back to ended, whose files
+// grace stays counted from when it first ended.
+func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) bool {
+	now := s.cfg.Now()
+	if !s.lostRunKeepable(run, now) {
+		return false
+	}
+	applied, err := loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: marking a run lost failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return true
+	}
+	if !applied {
+		return true
+	}
+	run.LostAt, run.LostReason = &at, reason
+	s.cancelRunApprovals(ctx, run.ID)
+	s.revokeRunBroker(ctx, run.ID)
+	s.leaseEnded.Store(run.ID, struct{}{})
+	data, outcome := map[string]any{"reason": string(reason)}, "success"
+	if err := s.stopLostSandbox(ctx, run, now); err != nil {
+		data["lost_error"] = err.Error()
+		if errors.Is(err, runner.ErrEndUnsupported) {
+			data["kept"] = false
+			s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
+			return true
+		}
+		// Any other failure leaves containment unconfirmed, and a teardown
+		// on the same failing daemon would only lose the files (#1060): the
+		// run stays kept and the lease sweep's re-assert retries the stop.
+		data["containment"], outcome = "unresolved", "failure"
+		s.noteContainmentFailure(ctx, leaser, run.ID, err)
+	}
+	data["kept"] = true
+	if until, ok := s.keptUntil(run); ok {
+		data["kept_until"] = until
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.lost",
+		run.ID.String(), outcome, mustJSON(data)))
+	return true
+}
+
+// lostRunKeepable: an interactive RUNNING run with a sandbox, not already
+// kept, whose lease or ended-run grace is still live.
+func (s *Server) lostRunKeepable(run types.AgentRun, now time.Time) bool {
+	if run.State != types.RunRunning || !run.Interactive || run.SandboxRef == "" || runIsKept(run) {
+		return false
+	}
+	return run.EndsAt == nil || now.Before(run.EndsAt.Add(s.cfg.EndedRunGrace))
+}
+
+// keptUntil is when a kept run is torn down: an ended run at its end plus the
+// grace counted from when it ended, a lost one at its end plus the grace, and
+// a lost run with no end only when someone kills it (ok false).
+func (s *Server) keptUntil(run types.AgentRun) (time.Time, bool) {
+	switch {
+	case run.LostReason == types.LostEnded:
+		return run.LostAt.Add(s.cfg.EndedRunGrace), true
+	case run.EndsAt != nil:
+		return run.EndsAt.Add(s.cfg.EndedRunGrace), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// endedFilesKept reports whether an ended run's files grace is still live at
+// now: an ended, kept run may be extended and revived only inside it (#1061).
+func (s *Server) endedFilesKept(run types.AgentRun, now time.Time) bool {
+	return run.LostReason == types.LostEnded && run.LostAt != nil && now.Before(run.LostAt.Add(s.cfg.EndedRunGrace))
+}
+
+// endedKept is the condition a write on an ended, kept run lands under (see
+// store.EndedKept), for run as read and the grace counted at now; nil for a run
+// its own end did not stop.
+func (s *Server) endedKept(run types.AgentRun, now time.Time) *store.EndedKept {
+	if run.LostReason != types.LostEnded || run.LostAt == nil {
+		return nil
+	}
+	return &store.EndedKept{LostAt: *run.LostAt, KeptAfter: now.Add(-s.cfg.EndedRunGrace), Now: now}
+}
+
+// stopLostSandbox stops a lost run's proxy. An outage run inside its lease
+// keeps its agent running; any other lost run (a reboot, or an outage past
+// its end) has its agent stopped as at the end.
+func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now time.Time) error {
+	if run.LostReason == types.LostOutage && (run.EndsAt == nil || now.Before(*run.EndsAt)) {
+		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
+		if !ok {
+			return runner.ErrEndUnsupported
+		}
+		return stopper.StopProxy(ctx, run.SandboxRef)
+	}
+	return s.endSandbox(ctx, run)
+}

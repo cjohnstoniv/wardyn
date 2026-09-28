@@ -37,7 +37,7 @@ type gitBrokerUpstream struct {
 	gitBody   []byte // body the forge received (proves byte-for-byte forwarding)
 	gitHits   int
 	// gitHeaders is the FULL header set the forge saw. gitAuth alone could not
-	// see F104: the lane stripped Authorization and forwarded every other
+	// see the leak: the lane stripped Authorization and forwarded every other
 	// sandbox-set credential header (Private-Token, X-Api-Key, …) beside the
 	// brokered Basic auth.
 	gitHeaders http.Header
@@ -76,13 +76,13 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 // newGitBrokerUpstream mints the PRODUCTION github_token shape — no `username`
 // key at all.
 //
-// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves Minted.Username
-// empty for this kind (internal/broker/broker.go: "Empty for github_token"; the
-// caller authenticates as x-access-token), and internal/api serialises it as an
-// empty string. The fixture used to inject `"username":"x-access-token"`, a
-// shape the broker never emits — which made the mask pin green while the
-// rendering actually on the wire, base64("x-access-token:"+tok), was
-// unregistered (F120): brokeredToken registered base64(":"+tok) instead.
+// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves
+// Minted.Username empty for this kind (internal/broker/broker.go: "Empty for
+// github_token"; the caller authenticates as x-access-token), and
+// internal/api serialises it as an empty string. A fixture that injected
+// `"username":"x-access-token"` — a shape the broker never emits — would make
+// the mask pin green while the rendering actually on the wire,
+// base64("x-access-token:"+tok), went unregistered.
 func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	t.Helper()
 	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
@@ -106,6 +106,7 @@ func newGitBrokerProxyWithSpec(t *testing.T, grants map[string]uuid.UUID, upstre
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		GitGrants:       grants,
 	})
 	return p, buf
@@ -217,6 +218,7 @@ func TestGitBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": grantID},
 	})
 
@@ -269,7 +271,7 @@ func TestGitBrokerRejectsBadRequests(t *testing.T) {
 	}
 }
 
-// ── push branch-namespace confinement ────────────────────────────────────────
+// push branch-namespace confinement
 
 // pkt frames one git pkt-line: 4 hex length digits that count themselves.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
@@ -421,6 +423,85 @@ func TestBranchNSEnforcedEnv(t *testing.T) {
 	}
 }
 
+// TestBranchNSScopes pins branchNSScopes' {app,pat} grammar directly — both
+// lanes together, not just the App lane TestBranchNSEnforcedEnv covers —
+// including every fail-CLOSED edge the doc comment promises: a bare garbage
+// word, a bare value mixed with a scoped part, an unrecognized scope name,
+// an empty word or scope, a non-comma separator, and the same scope named
+// twice with disagreeing words. Every fail-closed case wants (true, true):
+// a garbage value must never leave EITHER lane weaker than its default.
+//
+// This is the guard review round PR #1248 found unpinned (finding F2):
+// mutating either fail-closed exit — the bare-garbage arm at branchNSScopes'
+// `!ok` check, or the duplicate-disagreement check in its scoped-parsing
+// loop — left the whole existing suite green. Both mutations are called out
+// below so a future revert of either one is caught here first.
+func TestBranchNSScopes(t *testing.T) {
+	for _, tc := range []struct {
+		val          string
+		wantApp      bool
+		wantPat      bool
+		failsClosed  bool // documents the case as one of the "anything else" arms
+		mutantCaught string
+	}{
+		{val: "", wantApp: true, wantPat: false},
+		{val: "   ", wantApp: true, wantPat: false}, // whitespace-only is still "unset"
+		{val: "on", wantApp: true, wantPat: false},  // bare word: App lane ONLY
+		{val: "off", wantApp: false, wantPat: false},
+		{val: "pat:on", wantApp: true, wantPat: true}, // App keeps its default; PAT set explicitly
+		{val: "pat:off", wantApp: true, wantPat: false},
+		{val: "app:off,pat:on", wantApp: false, wantPat: true},
+		{val: "app:on,pat:off", wantApp: true, wantPat: false},
+		{val: "pat:on,pat:on", wantApp: true, wantPat: true}, // duplicate AGREEING: not a failure
+		{val: " APP : OFF , PAT : ON ", wantApp: false, wantPat: true},
+
+		// Bare garbage: branchNSScopes' `!ok` exit on the bare-value path.
+		// M3 (reviewer's mutation): replacing that path's
+		// `return branchNSFailClosed(raw)` with `return true, pat` makes
+		// this case read (true, false) instead of (true, true) — caught below.
+		{val: "maybe", wantApp: true, wantPat: true, failsClosed: true, mutantCaught: "M3"},
+
+		// A bare value mixed with a scoped part: "off" alone would be bare,
+		// but the presence of "pat:on" routes the WHOLE value through the
+		// scoped parser, where "off" (no ":") fails `!cut`.
+		{val: "off,pat:on", wantApp: true, wantPat: true, failsClosed: true},
+
+		// An empty word after the scope's colon.
+		{val: "app:", wantApp: true, wantPat: true, failsClosed: true},
+		{val: "app:off,", wantApp: true, wantPat: true, failsClosed: true}, // trailing empty part
+		// An unrecognized scope name.
+		{val: "git:off", wantApp: true, wantPat: true, failsClosed: true},
+		// A space instead of a comma between two scope:word pairs — read as
+		// ONE part, so the word half becomes "off pat:on", unrecognized.
+		{val: "app:off pat:on", wantApp: true, wantPat: true, failsClosed: true},
+
+		// Duplicate DISAGREEING: the one case that exercises the dup-check
+		// specifically (every other failsClosed case above never reaches it).
+		// M4 (reviewer's mutation): disabling branchNSScopes' duplicate-scope
+		// disagreement check (`if prev, dup := set[scope]; dup && prev != v`)
+		// makes this last-wins ("pat:off" overwrites "pat:on" in the map),
+		// reading (true, false) instead of the fail-closed (true, true) —
+		// caught below.
+		{val: "pat:on,pat:off", wantApp: true, wantPat: true, failsClosed: true, mutantCaught: "M4"},
+	} {
+		t.Run("val="+tc.val, func(t *testing.T) {
+			t.Setenv(envEnforceBranchNS, tc.val)
+			gotApp, gotPat := branchNSScopes()
+			if gotApp != tc.wantApp || gotPat != tc.wantPat {
+				extra := ""
+				if tc.mutantCaught != "" {
+					extra = " (this case is " + tc.mutantCaught + "'s pin)"
+				}
+				t.Fatalf("branchNSScopes(%q) = (%v, %v), want (%v, %v)%s",
+					tc.val, gotApp, gotPat, tc.wantApp, tc.wantPat, extra)
+			}
+			if tc.failsClosed && !(gotApp && gotPat) {
+				t.Fatalf("branchNSScopes(%q) is documented as a fail-closed case but did not enforce both lanes: (%v, %v)", tc.val, gotApp, gotPat)
+			}
+		})
+	}
+}
+
 // TestGitBrokerDeniesOutOfNamespacePush: with enforcement on, a push to a branch
 // outside `wardyn/<run-id>/*` is 403'd BEFORE the token is minted and before any
 // byte reaches github; audit gets a brokered:git:branch-ns deny row.
@@ -501,8 +582,8 @@ func TestGitBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
 // TestGitBrokerEnforcesPushByDefault: confinement is DEFAULT-ON — with the env
 // unset an out-of-namespace push is refused before the mint, and nothing reaches
 // github. agent-run puts the agent on `wardyn/<run-id>/work` (name_run_branch), so
-// the compliant push is the one a stock run makes. This is the regression pin for
-// the default posture; TestGitBrokerPushOptOut covers the escape hatch.
+// the compliant push is the one a stock run makes. This pins the default posture;
+// TestGitBrokerPushOptOut covers the escape hatch.
 func TestGitBrokerEnforcesPushByDefault(t *testing.T) {
 	t.Setenv(envEnforceBranchNS, "") // never inherit an operator's setting
 	up := newGitBrokerUpstream(t, "gh-inst-token")
@@ -655,12 +736,12 @@ func TestGitBrokerMintedTokenIsMaskRegistered(t *testing.T) {
 	}
 }
 
-// TestBrokerMintRefusesBrokeredGitGrant is the regression pin for the in-sandbox
-// token bypass. WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint
-// route is unauthenticated, so before this guard a single
+// TestBrokerMintRefusesBrokeredGitGrant closes the in-sandbox token bypass.
+// WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint route is
+// unauthenticated, so without this guard a single
 // `curl -XPOST .../wardyn/v1/credentials/mint -d '{"grant_id":"'$WARDYN_GITHUB_GRANT_ID'"}'`
-// handed the sandbox a live ghs_ installation token — and, because an
-// approval-gated grant is single-use, ALSO burnt the broker's one mint out from
+// would hand the sandbox a live ghs_ installation token — and, because an
+// approval-gated grant is single-use, also burn the broker's one mint out from
 // under the run's own clone/push.
 //
 // The four cases below are the whole contract: refuse the brokered grant, refuse
@@ -772,12 +853,12 @@ func newGitBrokerApprovalUpstream(t *testing.T, token string, approvalID uuid.UU
 	return u
 }
 
-// TestGitBrokerPollsPendingApproval is the regression for W23-S1-1 /
-// W19-W19a-1: the FIRST clone against an approval-gated github_token grant
-// used to 502 outright on the control plane's 409 (no wait, no retry) — the
-// documented quickstart's first clone always failed before a human could
-// possibly have approved it. The broker must now poll the SAME approval
-// server-side and re-mint once it clears, succeeding the original request.
+// TestGitBrokerPollsPendingApproval: the first clone against an
+// approval-gated github_token grant meets the control plane's 409 before a
+// human could possibly have approved it, so the broker must poll the same
+// approval server-side and re-mint once it clears, succeeding the original
+// request — not 502 outright (no wait, no retry), which would fail the
+// documented quickstart's first clone every time.
 func TestGitBrokerPollsPendingApproval(t *testing.T) {
 	orig := gitApprovalPollInterval
 	gitApprovalPollInterval = 5 * time.Millisecond

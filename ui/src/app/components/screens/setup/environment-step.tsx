@@ -55,6 +55,84 @@ const TIER_NAME_TINT: Record<ConfinementClass, string> = {
   CC3: "text-vault-fg",
 };
 
+// #1200 review P1-1 — the canonical "no sandbox runner" facts, extracted so
+// Settings' Host card (a SECOND, read-only mount) can render the same danger
+// card and fix line instead of inventing a compact-picker-only fallback.
+// Kept together: noDriver decides WHICH fix line NoRunnerCard shows, so a
+// caller that only reads noRunner (and drops noDriver) would render the
+// wrong one.
+//
+// HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForUser
+// zeroes the struct, whose Go zero value is "", not the sentinel "none") —
+// treat both as no-driver, or a member landing here (e.g. a stale direct
+// /setup visit before B4's honest-landing redirect) sees the wrong "start
+// wardynd with -runner docker" fix for a runner that's merely hidden from them.
+//
+// X3-F1 narrows that fold to the case it was written for. The redaction keeps
+// confinement_classes, so "" WITH classes means UNKNOWN (a live runner whose
+// name was withheld), not absent: no danger card, no operator-only fix, and —
+// the third symptom — a picker that still works, since `selectable` below
+// reads the same `noRunner`. Only "" with NO classes is still no-driver, which
+// is what the HIGH-4 pin asserts.
+export function runnerAvailability(status: SetupStatus): { noDriver: boolean; noRunner: boolean } {
+  const classes = status.runner.confinement_classes ?? [];
+  const noDriver =
+    status.runner.driver === "none" ||
+    (status.runner.driver === "" && classes.length === 0);
+  return { noDriver, noRunner: noDriver || classes.length === 0 };
+}
+
+// The canon danger card + fix line, byte-identical wherever a caller needs
+// to say "nothing can launch here" — Getting started's EnvironmentStep and
+// Settings' Host card both mount this rather than each authoring their own.
+export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
+  return (
+    <div className="rounded-xl border border-danger/40 bg-danger-subtle p-5">
+      <div className="flex items-start gap-3">
+        <AlertOctagon className="mt-0.5 size-5 text-danger" aria-hidden />
+        <div>
+          <div className="text-foreground">No sandbox runner — runs can't launch.</div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {noDriver ? (
+              <>
+                Fix: start wardynd with <Mono>-runner docker</Mono> (built with -tags docker).
+              </>
+            ) : (
+              "Fix: start the Docker daemon (or install a container runtime) so Wardyn can build a barrier, then re-check."
+            )}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// #1200 review P2-6 — Vault's honest incompatibility reason (the /dev/kvm
+// probe), extracted so a caller OTHER than this picker (New Run's Barrier
+// control, when a governance floor requires a tier this host can't build)
+// can name the SAME reason rather than a generic "isn't installed" — the
+// approved T-9 example is "...and this host can't run it: {this reason}".
+// Docker-host only: on k8s the probe describes wardynd's own pod, not the
+// node Vault would run on (see tierState below) — use vaultRequirementReason.
+export function vaultIncompatibleReason(platform: SetupStatus["platform"]): string {
+  const kvmProbed = typeof platform.kvm === "boolean";
+  const kvm = platform.kvm ?? !(platform.wsl || /darwin|mac/i.test(platform.os));
+  if (kvm) return "";
+  return kvmProbed
+    ? "Vault needs KVM virtualization and this host doesn't expose /dev/kvm. If wardynd is containerized (the compose quick-start), bind-mount /dev/kvm into it and Re-check; on WSL2 enable nested virtualization; on a laptop/desktop enable virtualization in firmware. Only a genuinely KVM-less host stays incompatible."
+    : "Vault likely can't run here — WSL/macOS hosts usually can't register a Kata runtime, and this daemon predates the /dev/kvm probe that would say for sure. Upgrade wardynd for a definitive answer.";
+}
+
+// #1200 review R2-4 — the driver-aware reason for a caller outside this
+// picker, split the same way tierState is (`!k8s && !kvm`): on k8s the remedy
+// is a Kata RuntimeClass, as K8S_TIER_GUIDES.CC3 says; elsewhere the /dev/kvm
+// reason. A member's redacted driver ("") reads as not-k8s, as it does here.
+const K8S_VAULT_REASON =
+  "Vault needs a Kata RuntimeClass — register one on a KVM-capable node pool, then pin it with k8s.runtimeClasses.CC3.";
+export function vaultRequirementReason(driver: string, platform: SetupStatus["platform"]): string {
+  return driver === "k8s" ? K8S_VAULT_REASON : vaultIncompatibleReason(platform);
+}
+
 // #213 — the strongest INSTALLED class, never inferred from the operating
 // system or from hardware compatibility. The old rule recommended the
 // strongest class the host could *theoretically* run (stepping down only for
@@ -70,7 +148,7 @@ export function recommendedTier(status: SetupStatus): ConfinementClass | null {
 
 // Per-tier "pick this when…" guidance — the sole copy (the barrier picker lives
 // only here).
-const PICK_WHEN: Record<ConfinementClass, string> = {
+export const PICK_WHEN: Record<ConfinementClass, string> = {
   CC1: "Trying Wardyn out, or the code is your own — quickest start, works on any host.",
   CC2: "Real work on real repos — closes the Fence's holes so the agent never touches your kernel.",
   CC3: "Untrusted code or secrets nearby — the strongest box Wardyn can build.",
@@ -135,7 +213,7 @@ function k8sClassesRow(status: SetupStatus): SetupCheck {
   };
 }
 
-function K8sEnvironmentRows({ status }: { status: SetupStatus }) {
+export function K8sEnvironmentRows({ status }: { status: SetupStatus }) {
   // Agent images: the SAME generic agent_image check every driver already
   // gets (agentImageCheck, setup.go) — reused verbatim rather than a second,
   // k8s-only "pullable" claim nothing actually verifies (wardynd has no
@@ -173,22 +251,8 @@ export function EnvironmentStep({
 }) {
   const classes = status.runner.confinement_classes ?? [];
   // No barrier can be built -> runs can't launch. Matrix stays visible read-only.
-  // HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForMember
-  // zeroes the struct, whose Go zero value is "", not the sentinel "none") —
-  // treat both as no-driver, or a member landing here (e.g. a stale direct
-  // /setup visit before B4's honest-landing redirect) sees the wrong "start
-  // wardynd with -runner docker" fix for a runner that's merely hidden from them.
-  //
-  // X3-F1 narrows that fold to the case it was written for. The redaction keeps
-  // confinement_classes, so "" WITH classes means UNKNOWN (a live runner whose
-  // name was withheld), not absent: no danger card, no operator-only fix, and —
-  // the third symptom — a picker that still works, since `selectable` below
-  // reads the same `noRunner`. Only "" with NO classes is still no-driver, which
-  // is what the HIGH-4 pin asserts.
-  const noDriver =
-    status.runner.driver === "none" ||
-    (status.runner.driver === "" && classes.length === 0);
-  const noRunner = noDriver || classes.length === 0;
+  // See runnerAvailability's own doc comment for the HIGH-4/X3-F1 reasoning.
+  const { noDriver, noRunner } = runnerAvailability(status);
   const available = new Set(classes);
   const rec = recommendedTier(status);
   // Every class stronger than the recommendation, by name — empty once rec is
@@ -209,12 +273,11 @@ export function EnvironmentStep({
   // schedules, a fact this daemon can't see). Only a genuinely KVM-less DOCKER
   // host marks Vault incompatible; k8s never does — it stays "todo" (register
   // a Kata RuntimeClass), the same needs-setup story CC2 already tells there.
-  const kvmProbed = typeof status.platform.kvm === "boolean";
   const kvm =
     status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
-  const vaultIncompatibleReason = kvmProbed
-    ? "Vault needs KVM virtualization and this host doesn't expose /dev/kvm. If wardynd is containerized (the compose quick-start), bind-mount /dev/kvm into it and Re-check; on WSL2 enable nested virtualization; on a laptop/desktop enable virtualization in firmware. Only a genuinely KVM-less host stays incompatible."
-    : "Vault likely can't run here — WSL/macOS hosts usually can't register a Kata runtime, and this daemon predates the /dev/kvm probe that would say for sure. Upgrade wardynd for a definitive answer.";
+  // "" only when kvm is true (no incompatibility to name) — tierState below
+  // is what actually gates whether this ever renders.
+  const reasonForIncompatibleVault = vaultIncompatibleReason(status.platform);
 
   const tierState = (cc: ConfinementClass): TierState => {
     if (available.has(cc)) return "ready";
@@ -270,25 +333,7 @@ export function EnvironmentStep({
   return (
     <div className="space-y-5">
       {/* No-runner danger card — the matrix stays visible read-only below. */}
-      {noRunner && (
-        <div className="rounded-xl border border-danger/40 bg-danger-subtle p-5">
-          <div className="flex items-start gap-3">
-            <AlertOctagon className="mt-0.5 size-5 text-danger" aria-hidden />
-            <div>
-              <div className="text-foreground">No sandbox runner — runs can't launch.</div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {noDriver ? (
-                  <>
-                    Fix: start wardynd with <Mono>-runner docker</Mono> (built with -tags docker).
-                  </>
-                ) : (
-                  "Fix: start the Docker daemon (or install a container runtime) so Wardyn can build a barrier, then re-check."
-                )}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {noRunner && <NoRunnerCard noDriver={noDriver} />}
 
       {/* k8s variant rows (prompt-v4) — Runner/Egress containment/Confinement
           classes/Agent images. The tier matrix below is UNCHANGED: it's still
@@ -382,7 +427,7 @@ export function EnvironmentStep({
                       recommended={cc === rec}
                       rechecking={rechecking}
                       disabled={noRunner}
-                      incompatibleReason={st === "incompatible" ? vaultIncompatibleReason : undefined}
+                      incompatibleReason={st === "incompatible" ? reasonForIncompatibleVault : undefined}
                       substrate={status.runner.confinement_substrates?.[cc]}
                       recheckToken={recheckToken}
                       guide={guides[cc]}
@@ -440,8 +485,10 @@ export function EnvironmentStep({
         <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
           <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="text-sm text-muted-foreground">
-            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")} are
-            stronger and each needs a one-time setup step.
+            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")}{" "}
+            {/* #510-F9 — subject/verb: recStronger is length 1 when rec is CC2 (only CC3 left to
+                name), and "X are stronger" reads wrong for a single tier. */}
+            {recStronger.length === 1 ? "is" : "are"} stronger and each needs a one-time setup step.
           </p>
         </div>
       )}

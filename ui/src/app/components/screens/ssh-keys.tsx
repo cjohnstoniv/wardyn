@@ -3,11 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// SSH keys management (account menu -> "SSH keys"): the signed-in human's
-// OWN registered public keys — list, add, remove. Not operator-gated: an SSH
-// key is a personal credential binding, not deployment configuration (the
-// server enforces the same scope independently — sshkeys.go's handlers key
-// every read/write off the caller's own principal).
+// SSH keys management: the signed-in human's OWN registered public keys —
+// list, add, remove. Not operator-gated: an SSH key is a personal credential
+// binding, not deployment configuration (the server enforces the same scope
+// independently — sshkeys.go's handlers key every read/write off the
+// caller's own principal).
+//
+// M-5 (#636): /ssh-keys is gone (deleted with no alias) — SshKeysPane is now
+// mounted once, in Your account (your-account-screen.tsx). AddSSHKeyDialog
+// and RemoveSSHKeyDialog are exported so admin-ssh-keys-card.tsx's "Admin SSH
+// keys" card (S-1) can reuse the same add/remove dialogs rather than a second
+// copy — the server stamps a key's role off the caller's session, so the two
+// cards differ only in which keys they list, never in how a key is added or
+// removed.
 import * as React from "react";
 import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -35,24 +43,20 @@ import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { absoluteTime, relativeTime } from "../../lib/format";
-
-// The page at /ssh-keys. The body is SshKeysPane so Settings can render the
-// same card ("Your SSH keys") without a second copy of the list, the dialogs,
-// or their reload wiring — the account menu keeps both entries, and they show
-// exactly the same thing.
-export function SSHKeysScreen() {
-  return (
-    <div className="mx-auto max-w-[900px] px-6 py-6">
-      <SshKeysPane />
-    </div>
-  );
-}
+import { capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
+import { DENIED } from "../../lib/permissions-copy";
+import { useOperator } from "../wardyn/operator-context";
 
 export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [addOpen, setAddOpen] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<SSHPublicKey | null>(null);
+  // Advisory: the server's `feature` check is the wall (handleAddSSHKey). A
+  // super admin is exempt there, so the set is not even fetched for one.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
+  const addBlocked = !capabilityAllowed(caps, "feature", "ssh_key");
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -71,13 +75,19 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
       <PageHeader
         as={heading}
         title="Your SSH keys"
-        description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; there is no admin view of anyone else's."
+        description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's."
         actions={
-          <Button onClick={() => setAddOpen(true)}>
+          <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
             <Plus className="size-4" /> Add key
           </Button>
         }
       />
+
+      {addBlocked && (
+        <p role="status" className="mb-3 text-sm text-muted-foreground">
+          {DENIED.SSH_KEY_FEATURE}
+        </p>
+      )}
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {status === "loading" ? (
@@ -90,7 +100,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
             title="No keys yet."
             description="Add your public key to connect over SSH."
             action={
-              <Button onClick={() => setAddOpen(true)}>
+              <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
                 <Plus className="size-4" /> Add key
               </Button>
             }
@@ -123,6 +133,18 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                           title="Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately."
                         >
                           Admin override
+                        </Chip>
+                      )}
+                      {/* #584: added in the user view, so capped at member
+                          rights for good (docs/SSH.md §Bounds). Frozen strings:
+                          docs/design/admin-access-canon.md. M-5 (#636, S-2):
+                          "Member access" pointed at a door M-5 removed (the
+                          user view was the only place a member could add ANY
+                          key); rewritten to "User access", tooltip pointing
+                          at S-1's new Admin SSH keys card instead. */}
+                      {k.capped && (
+                        <Chip title="Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.">
+                          User access
                         </Chip>
                       )}
                     </span>
@@ -161,7 +183,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   );
 }
 
-function AddSSHKeyDialog({
+export function AddSSHKeyDialog({
   open,
   onOpenChange,
   onAdded,
@@ -258,7 +280,7 @@ function AddSSHKeyDialog({
 // that shared one hard-codes the operator-only gate every OTHER delete in
 // the console needs, but an SSH key is the signed-in human's own — removing
 // it is never an operator-only act.
-function RemoveSSHKeyDialog({
+export function RemoveSSHKeyDialog({
   keyToDelete,
   onOpenChange,
   onRemoved,
@@ -299,7 +321,7 @@ function RemoveSSHKeyDialog({
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
-              confirmRemove();
+              void confirmRemove();
             }}
             disabled={removing}
             className="bg-danger text-danger-foreground hover:bg-danger/90"

@@ -79,7 +79,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 // The Workspace card's drive block reads the shell's ONE GET /me off the
-// context (operator-context's UserDriveContext), not a fetch of its own — so a
+// context (operator-context's MeIdentity.userDrive), not a fetch of its own — so a
 // case states its /me body here, exactly as app-shell hands it down. The
 // default carries NEITHER /me drive bit: no allocation and no door, which is
 // what every case below is, and which must render as today's card.
@@ -272,7 +272,7 @@ describe("NewRunScreen — the form matches the run mode", () => {
   });
 
   // …and the DEFAULT of that radiogroup is the AGENT, not the shell. Pinned
-  // because a live walk now depends on it: ui/e2e/live/sso-member.spec.ts
+  // because a live walk now depends on it: ui/e2e/walk/sso-member.spec.ts
   // launches a run expecting claude-code to make a model call at boot, and it
   // does not touch this control. If the default ever flips to "Terminal" that
   // run comes up as an idle shell, calls nothing, and the walk fails 180
@@ -315,14 +315,15 @@ describe("NewRunScreen — the form matches the run mode", () => {
 // Before this, the screen had NO client-side validation at all: an empty form
 // launched, and the server's answer arrived after the fact.
 describe("NewRunScreen — Launch says what it is waiting for", () => {
-  it("is disabled without a title, and says so", async () => {
+  // #1197 L2: the server never required a title (runs_create_validate.go's
+  // own doc comment) — only this screen did. Now it doesn't either: Launch is
+  // enabled by default (interactive mode needs no task), and a title is never
+  // the thing blocking it.
+  it("does not require a title", async () => {
     renderScreen();
     const launch = await screen.findByRole("button", { name: /Launch run/ });
-    expect(launch).toBeDisabled();
-    expect(screen.getByText("Give this run a title.")).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
     expect(launch).toBeEnabled();
+    expect(screen.queryByText("Give this run a title.")).not.toBeInTheDocument();
   });
 
   it("still waits for the task on an autonomous run", async () => {
@@ -335,6 +336,201 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
 
     await user.type(screen.getByLabelText("Task"), "fix the flaky test");
     expect(launch).toBeEnabled();
+  });
+
+  // #922 (UT-7c): the STRONGER answer Launch itself needs, folded into the
+  // SAME `problem` chain every other reason above goes through — never a
+  // second disabled-button mechanism. workspace-card.test.tsx already pins
+  // workspaceModelProviderUnavailable's own predicate in isolation; this
+  // proves it is actually WIRED into the screen's Launch button, the way
+  // wizard-types.test.ts's word-boundary cut needed its own "Title tracks the
+  // task" proof below.
+  it("disables Launch and names the canon sentence when the chosen workspace is pinned to an unavailable model provider", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ model_providers: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }] }),
+    );
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled when the chosen workspace's pin IS in the caller's own filtered list", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "corp-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ model_providers: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }] }),
+    );
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  // review F2: the server's model-provider door only ever asks for a model
+  // run (run_model_provider.go's needsModel/createDoorIsModelRun) — a Shell
+  // command sends no `agent` at all (task_mode=exec, wizard-spec.ts), so the
+  // server admits it regardless of the workspace's model-provider pin.
+  // Applying the client-side check to every run type was a false-disable.
+  it("stays enabled for a Shell command, even with the chosen workspace's model-provider pin unavailable", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ model_providers: [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }] }),
+    );
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+    await user.click(screen.getByRole("radio", { name: "Shell command" }));
+    await user.type(screen.getByLabelText("Command"), "make test");
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  // review F3 (round 3, R3-1): SetupStatus.model_providers is `omitzero`
+  // (setup.go), so the wire itself tells "no provider block at all" (the key
+  // absent) apart from "a block exists, this caller is granted nothing from
+  // it" (the key present as `[]`) — the console reads that distinction
+  // rather than re-deriving it. baseStatus()'s own default carries no
+  // model_providers key at all, matching "no block".
+  it("stays enabled when there is no provider block at all", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("disables Launch when a provider block exists but the caller is granted none of it", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(baseStatus({ model_providers: [] }));
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  // review F6: R1 (the reviewer's mutation) flipped `useMyCapabilities(!operator)`
+  // to `useMyCapabilities(true)` and survived every existing test in this
+  // file — nothing here asserted an operator's OWN exemption is wired
+  // through. This file mocks the HOOK itself (not the underlying fetch, the
+  // way workspace-detail.test.tsx's F030 "never asks /me/capabilities" case
+  // does), so the pin is on the ARGUMENT the screen passes it: `false` for
+  // an operator (renderScreen's own default), which is exactly what R1's
+  // `useMyCapabilities(true)` breaks.
+  it("passes useMyCapabilities the operator's own exemption (enabled=false for an operator)", async () => {
+    renderScreen();
+    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false));
+  });
+});
+
+// #1197 L2: the Title default tracks the task's own first line until the
+// operator writes one themselves — wizard-types.test.ts pins the word-boundary
+// cut in isolation; these prove it is actually WIRED into the screen.
+describe("NewRunScreen — Title tracks the task until edited", () => {
+  it("prefills the title from the task's first line as it's typed", async () => {
+    renderScreen();
+    // Default mode is interactive: the task field is the optional boot seed.
+    const seed = await screen.findByLabelText("Initial prompt (optional)");
+    await user.type(seed, "Refactor the payments module");
+    expect(screen.getByLabelText("Title")).toHaveValue("Refactor the payments module");
+  });
+
+  it("stops tracking once the operator edits the title by hand", async () => {
+    renderScreen();
+    const seed = await screen.findByLabelText("Initial prompt (optional)");
+    await user.type(seed, "Refactor the payments module");
+    const title = screen.getByLabelText("Title");
+    expect(title).toHaveValue("Refactor the payments module");
+
+    await user.clear(title);
+    await user.type(title, "My own title");
+    await user.type(seed, " and the retry path");
+    expect(title).toHaveValue("My own title");
+  });
+
+  it("stops tracking once the operator clears the title, and does not re-derive it", async () => {
+    renderScreen();
+    const seed = await screen.findByLabelText("Initial prompt (optional)");
+    await user.type(seed, "Refactor the payments module");
+    const title = screen.getByLabelText("Title");
+    await user.clear(title);
+    await user.type(seed, " more");
+    expect(title).toHaveValue("");
   });
 });
 
@@ -386,6 +582,17 @@ describe("NewRunScreen — Preflight", () => {
     await user.click(button);
 
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
+  });
+
+  // #497: the alert speaks the sr-only "Preflight failed" first, so the
+  // fallback for an error with no message must not repeat it.
+  it("an error with no message falls back to a sentence that doesn't repeat the spoken prefix", async () => {
+    preflightRunMock.mockRejectedValue(new Error(""));
+    const button = await readyScreen();
+    await user.click(button);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/^Preflight failed No reason was given\.$/);
   });
 
   it("disables the button and shows a loading spinner while in flight", async () => {
@@ -525,18 +732,15 @@ describe("NewRunScreen — the keyboard contract", () => {
   });
 });
 
-// The one validation-error state. aria-invalid is what paints it — the Input
-// primitive owns the ring, and this screen must never hand-paint one.
-describe("NewRunScreen — the title's error state", () => {
-  it("stays quiet until the operator has been in the field and left it empty", async () => {
+// #1197 L2: Title dropped its required-field error state along with the
+// requirement itself — leaving it empty, then blurring, is no longer wrong.
+describe("NewRunScreen — Title has no error state", () => {
+  it("never marks aria-invalid, even empty and blurred", async () => {
     renderScreen();
     const title = await screen.findByLabelText("Title");
     expect(title).not.toHaveAttribute("aria-invalid");
 
     fireEvent.blur(title);
-    await waitFor(() => expect(title).toHaveAttribute("aria-invalid", "true"));
-
-    await user.type(title, "Refund flow");
     expect(title).not.toHaveAttribute("aria-invalid");
   });
 });

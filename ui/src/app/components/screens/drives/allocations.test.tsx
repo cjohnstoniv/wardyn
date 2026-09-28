@@ -60,12 +60,20 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: (...a: unknown[]) => directorySearchMock(...a) } };
 });
 
+// UT-7a: the allocation form's "User type" branch — permissions.tsx's shared
+// UserTypeSubjectSelect, a closed picker rather than the DirectoryCombobox.
+const listUserTypesMock = vi.fn();
+vi.mock("../../../lib/api/user-types", () => ({
+  userTypes: { listUserTypes: () => listUserTypesMock() },
+}));
+
 import { HttpError } from "../../../lib/api/core";
 import type { UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { DRIVES, PERM, PREVIEW } from "../../../lib/user-drives-copy";
 import { DrivesScreen } from "./drives-screen";
 import { question, sizeText } from "./display";
+import { aheadByHours } from "../../../lib/test-clock";
 
 function drive(over: Partial<UserDriveListItem> = {}): UserDriveListItem {
   return {
@@ -75,8 +83,8 @@ function drive(over: Partial<UserDriveListItem> = {}): UserDriveListItem {
     home_template: "email_local",
     reclaim: "retain",
     grant_count: 2,
-    created_at: "2026-08-28T00:00:00Z",
-    updated_at: "2026-08-28T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     ...over,
   };
 }
@@ -105,7 +113,7 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
         priority: 10,
         size_mib_override: 16384,
         enabled: true,
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
     host_roots_configured: false,
@@ -132,6 +140,9 @@ beforeEach(() => {
   previewDriveMock.mockResolvedValue({});
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
+  listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+  ]);
 });
 
 describe("DrivesScreen — allocations", () => {
@@ -162,7 +173,7 @@ describe("DrivesScreen — allocations", () => {
             home_override: "bsmith",
             writable_override: true,
             enabled: true,
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -189,7 +200,7 @@ describe("DrivesScreen — allocations", () => {
             drive_id: HOMES.id,
             priority: 0,
             enabled: false,
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -240,6 +251,41 @@ describe("DrivesScreen — allocations", () => {
     expect(screen.queryByText(DRIVES.ALLOC_REPLACED)).not.toBeInTheDocument();
   });
 
+  // UT-7a: a user type is a bounded, admin-authored set — no directory search,
+  // a closed picker of the org's types instead, and its priority stays
+  // disabled (meaningful only inside the group tier).
+  it("an allocation for a user type reads by the type's name, not its id", async () => {
+    renderScreen(
+      snapshot({
+        grants: [
+          { id: "g2", subject_type: "user_type", subject: "portfolio-manager", drive_id: SCRATCH.id, priority: 0, enabled: true, created_at: aheadByHours(-1) },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.queryByText("portfolio-manager")).toBeNull();
+  });
+
+  it("User type swaps the Who field for UserTypeSubjectSelect and disables priority", async () => {
+    upsertGrantMock.mockResolvedValueOnce({ grant: {}, replaced: false });
+    renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    expect(screen.queryByRole("textbox", { name: PERM.FIELD_WHO })).toBeNull();
+    expect(screen.getByLabelText(GOV.FIELD_PRIORITY)).toBeDisabled();
+    await userEvent.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+
+    await userEvent.click(screen.getByRole("combobox", { name: DRIVES.FIELD_DRIVE }));
+    await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
+
+    expect(upsertGrantMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", drive_id: SCRATCH.id }),
+    );
+  });
+
   it("Remove is outline and reversible: it confirms with the frozen sentence and deletes no data", async () => {
     deleteGrantMock.mockResolvedValue(undefined);
     renderScreen();
@@ -275,7 +321,8 @@ describe("DrivesScreen — allocations", () => {
 //
 // The affordance is the console's existing one (TruncatedNote, states.tsx, on
 // Runs / Workspaces / Policies / Audit / run-detail); no new copy.
-describe("DrivesScreen — a bounded allocations page says so (R4/F092)", () => {
+describe("DrivesScreen — a bounded allocations page says so", () => {
+  // ticket: R4/F092
   const TRUNCATED = /Showing the first 1000 \(truncated\)/;
 
   it("shows the truncation note when more allocations exist than this page carries", async () => {

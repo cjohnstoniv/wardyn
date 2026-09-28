@@ -62,7 +62,7 @@ import (
 // adoSignInCapturedAction is the one audit action the sign-in owns. Both outcomes
 // ride it: `success` once the blob is stored, `failure` with a `reason` for
 // every refusal, so a review reads one action rather than correlating two.
-const adoSignInCapturedAction = "scm.ado.signin.captured"
+const adoSignInCapturedAction = "ado.signin.capture"
 
 // entraDefaultAuthority is the public Entra authority. Every endpoint this lane
 // dials is derived from it plus the tenant, exactly as Microsoft's own client
@@ -99,13 +99,13 @@ const (
 	// admin-token or local-mode caller reaches the route (it is in the
 	// authenticated group) and has no IdP subject, so there is nothing this
 	// capture could be bound to and no honest namespace to store it under.
-	adoSignInNoSessionRefusal = "an Azure DevOps sign-in must be started from a signed-in browser session: " +
+	adoSignInNoSessionRefusal = "An Azure DevOps sign-in must be started from a signed-in browser session: " +
 		"the captured credential is bound to your identity provider subject, and an admin-token caller has none"
 	// adoSignInUnconfiguredRefusal: no Azure DevOps Entra block is configured.
-	adoSignInUnconfiguredRefusal = "this deployment has no Azure DevOps sign-in configured"
+	adoSignInUnconfiguredRefusal = "This deployment has no Azure DevOps sign-in configured"
 	// adoSignInForeignAppRefusal is THE 0.7.10 boundary. %s is the client id the
 	// row named.
-	adoSignInForeignAppRefusal = "refusing this Azure DevOps sign-in: it is configured against application %s, " +
+	adoSignInForeignAppRefusal = "Refusing this Azure DevOps sign-in: it is configured against application %s, " +
 		"which is not the application this console signs people in with. " +
 		"The identity binding compares the identity token's subject, which is per-application, " +
 		"so a different application's token cannot be bound to your session — and the claims that would " +
@@ -114,11 +114,11 @@ const (
 	// adoSignInSubjectMismatchRefusal is the fail-closed identity binding. It
 	// names no subject: the two values are identities, and an error page is not
 	// where either belongs.
-	adoSignInSubjectMismatchRefusal = "refusing this Azure DevOps sign-in: the identity token's subject is not the subject of " +
+	adoSignInSubjectMismatchRefusal = "Refusing this Azure DevOps sign-in: the identity token's subject is not the subject of " +
 		"the browser session that started it. The credential would have been stored under the wrong person, so nothing was stored"
 	// adoSignInWrongTenantRefusal: the id_token was issued by a tenant other
 	// than the configured one.
-	adoSignInWrongTenantRefusal = "refusing this Azure DevOps sign-in: the identity token was issued by a different tenant " +
+	adoSignInWrongTenantRefusal = "Refusing this Azure DevOps sign-in: the identity token was issued by a different tenant " +
 		"than the one this deployment is configured for"
 )
 
@@ -298,7 +298,10 @@ func (c ADOEntraConfig) authorizeURL(state, nonce, challenge string, scopes []st
 // place with a real credential.
 const (
 	// EntraAuthorityOverrideRefusal is the refusal when the override is set
-	// without the acknowledgement. %q is the offending value.
+	// without the acknowledgement. %q is the offending value. Lower-case on
+	// purpose (staticcheck ST1005): this is a Go error string returned from
+	// fmt.Errorf, not an HTTP/console sentence, and Go convention refuses a
+	// capitalised one so it composes when a caller wraps it with %w.
 	EntraAuthorityOverrideRefusal = "refusing the Entra authority override %q — " +
 		"it re-points the Azure DevOps sign-in's authorization, token and discovery endpoints at a server of " +
 		"your choosing, which is a TEST hatch and never a production posture; unset it, or explicitly set " +
@@ -483,9 +486,9 @@ func adoRequestedScopes(q url.Values, ceiling []string) ([]string, error) {
 // withhold the very cookies that prove it belongs to this browser.
 func (s *Server) adoCookie(name, value string) *http.Cookie {
 	return &http.Cookie{
-		Name:     name,
+		Name:     s.consoleCookieName(name),
 		Value:    value,
-		Path:     "/",
+		Path:     s.cookiePath(),
 		MaxAge:   adoCookieMaxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -493,10 +496,10 @@ func (s *Server) adoCookie(name, value string) *http.Cookie {
 	}
 }
 
-func clearADOCookie(w http.ResponseWriter, name string) {
+func (s *Server) clearADOCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Name: s.consoleCookieName(name), Value: "", Path: s.cookiePath(), MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.OIDCSecureCookies,
 	})
 }
 
@@ -512,27 +515,27 @@ func clearADOCookie(w http.ResponseWriter, name string) {
 // The state comparison is CONSTANT TIME and stays first: a callback whose state
 // does not match a cookie this server set is not a sign-in this browser began,
 // and nothing else about the request is worth reading until that holds.
-func consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
+func (s *Server) consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
 	stateParam := r.URL.Query().Get("state")
-	stateCookie, err := r.Cookie(adoStateCookieName)
+	stateCookie, err := r.Cookie(s.consoleCookieName(adoStateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam == "" ||
 		subtle.ConstantTimeCompare([]byte(stateParam), []byte(stateCookie.Value)) != 1 {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return "", "", false
 	}
-	nonceCookie, err := r.Cookie(adoNonceCookieName)
+	nonceCookie, err := r.Cookie(s.consoleCookieName(adoNonceCookieName))
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
 		return "", "", false
 	}
-	pkceCookie, err := r.Cookie(adoPKCECookieName)
+	pkceCookie, err := r.Cookie(s.consoleCookieName(adoPKCECookieName))
 	if err != nil || pkceCookie.Value == "" {
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
 		return "", "", false
 	}
-	clearADOCookie(w, adoStateCookieName)
-	clearADOCookie(w, adoNonceCookieName)
-	clearADOCookie(w, adoPKCECookieName)
+	s.clearADOCookie(w, adoStateCookieName)
+	s.clearADOCookie(w, adoNonceCookieName)
+	s.clearADOCookie(w, adoPKCECookieName)
 	return nonceCookie.Value, pkceCookie.Value, true
 }
 
@@ -553,7 +556,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nonce, verifier, ok := consumeADOCookies(w, r)
+	nonce, verifier, ok := s.consumeADOCookies(w, r)
 	if !ok {
 		return
 	}
@@ -565,7 +568,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": reason, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
 	code := r.URL.Query().Get("code")
@@ -587,12 +590,16 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": reason, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
-	// Mask BEFORE anything can log or persist either value.
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
+	// Mask BEFORE anything can log or persist either value. Merge, not replace:
+	// until the store write below succeeds, the sign-in already stored stays the
+	// live one, so its tokens must stay current rather than be retired and swept.
+	// The access token is let go one grace after its expiry (#151).
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -602,22 +609,21 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted := adoEntraSplitScope(resp.Scope)
+	granted := adoCaptureScopes(resp.Scope, cfg.Scopes)
 	if resp.RefreshToken == "" || len(granted) == 0 {
 		// No refresh token means nothing to store and nothing to renew; no
-		// granted scope means the authority told us nothing about what this
-		// credential may do. Either way there is no usable capture.
+		// granted scope inside the row's ceiling means this credential may do
+		// nothing a run could use. Either way there is no usable capture.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		http.Error(w, "the identity provider returned no renewable Azure DevOps grant", http.StatusBadGateway)
 		return
 	}
-	now := s.cfg.Now()
 	blob := adoEntraBlob{
 		RefreshToken: resp.RefreshToken,
 		Scopes:       granted,
-		ExpiresAt:    now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC(),
+		ExpiresAt:    accessExpiry,
 		TenantID:     cfg.TenantID,
 		ClientID:     cfg.ClientID,
 		Subject:      subject,
@@ -629,12 +635,18 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	unlock := s.adoEntra.lock(subject, cfg.RowID)
 	defer unlock()
 	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+		// The cause is logged, never put on the row: the trail and its SIEM
+		// export carry a fixed reason only, like every other store failure.
+		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
 		return
 	}
+	// Stored: this sign-in is now the credential, and the one it replaced is not.
+	s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": granted, "source": adoEntraSourceSignIn,
@@ -642,7 +654,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	// After the capture row, never before: captured -> resolved -> retry.
 	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
-	http.Redirect(w, r, adoSignInDonePath, http.StatusFound)
+	http.Redirect(w, r, s.cfg.BasePath+adoSignInDonePath, http.StatusFound)
 }
 
 // adoCaptureErrorCode names a CAPTURE failure for the console, which is not the

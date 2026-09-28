@@ -29,7 +29,7 @@ func TestPGSessionRevocations_CutoffIsATimestampNotAFlag(t *testing.T) {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed session-revocation test")
 	}
 	ctx := t.Context()
-	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second)
+	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second, false)
 	if err != nil {
 		t.Fatalf("connectAndMigrate: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestPGSessionRevocations_CutoffIsATimestampNotAFlag(t *testing.T) {
 	}
 }
 
-// TestPGSessionRevocations_MatchesEitherIdentity is the session half of F002:
+// TestPGSessionRevocations_MatchesEitherIdentity pins the session half of revocation matching:
 // a revoke may name the OIDC sub or the email, and the cutoff has to match the
 // human back either way. Keyed on sub alone, a revoke naming the email of an
 // Entra human (whose sub is an opaque per-app identifier) stamped a row that
@@ -117,7 +117,7 @@ func TestPGSessionRevocations_MatchesEitherIdentity(t *testing.T) {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed session-revocation test")
 	}
 	ctx := t.Context()
-	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second)
+	pool, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 60*time.Second, false)
 	if err != nil {
 		t.Fatalf("connectAndMigrate: %v", err)
 	}
