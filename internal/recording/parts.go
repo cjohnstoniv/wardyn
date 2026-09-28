@@ -10,6 +10,8 @@ import (
 	"errors"
 	"io"
 	"strconv"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // A long run's cast arrives in parts (RL-12): wardyn-rec tails its own cast and
@@ -91,6 +93,10 @@ func (j *joinedCast) openNext() (bool, error) {
 	if !bytes.HasSuffix(j.header, []byte("\n")) {
 		return false, nil
 	}
+	// No part above the upload bound was ever stored, so the join never reads past it.
+	if j.next > types.RecordingMaxParts {
+		return false, nil
+	}
 	rc, err := j.s.OpenCast(j.ctx, CastKey(j.runID, PartSuffix(j.next)))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
@@ -129,7 +135,7 @@ func StatJoined(ctx context.Context, s Store, runID string, tailBytes int64) (in
 	if err != nil {
 		return 0, nil, err
 	}
-	for n := 2; ; n++ {
+	for n := 2; n <= types.RecordingMaxParts; n++ {
 		ps, pt, err := s.StatAndTail(ctx, CastKey(runID, PartSuffix(n)), tailBytes)
 		if errors.Is(err, ErrNotFound) {
 			return size, tail, nil
@@ -140,4 +146,5 @@ func StatJoined(ctx context.Context, s Store, runID string, tailBytes int64) (in
 		size += ps
 		tail = pt
 	}
+	return size, tail, nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -170,5 +171,41 @@ func requireValidCast(t *testing.T, b []byte) {
 			t.Fatalf("line %d %q: time %v after %v", i+2, l, ev[0], last)
 		}
 		last = at
+	}
+}
+
+// everyPartStore answers every key with the same one-line part, as if a run
+// had stored parts without end, and counts the reads.
+type everyPartStore struct{ opens, stats int }
+
+func (e *everyPartStore) SaveCast(context.Context, string, io.Reader) error { return nil }
+func (e *everyPartStore) SaveCastNamed(context.Context, string, string, io.Reader) error {
+	return nil
+}
+func (e *everyPartStore) OpenCast(context.Context, string) (io.ReadCloser, error) {
+	e.opens++
+	return io.NopCloser(strings.NewReader(partHeader + partEv1)), nil
+}
+func (e *everyPartStore) StatAndTail(context.Context, string, int64) (int64, []byte, error) {
+	e.stats++
+	return int64(len(partHeader + partEv1)), []byte(partEv1), nil
+}
+
+// TestJoinReadsNoPartAboveTheLimit: replay and the Recordings list read at
+// most types.RecordingMaxParts parts of a run, whatever the store holds.
+func TestJoinReadsNoPartAboveTheLimit(t *testing.T) {
+	s := &everyPartStore{}
+	size, _, err := recording.StatJoined(context.Background(), s, "run-many", 64)
+	if err != nil || s.stats != types.RecordingMaxParts || size != int64(types.RecordingMaxParts*len(partHeader+partEv1)) {
+		t.Fatalf("StatJoined: %d reads, size %d, err %v; want exactly %d reads", s.stats, size, err, types.RecordingMaxParts)
+	}
+	rc, err := recording.OpenJoined(context.Background(), s, "run-many")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	got, _ := io.ReadAll(rc)
+	if s.opens != types.RecordingMaxParts || strings.Count(string(got), partEv1) != types.RecordingMaxParts {
+		t.Fatalf("OpenJoined: %d opens, %d events; want %d of each", s.opens, strings.Count(string(got), partEv1), types.RecordingMaxParts)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -125,5 +126,37 @@ func TestProjectRecordingMeta_CountsEveryPart(t *testing.T) {
 	}
 	if got.RecordingBytes != int64(len(p1)+len(p2)) || got.RecordingDurationSec != 90000.5 {
 		t.Fatalf("meta = %d bytes / %v s, want %d / 90000.5", got.RecordingBytes, got.RecordingDurationSec, len(p1)+len(p2))
+	}
+}
+
+// TestUploadRecordingPart_RefusesAboveThePartLimit: the part at
+// types.RecordingMaxParts is stored; the next is refused with 413, stores
+// nothing, and is audited as a recording.upload failure naming the reason.
+func TestUploadRecordingPart_RefusesAboveThePartLimit(t *testing.T) {
+	store := &fakeRecordingStore{}
+	h := newRecordingHarness(t, store, nil)
+	runID := uuid.New()
+	tok := h.mintRunToken(t, runID)
+	path := func(n int) string {
+		return "/api/v1/internal/recordings/" + runID.String() + "/parts/" + strconv.Itoa(n)
+	}
+	if w := do(t, h.srv, http.MethodPut, path(types.RecordingMaxParts), tok, partsHeader); w.Code != http.StatusNoContent {
+		t.Fatalf("part at the limit: %d %s", w.Code, w.Body.String())
+	}
+	store.saved = nil
+	if w := do(t, h.srv, http.MethodPut, path(types.RecordingMaxParts+1), tok, partsHeader); w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("part above the limit: %d %s, want 413", w.Code, w.Body.String())
+	}
+	if store.saved != nil {
+		t.Fatalf("a part above the limit reached the store: %q", store.saved)
+	}
+	var refused map[string]any
+	for _, ev := range h.audit.events {
+		if ev.Action == "recording.upload" && ev.Outcome == "failure" {
+			_ = json.Unmarshal(ev.Data, &refused)
+		}
+	}
+	if refused["reason"] != recordingPartLimitReason || refused["part"] != float64(types.RecordingMaxParts+1) {
+		t.Errorf("refusal audit data = %v, want reason %q and the part", refused, recordingPartLimitReason)
 	}
 }

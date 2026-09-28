@@ -338,14 +338,21 @@ func envNames(names []string) string {
 //
 // A long run's cast arrives in parts (wardyn-rec's tail upload): part 1 on the
 // bare route, part n >= 2 on /{runID}/parts/{n}. A part number that is not
-// canonical decimal >= 2 never reaches the control plane.
+// canonical decimal >= 2, or is above types.RecordingMaxParts, never reaches
+// the control plane.
 func (p *Proxy) handleBrokerRecording(w http.ResponseWriter, r *http.Request) {
 	const cpPrefix = "/api/v1/internal/recordings/"
 	id, part, isPart := strings.Cut(strings.TrimPrefix(r.URL.Path, routeRecordings), "/parts/")
 	cpPath := cpPrefix + id
 	if isPart {
-		if n, err := strconv.Atoi(part); err != nil || n < 2 || strconv.Itoa(n) != part {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 2 || strconv.Itoa(n) != part {
 			http.Error(w, "invalid recording part", http.StatusNotFound)
+			return
+		}
+		if n > types.RecordingMaxParts {
+			p.emitLocalDecision(r, egress.Deny, ruleSourceRecordings, nil)
+			http.Error(w, "recording exceeds its part limit", http.StatusRequestEntityTooLarge)
 			return
 		}
 		cpPath += "/parts/" + part
