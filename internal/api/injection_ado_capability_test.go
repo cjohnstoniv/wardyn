@@ -355,6 +355,47 @@ func TestADOCapability_ConsentChainsAndTheSignInResolvesIt(t *testing.T) {
 	}
 }
 
+// wardyn_credential_reauth_total{outcome="resolved"} and its wait-seconds
+// summary are the AWS SSO re-auth population alone (#971's HELP), so
+// reconcileADOReauthOnRead resolving an Azure DevOps consent request —
+// credential_reauth too, but not that population — must not move either,
+// even though the audit trail still gets its credential.reauth.resolve row.
+func TestADOCapability_ConsentResolveDoesNotMoveTheAWSSSOReauthMetric(t *testing.T) {
+	f := newADOCapFixture(t)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+	f.fake.SetConsentRequired(true)
+	b := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath), reauthPendingState)
+	consent := f.row(b)
+	if got := f.srv.reconcileADOReauthOnRead(context.Background(), consent); got.State != types.ApprovalPending {
+		t.Fatalf("resolved before any sign-in: %s", got.State)
+	}
+
+	f.fake.SetConsentRequired(false)
+	later := time.Now().Add(time.Minute)
+	f.srv.cfg.Now = func() time.Time { return later }
+
+	// The resolve happens INSIDE the capture (resolvePendingADOReauth's eager
+	// path calls reconcileADOReauthOnRead itself), not on a later manual call —
+	// so the before/after straddles the capture, the transition's real site.
+	beforeResolved := reauthCount(t, f.srv, "resolved")
+	beforeWait := metricValue(t, f.srv, "wardyn_credential_reauth_wait_seconds_count")
+	if w := f.capture(t, f.subject); w.Code != http.StatusFound {
+		t.Fatalf("re-sign-in: %d %s", w.Code, w.Body.String())
+	}
+	if got := f.row(b).State; got != types.ApprovalApproved {
+		t.Fatalf("after the sign-in the consent request is %s, want APPROVED", got)
+	}
+
+	if after := reauthCount(t, f.srv, "resolved"); after != beforeResolved {
+		t.Errorf("an Azure DevOps consent resolve moved the resolved label (%s -> %s) — "+
+			"the series is the AWS SSO re-auth population alone", beforeResolved, after)
+	}
+	if after := metricValue(t, f.srv, "wardyn_credential_reauth_wait_seconds_count"); after != beforeWait {
+		t.Errorf("an Azure DevOps consent resolve moved the wait-seconds summary (%s -> %s)", beforeWait, after)
+	}
+}
+
 // A capability or consent hold the approval store cannot even raise used to
 // answer a bare 503 with no audit trace. #204 routes both through fail(), so
 // each leaves the lane's secret.read failure row and carries reason on the wire.

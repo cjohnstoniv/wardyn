@@ -35,7 +35,8 @@ vi.mock("./harness-login-pane", () => ({
 }));
 
 import { YourAccountScreen } from "./your-account-screen";
-import { baseStatus } from "../../../lib/test-fixtures";
+import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
+import { WithDoor } from "../../../../test/door-harness";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
@@ -130,5 +131,31 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
       "title",
       "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
     );
+  });
+});
+
+// #541: Your model connections is the User view's card. An admin reaches it
+// by switching to the User view, so under an /admin/ path the page keeps only
+// the shared model card.
+describe("YourAccountScreen — Your model connections", () => {
+  const status = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
+  const renderAt = (path: string) =>
+    render(
+      <WithDoor status={status} path={path} operator={false}>
+        <YourAccountScreen />
+      </WithDoor>,
+    );
+
+  it("shows the card in the User view", async () => {
+    getSetupStatusMock.mockResolvedValue(status);
+    renderAt("/account");
+    expect(await screen.findByTestId("model-connections-card")).toBeInTheDocument();
+  });
+
+  it("does not show it in the Admin view", async () => {
+    getSetupStatusMock.mockResolvedValue(status);
+    renderAt("/admin/account");
+    expect(await screen.findByRole("heading", { name: "Model provider" })).toBeInTheDocument();
+    expect(screen.queryByTestId("model-connections-card")).toBeNull();
   });
 });
