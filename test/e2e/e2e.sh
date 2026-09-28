@@ -241,9 +241,15 @@ CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${IN_BASE}" -e WARDYN_ADMIN_TOK
 echo "${CREATE}"
 RUN_ID="$(printf '%s\n' "${CREATE}" | awk '/^created run/{print $3; exit}')"
 [[ -n "${RUN_ID}" ]] || die "could not parse created run id"
-sleep 1
-STATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
+# Polled, like the claude-code run's check below: POST /runs dispatches
+# asynchronously, so a read a second after create sees STARTING while the
+# sandbox is still coming up. A terminal state ends the wait early.
+STATE=""
+for _ in $(seq 1 30); do
+  STATE="$(run_state "${RUN_ID}")"
+  case "${STATE}" in RUNNING|COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) break ;; esac
+  sleep 2
+done
 if [[ "${STATE}" == "RUNNING" ]]; then ok "run dispatched to RUNNING (live sandbox created)"; else
   bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"
   # Name the cause HERE: the run row's own reason, the run's failure audit rows
@@ -418,7 +424,10 @@ PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')
 LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$DEX$ACT" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
 CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://wardynd:8080#')
-$C -D /tmp/cb.txt -o /dev/null "$CB"
+$C -D /tmp/cb.txt -o /tmp/cb-body.txt "$CB"
+# The callback's own answer names the cause of a failed sign-in: a 302 to
+# the console on success, a 302 carrying ?error=<code> or a 4xx text on refusal.
+echo "callback_status=$(head -1 /tmp/cb.txt | tr -d '\r' | cut -d' ' -f2) callback_location=$(tr -d '\r' </tmp/cb.txt | sed -n 's/^[Ll]ocation: //p') callback_body=$(head -c 200 /tmp/cb-body.txt | tr '\n' ' ')"
 echo "session_cookie_set=$(grep -c wardyn_session $JAR)"
 echo "runs_with_session=$($C -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
 echo "runs_no_auth=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
@@ -433,6 +442,7 @@ if [[ "${G_PKCE}" == "1" && "${G_COOKIE}" -ge 1 && "${G_RUNS}" == "200" && "${G_
   ok "(g) OIDC login completes; session cookie authenticates /runs (200), no-auth 401, PKCE S256"
 else
   bad "(g) OIDC flow failed (pkce=${G_PKCE} cookie=${G_COOKIE} runs=${G_RUNS} noauth=${G_NOAUTH})"
+  "${COMPOSE[@]}" logs --tail 300 wardynd 2>/dev/null | grep -Ei 'oidc|auth/callback|sign-?in|login' | tail -15 || true
 fi
 
 # ── 6b. REAL-AGENT run: full governed agent end-to-end ──────────────────────--
