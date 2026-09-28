@@ -151,3 +151,18 @@ func TestAnthropicReachable_GatewayGoverns(t *testing.T) {
 		t.Fatalf("refusal must name the gateway, got %v", warns)
 	}
 }
+
+// TestReconcileLLMAccess_NoGrantNeverNamesTheConventionSecret: with no api_key
+// grant on the run, the verdict no longer tells the operator to store the
+// convention secret (anthropic-api-key) — nothing authors a grant from it any
+// more, so storing it would not give the run model access.
+func TestReconcileLLMAccess_NoGrantNeverNamesTheConventionSecret(t *testing.T) {
+	s := &Server{}
+	note, provisioned := s.reconcileLLMAccess(&types.RunPolicySpec{}, "claude-code", map[string]bool{}, false, false)
+	if provisioned {
+		t.Fatalf("expected no model access, got provisioned: %q", note)
+	}
+	if strings.Contains(note, "anthropic-api-key") || strings.Contains(note, "Add it under Secrets") {
+		t.Fatalf("the no-grant verdict points at the operator's convention secret: %q", note)
+	}
+}
