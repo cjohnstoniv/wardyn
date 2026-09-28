@@ -838,7 +838,7 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | Key | String |
 |---|---|
 | `AGENTS_TITLE` | Agents |
-| `AGENTS_LEAD` | Which coding agents this Wardyn offers, how each one reaches its model, and whether that credential is one for everyone or one per person. |
+| `AGENTS_LEAD` | Which coding agents this Wardyn offers, and the model provider each one uses by default. Every credential is each person's own. |
 | `AGENT_ROW_DISABLED_HINT` | Off: runs naming this agent are refused, and it shows as unavailable in New run. |
 | `MECHANISM_NONE` | None — the image brings its own |
 | `MECHANISM_BEDROCK_BEARER` | Bearer key |
