@@ -7,10 +7,12 @@
  * THE LIVE AWS SSO WALK, PART THREE — two people at once (#697).
  *
  * Runs in the same invocation and against the same cluster as sso-member and
- * sso-member-recovery (scripts/kind-sso-walk.sh), after them. It inherits
- * nothing it does not re-establish: both members are made actionable by a pin
- * flip before they sign in, and every observation is scoped to runs this file
- * launched.
+ * sso-member-recovery (scripts/kind-sso-walk.sh), after them. It inherits the
+ * roster pin and the member's stored capture from wherever those files
+ * stopped, which may be mid-flip (a case that moved the pin and never landed
+ * its capture), so ensureActionable() flips until the member is actually
+ * offered a sign-in and names the walk state when it cannot. Every run
+ * observation is a delta over this file's own runs.
  *
  * What it proves that one principal at a time cannot:
  *
@@ -42,7 +44,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { TERMINAL_RUN_STATES, type RunState } from "../../src/app/lib/types/runs";
 import {
   LOGIN_DONE,
@@ -125,16 +127,40 @@ async function runState(page: Page, id: string): Promise<string> {
   }, id);
 }
 
+/** The model-access states that offer "Sign in to AWS" (MODEL_ACCESS_ACTIONABLE). */
+const ACTIONABLE = ["not_configured", "expired_signin", "expiring"];
+
+/** Make the member actionable, whatever pin the previous spec left. One flip
+ *  contradicts the member's capture, unless the previous spec stopped between
+ *  its own flip and its capture: then the flip lands back on the pin the
+ *  capture was taken under, and the member still reads `live`. A second flip
+ *  then contradicts it. */
+async function ensureActionable(request: APIRequestContext, page: Page): Promise<void> {
+  for (let flip = 1; flip <= 2; flip++) {
+    await makeMemberActionable(request);
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (ACTIONABLE.includes((await modelAccess(page)).state ?? "")) return;
+      await page.waitForTimeout(1_000);
+    }
+  }
+  const state = (await modelAccess(page)).state;
+  throw new Error(
+    `the member still reads '${state}' after two pin flips, so no sign-in is offered: walk state, not this file's subject`,
+  );
+}
+
 let memberPage: Page;
 let member2Page: Page;
 
 test("A: two members sign in to AWS at the same moment and each holds their own capture", async ({ browser, request }) => {
-  // Both actionable first: the member is `live` from the earlier files and has
-  // no door until the pin contradicts their capture; the second member has
-  // never signed in, which is actionable under any pin.
-  await makeMemberActionable(request);
+  // Both actionable first: the member has no door until the pin contradicts
+  // their capture; the second member has never signed in, which is actionable
+  // under any pin.
   memberPage = await signedIn(browser, MEMBER_EMAIL);
   member2Page = await signedIn(browser, MEMBER2_EMAIL);
+  await ensureActionable(request, memberPage);
+  expect(ACTIONABLE, "the second member is offered no sign-in").toContain((await modelAccess(member2Page)).state);
   const before = [(await ownAWSRow(memberPage)).source_run_id ?? "", (await ownAWSRow(member2Page)).source_run_id ?? ""];
 
   await Promise.all([signInThroughPane(memberPage, openLoginPane), signInThroughPane(member2Page, openLoginPane)]);
@@ -153,6 +179,9 @@ test("C: three runs each, launched together, spend only their owner's session", 
     { name: "member", page: memberPage, runs: [] as string[] },
     { name: "member2", page: member2Page, runs: [] as string[] },
   ];
+  // Counters since the fake's restart include earlier specs' runs, whose proxy
+  // pods may have had the IPs these runs get: every read below is a delta.
+  const baseline = (await seen()).sessions;
   await Promise.all(
     owners.map(async (o) => {
       for (let i = 1; i <= RUNS_PER_MEMBER; i++) {
@@ -183,7 +212,9 @@ test("C: three runs each, launched together, spend only their owner's session", 
 
   // Every run both minted role credentials and spent them on bedrock.
   const sessionsOf = async (ip: string, field: "role_cred_callers" | "bedrock_callers") =>
-    (await seen()).sessions.filter((s) => (s[field][ip] ?? 0) > 0).map((s) => s.session);
+    (await seen()).sessions
+      .filter((s) => (s[field][ip] ?? 0) > (baseline.find((b) => b.session === s.session)?.[field][ip] ?? 0))
+      .map((s) => s.session);
   for (const id of all) {
     const ip = ipOf.get(id) ?? "";
     await expect.poll(async () => (await sessionsOf(ip, "role_cred_callers")).length, { timeout: LOGIN_DONE }).toBeGreaterThan(0);
@@ -206,8 +237,7 @@ test("C: three runs each, launched together, spend only their owner's session", 
 });
 
 test("B: one member opening two sign-ins at once gets one live sign-in sandbox", async ({ request }) => {
-  await makeMemberActionable(request);
-  await expect.poll(async () => (await modelAccess(memberPage)).state, { timeout: 120_000 }).toBe("expired_signin");
+  await ensureActionable(request, memberPage);
   const before = (await ownAWSRow(memberPage)).source_run_id ?? "";
 
   // Two launches from the same session, together. The per-person lock

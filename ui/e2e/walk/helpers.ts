@@ -30,7 +30,7 @@ export const PIN_ACCOUNT = process.env.WARDYN_WALK_PIN_ACCOUNT || "222222222222"
 export const PIN_ROLE = process.env.WARDYN_WALK_PIN_ROLE || "WardynDev";
 export const SSO_START_URL = process.env.WARDYN_WALK_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
 /** The harness's read-only route to the fake's /_seen — see seen() below. */
-export const SEEN_URL = process.env.WARDYN_WALK_SEEN_URL || "http://127.0.0.1:8390/_seen";
+export const SEEN_URL = process.env.WARDYN_WALK_SEEN_URL || "https://127.0.0.1:8390/_seen";
 
 export const ADMIN_EMAIL = "admin@wardyn.local";
 export const MEMBER_EMAIL = "member@wardyn.local";
