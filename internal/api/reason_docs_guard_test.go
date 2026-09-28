@@ -4,6 +4,9 @@
 package api
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"sort"
@@ -71,24 +74,19 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 		t.Fatalf("parsed only %d reason(s) from docs/sdk.md — the table anchor or parser broke, not reasons.go", len(docReasons))
 	}
 
-	reasonsGoBytes, err := os.ReadFile("reasons.go")
-	if err != nil {
-		t.Fatalf("read reasons.go: %v", err)
-	}
 	// Any string-literal const in this file counts, not only ones named
 	// reasonXxx: driveRefusal*/driveUnavailable* (#656 slice 2 review round)
 	// moved here BECAUSE this guard only reads this one file, and a naming
-	// prefix is not what makes a value wire-visible.
-	constValue := regexp.MustCompile(`(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([a-z][a-z0-9_]*)"`)
-	goReasons := map[string]bool{}
-	namesByValue := map[string][]string{}
-	for _, m := range constValue.FindAllStringSubmatch(string(reasonsGoBytes), -1) {
-		name, value := m[1], m[2]
-		goReasons[value] = true
-		namesByValue[value] = append(namesByValue[value], name)
-	}
+	// prefix is not what makes a value wire-visible. go/parser, not a regex
+	// anchored on "^\s*name = ..." (#656 slice 3 review round): that regex
+	// assumed every spec sat on its own line inside a `const ( ... )` block,
+	// so a single-line `const x = "…"` — legal Go, invisible to a line-anchored
+	// pattern that never expects the "const" keyword before the name — escaped
+	// both this check and the duplicate-value one below. driveRefusalConstants
+	// (user_drives_run_test.go) already parses this same file this way.
+	goReasons, namesByValue := reasonsGoConstValues(t)
 	if len(goReasons) < 50 {
-		t.Fatalf("parsed only %d reason(s) from reasons.go — the regex broke, not the const block", len(goReasons))
+		t.Fatalf("parsed only %d reason(s) from reasons.go — the parser broke, not the const block", len(goReasons))
 	}
 
 	// #656 slice 2 review round F4: no two consts may share a wire value
@@ -136,4 +134,55 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	if len(missingFromGo) > 0 {
 		t.Errorf("docs/sdk.md values with no reasons.go const (and not the ADOEntraFailure exception): %v", missingFromGo)
 	}
+}
+
+// reasonWireValueShape is a wire reason's own shape: lowercase snake_case,
+// the same shape docs/sdk.md's table anchors on. reasons.go declares other
+// string consts too (HTTP header names, capability kinds); this filters to
+// the ones that look like a reason without needing every const to say so by
+// name.
+var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// reasonsGoConstValues parses every top-level const's string-literal value in
+// reasons.go via go/parser rather than a line-anchored regex, so a
+// single-line `const x = "…"` (legal Go outside a `const ( ... )` block) is
+// seen exactly like one declared inside one — driveRefusalConstants
+// (user_drives_run_test.go) parses the same file the same way. Returns the
+// set of values, and every const name declared under each value (so the
+// duplicate-value check above can name the collision).
+func reasonsGoConstValues(t *testing.T) (values map[string]bool, namesByValue map[string][]string) {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "reasons.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse reasons.go: %v", err)
+	}
+	values, namesByValue = map[string]bool{}, map[string][]string{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				value := strings.Trim(lit.Value, `"`)
+				if !reasonWireValueShape.MatchString(value) {
+					continue
+				}
+				values[value] = true
+				namesByValue[value] = append(namesByValue[value], name.Name)
+			}
+		}
+	}
+	return values, namesByValue
 }
