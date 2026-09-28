@@ -450,7 +450,7 @@ func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	prompt, err := adoRequestedPrompt(r.URL.Query())
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInPromptInvalid, err.Error())
 		return
 	}
 

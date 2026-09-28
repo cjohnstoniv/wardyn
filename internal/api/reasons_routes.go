@@ -567,6 +567,11 @@ const (
 	reasonADOSignInForeignApp   = "ado_sign_in_foreign_app"
 	reasonADOSignInNoSession    = "ado_sign_in_no_session"
 	reasonADOSignInScopeInvalid = "ado_sign_in_scope_invalid"
+	// reasonADOSignInPromptInvalid: ?prompt= (adoRequestedPrompt) is set to
+	// anything other than "" or "select_account" — landed on main (#659 Q2)
+	// after this branch was cut, caught by the merge's own guard re-run
+	// (#656 final review round).
+	reasonADOSignInPromptInvalid = "ado_sign_in_prompt_invalid"
 )
 
 // The callback half of the same door (consumeADOCookies, handleADOCallback):
