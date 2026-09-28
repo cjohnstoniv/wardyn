@@ -20,11 +20,9 @@ type bedrockConfigureData struct {
 }
 
 // mintScopeData is the shape a credential.mint row's Data carries for the
-// per-user AWS SSO grant: internal/broker/broker.go's mintEvent puts the
-// grant's Scope (json.RawMessage) under "scope", and
-// internal/api/runs_dispatch_sso_inject.go's authorBedrockSSOInjection
-// authors that scope with a "snapshot" naming who it was captured for and
-// how (awsSSOScopeSnapshot).
+// per-user AWS SSO grant: mintEvent puts the grant's Scope under "scope", and
+// authorBedrockSSOInjection authors that scope with a "snapshot" naming who
+// it was captured for and how (awsSSOScopeSnapshot).
 type mintScopeData struct {
 	Scope struct {
 		SecretName string `json:"secret_name"`
@@ -36,34 +34,29 @@ type mintScopeData struct {
 }
 
 // BedrockWardynRunProvesPerUserSSO reports a descriptive error unless events
-// (a completed run's own audit trail) proves the specific claim LL3w exists
-// to check: the run's Bedrock call went out on THIS MEMBER's own per-user AWS
-// SSO capture, on an allow-listed model.
+// (a completed run's own audit trail) prove the run's Bedrock call went out
+// on THIS MEMBER's own per-user AWS SSO capture, on an allow-listed model.
 //
 // "per-user" is proven on the credential.mint row itself, not on
 // run.bedrock.configure's mode: mode=="sso-inject-proxy" is chosen from
-// b.ssoInject && b.ssoProxyInject (internal/api/runs_dispatch_llm.go)
-// REGARDLESS of whether the roster row behind it is `per_user` or `shared` —
-// an operator's shared captured session produces the exact same mode. What
-// actually distinguishes them is the mint's own scope snapshot
-// (authorBedrockSSOInjection): its secret_name is the AWS-SSO sentinel
-// (types.AWSSSOAccessTokenSecret), its credential_source is
-// types.CredentialSourcePerUser only for a per-user row, and its
-// owner_subject is the subject the roster resolved the capture for. A mint
-// whose snapshot says "shared", or whose owner is anyone but memberPrincipal,
-// is graded as a failure here — that IS the case #691 exists to catch, so
-// accepting it would be a false proof.
+// b.ssoInject && b.ssoProxyInject regardless of whether the roster row behind
+// it is `per_user` or `shared` — an operator's shared captured session
+// produces the exact same mode. What actually distinguishes them is the
+// mint's own scope snapshot (authorBedrockSSOInjection): its secret_name is
+// the AWS-SSO sentinel, its credential_source is CredentialSourcePerUser only
+// for a per-user row, and its owner_subject is the subject the roster
+// resolved the capture for. A mint whose snapshot says "shared", or whose
+// owner is anyone but memberPrincipal, must be graded a failure here, or the
+// proof is false.
 //
-// owner_subject is runIdentitySubject(ctx, run.CreatedBy) at dispatch
-// (runs_dispatch_llm.go) evaluated on the dispatcher's own detached context,
-// where localPrincipalFromContext is always empty outside local mode — so
-// for the OIDC-backed deployment this suite targets, owner_subject is
-// run.CreatedBy verbatim, the SAME "sub" GET /me's "principal" reports for
-// the same token. Compared for exact equality here; the residual (an
-// install where the two are NOT spelled the same) is disclosed in
-// docs/LIVE-TESTS.md rather than silently worked around, since nothing in
-// this test process can independently observe how they were derived without
-// reading the source it already cites.
+// owner_subject is runIdentitySubject(ctx, run.CreatedBy) at dispatch,
+// evaluated on the dispatcher's own detached context where
+// localPrincipalFromContext is always empty outside local mode — so for the
+// OIDC-backed deployment this suite targets, owner_subject is run.CreatedBy
+// verbatim, the same "sub" GET /me's "principal" reports for the same token.
+// Compared for exact equality here; an install where the two are not spelled
+// the same is disclosed in docs/LIVE-TESTS.md rather than silently worked
+// around.
 func BedrockWardynRunProvesPerUserSSO(events []types.AuditEvent, memberPrincipal string) error {
 	var configured *bedrockConfigureData
 	var perUserMintForMember bool
@@ -132,20 +125,17 @@ func TranscriptContainsReply(transcript []byte, want string) error {
 }
 
 // BedrockWardynForcedFaultOK reports a descriptive error unless hint is the
-// sentence internal/api/bedrock_dataplane_fault.go's bedrockFaultHints writes
-// to a run's failure_hint when AWS refuses the model call with the given
-// error class ("AccessDeniedException" or "ThrottlingException") — Wardyn's
-// own sentence, keyed by the AWS class the proxy's bedrockUpstreamFault
-// classified, never AWS's raw response verbatim. class must be one of those
-// two exact strings.
+// sentence bedrockFaultHints writes to a run's failure_hint when AWS refuses
+// the model call with the given error class ("AccessDeniedException" or
+// "ThrottlingException") — Wardyn's own sentence, keyed by the AWS class the
+// proxy's bedrockUpstreamFault classified, never AWS's raw response verbatim.
+// class must be one of those two exact strings.
 //
-// This is observable ONLY on a lane the proxy actually MITMs bedrock-runtime
-// on — the bearer (API-key) lane, or a plain-HTTP WARDYN_BEDROCK_BASE_URL
-// test hatch. The per-user AWS SSO lane's bedrock-runtime traffic is an
-// opaque, un-MITM'd tunnel (isMITMHost covers only the SSO portal host on
-// that lane, not bedrock-runtime itself), so a denied Integration on THAT
-// lane never produces this hint at all — see the live test's own mode check
-// before it calls this.
+// Observable ONLY on a lane the proxy actually MITMs bedrock-runtime on — the
+// bearer (API-key) lane, or a plain-HTTP WARDYN_BEDROCK_BASE_URL test hatch.
+// The per-user AWS SSO lane's bedrock-runtime traffic is an opaque, un-MITM'd
+// tunnel, so a denial on that lane never produces this hint at all — see the
+// live test's own mode check before it calls this.
 func BedrockWardynForcedFaultOK(hint, class string) error {
 	switch class {
 	case "AccessDeniedException", "ThrottlingException":

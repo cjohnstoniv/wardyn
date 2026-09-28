@@ -3,16 +3,15 @@
 
 package proxy
 
-// The Azure DevOps capability HOLD: when the REST gate meets a request
-// needing a capability this run does not hold, the request is parked while a
-// person decides, and resumes on the same connection if approved. The
-// control plane decides everything (ceiling, first-use mode, per-run cap,
-// unspent `once` approvals) and raises the approval; this file only asks,
+// The Azure DevOps capability hold: when the REST gate meets a request needing a
+// capability this run doesn't hold, it parks the request while a person decides, and
+// resumes on the same connection if approved. The control plane decides everything
+// (ceiling, first-use mode, per-run cap, unspent `once` approvals); this file only asks,
 // waits on the re-auth workflow (credhold.go), and re-resolves once.
 //
-// A `once` approval buys ONE request (spent on the re-resolve; parked
-// requests share one workflow whose onceTaken picks the ONE forwarder). A
-// `run` approval joins the run's standing set, so later requests ask again.
+// A `once` approval buys ONE request, spent on re-resolve (parked requests share one
+// workflow whose onceTaken picks the ONE forwarder); a `run` approval joins the run's
+// standing set, so later requests ask again.
 
 import (
 	"context"

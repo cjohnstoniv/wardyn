@@ -10,9 +10,9 @@ package proxy
 // the outbound leg — the sandbox never holds the credential.
 //
 // This makes the credential NON-RESIDENT, not least-privilege: a PAT carries
-// whatever scope the operator issued it with and Wardyn cannot narrow it, so
+// whatever scope the operator issued it with and Wardyn can't narrow it, so
 // the allowlist here is per-HOST (a per-repo key would imply a confinement
-// the credential does not have).
+// the credential doesn't have).
 
 import (
 	"cmp"
@@ -102,11 +102,11 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host not granted to this run", http.StatusForbidden)
 		return
 	}
-	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the two
-	// pack endpoints, nothing else, or this broker becomes a credentialed proxy
-	// to the whole forge. The forge path is arbitrarily deep (gitlab subgroups,
-	// ADO's "o/p/_git/r"), so this lane takes the last segment as verb rather
-	// than the GitHub lane's closed enum.
+	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the
+	// two pack endpoints, nothing else, or this broker becomes a credentialed
+	// proxy to the whole forge. The forge path is arbitrarily deep (gitlab
+	// subgroups, ADO's "o/p/_git/r"), so this lane takes the last segment as
+	// verb rather than the GitHub lane's closed enum.
 	verb := rest[strings.LastIndex(rest, "/")+1:]
 	if strings.HasSuffix(rest, "/info/refs") {
 		verb = "info/refs"
@@ -125,12 +125,12 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push branch-namespace confinement, OFF unless the operator opted this proxy
-	// in with the pat scope of WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (PATBranchNSEnforced;
-	// #203 folds the standalone WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into it).
-	// Opted in, it is the SAME confinement the App lane applies (confinePush,
-	// same rule sources), so a run's git_push_any_branch still opts out. A
-	// refusal happens BEFORE patToken, so the refused request mints nothing.
+	// Push branch-namespace confinement, OFF unless the operator opted this
+	// proxy in with WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (PATBranchNSEnforced;
+	// #203 folds the standalone WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into
+	// it). Opted in, it's the SAME confinement the App lane applies
+	// (confinePush, same rule sources), so git_push_any_branch still opts
+	// out. A refusal happens BEFORE patToken, so it mints nothing.
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourcePAT
 	if verb == "git-receive-pack" && PATBranchNSEnforced() {

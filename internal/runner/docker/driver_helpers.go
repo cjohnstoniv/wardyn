@@ -64,12 +64,11 @@ func envSlice(env map[string]string) []string {
 }
 
 // proxyEnv renders the wardyn-proxy sidecar's config (runner.BuildProxyConfig,
-// the substrate-agnostic core a k8s substrate shares) and builds its
-// environment. The config itself is NOT in the environment: it carries the run
-// token, the per-run MITM CA key and the upstream-proxy credential, and
-// startProxy delivers it on stdin (#1176). The environment holds only
-// non-secret values: the stdin marker, the run id, the control-plane URL and
-// the operator knobs forwarded below.
+// shared with the k8s substrate) and builds its environment. The config
+// itself is NOT in the environment — it carries the run token, the per-run
+// MITM CA key, and the upstream-proxy credential, and startProxy delivers it
+// on stdin instead. The environment holds only non-secret values: the stdin
+// marker, the run id, the control-plane URL, and forwarded operator knobs.
 func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) ([]string, []byte, error) {
 	cfgJSON, err := runner.BuildProxyConfig(runID, pc, port)
 	if err != nil {
@@ -86,10 +85,10 @@ func proxyEnvFromJSON(runID uuid.UUID, controlPlaneURL string) []string {
 		"WARDYN_RUN_ID=" + runID.String(),
 		"WARDYN_CONTROL_PLANE_URL=" + controlPlaneURL,
 	}
-	// Operator knobs the sidecar reads from ITS environment, forwarded from
-	// wardynd's when set. The LIST is runner.ProxySidecarEnvKnobs — shared with
-	// the k8s driver, because a knob one substrate forwards and the other does not
-	// is a control that silently does not exist on that substrate.
+	// Operator knobs the sidecar reads from its own environment, forwarded
+	// from wardynd's when set. Shared list (runner.ProxySidecarEnvKnobs) with
+	// the k8s driver, since a knob one substrate forwards and the other
+	// doesn't is a control that silently doesn't exist there.
 	for _, kv := range runner.ProxySidecarEnvKnobs() {
 		env = append(env, kv[0]+"="+kv[1])
 	}
@@ -109,9 +108,9 @@ func isNotRunning(err error) bool {
 }
 
 // isAlreadyPaused / isNotPaused detect the daemon's redundant-pause-state
-// errors so FreezeSandbox/ThawSandbox stay idempotent on a retried call (a
-// pause request that lands twice, or a thaw after a lost response) instead of
-// surfacing the daemon's conflict as a caller-visible error.
+// errors so FreezeSandbox/ThawSandbox stay idempotent on a retried call
+// (duplicate pause, or a thaw after a lost response) instead of surfacing
+// the daemon's conflict as an error.
 func isAlreadyPaused(err error) bool {
 	if err == nil {
 		return false

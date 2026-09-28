@@ -16,47 +16,40 @@ import (
 // MEMBER-authored host bind mounts (SECURITY-CRITICAL — the one place a
 // NON-operator supplies a host path that gets bound into a sandbox).
 //
-// Everything in mount.go assumes the mount source was authored by an operator:
-// a policy write or an inline policy from an admin / SSO-gated human operator.
-// A member-owned workspace (types.Workspace.OwnedBy) breaks that assumption on
-// purpose — the desktop developer onboards their own project directory without
-// an admin authoring the mount — so a member source runs the operator
-// deny-list (ValidateMountSource) AND, additively, everything below:
+// Everything in mount.go assumes the mount source was authored by an
+// operator. A member-owned workspace (types.Workspace.OwnedBy) breaks that
+// assumption on purpose — a desktop developer onboards their own project
+// directory without an admin authoring the mount — so a member source runs
+// the operator deny-list (ValidateMountSource) AND, additively:
 //
-//  1. ROOT ALLOWLIST. The source's canonicalized real path must sit inside one
-//     of the operator/MDM-set roots (WARDYN_USER_WORKSPACE_ROOTS, or that
+//  1. ROOT ALLOWLIST. The source's canonicalized real path must sit inside
+//     one of the operator/MDM-set roots (WARDYN_USER_WORKSPACE_ROOTS, or that
 //     member's own entry in WARDYN_USER_WORKSPACE_ROOTS_MAP, which REPLACES
 //     the shared list rather than adding to it). No roots configured => a
-//     member local_dir mount is refused outright (fail closed); repos and
-//     operator-owned workspaces still work.
+//     member local_dir mount is refused outright (fail closed).
 //  2. CANONICALIZE, THEN MATCH. The within-root test runs on the EvalSymlinks
-//     result, so a symlink INSIDE a root pointing OUT of every root is refused —
-//     the escape a lexical prefix check misses. Unlike ValidateMountSource
-//     (which falls through to lexical-only when the path does not resolve, for
-//     the remote-daemon case), an unresolvable member source is REFUSED: the
-//     allowlist is the whole guarantee and cannot be asserted about a path this
-//     process cannot see.
+//     result, so a symlink INSIDE a root pointing OUT of every root is
+//     refused — the escape a lexical prefix check misses. Unlike
+//     ValidateMountSource (which falls through to lexical-only for the
+//     remote-daemon case), an unresolvable member source is REFUSED: the
+//     allowlist can't be asserted about a path this process can't see.
 //  3. DOTFILE DENY. The real path may neither BE nor TRAVERSE a credential
-//     dotfile dir (~/.ssh, ~/.aws, ~/.claude, ...). This is the compose file's
-//     own warning ("DO NOT set it to your home directory") turned into code,
-//     and it is belt-and-braces with (1): an operator who does point a root at
-//     $HOME still cannot let a member mount their own ~/.ssh.
+//     dotfile dir (~/.ssh, ~/.aws, ~/.claude, ...), belt-and-braces with (1):
+//     an operator who points a root at $HOME still can't let a member mount
+//     their own ~/.ssh.
 //
-// WRITABLE is a separate, narrower allowlist (WARDYN_USER_WRITABLE_ROOTS,
+// WRITABLE is a separate, narrower allowlist (WARDYN_USER_WRITABLE_ROOTS
 // minus WARDYN_USER_WRITABLE_DENY, deny winning) because a writable bind
-// widens the residual; both unset means NO writable member mounts at all.
-// Operators keep the unrestricted per-source Writable opt-in they have today —
-// none of this narrows an operator mount, since a run with no member-owned
-// workspace carries no roots and takes exactly today's path.
+// widens the residual; both unset means NO writable member mounts. None of
+// this narrows an operator mount.
 //
-// RESIDUAL, stated honestly: the bind-time re-check (docker driver's
-// agentMounts, via SandboxSpec.UserMountRoots) resolves the real path as late
-// as this process can, but validate and ContainerCreate are still not atomic —
-// the same TOCTOU window ValidateMountSource's own residual note already
-// documents for operator mounts. Two things bound it: the roots are operator-set, so a member can only
-// race WITHIN the declared roots, never enlarge them; and the dotfile deny-list
-// matches the post-EvalSymlinks real path, so a won race that lands on ~/.ssh is
-// still refused.
+// RESIDUAL: the bind-time re-check resolves the real path as late as this
+// process can, but validate and ContainerCreate are still not atomic — the
+// same TOCTOU window ValidateMountSource's own residual note documents.
+// Bounded by two things: the roots are operator-set, so a member can only
+// race WITHIN the declared roots, never enlarge them; and the dotfile
+// deny-list matches the post-EvalSymlinks real path, so a won race landing on
+// ~/.ssh is still refused.
 
 // memberDeniedSegments are path SEGMENTS a member mount's resolved real path
 // may neither end in nor traverse. Modeled on deniedSourcePrefixes (mount.go)
@@ -84,23 +77,20 @@ var memberDeniedPairs = [][2]string{
 
 // UserMountPolicy is the operator/MDM-set posture for MEMBER-authored
 // local_dir binds. The zero value means "no member local_dir mounts at all",
-// which is the fail-closed default: a deployment that configures none of these
-// vars behaves exactly as it does today, minus the ability for a member to
-// onboard a host directory.
+// the fail-closed default.
 //
-// Every field comes from operator/MDM-set ENV (cmd/wardynd), never SiteConfig —
-// site config is a full-replace row a single bad PUT can blank (the 0042
-// hazard), and this is a security ceiling.
+// Every field comes from operator/MDM-set ENV (cmd/wardynd), never
+// SiteConfig — site config is a full-replace row a single bad PUT can blank,
+// and this is a security ceiling.
 type UserMountPolicy struct {
 	// Roots is the shared allowlist (WARDYN_USER_WORKSPACE_ROOTS): absolute,
 	// cleaned host prefixes any member's local_dir source must resolve into.
 	Roots []string
 	// RootsByPrincipal (WARDYN_USER_WORKSPACE_ROOTS_MAP) is the per-member
 	// override. A principal with an entry uses ONLY that entry — per-member
-	// REPLACES shared, because per-member exists to be the more restrictive
-	// control, and a union would make adding a row widen rather than narrow.
-	// Keys are lowercased principals (OIDC sub or email, the same dual-key
-	// identity a capability_grants `user` subject carries).
+	// REPLACES shared, since it exists to be the more restrictive control,
+	// and a union would make adding a row widen rather than narrow. Keys are
+	// lowercased principals (OIDC sub or email).
 	RootsByPrincipal map[string][]string
 	// WritableRoots (WARDYN_USER_WRITABLE_ROOTS) is where a member may mark
 	// their own mount writable. Empty = nowhere.
@@ -161,11 +151,10 @@ func ValidateUserMountSource(src string, roots []string) error {
 }
 
 // validateUserSource runs the three additive checks and returns the resolved
-// real path (which the writable check then matches against, so the two can
-// never disagree about WHICH path they are deciding about).
+// real path, which the writable check then matches against so the two can
+// never disagree about WHICH path they are deciding about.
 func validateUserSource(src string, roots []string) (string, error) {
-	// The operator deny-list first, unchanged and unweakened: absolute, cleaned
-	// (so lexical ".." is already refused), not host-root/proc/etc/docker.sock.
+	// The operator deny-list first, unchanged and unweakened.
 	if err := ValidateMountSource(src); err != nil {
 		return "", err
 	}
@@ -173,8 +162,8 @@ func validateUserSource(src string, roots []string) (string, error) {
 		return "", fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
 	}
 	// Fail CLOSED on any resolve error, "does not exist" included: unlike the
-	// operator path, there is no lexical-only fallback here — an allowlist we
-	// cannot evaluate is not an allowlist.
+	// operator path, there is no lexical-only fallback here — an allowlist
+	// that can't be evaluated is not an allowlist.
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		return "", fmt.Errorf("mount source %q could not be resolved (member mounts must resolve on this host): %w", src, err)
@@ -231,14 +220,13 @@ func deniedUserSegment(real string) string {
 // {"<principal>": ["/abs/root", ...]}.
 //
 // FAIL CLOSED on a malformed value — a typo'd root that silently matched
-// nothing (or, worse, prefix-matched something else) is exactly the config bug
-// this ceiling cannot afford — so boot stops rather than starting with a
+// nothing (or, worse, prefix-matched something else) is exactly the config
+// bug this ceiling cannot afford — so boot stops rather than starting with a
 // half-understood allowlist.
 //
-// warnings are the O4 posture notices the caller logs at boot: a root of "/" or
-// of $HOME is permitted (matching the LocalMode unspecified-bind WARN precedent
-// documented on humanOrAdminAuth) but leaves the section-(c) residual
-// unbounded, so it must never be silent.
+// warnings are the posture notices the caller logs at boot: a root of "/" or
+// of $HOME is permitted but leaves the dotfile-deny residual unbounded, so it
+// must never be silent.
 func ParseUserMountPolicy(roots, rootsMap, writable, writableDeny string) (p UserMountPolicy, warnings []string, err error) {
 	if p.Roots, err = parseRootList("WARDYN_USER_WORKSPACE_ROOTS", roots); err != nil {
 		return UserMountPolicy{}, nil, err
@@ -272,9 +260,9 @@ func ParseUserMountPolicy(roots, rootsMap, writable, writableDeny string) (p Use
 	return p, p.bootWarnings(), nil
 }
 
-// parseRootList splits and validates one comma-separated root list. Each entry
-// must be an absolute, already-cleaned path — the same shape ValidateMountSource
-// demands of a mount source, so a root can never carry a traversal segment that
+// parseRootList splits and validates one comma-separated root list. Each
+// entry must be an absolute, already-cleaned path — the same shape
+// ValidateMountSource demands, so a root can never carry a traversal segment
 // the prefix test would then honor.
 func parseRootList(name, raw string) ([]string, error) {
 	var out []string
@@ -291,24 +279,22 @@ func parseRootList(name, raw string) ([]string, error) {
 	return out, nil
 }
 
-// bootWarnings returns the O4 notices for the two roots that are allowed (WARN,
-// not refuse) but do not bound what an operator setting them expects. They are
-// warned about for OPPOSITE reasons and so get OPPOSITE sentences — the same
-// split ParseUserDriveHostRoots keeps, and for the same reason (a merged
-// sentence sends an operator hunting the wrong failure):
+// bootWarnings returns notices for the two roots that are allowed (WARN, not
+// refuse) but don't bound what an operator setting them expects. They're
+// warned about for OPPOSITE reasons and get OPPOSITE sentences — a merged
+// sentence would send an operator hunting the wrong failure:
 //
 //   - $HOME is far too WIDE: withinAnyRoot really does admit everything under
-//     it, so the credential dotfile deny-list is the only thing left between a
-//     member and the operator's credentials.
+//     it, so the credential dotfile deny-list is the only thing left between
+//     a member and the operator's credentials.
 //   - "/" is DEAD: withinAnyRoot compares real == root || HasPrefix(real,
 //     root+"/"), which for "/" is the prefix "//" — so a root of "/" matches
-//     nothing but the literal path "/" and REFUSES every member mount under it.
-//     Saying it is bounded only by the deny-list states the opposite of what
-//     the code does.
+//     nothing but the literal path "/" and REFUSES every member mount under
+//     it. Saying it is bounded only by the deny-list states the opposite of
+//     what the code does.
 //
-// Fail-closed is the right behaviour for "/". internal/runner/member_mount_test.go
-// drives both against withinAnyRoot so the wording cannot drift from the
-// behaviour.
+// internal/runner/member_mount_test.go drives both against withinAnyRoot so
+// the wording cannot drift from the behaviour.
 func (p UserMountPolicy) bootWarnings() []string {
 	home := filepath.Clean(strings.TrimSpace(os.Getenv("HOME")))
 	seen := map[string]bool{}

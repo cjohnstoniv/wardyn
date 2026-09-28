@@ -2,35 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package lifecycle implements workspace lifecycle automation: the Reaper loop
-// finds RUNNING agent runs that have been idle past their policy's
-// AutoStopAfterSec threshold and stops them, emitting a "run.autostop" audit
-// event for each.
+// finds RUNNING agent runs idle past their policy's AutoStopAfterSec threshold
+// and stops them, emitting a "run.autostop" audit event for each.
 //
-// # Idleness definition — PARTIAL, and honestly so
+// Idleness is wall-clock age of agent_runs.updated_at, reset only by a write
+// through the store (state transitions, sandbox_ref updates, TouchRun). The
+// proxy's decision-ingest touch is coalesced to one UPDATE per TouchDebounce
+// window, so thresholdFor adds TouchDebounce as slack. Activity that never
+// leaves the sandbox (CPU, file writes) does NOT reset the clock, so a busy
+// run can still be reaped; operators needing an unbounded session use the
+// never-reap escape hatch (AutoStopAfterSec <= 0).
 //
-// "Idleness" here is wall-clock age of agent_runs.updated_at. The clock resets
-// only when something writes that row through the store — state transitions,
-// sandbox_ref updates, or an explicit store.TouchRun keepalive. Two callers
-// touch it today: the interactive-attach handler (a human is watching) and the
-// proxy's decision ingest (the agent made an egress call). The ingest touch is
-// coalesced to one UPDATE per TouchDebounce window, so thresholdFor adds
-// TouchDebounce as slack — a run stops once idle past policy + TouchDebounce,
-// never earlier.
-//
-// What still does NOT reset the clock is activity that never leaves the sandbox
-// — CPU, file writes, a long local build. Such a run is stopped once updated_at
-// ages past its policy threshold even while busy. The remaining upgrade is
-// runner-reported liveness; until then, operators who need an unbounded session
-// should use the never-reap escape hatch (policy AutoStopAfterSec <= 0).
-//
-// # AutoStopAfterSec semantics (policy auto_stop_after_sec)
-//
-//	> 0  idle timeout in seconds (stop after this much wall-clock idleness)
-//	  0  DISABLED — the run is never reaped (matches docs/POLICIES.md; this is the
-//	     default for a run with no auto-stop configured, since the store COALESCEs
-//	     an absent policy field to 0)
-//	< 0  never reaped (explicit interactive escape hatch; equivalent to 0 for the
-//	     reaper, but kept distinct so an operator can express intent loudly)
+// AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
+// 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
+// reaped but kept distinct so an operator can express intent loudly.
 package lifecycle
 
 import (
@@ -49,130 +34,89 @@ const (
 	// defaultInterval is how often the reaper wakes to scan for idle runs.
 	defaultInterval = time.Minute
 
-	// defaultStopTimeout bounds a single StopRun call so one hung StopSandbox
-	// cannot stall the whole reap loop. Each idle run gets its own deadline
-	// derived from the tick's context; on timeout the stop is logged and
-	// skipped, and the run is retried on the next tick.
+	// defaultStopTimeout bounds one StopRun call so a hung StopSandbox can't
+	// stall the loop; on timeout the stop is skipped and retried next tick.
 	defaultStopTimeout = 2 * time.Minute
 )
 
-// TouchDebounce is how stale a run's activity signal may legitimately be: the
-// decision-ingest touch (internal/api) coalesces bursts to one updated_at
-// UPDATE per window, so an ACTIVE run's row can lag real activity by up to
-// this much. thresholdFor adds it as slack, so the debounce can never make an
-// active run look idle — a genuinely idle run stops at most this much later.
+// TouchDebounce covers the ingest touch's coalesced-UPDATE lag, added as slack
+// in thresholdFor so debounce can never make an active run look idle.
 const TouchDebounce = 30 * time.Second
 
 // RunSummary is the minimal projection a Store must return for idle detection.
-// It carries everything the Reaper needs without leaking the full run row.
 type RunSummary struct {
 	ID        uuid.UUID
 	UpdatedAt time.Time
-	// PolicyAutoStopAfterSec is the value from the run's attached policy spec.
-	// Semantics (see package doc): 0 means DISABLED (never reap), a NEGATIVE value
-	// also means "never reap", and a POSITIVE value is the idle timeout in seconds.
-	// The Store must JOIN to the policy table and surface this field; a zero value
-	// is intentional (a run with no auto-stop configured is never reaped, not a
-	// missing join).
+	// PolicyAutoStopAfterSec: 0 or negative means never reap, positive is the
+	// idle timeout in seconds. Store must JOIN to the policy table; zero is
+	// intentional, not a missing join.
 	PolicyAutoStopAfterSec int
 }
 
-// Store is the narrow persistence interface the Reaper requires.
-//
-// The real adapter is trivial: store.ListRunningWithPolicy wraps the pgxpool
-// and maps from (agent_runs JOIN run_policies). Tests supply a fake.
-//
-// Method shapes deliberately mirror the existing store package naming
-// conventions (List*, returning a slice) so the integrator's adapter
-// is mechanical.
+// Store is the narrow persistence interface the Reaper requires; the real
+// adapter maps agent_runs JOIN run_policies, tests supply a fake.
 type Store interface {
-	// ListRunningWithPolicy returns all runs currently in state RUNNING
-	// together with the auto_stop_after_sec value from their attached policy
-	// (0 when no policy is attached or the policy field is unset).
-	//
-	// It ALSO returns the store's own clock, read once for the whole scan, and
-	// the reaper measures idleness against that rather than its own:
-	// RunSummary.UpdatedAt is a Postgres-stamped column, so a wardynd clock
-	// running ahead of the database adds its skew directly to every measured
-	// age — and TouchDebounce's 30 seconds is the entire margin, so a few
-	// minutes of skew stops an actively-attached run and revokes its
-	// credentials, while skew the other way never reaps at all.
-	//
-	// A ZERO time means "this store has no clock of its own" — every in-memory
-	// double — and the reaper falls back to its own, which is what those doubles
-	// were always measuring against.
+	// ListRunningWithPolicy returns RUNNING runs with their policy's
+	// auto_stop_after_sec (0 if unattached/unset), plus the store's own clock
+	// read once for the whole scan. The reaper measures idleness against that
+	// clock, not its own: UpdatedAt is Postgres-stamped, so wardynd clock skew
+	// vs. the database eats directly into TouchDebounce's 30s margin — enough
+	// skew stops an actively-attached run and revokes its credentials, or
+	// (skewed the other way) never reaps at all. A ZERO returned time means
+	// the store has no clock (in-memory doubles), and the reaper falls back
+	// to its own.
 	ListRunningWithPolicy(ctx context.Context) ([]RunSummary, time.Time, error)
 }
 
 // StopOutcome is what StopRun reports back to the Reaper beyond the raw error.
 type StopOutcome struct {
-	// Applied reports whether the stop actually transitioned the run from RUNNING
-	// to STOPPED. False when a concurrent kill/complete had already moved the
-	// run terminal, OR when the idleness guard no-op'd because the run's
-	// updated_at advanced past the reaper's snapshot (an active `wardyn run attach`
-	// touched it after the scan). Either way the reaper must NOT emit a
-	// spurious run.autostop.
+	// Applied is false when a concurrent kill/complete already moved the run
+	// terminal, or the idleness guard no-op'd because updated_at advanced past
+	// the snapshot (an active attach). Either way, no spurious run.autostop.
 	Applied bool
-	// Errors, when non-empty, carries the teardown/revocation failures that
-	// occurred AFTER the stop transition won (Applied=true) but which left the
-	// run not fully contained: "identity_error" / "broker_error" (the run
-	// token or minted broker creds may still be live), and "teardown_error"
-	// (the sandbox may still be routable). The reaper emits these as a
-	// distinct run.revoke/failure audit event so the live-credential/
-	// live-sandbox window is visible, mirroring handleKillRun/revokeRunCascade.
-	// Nil on a clean stop.
+	// Errors, when non-empty, are post-transition teardown/revocation failures
+	// ("identity_error"/"broker_error": creds may still be live;
+	// "teardown_error": sandbox may still be routable) that leave the run not
+	// fully contained. Emitted as a distinct run.revoke/failure audit event,
+	// mirroring handleKillRun/revokeRunCascade. Nil on a clean stop.
 	Errors map[string]string
 }
 
-// Stopper stops a single run. The implementation is expected to conditionally
-// transition the run's state to STOPPED (RUNNING->STOPPED only, guarded on the
-// snapshot's idleness) and then call runner.StopSandbox + the revoke cascade;
-// all concerns are hidden behind this interface so the lifecycle package stays
-// target-agnostic.
+// Stopper stops a single run: transitions RUNNING->STOPPED guarded on the
+// snapshot's idleness, then calls runner.StopSandbox + the revoke cascade.
+// Hidden behind this interface so lifecycle stays target-agnostic.
 type Stopper interface {
-	// StopRun gracefully stops the run identified by runID. Implementations must
-	// be idempotent: stopping an already-stopped run returns ({Applied:false}, nil).
-	//
-	// notAfter is the run's updated_at from the reaper's tick snapshot: the stop
-	// transition must be conditional on updated_at not having advanced past it, so
-	// a run an active attach touched after the snapshot is NOT stopped.
-	//
-	// The returned StopOutcome reports whether the transition applied and any
-	// post-transition teardown/revocation failures. A non-nil error means the stop
-	// failed outright; the outcome is meaningless and the reaper logs and skips.
+	// StopRun must be idempotent: stopping an already-stopped run returns
+	// ({Applied:false}, nil). notAfter is the snapshot's updated_at; the
+	// transition is conditional on updated_at not having advanced past it, so
+	// a run touched by an active attach since the snapshot is NOT stopped. A
+	// non-nil error means the stop failed outright and the reaper logs/skips.
 	StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (StopOutcome, error)
 }
 
-// Recorder is the minimal audit interface the Reaper needs. It matches
-// audit.Recorder exactly so the integrator can pass a store.Recorder directly.
+// Recorder matches audit.Recorder exactly so a store.Recorder can be passed directly.
 type Recorder interface {
 	Record(ctx context.Context, ev types.AuditEvent) error
 }
 
-// Config holds optional overrides for Reaper behaviour. Zero value is valid:
-// defaults are applied in New.
+// Config holds optional overrides for Reaper behaviour; zero value is valid.
 type Config struct {
 	// Interval is how often the reaper scans. Default: 1 minute.
 	Interval time.Duration
 	// Now overrides the wall clock. Nil means use real time.
 	Now func() time.Time
 	// TickLock, when non-nil, makes each tick single-flight across control
-	// planes: it must TRY to take a cluster-wide lock and return a release func,
-	// or (nil, false) when someone else holds it — in which case the tick is
-	// skipped, not queued. wardynd wires a Postgres try-advisory-lock; it stays
-	// a func here so lifecycle keeps no database dependency.
-	//
-	// Nil = ungated, the single-process default (and what tests drive Tick with).
+	// planes: TRY a cluster-wide lock, return a release func, or (nil, false)
+	// if held elsewhere — then the tick is skipped, not queued. wardynd wires
+	// a Postgres try-advisory-lock; kept as a func so lifecycle has no DB
+	// dependency. Nil = ungated (single-process default; what tests use).
 	TickLock func(ctx context.Context) (release func(), ok bool)
 }
 
-// Reaper is the idle-workspace garbage collector. It runs a periodic loop
-// that finds RUNNING workspaces idle past their policy threshold and stops
-// them.
-//
-// Reaper.Run is designed to be called in a dedicated goroutine and blocks
-// until ctx is cancelled. A stopper error is logged and skipped so that one
-// broken sandbox never prevents the rest from being reaped on the same tick.
+// Reaper is the idle-workspace garbage collector: a periodic loop that finds
+// RUNNING workspaces idle past their policy threshold and stops them.
+// Reaper.Run blocks until ctx is cancelled; a stopper error is logged and
+// skipped so one broken sandbox never blocks the rest of the tick.
 type Reaper struct {
 	store    Store
 	stopper  Stopper
@@ -183,8 +127,7 @@ type Reaper struct {
 	logger   *slog.Logger
 }
 
-// New constructs a Reaper. store, stopper, and recorder are required and must
-// be non-nil. cfg may be zero-valued.
+// New constructs a Reaper. store, stopper, and recorder must be non-nil.
 func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 	r := &Reaper{
 		store:    store,
@@ -204,9 +147,8 @@ func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 	return r
 }
 
-// Run starts the reap loop. It returns when ctx is cancelled (typically at
-// process shutdown). The first tick fires after one full Interval so that the
-// control plane can finish starting up before the first scan.
+// Run starts the reap loop, returning when ctx is cancelled. The first tick
+// fires after one full Interval so startup finishes before the first scan.
 func (r *Reaper) Run(ctx context.Context) {
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
@@ -221,28 +163,21 @@ func (r *Reaper) Run(ctx context.Context) {
 	}
 }
 
-// Tick is one reap scan, gated by Config.TickLock when one is wired. It is
-// exported so that integration callers and tests can drive it directly; in
-// production code always use Run instead.
+// Tick is one reap scan, gated by Config.TickLock when wired. Exported for
+// integration callers/tests to drive directly; production code uses Run.
 //
-// The whole tick runs under an Interval+defaultStopTimeout deadline: the
-// advisory-lock connection is held for the tick's duration, so a single
-// wedged StopRun must not pin the lock (and with it, reaping cluster-wide)
-// past that bound. defaultStopTimeout is added on top of Interval, not folded
-// into it — a child context.WithTimeout can only SHORTEN its parent's
-// deadline, so budgeting at bare Interval would silently cap every per-stop
-// deadline at whatever was left of Interval, never the full defaultStopTimeout
-// the constant promises.
+// Deadline is Interval+defaultStopTimeout, not just Interval: a child
+// context.WithTimeout can only shorten its parent's deadline, so budgeting at
+// bare Interval would silently cap every per-stop deadline short of the full
+// defaultStopTimeout the constant promises.
 func (r *Reaper) Tick(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, r.interval+defaultStopTimeout)
 	defer cancel()
 	if r.tickLock != nil {
 		release, ok := r.tickLock(ctx)
 		if !ok {
-			// Another control plane is reaping this tick (or the lock could not be
-			// reached). Skipping is the point of a TRY lock: the scan is idempotent
-			// and the next tick is one Interval away, so waiting would only queue
-			// duplicate stops behind the winner.
+			// TRY lock semantics: skip rather than queue, since the scan is
+			// idempotent and the next tick is one Interval away.
 			r.logger.DebugContext(ctx, "lifecycle: tick skipped (reap lock held elsewhere)")
 			return
 		}
@@ -259,21 +194,16 @@ func (r *Reaper) reap(ctx context.Context) {
 		return
 	}
 
-	// ONE CLOCK FOR THE AGE: the store's, because UpdatedAt came from it. A zero
-	// answer is a store with no clock (the in-memory doubles), not a store that
-	// failed — those rows were stamped from r.now() too, so r.now() is the
-	// comparable reading for them.
+	// Measure age against the store's clock, since UpdatedAt came from it; a
+	// zero answer means no clock (in-memory doubles), which fall back to r.now().
 	now := storeNow
 	if now.IsZero() {
 		now = r.now()
 	}
 
 	for _, run := range runs {
-		// Auto-stop disabled / never-reap opt-out: a policy AutoStopAfterSec <= 0
-		// means the run is exempt from idle auto-stop entirely — the reaper
-		// must never stop it regardless of how long it has been idle. 0 is
-		// DISABLED (the default); a negative value is the explicit interactive
-		// escape hatch for unbounded attach sessions. Either way: skip.
+		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =
+		// disabled default; negative = explicit unbounded-attach escape hatch).
 		if run.PolicyAutoStopAfterSec <= 0 {
 			continue
 		}
@@ -283,18 +213,15 @@ func (r *Reaper) reap(ctx context.Context) {
 			continue
 		}
 
-		// Run is idle past its threshold: stop it. Bound each stop with its own
-		// deadline so a single hung StopSandbox cannot stall the whole reap
-		// loop; the run is simply retried on the next tick.
+		// Bound each stop with its own deadline so one hung StopSandbox can't
+		// stall the loop; a timed-out stop is simply retried next tick.
 		runID := run.ID
 		stopCtx, cancel := context.WithTimeout(ctx, defaultStopTimeout)
-		// Pass the snapshot's updated_at so the stop transition is conditional on
-		// the run not having been touched (e.g. by an active attach keepalive)
-		// since the scan.
+		// notAfter = snapshot's updated_at, so the transition is skipped if an
+		// attach keepalive touched the run since the scan.
 		out, err := r.stopper.StopRun(stopCtx, runID, run.UpdatedAt)
 		cancel()
 		if err != nil {
-			// Log and continue — one broken sandbox must not kill the loop.
 			r.logger.ErrorContext(ctx, "lifecycle: stop run failed",
 				"run_id", runID,
 				"idle_for", idleFor,
@@ -304,11 +231,8 @@ func (r *Reaper) reap(ctx context.Context) {
 			continue
 		}
 		if !out.Applied {
-			// A concurrent kill/complete already moved the run terminal, the run
-			// was touched after the snapshot (active attach), or an open request is
-			// still inside its wait, so the idle-guarded transition was a no-op. In
-			// every case do NOT emit a spurious run.autostop — the run was not
-			// autostopped.
+			// No-op transition (already terminal, touched since snapshot, or an
+			// open request mid-wait): do NOT emit a spurious run.autostop.
 			r.logger.DebugContext(ctx, "lifecycle: stop was a no-op (already terminal, touched after snapshot, or an open request is still inside its wait)",
 				"run_id", runID,
 			)
@@ -317,35 +241,28 @@ func (r *Reaper) reap(ctx context.Context) {
 
 		r.emitAutoStop(ctx, runID, idleFor, threshold)
 
-		// The stop transition won but a teardown/revocation step failed: the run is
-		// STOPPED yet not fully contained (live token/broker creds or a live
-		// sandbox). Emit a DISTINCT run.revoke/failure event so that window is
-		// visible in the audit log — the run.autostop above alone would dishonestly
-		// read as a fully-successful stop. Mirrors handleKillRun.
+		// Stop won but teardown/revocation failed: run is STOPPED yet not fully
+		// contained. Emit a DISTINCT event so that window is visible instead of
+		// hiding behind a dishonestly-clean run.autostop. Mirrors handleKillRun.
 		if len(out.Errors) > 0 {
 			r.emitRevokeFailure(ctx, runID, out.Errors)
 		}
 	}
 }
 
-// thresholdFor returns the idle threshold for a run. The run's policy
-// AutoStopAfterSec (> 0) is the timeout in seconds. This preserves the invariant
-// that workspace-local configuration can only NARROW policy, never widen it —
-// the per-run override is sourced from the policy, not from workspace config.
-//
-// Tick filters out every run with AutoStopAfterSec <= 0 (DISABLED / never-reap)
-// BEFORE calling this, so thresholdFor is only ever invoked with a positive
-// value. TouchDebounce rides on top as slack (see its doc).
+// thresholdFor returns the idle threshold for a run: policy AutoStopAfterSec
+// (always positive here, since reap filters <= 0 before calling this) plus
+// TouchDebounce slack. Sourcing the override from policy, not workspace
+// config, preserves the invariant that workspace config can only narrow
+// policy, never widen it.
 func (r *Reaper) thresholdFor(run RunSummary) time.Duration {
 	return time.Duration(run.PolicyAutoStopAfterSec)*time.Second + TouchDebounce
 }
 
-// emitAutoStop writes a "run.autostop" audit event. Failures are logged and
-// swallowed: audit must never gate the stop path. The append-only audit
-// invariant is upheld by the store layer (Postgres trigger).
-// threshold here is the EFFECTIVE value (policy + TouchDebounce) — deliberately
-// what the reaper compared idleFor against, not the raw policy number;
-// docs/POLICIES.md documents the delta.
+// emitAutoStop writes a "run.autostop" audit event; failures are logged and
+// swallowed since audit must never gate the stop path. threshold is the
+// EFFECTIVE value (policy + TouchDebounce) the reaper actually compared
+// against, not the raw policy number — see docs/POLICIES.md.
 func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, threshold time.Duration) {
 	data, _ := json.Marshal(map[string]any{
 		"idle_for_sec":  int64(idleFor.Seconds()),
@@ -371,13 +288,11 @@ func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, thr
 	}
 }
 
-// emitRevokeFailure writes a "run.revoke" / failure audit event carrying the
-// per-target teardown/revocation errors ("identity_error" / "broker_error" /
-// "teardown_error") from a stop that transitioned the run to STOPPED but did not
-// fully contain it. This mirrors handleKillRun/revokeRunCascade's distinct
-// failure event so a silently-failed idle-stop revoke — which leaves the run
-// token valid until its <=1h TTL, or the sandbox routable — is visible in the
-// system of record instead of hiding behind run.autostop/success.
+// emitRevokeFailure writes a "run.revoke"/failure audit event carrying
+// per-target teardown/revocation errors from a stop that reached STOPPED but
+// didn't fully contain the run. Mirrors handleKillRun/revokeRunCascade so a
+// silently-failed revoke (token live until its <=1h TTL, or sandbox routable)
+// stays visible instead of hiding behind run.autostop/success.
 func (r *Reaper) emitRevokeFailure(ctx context.Context, runID uuid.UUID, errs map[string]string) {
 	data, _ := json.Marshal(errs)
 	ev := types.AuditEvent{

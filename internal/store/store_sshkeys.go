@@ -1,8 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// SSH gateway key registry (migration 0033). Kept out of store.go on purpose
-// (it sits at a lint size boundary), mirroring store_sandbox_ref.go's split.
+// SSH gateway key registry. Kept out of store.go on purpose (lint size
+// boundary), mirroring store_sandbox_ref.go's split.
 package store
 
 import (
@@ -18,8 +18,8 @@ import (
 )
 
 // AddSSHKey inserts a new registered key. Returns ErrConflict when the
-// fingerprint (the PK) already exists — a unique_violation (23505) on this
-// table means someone already registered that exact key material.
+// fingerprint (PK) already exists — a 23505 here means that exact key
+// material is already registered.
 func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
 	const q = `
 		INSERT INTO ssh_public_keys (` + sshKeyCols + `)
@@ -45,11 +45,11 @@ func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]typ
 	return collect(ctx, s.Pool, "list", "ssh keys", q, []any{principal}, scanSSHKey)
 }
 
-// GetSSHKeyByFingerprint is the gateway's pre-auth lookup: given the offered
-// key's fingerprint, resolve which principal (if any) registered it — and with
-// which role (0043), the gateway's admin-override signal.
-// Deliberately UNSCOPED by principal — the caller has not authenticated yet;
-// this call is what authenticates them. Returns ErrNotFound when unregistered.
+// GetSSHKeyByFingerprint is the gateway's pre-auth lookup: resolves which
+// principal (if any) registered the offered fingerprint, and with which
+// role, the admin-override signal. Deliberately UNSCOPED by principal — the
+// caller has not authenticated yet; this call is what authenticates them.
+// Returns ErrNotFound when unregistered.
 func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error) {
 	const q = `
 		SELECT ` + sshKeyCols + `
@@ -57,20 +57,16 @@ func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (typ
 	return scanSSHKey(s.Pool.QueryRow(ctx, q, fingerprint))
 }
 
-// RefreshSSHKeyRoles re-stamps role AND role_checked_at on every key owned by
-// principal — the OIDC callback's OnLogin hook (migration 0046), fired on
-// every successful login with that login's freshly-derived role. This is what
-// narrows the admin-override stamp from "set once at registration, never
-// touched again" to "at most WARDYN_SSH_ROLE_TTL stale": a login is a live
-// read of the human's CURRENT role, more authoritative than whatever was true
-// the day a given key was registered, so it overwrites role too, not only the
-// timestamp — a demoted human's keys downgrade to member on their very next
-// login, and a promoted human's keys upgrade the same way, with no
-// delete-then-re-register needed. A principal with no registered keys is a
-// normal, silent no-op (RowsAffected 0) — logging in has nothing to refresh.
+// RefreshSSHKeyRoles re-stamps role and role_checked_at for every key owned
+// by principal, from the OIDC OnLogin hook, with that login's
+// freshly-derived role. This bounds the admin-override stamp to at most
+// WARDYN_SSH_ROLE_TTL stale: it overwrites role too, not only the timestamp,
+// so a demoted or promoted human's keys take effect on their very next
+// login, with no delete-then-re-register needed. No registered keys is a
+// normal, silent no-op.
 //
-// A CAPPED key (migration 0070, registered in the user view) keeps its user
-// role: the login refreshes only its timestamp, never promotes it.
+// A CAPPED key (registered in the user view) keeps its user role — the
+// login refreshes only its timestamp, never promotes it.
 func (s PG) RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error {
 	_, err := s.Pool.Exec(ctx,
 		`UPDATE ssh_public_keys SET role = CASE WHEN capped THEN role ELSE $1 END, role_checked_at = $2 WHERE principal = $3`,
@@ -82,9 +78,9 @@ func (s PG) RefreshSSHKeyRoles(ctx context.Context, principal, role string, chec
 }
 
 // DeleteSSHKey removes fingerprint, scoped to principal so a human can only
-// ever delete their OWN key. Returns ErrNotFound both when the fingerprint
-// doesn't exist and when it belongs to someone else — indistinguishable on
-// purpose (no existence leak across principals).
+// delete their OWN key. Returns ErrNotFound whether the fingerprint doesn't
+// exist or belongs to someone else — indistinguishable on purpose, no
+// existence leak across principals.
 func (s PG) DeleteSSHKey(ctx context.Context, fingerprint, principal string) error {
 	tag, err := s.Pool.Exec(ctx,
 		`DELETE FROM ssh_public_keys WHERE fingerprint = $1 AND principal = $2`, fingerprint, principal)
@@ -108,8 +104,8 @@ func (s PG) DeleteSSHKeys(ctx context.Context, principal string) (int, error) {
 }
 
 // sshKeyCols is THE ssh_public_keys column list, in scanSSHKey's order (four
-// pasted sites). One list, not two: every column is written at registration,
-// and RefreshSSHKeyRoles updates two in place rather than adding any.
+// call sites). One list, not two: every column is written at registration;
+// RefreshSSHKeyRoles updates two in place rather than adding any.
 const sshKeyCols = `fingerprint, principal, name, public_key, role, role_checked_at, capped, created_at`
 
 func scanSSHKey(row pgx.Row) (types.SSHPublicKey, error) {

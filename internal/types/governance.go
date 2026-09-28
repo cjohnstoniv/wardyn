@@ -4,10 +4,9 @@
 // Governance profiles (migration 0052): the wire + store types for an
 // ASSIGNABLE ceiling and the row that binds one to a subject.
 //
-// Named `governance*` throughout, deliberately: "profile" already means two
-// unrelated things in this tree — the Recording-Mode synthesis result and the
-// workspace scan profile — and a third would make every grep ambiguous at
-// exactly the surface where a mistaken read is a containment bug.
+// Named `governance*` throughout since "profile" already means two other
+// things in this tree (Recording-Mode synthesis, workspace scan profile),
+// and grep ambiguity here is a containment-bug risk.
 package types
 
 import (
@@ -18,88 +17,61 @@ import (
 )
 
 // GovernanceLimits carries the autonomy switches that BOUND A REQUEST rather
-// than a policy, which is why they live here and not in RunPolicySpec.
+// than a policy (RunPolicySpec bounds what a sandbox may reach once
+// running, enforced by the proxy). These refuse a run SHAPE before it
+// exists, or (DenyUserDrive) leave state behind:
 //
-// RunPolicySpec describes what a sandbox may reach once running, enforced
-// OUTSIDE the sandbox by the proxy. These booleans instead refuse a run SHAPE
-// before it exists, each naming a way to route AROUND the tool gate entirely,
-// or (DenyUserDrive) leave state behind:
+//   - DenyTaskModeExec: task_mode=exec has no agent and no toolgate, so no
+//     tool_rules ceiling binds it.
+//   - DenyInteractive: an interactive run refuses tool_approvals=hold by
+//     design, so tool_rules can't express "supervised" there either.
+//   - DenyUserDrive: a drive OUTLIVES the run, so no tool_rules ceiling
+//     describes the escape — the storage itself is the escape.
+//   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
+//     not 403.
+//   - MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
+//     and told so, never refused (disk_mib is policy-authored, so refusing
+//     would break every stored policy the day a limit is first written).
 //
-//   - DenyTaskModeExec: task_mode=exec runs a bare command with no agent and no
-//     toolgate, so no tool_rules ceiling can bind it.
-//   - DenyInteractive: an interactive run REFUSES tool_approvals=hold by design
-//     (a human at the attach pane is the supervision), so tool_rules can't
-//     express "supervised" on that lane either.
-//   - DenyUserDrive: a user drive is a tree that OUTLIVES the run, so a member
-//     who may mount one can persist anything the sandbox produced. No
-//     tool_rules ceiling describes that, since the escape is the storage.
-//   - MaxConcurrentRuns is the odd one out — a QUOTA, not a door: it bounds
-//     how many runs one member holds at once, answering 422 with no
-//     authz.denied, while the booleans answer 403.
-//   - MaxEphemeralDiskMiB and MaxDriveSizeMiB (0.7.2) are neither doors nor
-//     quotas: they CLAMP. A run or drive at the bound is capped and told so,
-//     never refused (disk_mib is authored on policies, so a 422 would break
-//     every stored policy the day a limit is first written).
-//
-// A CLOSED struct with `omitempty` on every field, not a map: the set is
-// small, complete, and validated by the Go type itself, so migration 0052
-// puts no CHECK on the limits column at all. EVERY zero value means
-// "unrestricted", so a profile that omits limits behaves exactly as one
-// written before this struct had fields.
+// A CLOSED struct with `omitempty` on every field, not a map: small,
+// complete, validated by the Go type itself, no DB CHECK needed. Every zero
+// value means "unrestricted", so an omitted limits object behaves exactly
+// as before this struct existed.
 type GovernanceLimits struct {
 	// DenyTaskModeExec refuses task_mode=exec for a member under this profile.
 	DenyTaskModeExec bool `json:"deny_task_mode_exec,omitempty"`
-	// DenyInteractive refuses an interactive run for a member under this
-	// profile. Evaluated against POST-COERCION interactivity: a request that
-	// simply OMITS the task coerces to interactive later in validation, so a
-	// raw "did the caller ask for interactive" read would be evaded by
-	// leaving a field out.
+	// DenyInteractive refuses an interactive run under this profile.
+	// Evaluated against POST-COERCION interactivity, since omitting the
+	// task coerces to interactive later — a raw "did the caller ask" check
+	// would be evaded by leaving the field out.
 	DenyInteractive bool `json:"deny_interactive,omitempty"`
 	// MaxConcurrentRuns caps how many NON-TERMINAL runs a member under this
 	// profile may hold at once. 0 is unlimited.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty"`
-	// DenyUserDrive refuses a USER DRIVE mount for a member under this
-	// profile, whatever an admin has allocated them.
-	//
-	// A DOOR, NOT A QUOTA: a drive is a writable tree that OUTLIVES the run,
-	// so "how big" is the wrong question; "may this principal persist
-	// anything at all" is the right one (403 with authz.denied, same shape as
-	// the two refusals above).
+	// DenyUserDrive refuses a USER DRIVE mount under this profile, whatever
+	// an admin allocated. A DOOR, NOT A QUOTA: a drive outlives the run, so
+	// "may this principal persist anything at all" is the question (403 +
+	// authz.denied), not "how big".
 	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
-	// MaxEphemeralDiskMiB caps the EPHEMERAL scratch a member's run under this
-	// profile may be given — the writable layer when the sandbox mounts no
-	// drive. 0 is unlimited.
-	//
-	// A CLAMP, NOT A DOOR: an authorized caller at the bound earns no
-	// authz.denied row, since nothing was denied — composer.Clamp's own idiom.
-	//
-	// ENFORCED AT DISPATCH, in ONE place (runs_dispatch.go), folded with the
-	// deployment's own storage.ephemeral.max_disk_mib ceiling — never on the
-	// create path. Assigned members only; operators are exempt.
-	//
-	// WHETHER THE CAP BINDS depends on the substrate (Docker's overlay2
-	// doesn't enforce a size at all) — render through StorageEnforcement and
-	// never claim a cap the substrate doesn't keep.
+	// MaxEphemeralDiskMiB caps the EPHEMERAL scratch (the writable layer when no drive is
+	// mounted) a run under this profile may be given. 0 is unlimited. A CLAMP, NOT A DOOR: no
+	// authz.denied at the bound. Enforced at dispatch only (runs_dispatch.go), folded with the
+	// deployment's own storage.ephemeral.max_disk_mib; assigned members only, operators exempt.
+	// Whether it actually binds depends on the substrate (Docker's overlay2 doesn't enforce
+	// size at all) — render through StorageEnforcement, never claim a cap the substrate doesn't keep.
 	MaxEphemeralDiskMiB int `json:"max_ephemeral_disk_mib,omitempty"`
-	// MaxDriveSizeMiB caps how large a USER DRIVE may be for a member under
-	// this profile. 0 is unlimited — the governance twin of DenyUserDrive
-	// ("may persist" vs "how much").
-	//
-	// PER PRINCIPAL: a drive today is one tree belonging to one subject.
-	// Team-shared drives (0.8) add a scope axis on the same row rather than a
-	// second field, since a shared drive's ceiling is not the sum of its
-	// members' and must not be derived from one.
-	//
-	// CLAMPED IN newResolvedDrive, the one scope holding BOTH facts — never
-	// at grant write, where the subject is claims-resolved and unreadable
-	// from the row. Folds with storage.user_drive.max_size_mib in one min()
-	// expression, so launch, /me and preview cannot disagree about size.
+	// MaxDriveSizeMiB caps how large a USER DRIVE may be under this profile. 0 is unlimited —
+	// DenyUserDrive's twin ("may persist" vs "how much"). PER PRINCIPAL: a drive is one tree
+	// belonging to one subject; a team-shared drive's ceiling is not the sum of its members'
+	// and can't be derived from one, so sharing (0.8) adds a scope axis instead. Clamped in
+	// newResolvedDrive, the one place holding both facts — never at grant write, where the
+	// subject is claims-resolved and unreadable from the row. Folds with
+	// storage.user_drive.max_size_mib in one min(), so launch, /me and preview can't disagree.
 	MaxDriveSizeMiB int `json:"max_drive_size_mib,omitempty"`
-	// AutonomyRubric maps a run's posture to a permitted AutonomyLevel (0.8,
-	// #77). A POINTER: a plain field would put `"autonomy_rubric":{}` on
-	// every profile's wire body, including one authored before this field
-	// existed. Nil means "no rubric": resolveRunAutonomy (#97) treats it
-	// exactly like a member with no assigned profile at all.
+	// AutonomyRubric maps a run's posture to a permitted AutonomyLevel
+	// (0.8, #77). A POINTER so an unset rubric doesn't put
+	// `"autonomy_rubric":{}` on every profile's wire body. Nil means "no
+	// rubric" (resolveRunAutonomy, #97, treats it like no assigned profile).
 	AutonomyRubric *AutonomyRubric `json:"autonomy_rubric,omitempty"`
 	// RunLimits is embedded, so its seven fields sit flat on the limits wire
 	// object beside the ones above — the same field set a run captures at
@@ -108,45 +80,42 @@ type GovernanceLimits struct {
 }
 
 // RunLimits bound how long a run lives and how long it waits for a decision
-// (long-holds design rev 4, §2.2). Zero values keep today's behaviour: no end,
-// the deployment's approval expiry as the wait, no idle pause.
+// (long-holds design rev 4, §2.2). Zero values keep today's behaviour: no
+// end, the deployment's approval expiry as the wait, no idle pause.
 //
-// They bind every run under a profile, a security admin's included; only a
-// super admin's run skips them, since effectiveCeiling resolves no profile
-// for an operator.
+// They bind every run under a profile, including a security admin's; only a
+// super admin's run skips them (effectiveCeiling resolves no profile for an
+// operator).
 type RunLimits struct {
-	// MaxEndAheadSec is the furthest ahead of NOW a run's end may be set. 0 is
-	// no limit. Extending within it never needs UserChangesLimits: extending
-	// is the lease.
+	// MaxEndAheadSec: furthest ahead of NOW a run's end may be set (0 = no limit).
+	// Extending within it never needs UserChangesLimits — extending is the lease.
 	MaxEndAheadSec int `json:"max_end_ahead_sec,omitempty"`
-	// DefaultEndSec is a new run's end, from create. 0 means MaxEndAheadSec;
-	// when both are 0 a run has no end.
+	// DefaultEndSec is a new run's end, from create; 0 means MaxEndAheadSec, and
+	// a run has no end when both are 0.
 	DefaultEndSec int `json:"default_end_sec,omitempty"`
 	// AllowNoEnd offers "No end" to a user who may change limits.
 	AllowNoEnd bool `json:"allow_no_end,omitempty"`
-	// MaxWaitSec / DefaultWaitSec are the longest and the default wait for a
-	// decision. 0 is the deployment's approval expiry, which also caps both.
+	// MaxWaitSec/DefaultWaitSec: longest and default wait for a decision; 0 =
+	// the deployment's approval expiry, which also caps both.
 	MaxWaitSec     int `json:"max_wait_sec,omitempty"`
 	DefaultWaitSec int `json:"default_wait_sec,omitempty"`
 	// UserChangesLimits is the one gate: the user may shorten the end, set No
 	// end, or change the wait.
 	UserChangesLimits bool `json:"user_changes_limits,omitempty"`
-	// PauseIdleAfterSec pauses a run nobody is using after this long. 0 pauses
-	// only runs waiting for a decision.
+	// PauseIdleAfterSec pauses an unused run after this long (0 pauses only
+	// runs waiting for a decision).
 	PauseIdleAfterSec int `json:"pause_idle_after_sec,omitempty"`
 }
 
 // AutonomyLevel is one rung on the autonomy ladder a governance profile's
 // AutonomyRubric caps against, L0 (most supervised) through L3 (least). The
-// codes stay internal — the console renders plain labels, as ConfinementClass's
-// CC1/CC2/CC3 do (0.8 #77):
+// codes stay internal — the console renders plain labels, like
+// ConfinementClass's CC1/CC2/CC3 (0.8 #77):
 //
-//   - AutonomyL0 "attended": interactive only, supervised seeding.
-//   - AutonomyL1 "gated": adds non-interactive runs, but tool approvals are
-//     derived to `hold`.
-//   - AutonomyL2 "unattended": adds auto-approval and seeded auto tools.
-//   - AutonomyL3: adds `task_mode=exec`, the door that routes around every
-//     other gate, so it is the top rung.
+//   - L0 "attended": interactive only, supervised seeding.
+//   - L1 "gated": adds non-interactive runs, but tool approvals derive to hold.
+//   - L2 "unattended": adds auto-approval and seeded auto tools.
+//   - L3: adds task_mode=exec, the door around every other gate — the top rung.
 type AutonomyLevel string
 
 const (
@@ -188,31 +157,27 @@ func (l AutonomyLevel) Rank() int {
 	}
 }
 
-// AutonomyRubric maps a run's posture to a permitted AutonomyLevel. Nine
-// closed fields — three egress postures, three secret postures, three
-// confinement classes — each unset (caps nothing) or one of the four levels.
-// The level a run resolves to is the MINIMUM over every field whose posture
-// applies (internal/composer/autonomy.go, #97); an all-unset rubric caps
-// nothing, identically to a nil rubric.
+// AutonomyRubric maps a run's posture to a permitted AutonomyLevel: three
+// egress postures, three secret postures, three confinement classes, each
+// unset (caps nothing) or one of the four levels. A run resolves to the
+// MINIMUM over every field whose posture applies
+// (internal/composer/autonomy.go, #97); an all-unset rubric caps nothing,
+// like a nil rubric.
 //
-// A closed struct with `omitempty` on every field, not a map — the same
-// GovernanceLimits doctrine: small, complete, validated by the Go type itself
-// (Validate), no DDL CHECK backing the stored JSON column.
+// A closed struct with `omitempty` on every field, not a map — same
+// doctrine as GovernanceLimits: small, complete, validated by the Go type
+// (Validate), no DB CHECK needed.
 type AutonomyRubric struct {
-	// EgressOpen caps the level when the run's egress is OPEN: allow-all, or
-	// any allowlisted host beyond baseline.
+	// EgressOpen caps the level when egress is OPEN: allow-all, or any allowlisted host beyond baseline.
 	EgressOpen AutonomyLevel `json:"egress_open,omitempty"`
-	// EgressReviewed caps the level when egress is REVIEWED: first-use approval
-	// raises approvals, but nothing is wide open.
+	// EgressReviewed caps the level when egress is REVIEWED: first-use approval raises approvals, nothing wide open.
 	EgressReviewed AutonomyLevel `json:"egress_reviewed,omitempty"`
 	// EgressSealed caps the level when egress is SEALED: neither of the above.
 	EgressSealed AutonomyLevel `json:"egress_sealed,omitempty"`
-	// SecretsPowerful caps the level when the run holds a POWERFUL secret: any
-	// write-capable grant, an api_key to a non-baseline host, or a
-	// git_pat/ssh_key/env_secret grant.
+	// SecretsPowerful caps the level when the run holds a POWERFUL secret: a write-capable grant, an
+	// api_key to a non-baseline host, or a git_pat/ssh_key/env_secret grant.
 	SecretsPowerful AutonomyLevel `json:"secrets_powerful,omitempty"`
-	// SecretsBaseline caps the level when the run holds any grant, none of them
-	// powerful.
+	// SecretsBaseline caps the level when the run holds any grant, none of them powerful.
 	SecretsBaseline AutonomyLevel `json:"secrets_baseline,omitempty"`
 	// SecretsNone caps the level when the run holds no grant at all.
 	SecretsNone AutonomyLevel `json:"secrets_none,omitempty"`
@@ -223,11 +188,10 @@ type AutonomyRubric struct {
 	ConfinementCC3 AutonomyLevel `json:"confinement_cc3,omitempty"`
 }
 
-// Validate reports the first field carrying a value that is not a defined
-// AutonomyLevel, NAMING that field — governanceLimitsRefusal prefixes the
-// field name onto its "limits." 400 so an admin is told which of the nine to
-// fix, not just "invalid". An empty field is always valid: unset means "this
-// posture caps nothing".
+// Validate reports the first field carrying an undefined AutonomyLevel,
+// naming it — governanceLimitsRefusal prefixes the field name onto its 400
+// so an admin knows which of the nine to fix. An empty field is always
+// valid: unset caps nothing.
 func (a AutonomyRubric) Validate() error {
 	for _, f := range []struct {
 		field string
@@ -271,49 +235,42 @@ const (
 )
 
 // AutonomyPosture is a run's three-axis shape — egress reach, secret power,
-// enforced confinement class — the input #97's resolveRunAutonomy folds
-// against a profile's AutonomyRubric to pick an AutonomyLevel. Computed, never
-// stored on its own; it travels inside AutonomyResolution.
+// enforced confinement class — the input resolveRunAutonomy (#97) folds
+// against a profile's AutonomyRubric. Computed, never stored on its own; it
+// travels inside AutonomyResolution.
 type AutonomyPosture struct {
 	Egress      AutonomyEgressPosture  `json:"egress"`
 	Secrets     AutonomySecretsPosture `json:"secrets"`
 	Confinement ConfinementClass       `json:"confinement"`
 }
 
-// AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the
-// level, the posture that produced it, and every rubric field that bound the
-// result — provenance for the create audit row, the frozen
-// AgentRun.AutonomyLevel, and the preflight response.
+// AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the level, the
+// posture that produced it, and every rubric field that bound the result — provenance for the
+// create audit row, the frozen AgentRun.AutonomyLevel, and the preflight response.
 //
-// BoundBy is a LIST, deliberately: the fold is a min() over three axes, so
-// rows TIE at the resolved level routinely (a sealed, grant-less CC3 run
-// under a rubric capping all three postures at L1 is bound by all three).
-// Naming one in a fixed order would send an admin to edit a row they can
-// raise without the level moving, still capped by causes they were never
-// shown — every tied cause is named, in the fixed field order
-// internal/composer/autonomy.go folds in.
+// BoundBy is a LIST, deliberately: the fold is a min() over three axes, so rows routinely TIE
+// at the resolved level, and naming just one cause would leave an admin editing a row that
+// can't move the level while other causes stay hidden — every tied cause is named, in the
+// fixed field order internal/composer/autonomy.go folds in.
 //
-// Empty when nothing capped the level (no profile, no rubric, or a posture
-// the rubric left unset).
+// Empty when nothing capped the level (no profile, no rubric, or an unset posture).
 type AutonomyResolution struct {
 	Level   AutonomyLevel   `json:"level"`
 	Posture AutonomyPosture `json:"posture"`
 	BoundBy []string        `json:"bound_by,omitempty"`
 }
 
-// GovernanceProfile is one named, assignable ceiling (migration 0052's
-// governance_profiles row).
+// GovernanceProfile is one named, assignable ceiling (migration 0052's governance_profiles row).
 //
-// Ceiling is a full RunPolicySpec and is REPLACEMENT semantics, not
-// composition: an assigned profile IS the principal's ceiling, and a
-// principal with no assignment falls through to Config.DefaultPolicy byte
-// for byte. Composing the two through composer.Clamp is NOT a lattice meet
-// (it drops workspace_mounts unconditionally, is order-dependent through
-// llm_inspection, defaults unnamed tools to hold) — a "composed" ceiling
-// would silently lose fields and could not express an autonomous profile.
+// Ceiling is a full RunPolicySpec with REPLACEMENT semantics, not composition: an assigned
+// profile IS the principal's ceiling; with no assignment a principal falls through to
+// Config.DefaultPolicy byte for byte. composer.Clamp is NOT a lattice meet (drops
+// workspace_mounts unconditionally, is order-dependent through llm_inspection, defaults
+// unnamed tools to hold), so a "composed" ceiling would silently lose fields and couldn't
+// express an autonomous profile.
 //
-// Name is the UNIQUE human handle: what an admin assigns by, what the console
-// lists, and the last tie-break in the resolver's ORDER BY.
+// Name is the UNIQUE human handle: what an admin assigns by, what the console lists, and the
+// resolver's last ORDER BY tie-break.
 type GovernanceProfile struct {
 	ID        uuid.UUID        `json:"id"`
 	Name      string           `json:"name"`
@@ -324,16 +281,15 @@ type GovernanceProfile struct {
 	CreatedBy string           `json:"created_by,omitempty"`
 }
 
-// GovernanceAssignment binds one profile to one subject (migration 0052's
-// governance_assignments row).
+// GovernanceAssignment binds one profile to one subject (migration 0052's governance_assignments row).
 //
-// SubjectType REUSES CapabilitySubjectType — the same vocabulary
-// capability_grants is written against — a second enum meaning the same
-// thing is the dual-matcher drift this codebase warns about elsewhere.
+// SubjectType REUSES CapabilitySubjectType — the same vocabulary capability_grants is written
+// against; a second enum for the same thing is the dual-matcher drift this codebase warns
+// against elsewhere.
 //
-// Priority breaks ties WITHIN a tier (higher wins) — the group tier's working
-// lever, since a member is typically in several groups at once. Does NOT
-// cross tiers: a user-tier row beats every group-tier row at any priority.
+// Priority breaks ties WITHIN a tier (higher wins), the group tier's working lever since a
+// member is often in several groups. Never crosses tiers: a user-tier row beats every
+// group-tier row at any priority.
 type GovernanceAssignment struct {
 	ID          uuid.UUID             `json:"id"`
 	SubjectType CapabilitySubjectType `json:"subject_type"`

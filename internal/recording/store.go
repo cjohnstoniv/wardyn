@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package recording provides storage and HTTP serving of asciicast session
-// recordings produced by wardyn-rec. The Store interface is intentionally
-// minimal so the fs-backed implementation can later be replaced by object
-// storage without touching callers.
+// recordings produced by wardyn-rec. Store is intentionally minimal so the
+// fs-backed implementation can later be replaced by object storage without
+// touching callers.
 //
 // Security constraints:
 //   - All path construction goes through safeRunPath, which rejects any runID
@@ -34,18 +34,16 @@ var ErrNotFound = errors.New("recording: not found")
 // any prior recording; safe for concurrent saves of different runIDs.
 //
 // SaveCastNamed persists under a composite key "<runID>~<suffix>" (e.g. an
-// interactive attach session id), so it does NOT clobber the batch run's
-// cast (keyed by bare runID). The same path guardrails apply to both runID
-// and suffix. Passing an empty suffix is equivalent to SaveCast.
+// interactive attach session id) so it does not clobber the batch run's cast
+// (keyed by bare runID). Same path guardrails as runID; an empty suffix is
+// equivalent to SaveCast.
 //
-// OpenCast returns a ReadCloser for the asciicast (caller closes it);
-// ErrNotFound when no recording exists. The key is either a bare runID or a
-// "<runID>~<suffix>" composite.
+// OpenCast returns a ReadCloser (caller closes it) or ErrNotFound. The key is
+// either a bare runID or a "<runID>~<suffix>" composite.
 //
-// StatAndTail answers "does this key have a recording, how big is it, and
-// what are its last tailBytes" WITHOUT returning the whole payload.
-// tailBytes is clamped to size when the cast is smaller. Returns ErrNotFound
-// on the same terms as OpenCast.
+// StatAndTail reports a key's size and its last tailBytes without returning
+// the whole payload; tailBytes clamps to size when the cast is smaller.
+// ErrNotFound on the same terms as OpenCast.
 type Store interface {
 	SaveCast(ctx context.Context, runID string, r io.Reader) error
 	SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error
@@ -53,13 +51,13 @@ type Store interface {
 	StatAndTail(ctx context.Context, key string, tailBytes int64) (size int64, tail []byte, err error)
 }
 
-// castSep separates the run id from a session suffix in a composite cast key.
-// Chosen as '~' because it is filesystem-safe and is not a path separator, and
-// is rejected by safeRunPath's traversal checks like any other key character.
+// castSep separates the run id from a session suffix. Chosen as '~': it is
+// filesystem-safe, not a path separator, and rejected by safeRunPath's
+// traversal checks like any other key character.
 const castSep = "~"
 
-// CastKey builds the composite cast key for a run + optional session suffix. An
-// empty suffix yields the bare runID (the batch-run cast key).
+// CastKey builds the composite cast key for a run + optional session suffix.
+// An empty suffix yields the bare runID (the batch-run cast key).
 func CastKey(runID, suffix string) string {
 	if suffix == "" {
 		return runID
@@ -67,11 +65,10 @@ func CastKey(runID, suffix string) string {
 	return runID + castSep + suffix
 }
 
-// validSuffix rejects a session suffix that could misaddress a cast: one
-// containing castSep would let a composite key collide with a DIFFERENT
-// run/suffix pair. Shared by every Store implementation's SaveCastNamed so a
-// suffix is accepted or rejected identically no matter which backend
-// WARDYN_RECORDING_STORE selects.
+// validSuffix rejects a suffix that could misaddress a cast: one containing
+// castSep would let a composite key collide with a different run/suffix pair.
+// Shared by every Store's SaveCastNamed so acceptance is identical no matter
+// which backend WARDYN_RECORDING_STORE selects.
 func validSuffix(suffix string) error {
 	if strings.ContainsAny(suffix, "/\\\x00"+castSep) || strings.Contains(suffix, "..") {
 		return errors.New("recording: invalid session suffix")
@@ -95,11 +92,10 @@ func NewFSStore(root string) (*FSStore, error) {
 }
 
 // SaveCastNamed writes the asciicast stream to <root>/<runID>~<suffix>.cast
-// atomically. An empty suffix is equivalent to SaveCast (bare runID key). Both
-// the runID and the composite key are checked by safeRunPath (fails closed on
-// any path-traversal attempt in either component).
+// atomically. An empty suffix is equivalent to SaveCast. Both runID and the
+// composite key are checked by safeRunPath, failing closed on any
+// path-traversal attempt in either component.
 func (s *FSStore) SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error {
-	// Reject a suffix carrying separators/traversal up front, before safeRunPath re-checks.
 	if err := validSuffix(suffix); err != nil {
 		return err
 	}
@@ -114,7 +110,6 @@ func (s *FSStore) SaveCast(_ context.Context, runID string, r io.Reader) error {
 		return err
 	}
 
-	// Write to a sibling temp file then rename for atomicity.
 	tmp, err := os.CreateTemp(s.root, ".tmp-cast-*")
 	if err != nil {
 		return err
@@ -138,15 +133,15 @@ func (s *FSStore) SaveCast(_ context.Context, runID string, r io.Reader) error {
 	return nil
 }
 
-// Sweep unlinks every cast (and every orphaned atomic-write temp file)
-// directly under root whose mtime is older than olderThan, returning how
-// many files it removed. Deliberately NOT on the Store interface: retention
-// is an fs-storage concern, so callers type-assert for it.
+// Sweep unlinks every cast (and orphaned atomic-write temp file) directly
+// under root whose mtime is older than olderThan, returning the count
+// removed. Deliberately not on the Store interface: retention is an
+// fs-storage concern, so callers type-assert for it.
 //
 // Age is measured on ModTime, not birth time: the recordings directory is
-// also mounted into agent containers for wardyn-rec's -out-dir fallback, so
-// a cast may still be being appended to, and mtime advances on every write —
-// do not "improve" this to birth time.
+// also mounted into agent containers for wardyn-rec's -out-dir fallback, so a
+// cast may still be appended to and mtime keeps advancing — do not "improve"
+// this to birth time.
 func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	ents, err := os.ReadDir(s.root)
 	if err != nil {
@@ -160,7 +155,7 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 		if e.IsDir() || (!strings.HasSuffix(name, ".cast") && !strings.HasPrefix(name, ".tmp-cast-")) {
 			continue
 		}
-		// A stat error means the entry vanished under us; nothing to remove.
+		// A stat error means the entry vanished under us.
 		info, ierr := e.Info()
 		if ierr != nil || !info.ModTime().Before(cutoff) {
 			continue
@@ -189,8 +184,8 @@ func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, erro
 }
 
 // StatAndTail reports the cast's size and reads its last tailBytes without
-// opening (or copying) the rest of the file. tailBytes is clamped down to size
-// when the cast is smaller.
+// copying the rest of the file. tailBytes clamps down to size when the cast
+// is smaller.
 func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (int64, []byte, error) {
 	path, err := safeRunPath(s.root, key)
 	if err != nil {
@@ -225,10 +220,10 @@ func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (i
 	return size, tail, nil
 }
 
-// validKey rejects a cast key (a bare runID or a "<runID>~<suffix>" composite)
-// that no Store should accept. Shared by EVERY implementation: a key one
-// backend stores and another rejects means switching WARDYN_RECORDING_STORE
-// silently changes which recordings exist.
+// validKey rejects a cast key (bare runID or "<runID>~<suffix>" composite)
+// that no Store should accept. Shared by every implementation: divergence
+// here means switching WARDYN_RECORDING_STORE silently changes which
+// recordings exist.
 func validKey(key string) error {
 	if key == "" {
 		return errors.New("recording: empty run id")
@@ -242,9 +237,9 @@ func validKey(key string) error {
 	return nil
 }
 
-// safeRunPath builds the .cast file path for runID inside root. It rejects any
-// runID that contains path separators, null bytes, or dot-dot sequences, which
-// would allow directory traversal outside root.
+// safeRunPath builds the .cast file path for runID inside root, rejecting any
+// runID with path separators, null bytes, or dot-dot sequences that would
+// allow directory traversal outside root.
 func safeRunPath(root, runID string) (string, error) {
 	if err := validKey(runID); err != nil {
 		return "", err

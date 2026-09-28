@@ -26,13 +26,13 @@ import (
 var upstreamConnectTimeout = 15 * time.Second
 
 // upstreamProxy is the OPTIONAL corporate parent proxy that wardyn-proxy
-// chains its egress through, since the ONLY way out of a locked-down
-// corporate network may be the org's HTTP CONNECT proxy (frequently a
-// PRIVATE address). When set, every FORWARD-EGRESS dial is issued as CONNECT
-// to this proxy instead of a direct dial. Control-plane calls NEVER traverse
-// it (controlTransport in newProxy), so the run token is never sent toward
-// the corp proxy. The embedded credential is held ONLY here in proxy memory
-// and registered in the process secret-mask registry (NewServer).
+// chains its egress through, since the only way out of a locked-down
+// corporate network may be the org's HTTP CONNECT proxy (frequently a private
+// address). When set, every forward-egress dial is issued as CONNECT to this
+// proxy instead of a direct dial. SECURITY: control-plane calls never
+// traverse it (controlTransport in newProxy), so the run token is never sent
+// toward the corp proxy. The embedded credential is held only here in proxy
+// memory and registered in the process secret-mask registry (NewServer).
 type upstreamProxy struct {
 	// addr is the corp proxy's host:port. Resolved and pinned WITHOUT the
 	// private-IP guard — the deliberate, audited exception.
@@ -62,9 +62,9 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 	switch strings.ToLower(u.Scheme) {
 	case "http":
 		// Only plaintext-HTTP CONNECT-forwarding is implemented; an https://
-		// proxy would need a TLS wrap first or the Basic cred goes cleartext
-		// to the proxy. (The tunneled payload to the real target is still
-		// end-to-end TLS regardless — this is only the hop to the proxy.)
+		// proxy would need a TLS wrap first or the Basic cred goes cleartext to
+		// the proxy (the tunneled payload to the real target stays end-to-end
+		// TLS regardless — this is only the hop to the proxy).
 	default:
 		return nil, fmt.Errorf("upstream proxy url: unsupported scheme %q (only http is supported; https-to-proxy is not yet implemented)", u.Scheme)
 	}
@@ -86,9 +86,9 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 		port: port,
 	}
 	if u.User != nil {
-		// user[:pass] -> "Basic base64(user:pass)". Use the DECODED username/
-		// password, not u.User.String(), which percent-encodes them (a
-		// password like "p@ss/w0rd" would be sent wrong). NewServer registers
+		// user[:pass] -> "Basic base64(user:pass)". Use the decoded
+		// username/password, not u.User.String() (percent-encodes them,
+		// mangling a password like "p@ss/w0rd"). NewServer registers
 		// maskValues() so the cleartext credential is never logged.
 		cred := u.User.Username()
 		if pw, ok := u.User.Password(); ok {
@@ -121,12 +121,12 @@ func (u *upstreamProxy) maskValues() [][]byte {
 // dialThroughUpstream dials the corporate parent proxy and issues a CONNECT
 // for the REAL destination host:port, returning the established tunnel.
 //
-// Security relaxation (deliberate + audited): the corp proxy address is
-// resolved+pinned WITHOUT the private-IP/loopback/metadata guard — the
-// OPERATOR-CONFIGURED trusted egress hop, same trust boundary as the
-// control-plane URL. This exception applies ONLY to dialing the configured
+// SECURITY RELAXATION (deliberate + audited): the corp proxy address is
+// resolved+pinned without the private-IP/loopback/metadata guard — it's the
+// operator-configured trusted egress hop, same trust boundary as the
+// control-plane URL. This exception applies only to dialing the configured
 // proxy; agent-chosen targets keep the full guard. The real host is sent by
-// NAME — the corp proxy does the outbound DNS+dial, so the vetted-IP TOCTOU
+// name — the corp proxy does the outbound DNS+dial, so the vetted-IP TOCTOU
 // pin is relaxed for this hop only (documented in evaluate()).
 func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPort int) (net.Conn, error) {
 	up := p.upstream
@@ -157,9 +157,9 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 	}
 	// Bound the read: a proxy that accepts the TCP connection and never
 	// answers would otherwise hang forever — the MITM path has already told
-	// the agent "200 Connection Established" before this dial, so an
-	// APPROVED request would hang instead of failing. Fail fast instead; the
-	// caller turns the error into the normal dial-failed DENY + 502.
+	// the agent "200 Connection Established" before this dial, so an approved
+	// request would hang instead of failing fast into the normal
+	// dial-failed DENY + 502.
 	if err := conn.SetReadDeadline(time.Now().Add(upstreamConnectTimeout)); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("set upstream CONNECT deadline: %w", err)

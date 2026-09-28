@@ -136,19 +136,18 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 
 // UpdateWorkspace replaces a workspace's editable composition via a
 // FULL-column write of every scan-owned field (profile, image_ref,
-// built_profile_hash, status, etc.) — WITH ONE DELIBERATE EXCEPTION:
+// built_profile_hash, status, etc.), WITH ONE DELIBERATE EXCEPTION:
 // denied_egress is NOT in this SET clause (see Workspace.DeniedEgress) — a
-// permanent deny survives a composition edit, unlike ApprovedEgress.
-// Callers must round-trip the fetched row. Returns ErrNotFound when no
-// workspace has the given id.
+// permanent deny survives a composition edit, unlike ApprovedEgress. Callers
+// must round-trip the fetched row. Returns ErrNotFound for an unknown id.
 //
 // egress_edited_at is passed through unless stampEgressEdit marks this write
 // as the operator action the column records: unconditional stamping would
-// suppress the boot heal for a decision nobody undid (migration 0055), while
-// plain omission let this writer clear approved_egress without moving the
-// stamp, so ReconcileWorkspaceEgressDecisions re-widened the list on restart.
-// The stamp is now() from the database, not wardynd's clock, since it is
-// compared against approvals.decided_at and clock skew there fails OPEN.
+// suppress the boot heal for a decision nobody undid, while plain omission
+// let this writer clear approved_egress without moving the stamp, so
+// ReconcileWorkspaceEgressDecisions re-widened the list on restart. The
+// stamp is now() from the database, not wardynd's clock, since it's compared
+// against approvals.decided_at and clock skew there fails OPEN.
 func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace, stampEgressEdit bool) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
@@ -200,12 +199,12 @@ func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domain
 }
 
 // qAddApprovedEgressDecision and qAddDeniedEgressDecision back
-// AddWorkspaceEgressDecision, one static query per direction (chosen in Go by
-// `allow`, never interpolated) so each stays a single auditable literal. Each
-// appends host to its own list (deduped), removes it from the opposite list
-// (deny beats allow), and guards the cap against the target list only, ORed
-// with "already present" so an idempotent re-decide on a full list never
-// errors. Both effects land in ONE UPDATE, so a decision can never half-apply.
+// AddWorkspaceEgressDecision, one static query per direction (chosen in Go
+// by `allow`, never interpolated) so each stays a single auditable literal.
+// Each appends host to its own list (deduped), removes it from the opposite
+// list (deny beats allow), and guards the cap against the target list only,
+// ORed with "already present" so an idempotent re-decide on a full list
+// never errors. Both effects land in ONE UPDATE, so a decision never half-applies.
 const (
 	qAddApprovedEgressDecision = `
 		UPDATE workspaces

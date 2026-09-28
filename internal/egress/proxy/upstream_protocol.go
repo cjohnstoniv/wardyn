@@ -25,29 +25,24 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// This file is ONE subject: the upstream PROTOCOL a round trip actually got
-// back. The egress transport offers h2,http/1.1 over ALPN (#360); a peer
-// that speaks HTTP/2 WITHOUT negotiating it is caught two ways — a post-TLS
-// byte sniff at dial time (sniffH2), and net/http's own parse error
-// (isH2Preface) for a peer that only answers after reading a request — then
-// the request is resent over HTTP/2 when it can be replayed and the host is
-// remembered for the rest of the run (roundTripUpstream). Otherwise it's
-// #359's refusal: builtin:upstream-protocol-mismatch and a 400.
+// This file handles a peer that speaks HTTP/2 WITHOUT negotiating it: caught
+// either by a post-TLS byte sniff at dial time (sniffH2) or by net/http's own
+// parse error for a peer that answers only after reading a request
+// (isH2Preface). roundTripUpstream then resends over HTTP/2 when replayable
+// and remembers the host; otherwise it refuses with
+// builtin:upstream-protocol-mismatch and a 400.
 
-// isH2Preface reports whether err is Go's HTTP/1.x transport's own "malformed
-// HTTP response" failure (net/http/response.go's ReadResponse, a bare
-// badStringError with no exported type or sentinel) WRAPPING an HTTP/2 frame
-// header — the shape a peer answers with when it speaks HTTP/2 only after
-// reading an HTTP/1.1 request on a connection that negotiated no ALPN (a
-// peer that speaks first is caught earlier, by sniffH2). With no errors.As
-// handle into it, the only way in is matching the exact message shape
-// "malformed HTTP response %q" and passing the unquoted payload through
-// isH2FrameHeader, so an ordinary corrupted response does not match.
+// isH2Preface reports whether err is net/http's "malformed HTTP response"
+// failure (a bare badStringError with no exported type or sentinel) WRAPPING
+// an HTTP/2 frame header — the shape a peer answers with when it speaks
+// HTTP/2 only after reading a request on a connection that negotiated no
+// ALPN (a peer that speaks first is caught earlier, by sniffH2). With no
+// errors.As handle into it, matching relies on the exact message shape
+// "malformed HTTP response %q", so an ordinary corrupted response won't match.
 //
-// sniffH2's byte read covers the cases the error text can't carry: SETTINGS
-// bytes that trip a different net/http parse arm, or that arrive with no
-// bytes logged at all. Both come from a peer that writes before it reads,
-// which is exactly what the dial-time sniff sees.
+// sniffH2's own byte read exists for cases the error text can't carry:
+// SETTINGS bytes on a different parse arm, or none logged at all — both from
+// a peer that writes before it reads, which is what the dial-time sniff sees.
 func isH2Preface(err error) bool {
 	if err == nil {
 		return false
@@ -62,57 +57,51 @@ func isH2Preface(err error) bool {
 	return uerr == nil && isH2FrameHeader([]byte(raw))
 }
 
-// isH2FrameHeader reports whether b starts with a syntactically valid HTTP/2
-// frame header (RFC 9113 §4.1) naming a SETTINGS frame (type 0x04) on stream
-// 0 — the frame a compliant HTTP/2 server always sends first, unprompted, as
-// its half of the connection preface.
+// isH2FrameHeader reports whether b starts with a valid HTTP/2 SETTINGS
+// frame header (RFC 9113 §4.1) on stream 0 — what a compliant HTTP/2 server
+// always sends first, unprompted, as its half of the connection preface.
 func isH2FrameHeader(b []byte) bool {
 	const frameTypeSettings = 0x04
 	return len(b) >= 9 && b[3] == frameTypeSettings && b[5] == 0 && b[6] == 0 && b[7] == 0 && b[8] == 0
 }
 
-// h2ProbeTimeout bounds sniffH2's wait for an HTTP/2 server's unprompted
-// SETTINGS frame. Paid once per host (h2Fallback.hosts remembers the
-// answer) and only when ALPN negotiated nothing at all — a peer that picks
-// h2 or http/1.1 is never probed.
+// h2ProbeTimeout bounds sniffH2's wait for an unprompted SETTINGS frame.
+// Paid once per host (memoized in h2Fallback.hosts) and only when ALPN
+// negotiated nothing at all.
 const h2ProbeTimeout = 250 * time.Millisecond
 
 // tlsHandshakeTimeout mirrors the egress http.Transport's TLSHandshakeTimeout,
 // which a DialTLSContext hook bypasses and so has to apply itself.
 const tlsHandshakeTimeout = 15 * time.Second
 
-// errPeerSpeaksH2 is sniffH2's verdict: the peer sent an HTTP/2 SETTINGS frame
-// on a connection that negotiated no ALPN. The dial fails before any request
-// byte is written, and roundTripUpstream turns it into the HTTP/2 fallback.
+// errPeerSpeaksH2 is sniffH2's verdict when the peer sends an HTTP/2 SETTINGS
+// frame on a no-ALPN connection; the dial fails before any request byte is
+// written and roundTripUpstream turns it into the HTTP/2 fallback.
 var errPeerSpeaksH2 = errors.New("peer sent an HTTP/2 SETTINGS frame without negotiating h2")
 
-// errNoUnpromptedBytes is sniffH2's other verdict, for the dialer alone: the
-// peer said nothing in the probe window, which is what an HTTP/1.1 peer does.
-// The connection is returned with it and is used normally.
+// errNoUnpromptedBytes is sniffH2's verdict for an HTTP/1.1 peer: nothing
+// arrived in the probe window. The connection is still usable.
 var errNoUnpromptedBytes = errors.New("peer sent nothing before the request")
 
 type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// h2Fallback is the egress lane's HTTP/2 path for a peer that speaks HTTP/2
-// without negotiating it. hosts maps a memoKey to what this run learned:
-// true, go straight to the fallback transport; false, skip the sniff on
-// every later connection. Lives as long as the Proxy (per run); no TTL,
-// since a peer's protocol doesn't change mid-run. Uses x/net's
-// http2.Transport, though net/http deprecates it, because net/http itself
-// speaks HTTP/2 over TLS only when ALPN selected h2 — exactly what these
-// peers never do.
+// h2Fallback is the HTTP/2 path for a peer that speaks HTTP/2 without
+// negotiating it. hosts maps a memoKey to what this run learned: true, go
+// straight to the fallback transport; false, skip the sniff on later
+// connections. No TTL — a peer's protocol doesn't change mid-run. Uses x/net's
+// deprecated http2.Transport because net/http itself only speaks HTTP/2 over
+// TLS when ALPN selected h2, which these peers never do.
 type h2Fallback struct {
 	//lint:ignore SA1019 net/http cannot speak HTTP/2 over TLS unless ALPN selected h2 (see h2Fallback)
 	transport *http2.Transport
 	hosts     sync.Map
 }
 
-// offerHTTP2 makes p.transport offer h2,http/1.1 and speak HTTP/2 when the
-// peer negotiates it, sniffs a no-ALPN peer for HTTP/2 (sniffH2), and builds
-// the fallback transport. Both TLS paths dial through the SAME egressDial,
-// so the fallback reaches nothing the HTTP/1.1 lane could not. p.transport
-// gets a PRIVATE copy of base since enabling HTTP/2 appends to the
-// transport's own TLSClientConfig.NextProtos on first use.
+// offerHTTP2 makes p.transport offer h2,http/1.1, sniffs a no-ALPN peer for
+// HTTP/2, and builds the fallback transport. Both TLS paths dial through the
+// SAME egressDial so the fallback reaches nothing the HTTP/1.1 lane could
+// not. p.transport gets a PRIVATE copy of base since enabling HTTP/2 appends
+// to TLSClientConfig.NextProtos on first use.
 func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	p.transport.ForceAttemptHTTP2 = true
 	p.transport.TLSClientConfig = base.Clone()
@@ -135,14 +124,14 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 		}
 		conn, err := sniffH2(tc)
 		if errors.Is(err, errNoUnpromptedBytes) {
-			// An HTTP/1.1 peer. Remember it so later connections skip the probe.
+			// HTTP/1.1 peer: skip the probe on later connections.
 			p.h2.hosts.Store(key, false)
 			return tc, nil
 		}
 		return conn, err
 	}
-	// The custom dialer skips x/net's "ALPN must say h2" check, which is the
-	// point: this transport serves peers that never negotiate it.
+	// Skips x/net's "ALPN must say h2" check on purpose: this transport
+	// serves peers that never negotiate it.
 	//lint:ignore SA1019 see h2Fallback
 	p.h2.transport = &http2.Transport{
 		TLSClientConfig: base.Clone(),
@@ -173,10 +162,9 @@ func handshakeOver(ctx context.Context, dial dialFunc, network, addr string, cfg
 }
 
 // sniffH2 reads, for at most h2ProbeTimeout, the first 9 bytes a no-ALPN peer
-// sends unprompted. An HTTP/1.1 server sends nothing before a request, so
-// the read times out with no bytes: errNoUnpromptedBytes, tc left usable
-// (crypto/tls treats a deadline as temporary). A SETTINGS frame header means
-// HTTP/2. Anything else is handed back in front of tc unchanged.
+// sends unprompted. No bytes (an HTTP/1.1 server) yields errNoUnpromptedBytes
+// with tc still usable (crypto/tls treats a deadline as temporary). A
+// SETTINGS frame header means HTTP/2; anything else is handed back unchanged.
 func sniffH2(tc *tls.Conn) (net.Conn, error) {
 	var hdr [9]byte
 	_ = tc.SetReadDeadline(time.Now().Add(h2ProbeTimeout))
@@ -184,8 +172,7 @@ func sniffH2(tc *tls.Conn) (net.Conn, error) {
 	_ = tc.SetReadDeadline(time.Time{})
 	switch {
 	case isH2FrameHeader(hdr[:n]):
-		// The RAW conn, not tc.Close: this peer is dropped mid-protocol-confusion,
-		// nothing to be polite about.
+		// RAW conn, not tc.Close: this peer is dropped mid-protocol-confusion.
 		_ = tc.NetConn().Close()
 		return nil, errPeerSpeaksH2
 	case n == 0:
@@ -194,8 +181,8 @@ func sniffH2(tc *tls.Conn) (net.Conn, error) {
 	return &prefixedConn{Conn: tc, r: io.MultiReader(bytes.NewReader(hdr[:n]), tc)}, nil
 }
 
-// memoKey names a peer in h2Fallback.hosts the way every other host lookup in
-// this package does: lower-cased, with a root label's trailing dot dropped.
+// memoKey names a peer the way every other host lookup in this package does:
+// lower-cased, with a trailing root-label dot dropped.
 func memoKey(host, port string) string {
 	return strings.TrimSuffix(strings.ToLower(host), ".") + ":" + port
 }
@@ -215,10 +202,9 @@ type prefixedConn struct {
 
 func (c *prefixedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
-// h2MismatchError is roundTripUpstream's protocol-mismatch failure: the peer
-// spoke HTTP/2 without negotiating it and the request could not complete
-// over HTTP/2 either. err is the HTTP/1.1 attempt's failure; h2Err is the
-// HTTP/2 resend's, nil when none ran.
+// h2MismatchError is roundTripUpstream's protocol-mismatch failure: err is
+// the HTTP/1.1 attempt's failure; h2Err is the HTTP/2 resend's, nil when
+// none ran.
 type h2MismatchError struct {
 	alpn      string
 	hadTLS    bool
@@ -239,11 +225,11 @@ func (e *h2MismatchError) Unwrap() error { return e.err }
 
 // roundTripUpstream is the MITM/LLM and plain lanes' round trip. A host
 // already known to speak HTTP/2 unasked goes straight to the fallback
-// transport. Otherwise the request goes out on p.transport (h2 when
-// negotiated); if the peer speaks HTTP/2 without negotiating it, the host is
-// remembered and the request is resent ONCE over HTTP/2 when its body can be
-// replayed. Only a request that didn't complete comes back as an error, so
-// an allow decision still follows a successful round trip (E3).
+// transport; otherwise the request goes out on p.transport, and if the peer
+// speaks HTTP/2 without negotiating it, the host is remembered and the
+// request resent ONCE over HTTP/2 when its body can be replayed. Only an
+// incomplete request returns as an error, so an allow decision always
+// follows a successful round trip.
 func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 	key := memoKey(req.URL.Hostname(), cmp.Or(req.URL.Port(), "443"))
 	tlsLane := req.URL.Scheme == "https"
@@ -251,9 +237,9 @@ func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 		//lint:ignore SA1019 see h2Fallback
 		return p.h2.transport.RoundTrip(req)
 	}
-	// Shielded for the first attempt: net/http closes a request body when a
-	// dial fails, and a sniffed peer fails the dial before any byte is
-	// written, so the untouched body can still go out over HTTP/2.
+	// Shielded: net/http closes a request body when a dial fails, and a
+	// sniffed peer fails the dial before any byte is written, so the
+	// untouched body can still go out over HTTP/2.
 	var shield *shieldedBody
 	if req.Body != nil && req.Body != http.NoBody {
 		shield = &shieldedBody{rc: req.Body}
@@ -270,8 +256,8 @@ func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 	if err == nil || (!sniffed && !isH2Preface(err)) {
 		return resp, err
 	}
-	// hadTLS from the request, not the trace: net/http records the handshake
-	// only for a *tls.Conn, and sniffH2 may have wrapped one.
+	// hadTLS comes from the request, not the trace: net/http records the
+	// handshake only for a *tls.Conn, and sniffH2 may have wrapped one.
 	mm := &h2MismatchError{err: err, hadTLS: tlsLane}
 	if !sniffed {
 		mm.alpn, _ = alpnState()
@@ -310,18 +296,17 @@ func (b *shieldedBody) Read(p []byte) (int, error) {
 func (b *shieldedBody) Close() error { return nil }
 
 // resendable returns the request to send over HTTP/2, or false when this one
-// can't be sent again. A body net/http can rebuild is rebuilt. Failing that,
-// a sniffed peer failed the dial, so an unread body goes out as-is. A peer
-// detected from its answer (isH2Preface) was already written to, so only a
-// rebuildable body can be sent again.
+// can't be sent again. A body net/http can rebuild is rebuilt; failing that,
+// a sniffed peer's unread body goes out as-is, but a peer detected from its
+// answer (isH2Preface) was already written to, so only a rebuildable body
+// qualifies.
 func resendable(req *http.Request, shield *shieldedBody, sniffed bool) (*http.Request, bool) {
 	out := req.Clone(req.Context())
 	switch {
 	case shield == nil: // no body, or http.NoBody
 	case req.GetBody != nil:
-		// Tried FIRST: a GetBody request may still have a write goroutine from
-		// the failed attempt alive here, and rebuilding hands the resend its
-		// own reader, which that goroutine can't touch.
+		// Tried first: the failed attempt's write goroutine may still be
+		// alive, and rebuilding hands the resend a reader it can't touch.
 		body, err := req.GetBody()
 		if err != nil {
 			return nil, false
@@ -337,11 +322,10 @@ func resendable(req *http.Request, shield *shieldedBody, sniffed bool) (*http.Re
 }
 
 // alpnCapture attaches an httptrace.ClientTrace to ctx that records ONE
-// outbound round trip's TLS-handshake outcome, so a protocol-mismatch Cause
-// can name the ALPN actually negotiated instead of guessing. The returned
-// getter reports (negotiated-protocol, true) once TLSHandshakeDone has
-// fired, or ("", false) when the round trip never reached a TLS handshake
-// at all — so a caller can tell "no ALPN" from "no TLS ran here".
+// round trip's TLS-handshake outcome, so a protocol-mismatch Cause can name
+// the ALPN actually negotiated instead of guessing. The returned getter
+// distinguishes "no ALPN" (handshaked, empty protocol) from "no TLS ran here"
+// (never handshaked).
 func alpnCapture(ctx context.Context) (context.Context, func() (proto string, handshaked bool)) {
 	var negotiated string
 	var done bool
@@ -353,9 +337,8 @@ func alpnCapture(ctx context.Context) (context.Context, func() (proto string, ha
 	return httptrace.WithClientTrace(ctx, trace), func() (string, bool) { return negotiated, done }
 }
 
-// alpnOrNone renders alpnCapture's negotiated protocol for the h2-mismatch
-// cause sentence: "none" is a WORD an operator reads, where an empty string
-// sitting in the middle of an otherwise readable sentence looks like a bug.
+// alpnOrNone renders the negotiated protocol for the h2-mismatch cause
+// sentence: an empty string mid-sentence reads as a bug, "none" doesn't.
 func alpnOrNone(proto string) string {
 	if proto == "" {
 		return "none"
@@ -364,10 +347,8 @@ func alpnOrNone(proto string) string {
 }
 
 // h2MismatchSentence is upstreamProtocolMismatchCause's sentence before the
-// mask/redact pass. hadTLS is false only for the plain-HTTP forward lane's
-// test-only branch: no TLS handshake ran there, so naming an ALPN outcome
-// would claim a negotiation that never happened. The tail names the HTTP/2
-// attempt: why it didn't run, or how it failed.
+// mask/redact pass. hadTLS is false only for the plain-HTTP test-only branch,
+// where no handshake ran, so naming an ALPN outcome would be false.
 func h2MismatchSentence(e *h2MismatchError) string {
 	if !e.hadTLS {
 		return "peer answered HTTP/2 to an HTTP/1.1 request"
@@ -382,9 +363,9 @@ func h2MismatchSentence(e *h2MismatchError) string {
 	return s
 }
 
-// upstreamProtocolMismatchCause is h2MismatchSentence run through the SAME
-// mask + topology-redaction pass every other Cause takes (dialFailureCause,
-// sandbox_error.go): the row is visible to the run's own creator.
+// upstreamProtocolMismatchCause runs h2MismatchSentence through the SAME
+// mask + topology-redaction pass every other Cause takes: the row is visible
+// to the run's own creator.
 func (p *Proxy) upstreamProtocolMismatchCause(e *h2MismatchError) string {
 	masked := string(maskDecisionBytes([]byte(h2MismatchSentence(e))))
 	return p.redactTopology(masked)
@@ -392,11 +373,9 @@ func (p *Proxy) upstreamProtocolMismatchCause(e *h2MismatchError) string {
 
 // refuseH2Mismatch answers roundTripUpstream's *h2MismatchError, reporting
 // whether err was one; any other error is left to the caller's dial-failed
-// arm. seen carries the request and scan summary the deny row reports; nil
-// means no decision is emitted. denyDialFailed's sibling (sandbox_error.go):
-// same Via computation, but Cause is the h2-mismatch sentence, since the
-// peer ANSWERED. ruleSource is an argument so each call site keeps
-// ruleSourceUpstreamProtocolMismatch on its own line for docs/AUDIT-ACTIONS.md.
+// arm. seen carries the request/scan the deny row reports; nil emits no
+// decision. denyDialFailed's sibling: same Via computation, but Cause is the
+// h2-mismatch sentence, since the peer ANSWERED.
 func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource string, seen *egress.DecisionLog, host, msg string) bool {
 	var mm *h2MismatchError
 	if !errors.As(err, &mm) {
@@ -416,7 +395,7 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource st
 
 // failUpstream answers a failed roundTripUpstream with exactly one deny row:
 // the HTTP/2 mismatch refusal (a 400), or builtin:dial-failed and a 502. A
-// lane emits its allow row only after the round trip succeeds (E3), so a
+// lane's allow row is only ever emitted after a successful round trip, so a
 // failed dial never over-reports an allow. seen may be nil.
 func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.DecisionLog, host, msg string) {
 	if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
@@ -429,16 +408,14 @@ func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.Deci
 }
 
 // writeUpstreamProtocolMismatch answers the refusal to the sandbox with
-// cause, never the raw wrapped net/http error (the HTTP/2 frame bytes
-// themselves, not a readable diagnosis) — the one refusal that does NOT go
-// through httpError. The AWS lane gets writeAWSSDKError's modelled body
-// (httpErrorAWSAware's rationale); every other host gets a plain 400. A 400,
-// not the usual 502, since 502 is exactly the class an SDK retries blindly,
-// and a retry here only helps once roundTripUpstream's memo routes the host
-// to HTTP/2.
+// cause, never the raw wrapped net/http error — the one refusal that does
+// NOT go through httpError. The AWS lane gets writeAWSSDKError's modelled
+// body; every other host gets a plain 400, not the usual 502, since 502 is
+// exactly the class an SDK retries blindly and a retry only helps once
+// roundTripUpstream's memo routes the host to HTTP/2.
 //
-// err carries the RAW, un-redacted error onto the operator-only slog line,
-// masked — never into the decision row or the sandbox body.
+// SECURITY: err carries the RAW, un-redacted error onto the operator-only
+// slog line, masked — never into the decision row or the sandbox body.
 func (p *Proxy) writeUpstreamProtocolMismatch(w http.ResponseWriter, host, msg, cause string, err error) {
 	slog.Warn("proxy error returned to the sandbox", "msg", msg, "status", http.StatusBadRequest,
 		"err", cause, "raw_err", string(maskDecisionBytes([]byte(err.Error()))))

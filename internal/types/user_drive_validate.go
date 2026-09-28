@@ -158,11 +158,10 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 			return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
 		}
 		if g.SubjectType == CapabilitySubjectGroup {
-			// A group subject is matched by EXACT equality against the login-time
-			// snapshot (printable ASCII), via CanonicalGroupSubject rather than a
-			// plain ToLower: ToLower would fold U+212A / U+0130 onto an
-			// operator-authored ASCII group, binding the drive to a group the
-			// author never named.
+			// Matched by exact equality against the login-time snapshot
+			// (printable ASCII), via CanonicalGroupSubject rather than a plain
+			// ToLower: ToLower would fold U+212A/U+0130 onto an operator-authored
+			// ASCII group, binding the drive to a group the author never named.
 			subject, ok := CanonicalGroupSubject(g.Subject)
 			if !ok {
 				return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
@@ -176,8 +175,7 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 			// CanonicalUserSubject, not a bare lowercase: ToLower folds U+212A/
 			// U+0130 onto ASCII look-alikes, misdirecting the allocation. Unlike
 			// the group arm, a non-ASCII subject is kept rather than refused,
-			// since a `sub` claim is whatever the identity provider issues. See
-			// CanonicalUserSubject for where that trade-off is settled.
+			// since a `sub` claim is whatever the identity provider issues.
 			g.Subject = CanonicalUserSubject(g.Subject)
 		}
 		if len(g.Subject) > maxUserDriveFieldLen || !driveTextIsClean(g.Subject) {
@@ -213,12 +211,12 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 	return nil
 }
 
-// maxUserDriveInt / minUserDriveInt are the range EVERY integer column on these
-// two tables actually has: migration 0054 declares size_mib, priority and
-// size_mib_override as PostgreSQL INT (32-bit signed) while Go's int is 64-bit,
-// so a value in the gap would otherwise reach the database and fail there as a
-// raw 500 instead of a clean validation error. Priority is bounded in both
-// directions since negative priorities are legitimate and int32 is asymmetric.
+// maxUserDriveInt / minUserDriveInt are the range EVERY integer column on
+// these two tables actually has: migration 0054 declares size_mib, priority
+// and size_mib_override as PostgreSQL INT (32-bit) while Go's int is 64-bit,
+// so a value in the gap would otherwise reach the database and fail there as
+// a raw 500 instead of a clean validation error. Priority is bounded both
+// ways since negative priorities are legitimate and int32 is asymmetric.
 const (
 	maxUserDriveInt = math.MaxInt32
 	minUserDriveInt = math.MinInt32

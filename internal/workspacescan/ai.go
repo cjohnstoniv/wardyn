@@ -172,7 +172,7 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 	// NeedsReview so an operator must deliberately promote it via the
 	// workspace's ApprovedEgress list before it can ever reach a run.
 	//
-	// B11b-F6: through validateSuggestedHosts, the SAME normalise (lowercase,
+	// Through validateSuggestedHosts, the SAME normalise (lowercase,
 	// strip scheme/port/path), charset check, dot requirement and cap the
 	// deterministic content lane's own suggested hosts cross. An advisory host
 	// and a content-derived one land in one field and are promoted by one
@@ -210,13 +210,12 @@ const (
 
 // cleanSet trims, drops empties, dedupes, VALIDATES and sorts.
 //
-// The validation is the point (B11b-F6). This list is the advisor's answer, the
-// advisor was fed UnrecognizedSamples — file content out of the scanned repo —
-// and Languages/PackageManagers/Tools are written VERBATIM into the AGENTS.md
-// that the next agent reads. An entry carrying a newline and a "## SYSTEM:"
-// heading is therefore a prompt-injection re-entry path through a field that
-// is only trimmed, nothing else. adviceItemSafe is what closes it; the
-// count and length caps close the size half.
+// SECURITY: the validation is the point. The advisor was fed
+// UnrecognizedSamples — file content out of the scanned repo — and this list
+// (Languages/PackageManagers/Tools) is written VERBATIM into the AGENTS.md
+// the next agent reads. An entry carrying a newline and a "## SYSTEM:"
+// heading is a prompt-injection re-entry path if only trimmed; adviceItemSafe
+// closes it, and the count/length caps close the size half.
 func cleanSet(xs []string) []string {
 	set := make(map[string]struct{}, len(xs))
 	for _, x := range xs {

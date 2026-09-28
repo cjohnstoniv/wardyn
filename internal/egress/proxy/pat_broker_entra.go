@@ -3,19 +3,16 @@
 
 package proxy
 
-// git through the /wardyn/git/ broker for a host the run's per-person Azure
-// DevOps (Entra) grant covers. The REST gate (ado_gate.go) refuses git on the
-// intercepted connection, so this route is the one door git has to Azure
-// DevOps on this lane; it enforces the same four things the REST gate does,
-// in git's terms: the organisation pin (an Entra token carries no org claim),
-// the capability check via adoscope.Permits (a push is decided on the pack
-// POST, since the receive-pack advertisement is served to a read-only
-// credential too), the content rules (push_rules.go, before any capability
-// ask), and the person's bearer credential via the same injector the REST
-// lane's MITM uses.
+// git through the /wardyn/git/ broker for a host the run's per-person Azure DevOps (Entra) grant covers.
+// The REST gate refuses git on the intercepted connection, so this route is the one door git has to Azure
+// DevOps on this lane; it enforces the same four things the REST gate does, in git's terms: the
+// organisation pin (an Entra token carries no org claim), the capability check via adoscope.Permits (a
+// push is decided on the pack POST, since the receive-pack advertisement is served to a read-only
+// credential too), the content rules (before any capability ask), and the person's bearer credential via
+// the same injector the REST lane's MITM uses.
 //
-// A refusal never reaches git as a 401: git reads a 401 as a credential
-// challenge and prints "could not read Username", which hides the reason.
+// SECURITY: a refusal never reaches git as a 401 — git reads a 401 as a credential challenge and prints
+// "could not read Username", which hides the reason.
 
 import (
 	"bytes"
@@ -79,9 +76,8 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
-		// Content rules run BEFORE the capability check: nobody is asked to
-		// approve policy_bypass for a push the rules refuse. A probe moving
-		// no ref carries nothing to inspect and stays a read.
+		// Content rules run BEFORE the capability check: nobody is asked to approve policy_bypass for a
+		// push the rules refuse. A probe moving no ref carries nothing to inspect and stays a read.
 		if len(push.refs) > 0 {
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
 				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
@@ -92,9 +88,8 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			}
 			body = inspected
 		}
-		// A command section that moves no ref is git's auth probe ahead of a
-		// large pack (remote-curl's probe_rpc): it writes nothing, so it is a
-		// read and never raises, or spends, an approval meant for the push.
+		// A command section moving no ref is git's auth probe ahead of a large pack (remote-curl's
+		// probe_rpc): it writes nothing, so it's a read and never raises or spends an approval for the push.
 		switch {
 		case slices.ContainsFunc(push.refs, p.adoRunRefProtected):
 			need = adoscope.CapPolicyBypass
@@ -154,11 +149,10 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	}
 }
 
-// refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra
-// lane, and its hold point. held is non-nil only for a capability the run does
-// not hold; that request is escalated (awaitADOCapability) and, if a person
-// approves it in time, refuseADOGit reports true and the caller forwards.
-// Every other refusal is answered here in git's own terms.
+// refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra lane, and its hold point. held
+// is non-nil only for a capability the run doesn't hold; that request is escalated (awaitADOCapability)
+// and, if approved in time, refuseADOGit reports true and the caller forwards. Every other refusal is
+// answered here in git's own terms.
 func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string, held *adoscope.Verdict, push *adoGitPush, msg string) bool {
 	if held != nil {
 		var ok bool
@@ -168,17 +162,15 @@ func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string
 	}
 	p.emitPATDecision(r, host, egress.Deny, ruleSourceADOGitDenied)
 	if push != nil {
-		// The pack is still on the wire: read it so git gets the answer rather
-		// than a reset connection.
+		// Pack still on the wire: read it so git gets the answer rather than a reset connection.
 		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, adoGitDrainLimit))
 	}
 	writeADOGitRefusal(w, push, msg)
 	return false
 }
 
-// adoGitVerdict is the verdict a git request is held to. Refs ride only a
-// policy_bypass verdict: the control plane reads refs as a protected-ref move,
-// which a push inside the run's own namespace is not.
+// adoGitVerdict is the verdict a git request is held to. Refs ride only a policy_bypass verdict: the
+// control plane reads refs as a protected-ref move, which a push inside the run's own namespace is not.
 func adoGitVerdict(need adoscope.Capability, push *adoGitPush) adoscope.Verdict {
 	v := adoscope.Verdict{Capability: need}
 	if need == adoscope.CapPolicyBypass {
@@ -187,9 +179,8 @@ func adoGitVerdict(need adoscope.Capability, push *adoGitPush) adoscope.Verdict 
 	return v
 }
 
-// adoGitAsk describes a held git request for the approval: its method, the
-// broker-stripped path, and the repository — the segment after _git, keyed
-// exactly as the REST gate's adoRepoOf keys it.
+// adoGitAsk describes a held git request for the approval: its method, the broker-stripped path, and the
+// repository — the segment after _git, keyed exactly as the REST gate's adoRepoOf keys it.
 func adoGitAsk(r *http.Request) adoAsk {
 	_, rest, _ := parsePATBrokerPath(r.URL.Path)
 	ask := adoAsk{method: r.Method, path: rest}
@@ -201,11 +192,10 @@ func adoGitAsk(r *http.Request) adoAsk {
 	return ask
 }
 
-// adoGitKeys is every segment of a git request's broker-stripped path as
-// adoscope.NameKey reads it, taken from the path as it ARRIVED (EscapedPath),
-// never the decoded Path (decoding first would decode a name holding "%"
-// twice). ok=false when any segment is one adoscope.NameKey refuses, so a
-// spelling the REST gate refuses is refused here too.
+// adoGitKeys is every segment of a git request's broker-stripped path as adoscope.NameKey reads it, taken
+// from the path as it ARRIVED (EscapedPath), never the decoded Path (decoding first would decode a name
+// holding "%" twice). ok=false when any segment is one adoscope.NameKey refuses, so a spelling the REST
+// gate refuses is refused here too.
 func adoGitKeys(r *http.Request) ([]string, bool) {
 	_, rest, _ := parsePATBrokerPath(r.URL.EscapedPath())
 	var keys []string
@@ -222,11 +212,10 @@ func adoGitKeys(r *http.Request) ([]string, bool) {
 	return keys, true
 }
 
-// adoGitRepoKeys is adoGitKeys truncated to the repository itself — org,
-// project, "_git", and repo name, verb segments dropped — so a held push's
-// pushTarget.repo names the same string adoRESTTarget builds from the REST
-// route. A missing "_git" here is an invariant broken, not a request to
-// answer for; the empty repo it falls back to still keys as its own approval.
+// adoGitRepoKeys is adoGitKeys truncated to the repository itself — org, project, "_git", and repo name,
+// verb segments dropped — so a held push's pushTarget.repo names the same string adoRESTTarget builds from
+// the REST route. A missing "_git" here is an invariant broken, not a request to answer for; the empty
+// repo it falls back to still keys as its own approval.
 func adoGitRepoKeys(r *http.Request) []string {
 	keys, ok := adoGitKeys(r)
 	if !ok {
@@ -238,11 +227,9 @@ func adoGitRepoKeys(r *http.Request) []string {
 	return nil
 }
 
-// writeADOGitRefusal answers git in its own terms, never as a 401. A push
-// that asked for report-status gets a 200 receive-pack result with an error
-// unpack status and every ref "ng" with the reason (git prints
-// "! [remote rejected] <ref> (<reason>)"); anything else gets a 403 with a
-// plain-text body.
+// writeADOGitRefusal answers git in its own terms, never as a 401. A push that asked for report-status
+// gets a 200 receive-pack result with an error unpack status and every ref "ng" with the reason (git
+// prints "! [remote rejected] <ref> (<reason>)"); anything else gets a 403 with a plain-text body.
 func writeADOGitRefusal(w http.ResponseWriter, push *adoGitPush, msg string) {
 	if push == nil || !slices.ContainsFunc(push.caps, func(c string) bool { return c == "report-status" || c == "report-status-v2" }) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -286,9 +273,8 @@ func writeADOGitRefusal(w http.ResponseWriter, push *adoGitPush, msg string) {
 // pktLine frames s as one git pkt-line.
 func pktLine(s string) string { return fmt.Sprintf("%04x", len(s)+4) + s }
 
-// readADOGitPush reads a receive-pack command section and returns its bytes
-// for the forward, the refs it moves and the capabilities git asked for. msg
-// is the refusal when it cannot be read.
+// readADOGitPush reads a receive-pack command section and returns its bytes for the forward, the refs it
+// moves and the capabilities git asked for. msg is the refusal when it can't be read.
 func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string) {
 	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
 		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
