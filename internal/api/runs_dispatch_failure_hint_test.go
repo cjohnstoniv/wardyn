@@ -123,13 +123,16 @@ func (s *recordHintStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, hint
 func TestLaunchRecordRun_GrantWriteFailure_HintsCarryNoDriverText(t *testing.T) {
 	h := newHarness(t)
 	fake := &recordHintStore{recordAbortStore: &recordAbortStore{
-		ws:       types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
+		ws: types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
+			Requirements: map[string]types.WorkspaceRequirement{
+				"secret:anthropic-api-key": {Level: "required", Provenance: "operator_set"},
+			}},
 		grantErr: errors.New(driverText),
 	}}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	// The api-key branch, whose CreateGrant then fails (as in
+	// A required secret's grant, whose CreateGrant then fails (as in
 	// TestLaunchRecordRun_CreateGrantFailureFinalizesRun).
 	cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
 	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}

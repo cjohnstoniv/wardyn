@@ -303,13 +303,8 @@ type CreateRunRequest struct {
 	// workspace this run does not otherwise attach (via WorkspaceID or a
 	// policy's workspace_mounts/workspace_repos) does nothing.
 	Workspaces []WorkspaceSelection `json:"workspaces,omitempty"`
-	// IntegrationID, when set, pins this run's model/harness credential to a
-	// SPECIFIC AI-provider Integration (SiteConfig.Integrations[i].ID, stored
-	// or a well-known legacy-derived id — see GET /integrations), overriding
-	// any workspace LLMCred binding and the operator's DefaultFor:agent_runs
-	// default. Naming a non-AI-provider integration (a source-control or
-	// corporate-network id — those apply operator-wide already, and are never
-	// run-selectable) is a 400.
+	// IntegrationID no longer chooses a model credential: a run naming one is
+	// refused with a 422. Use ModelProvider.
 	IntegrationID string `json:"integration_id,omitempty"`
 	// ModelProvider chooses this run's model provider (GET /model-providers,
 	// by id), ahead of a workspace's provider pin and the agent's default. It

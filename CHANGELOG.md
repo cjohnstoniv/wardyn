@@ -10,6 +10,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **An operator's stored model key no longer reaches a run through an integration (#547).** The
+  four AI integration kinds (`anthropic_api_key`, `anthropic_subscription`, `bedrock`,
+  `openai_api_key`) are no longer a way to give a run model access. A run's `integration_id` is
+  refused (`422`) at create and Review; a workspace's AI-integration pin and a `default_for:
+  agent_runs` site default no longer fold the operator's key into a run; record, verify and build
+  sessions no longer mint an `api_key` grant from the operator's `anthropic-api-key`; and no AI row
+  is derived from the operator's model secrets, subscription or Bedrock config. A write naming an AI
+  kind, or `default_for`, is refused; a stored AI row stays in site config for the conversion to
+  model providers but grants nothing. The `integration` capability kind (and its
+  `capability_integration` refusal) and the `run.workspace_cred.resolve` audit action are retired,
+  and `GET /me/capabilities` reports `kinds_version` 4. Model access is a model provider, on the
+  person's own credential. On a deployment with no model providers, a run that relied on one of
+  these paths now launches without model access.
 - **`WARDYN_TLS_KEY` now gets the same secret-file mode rule as every other secret file
   (#1297).** The console's TLS private key was read by `ListenAndServeTLS` with no file-mode
   check, so a group- or world-readable key was accepted silently. Loading it now goes through

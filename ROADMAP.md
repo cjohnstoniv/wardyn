@@ -205,11 +205,11 @@ shipped behavior; none is scheduled.
   is dropped unless the operator eligible-listed that exact pairing
   (`filterUserGrants`, `internal/api/inline_policy.go` — the secret-exfil
   guard: a member must not pair an arbitrary stored secret with an allowlisted
-  host). A run's real model-access grant is re-added at launch by
-  `foldRunIntegration` (an operator integration) or `applyWorkspaceRequirements`
-  (a workspace requirement), so the supported multi-user flow is unaffected. The
+  host). A run's real model-access grant comes from its model provider, or is
+  re-added at launch by `applyWorkspaceRequirements` (a workspace requirement),
+  so the supported multi-user flow is unaffected. The
   ceiling: a member whose model access relies ONLY on a raw operator secret + a
-  wildcard `api_key` ceiling with NO integration and NO workspace requirement
+  wildcard `api_key` ceiling with NO provider and NO workspace requirement
   gets nothing re-added — the run launches without model access (fail-closed, no
   exfil). The drop used to be invisible to an operator — a clamp *warning* in
   preflight/Review and nothing else — so a deliberate member exfil *attempt*

@@ -549,7 +549,7 @@ func ownerSessionAs(t *testing.T) *http.Cookie {
 // yields exactly the re-checked kinds.
 func TestPersistedDoorsClassifyEveryKind(t *testing.T) {
 	rechecked := []string{capAgent, capWorkspace, capWorkspaceProvider, capModelProvider, capPolicy}
-	unrecoverable := []string{capImage, capIntegration}
+	unrecoverable := []string{capImage}
 	notALaunchDoor := []string{capEgressHost, capSecret, capFeature}
 	for _, kind := range capabilityKinds {
 		n := 0

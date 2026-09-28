@@ -33,7 +33,7 @@ const (
 	mpRunNoToken        = "you have not added your token for it"
 	mpRunCredUnreadable = "Wardyn couldn't read your credential for model provider %s just now, so nothing was started. Try again in a moment."
 	mpRunUnreadable     = "Wardyn couldn't read its model providers just now, so nothing was started. Try again in a moment."
-	mpRunNoIntegration  = "integration_id no longer chooses a model credential on this deployment: its model providers do — use model_provider instead."
+	mpRunNoIntegration  = "integration_id no longer chooses a model credential: a run's model provider does — use model_provider instead."
 	// mpNoProviderDetail is the brokered-LLM 404's detail for a model run no
 	// provider serves: under a provider block nothing else credentials it.
 	mpNoProviderDetail = "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"

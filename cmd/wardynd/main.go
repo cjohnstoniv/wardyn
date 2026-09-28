@@ -319,7 +319,7 @@ func run() error {
 	// policy is not always the ceiling every run inherits) when the default
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
-	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
+	// model call once its api_key grant points at the gateway.
 	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(bootCtx, f, runnerTarget)
 	if err != nil {
 		return err

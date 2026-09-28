@@ -178,11 +178,9 @@ func (s *recordAbortStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUI
 	return true, nil
 }
 
-// GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
-// access unconditionally (foldRunIntegration
-// always runs, not just when the workspace carries its own LLMCred binding),
-// which reaches defaultAgentRunsIntegration's GetSiteConfig read on every
-// call — the embedded nil store.Store would otherwise panic here.
+// GetSiteConfig is a no-op stub: launchRecordRun reads the site config on every
+// call (recordProviderChoice) — the embedded nil store.Store would otherwise
+// panic here.
 func (s *recordAbortStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
@@ -196,14 +194,17 @@ func TestLaunchRecordRun_CreateGrantFailureFinalizesRun(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()
 	fake := &recordAbortStore{
-		ws:       types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
+		ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
+			Requirements: map[string]types.WorkspaceRequirement{
+				"secret:anthropic-api-key": {Level: "required", Provenance: "operator_set"},
+			}},
 		grantErr: errors.New("grant store down"),
 	}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	// A present provider secret + a ceiling that does NOT bless a subscription mount
-	// forces the api-key branch, whose CreateGrant then fails.
+	// A required secret the store holds makes the requirement fold mint a grant,
+	// whose CreateGrant then fails.
 	cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
 	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
 	srv := New(cfg)

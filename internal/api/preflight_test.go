@@ -251,9 +251,8 @@ func TestPreflight_BlastRadiusRaisesToCC3(t *testing.T) {
 	}
 }
 
-// preflightIntegrationStore serves GetSiteConfig for resolveIntegrationRef
-// (the eager integration_id check plus foldRunIntegration's tier 1) from a
-// seeded stored Integration, and ListWorkspaces=none — referencedWorkspaces
+// preflightIntegrationStore serves GetSiteConfig from seeded stored
+// Integrations, and ListWorkspaces=none — referencedWorkspaces
 // (workspace_run.go) calls it unconditionally whenever a Store is configured
 // at all, which the embedded nil store.Store does not implement.
 type preflightIntegrationStore struct {
@@ -268,53 +267,28 @@ func (preflightIntegrationStore) ListWorkspaces(context.Context) ([]types.Worksp
 	return nil, nil
 }
 
-// TestPreflight_ModelAccessFromExplicitIntegrationID: preflight must fold the
-// whole run-level integration precedence chain (foldRunIntegration), not just
-// the workspace tier. A run naming an explicit integration_id and no workspace
-// at all must still see model access satisfied on the checklist — proving the
-// fold reaches tier 1, not only the workspace-ref tier.
-func TestPreflight_ModelAccessFromExplicitIntegrationID(t *testing.T) {
+// TestPreflight_IntegrationIDRefused pins the refusal launch applies
+// (decodeAndValidateCreateRun): no integration chooses a run's model credential
+// any more, so naming one — an AI-kind row or any other — is a 422 here too,
+// never a preview of model access the launch door would refuse.
+func TestPreflight_IntegrationIDRefused(t *testing.T) {
 	h := newHarness(t)
 	st := preflightIntegrationStore{cfg: types.SiteConfig{Integrations: []types.Integration{
 		{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
 			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key",
 				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}}},
+		{ID: "acme-scm", Kind: types.IntegrationKindGitHost},
 	}}}
 	cfg := baseTestConfig(h, st)
 	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
-	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
 	srv := New(cfg)
 
-	body := `{"agent":"claude-code","repo":"ephemeral","integration_id":"acme-anthropic","inline_policy":{"min_confinement_class":"CC2"}}`
-	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("preflight code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	var resp preflightResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
-	}
-	if it, ok := findItem(resp.SetupItems, "llm_access:claude-code"); !ok || it.Status != "satisfied" {
-		t.Errorf("llm_access row = %+v (ok=%v), want satisfied (model access from the explicit integration_id, no workspace involved)", it, ok)
-	}
-}
-
-// TestPreflight_IntegrationID_NonAIProviderIs400 pins the shared rule launch
-// applies (decodeAndValidateCreateRun, runs_create.go) and compose replicates
-// (handleComposeRun, compose.go): a typo or a non-ai_provider integration_id
-// 400s here too, instead of previewing as "no model access" and only 400ing
-// for real once the operator clicks launch.
-func TestPreflight_IntegrationID_NonAIProviderIs400(t *testing.T) {
-	h := newHarness(t)
-	st := preflightIntegrationStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-scm", Kind: types.IntegrationKindGitHost},
-	}}}
-	srv := New(baseTestConfig(h, st))
-
-	body := `{"agent":"claude-code","repo":"ephemeral","integration_id":"acme-scm","inline_policy":{"min_confinement_class":"CC2"}}`
-	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("preflight with a non-ai_provider integration_id: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	for _, id := range []string{"acme-anthropic", "acme-scm"} {
+		body := `{"agent":"claude-code","repo":"ephemeral","integration_id":"` + id + `","inline_policy":{"min_confinement_class":"CC2"}}`
+		w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), mpRunNoIntegration) {
+			t.Errorf("preflight with integration_id %q: %d %s, want 422 %q", id, w.Code, w.Body.String(), mpRunNoIntegration)
+		}
 	}
 }
 

@@ -49,11 +49,6 @@ const STATE_TONE: Record<ExplainState, "neutral" | "success" | "danger"> = {
 
 const same = (a: string, b: string) => a.trim() === b.trim();
 
-// G-1: Model integrations is retiring (KIND.integration says so) — its default
-// row alone would be noise on every type, so the family renders only once a
-// grant or restriction gives it a row beyond "*".
-const HIDE_WHEN_DEFAULT_ONLY: CapabilityKind = "integration";
-
 // G-5: "only A and B" (two), "only A, B and C" (three) name every audience —
 // nothing is elided, so there is nothing more to disclose. Four or more names
 // the first two and counts the rest; `elided` says so, and `full` (every
@@ -162,10 +157,6 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
       {CAPABILITY_KINDS.map((kind) => {
         const list = rows.filter((r) => r.kind === kind);
         if (list.length === 0) return null;
-        // G-1: Model integrations is retiring — hide it while its only row is
-        // the default, and let it reappear the moment a grant or restriction
-        // gives it a second one.
-        if (kind === HIDE_WHEN_DEFAULT_ONLY && list.length === 1 && list[0].value === "*") return null;
         return (
           <div key={kind} className="border-t border-border py-2.5 first:border-t-0 first:pt-0">
             <div className="flex items-center justify-between gap-2">

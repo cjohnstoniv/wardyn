@@ -496,7 +496,7 @@ func stripSandboxCredentials(h http.Header, owned string) {
 //   - cleartext to port 443 (or 8443/9443, tlsConventionalPorts): NEVER,
 //     whatever the allowlist says — an AUTHORED port cannot re-admit it (the
 //     port-scoping remedy docs/POLICIES.md recommends coexists with a bare
-//     entry addAPIKeyGrant also appends, so AuthoredPortFor would otherwise
+//     entry applyRequiredSecretGrant also appends, so AuthoredPortFor would otherwise
 //     answer true for :443).
 //   - cleartext to a host the proxy itself only ever speaks TLS to
 //     (isLLMHost): NEVER — no plaintext connector exists to break.

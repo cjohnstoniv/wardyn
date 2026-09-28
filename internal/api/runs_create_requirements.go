@@ -22,8 +22,8 @@ import (
 
 // requirementAuditEntry is one audit-worthy fact applyWorkspaceRequirements
 // produced (an auto-attached secret grant, or a non-empty egress addition).
-// applyWorkspaceRequirements itself never audits — like foldRunIntegration, the
-// "fold" is separated from "audit" (the create path emits the events once the
+// applyWorkspaceRequirements itself never audits — the "fold" is separated from
+// "audit" (the create path emits the events once the
 // run id is minted) so preflight, which persists nothing, can call the SAME
 // fold and simply discard these.
 type requirementAuditEntry struct {
@@ -61,9 +61,9 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 // applyWorkspaceRequirements folds each referenced workspace's requirements
 // contract (types.Workspace.Requirements) into the run's RESOLVED policy — the
 // per-workspace analogue of unionWorkspaceEgress/applyWorkspaceCreds, kept as
-// its OWN function and never inlined into either of those (nor into
-// ensureLLMGrant): a reviewer specifically flagged that a fourth folder
-// inlined among those three is where double-grants and dropped hosts hide.
+// its OWN function and never inlined into either of those: a reviewer
+// specifically flagged that a folder inlined among the others is where
+// double-grants and dropped hosts hide.
 //
 // Owner's contract, verbatim: "Any setting that is required always comes by
 // default with the workspace whenever it is used; anything optional is then
@@ -195,9 +195,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					if present == nil {
 						present = s.presentSecretNames(ctx)
 					}
-					// Operator scope (integrations_write.go's reason): a workspace
-					// requirement names an integration ROW, never a principal's session.
-					integrationRows = s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, types.SiteConfig{}, awsSSOScope{}))
+					integrationRows = s.effectiveIntegrations(ctx, present)
 					integrationRowsLoaded = true
 				}
 				if ev, ok := s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name); ok {
@@ -241,7 +239,7 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 // mutation — when: the agent has no LLM-provider convention (nothing to bind
 // to); a grant for that host is already proposed (never double-grant the same
 // host — whichever caller proposed it first wins, mirroring
-// ensureLLMGrant/applyWorkspaceCreds); or the named secret is not actually
+// applyIntegrationInjection); or the named secret is not actually
 // stored (an auto-mint grant with no resolvable secret would fail the proxy
 // CLOSED at startup — degrade silently to no-model-access instead of bricking
 // the run; compose_setup.go's checklist escalates the gap to blocking styling).

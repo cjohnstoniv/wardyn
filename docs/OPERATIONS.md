@@ -1112,12 +1112,9 @@ migration `0050`)** are the second and third owned nouns after runs.
   `workspace_owner` naming the member; `secret.write`/`secret.delete` carry
   `secret_owner` naming the non-"" namespace a write landed in (a member's own
   ordinary write included) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
-- **Member model access.** A member's own secret under the provider convention
-  name (`anthropic-api-key`/`openai-api-key`) synthesises the legacy
-  `anthropic_api_key`/`openai_api_key` integration row exactly as the operator's
-  does (`resolveIntegrationRef`), so `GET /integrations` lists it, a run
-  selecting it resolves model access, and no false "no model access" warning
-  fires. `filterUserGrants` admits the matching hand-authored inline `api_key`
+- **Member model access.** A member's model access is their own credential on a
+  model provider; no integration row is derived from anyone's convention-named
+  secret (`anthropic-api-key`/`openai-api-key`) any more. `filterUserGrants` admits the matching hand-authored inline `api_key`
   grant with no operator eligible-grant pairing when ALL hold: the host is a
   model-provider host (the anthropic.com/openai.com convention, or a configured
   internal gateway) that the run's own already-clamped egress allows, and the
@@ -1775,11 +1772,11 @@ row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny`
 beside it (`capability_enforcement`). One sentence is the doctrine, and every rule
 below follows from it: **a capability bounds what the MEMBER chose, never what the
 ADMIN pre-authorized.** So a stored policy, a workspace's own requirements, the
-hosts a workspace scan seeded, the model provider's own egress, and the grant
-`foldRunIntegration`/`applyWorkspaceRequirements` re-add at launch are all left
-untouched no matter what a member holds.
+hosts a workspace scan seeded, the model provider's own egress, and the grants
+`applyWorkspaceRequirements` re-adds at launch are all left untouched no matter
+what a member holds.
 
-**The ten kinds** — a closed set, written down once in Go (`capabilityKinds`,
+**The nine kinds** — a closed set, written down once in Go (`capabilityKinds`,
 `internal/api/capabilities.go`) rather than as a schema CHECK:
 
 | Kind | Value | Direction | What it bounds, and where |
@@ -1789,14 +1786,15 @@ untouched no matter what a member holds.
 | `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, `internal/api/runs_create_validate.go`) |
 | `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
-| `integration` | exact integration id | narrows | which AI-provider integration a member may name on a run (`integration_id`, same seam) — and nothing else. **Tier 1 only**: a workspace's own `LLMCred` pin and your `DefaultFor: agent_runs` site default are operator-authored and are never gated, or one `all` deny row would strip the deployment's model access |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row the repositories a member brings in may come from — the row `admitRepoURL` resolves a derived clone URL to (`internal/api/workspace_providers.go`). **Six doors**, every one a member can reach: `POST /runs` over the resolved spec's repos and over the legacy `repo` field, and `POST`/`PUT /workspaces`, `POST /workspaces/{id}/scan` and `.../build` — the last three re-point or perform a SERVER-SIDE clone. It bounds the PROVIDER, not the repository: admission is URL-prefix matching, not a repo ACL. Inert on a deployment with no provider rows, and on a repository whose host no row CLAIMS (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check) |
-| `model_provider` | exact model provider id | narrows | which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use — the one the request names (`model_provider`, `wardyn run --model-provider`), the one a workspace pins (`llm_cred.provider_ref`), or the agent's default reaching them (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; create and Review alike). **Unlike `integration`, a workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt. Inert with no model-provider block |
+| `model_provider` | exact model provider id | narrows | which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use — the one the request names (`model_provider`, `wardyn run --model-provider`), the one a workspace pins (`llm_cred.provider_ref`), or the agent's default reaching them (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; create and Review alike). **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt. Inert with no model-provider block |
 | `feature` | `ssh_key` or `api_token` | narrows | whether a member may add an SSH key (`POST /me/ssh-keys`) or mint an API token (`POST /me/tokens`) at all — one check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564). Mint only: a key or token that already exists keeps working until it is removed or revoked. Any other value is refused at write time (`400`) |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. Checked before the row is read, so an ungranted id is refused whether or not it exists |
 
 `*` as a value matches everything of that kind, spelled the same way for all
-ten. `egress_host` values are matched by `entryCoversAny`
+nine. 0.8 retired a tenth, `integration`, with the AI integrations it bounded: a
+run's `integration_id` is refused with a `422` for everyone, so there is nothing
+left for it to gate. Its stored grant rows are inert, and a new one is refused. `egress_host` values are matched by `entryCoversAny`
 (`internal/api/artifact_redirect.go`) — the *same* matcher that decides whether
 one allowlist entry covers a host, deliberately not a second one, because two
 host matchers that disagree is how a deny gets bypassed by a port suffix. Every
@@ -1832,8 +1830,8 @@ fail-closed. A store error is never permission — the request answers `500`.
 it too. Both directions obey "an upgrade with no configuration changes nothing".
 So `image` needs *both* the switch on and an exact-ref grant; the other five need
 only the absence of a deny until you enforce them. That rule is also why `agent`
-and `integration` narrow rather than widen: launching an agent, or naming a
-provider, is something every member could already do, so a widening kind would
+narrows rather than widens: launching an agent is something every member could
+already do, so a widening kind would
 refuse every member run on every deployment that has not enforced it — i.e. all of
 them on upgrade day.
 
@@ -1997,8 +1995,8 @@ posture, not a switch that failed.
 
 **What a person is offered.** The per-person lists the console's pickers read
 hold only what the caller may use, decided by the same resolver the launch doors
-refuse with: the `harnesses` (`agent`) and `integrations` (`integration`) of
-`GET /setup/status`, `GET /integrations`, and the Azure DevOps rows of
+refuse with: the `harnesses` (`agent`) of `GET /setup/status`, and the Azure
+DevOps rows of
 `GET /me/scm-access` and `/setup/status`'s `scm_access` (`workspace_provider`).
 A refused row is dropped whole, so it reads exactly as a resource the deployment
 does not have. If the grant tables cannot be read, those lists come back empty
@@ -2032,7 +2030,7 @@ enforcement map alone, not the grant table) can be sent back as this `PUT`'s
 `If-Match`: a document that changed underneath a stale tab is refused `412`.
 `If-Match` is optional, and the write is audited either way.
 
-**"Available to" (0.8).** `workspace`, `image`, `agent`, `integration` and
+**"Available to" (0.8).** `workspace`, `image`, `agent` and
 `workspace_provider` values can each be restricted one at a time (migration
 `0081_capability_restrictions`). A restricted value counts as enforced whatever
 its kind's switch says, and only a caller holding an allow row that names the
@@ -2585,7 +2583,6 @@ admin walking the member path, not an incident.
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
-| `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
 | `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, `internal/api/run_owner_authority.go`). The body is the one sentence naming the provider; Review answers the same refusal | ⛔ `403` |
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
@@ -2632,7 +2629,7 @@ audit call, so it is a bare 403 with no audit trail at all.
 **What's still not built.** No custom roles: the tier set is the three fixed ones
 (admin, `security_admin`, member — see "Three roles, and who sets the walls"), and
 a capability grant only narrows or widens what a member may reach, it can never
-mint a tier. Only the ten kinds above are grantable; there is no general
+mint a tier. Only the nine kinds above are grantable; there is no general
 per-resource permission model (a run is still owner-or-admin only — no "read-only
 share" or "co-owner" concept), no tenant/org columns, and no separation of duty
 among super admins — every admin (and the admin token, always) can rewrite the

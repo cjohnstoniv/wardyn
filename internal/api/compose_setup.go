@@ -134,14 +134,14 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 	if !llmAccess.Provisioned {
 		if p, ok := s.llmProviderFor(agent); ok {
 			// Name the run's ACTUAL resolved
-			// grant secret, not the provider convention name — an
-			// integration-bound run's api_key grant carries the
-			// INTEGRATION's own secret (applyIntegrationCreds), which may
-			// differ from the convention default. Fixing the wrong (unused)
-			// secret would end in a false green: the checklist reads
-			// "satisfied" once the convention secret exists, even though
-			// the run still authenticates through the integration's secret,
-			// unaffected by what the operator just added.
+			// grant secret, not the provider convention name — a run's
+			// api_key grant may carry its own secret (a policy grant, or a
+			// workspace's required secret), which may differ from the
+			// convention default. Fixing the wrong (unused) secret would end
+			// in a false green: the checklist reads "satisfied" once the
+			// convention secret exists, even though the run still
+			// authenticates through the grant's own secret, unaffected by
+			// what the operator just added.
 			secretName := p.secret
 			if g, ok := apiKeyGrantForHost(&spec, p.host); ok {
 				if s := apiKeyGrantScopeSecret(g.Scope); s != "" {

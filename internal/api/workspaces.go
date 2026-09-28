@@ -492,10 +492,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	owner := s.secretOwnerFromRequest(r)
 	// llm_cred is an OPERATOR field on a member-reachable door. The
 	// dedicated PUT /workspaces/{id}/llm-cred is operatorOnly (routes.go) — create
-	// was the one unguarded way in, and the binding it writes folds through
-	// resolveRunIntegration's TIER 2, which deliberately carries NO resident_host
-	// guard precisely because "a workspace pin is operator consent" (llmcred.go).
-	// A member-authored pin makes that sentence false.
+	// was the one unguarded way in, and a workspace pin is operator consent —
+	// a member-authored pin makes that false. (An AI-integration pin no longer
+	// credentials a run; the conversion to model providers reads it.)
 	//
 	// Refused, never silently dropped: "a field accepted and thrown away is worse
 	// than one refused" (interactiveToolApprovalsError) — a member who sees a 201

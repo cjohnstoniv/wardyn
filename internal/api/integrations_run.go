@@ -138,7 +138,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 //     already rejects this combination (validateIntegrationHosts); this covers a
 //     row stored before that guard, or a legacy-derived one.
 //   - a host that already has an api_key grant is left alone — never
-//     double-grant a host, mirroring ensureLLMGrant/applyWorkspaceCreds.
+//     double-grant a host, mirroring applyRequiredSecretGrant.
 //     Whichever caller proposed it first wins.
 func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration) []string {
 	// HeaderSecret is the row's proxy_header-delivered secret; an empty stored

@@ -120,13 +120,7 @@ func runFieldCharsAllowed(v string, multiline bool) bool {
 // have a run id to bind them to (POST /runs and the record launch). Extracted because handleCreateRun sits at the
 // funlen ratchet (.golangci.yml), which is what its neighbours' own comments ask
 // the next lane to do.
-func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID,
-	foldInteg types.Integration, foldKind string, reqEvents []requirementAuditEntry,
-) {
-	if foldKind != "" {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace_cred.resolve",
-			runID.String(), "success", mustJSON(map[string]any{"integration_ref": foldInteg.ID, "type": foldKind})))
-	}
+func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID, reqEvents []requirementAuditEntry) {
 	for _, ev := range reqEvents {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, "success", mustJSON(ev.data)))
 	}

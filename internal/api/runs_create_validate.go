@@ -220,16 +220,11 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 
-	// A run-explicit integration_id must name a real, run-selectable
-	// (AI-provider) integration — checked eagerly, before any run is created,
-	// so a typo or a source-control / corporate-network id (operator-wide,
-	// never run-selectable) fails loud here rather than silently resolving to
-	// nothing at foldRunIntegration time (llmcred.go).
+	// No integration credentials a run's model any more — its model provider
+	// does — so naming one is refused, not ignored.
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(r.Context(), s.secretOwnerFromRequest(r), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
-			return req, noCeiling, "", "", false
-		}
+		writeError(w, http.StatusUnprocessableEntity, mpRunNoIntegration)
+		return req, noCeiling, "", "", false
 	}
 
 	// A non-interactive request with no task would dispatch a sandbox
@@ -404,13 +399,12 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 //     its own comment). Same build path as devcontainer_repo, but a pinned ref
 //     an admin wrote down is a bounded thing; a repo whose contents change
 //     under them is not.
-//   - workspace, agent, integration_id and policy_id all NARROW: each is
-//     something every member could already do, so each stays allowed until an
-//     admin enforces its kind (denyUserCapability, capSeamAllowed). Each
-//     gates the member's OWN choice and nothing else — never the workspace a stored policy or a
-//     scan linkage brings in, never the workspace pin or site default
-//     resolveRunIntegration falls back to, all of which are admin-authored
-//     (the doctrine in OPERATIONS §Multi-user).
+//   - workspace, agent and policy_id all NARROW: each is something every
+//     member could already do, so each stays allowed until an admin enforces
+//     its kind (denyUserCapability, capSeamAllowed). Each gates the member's
+//     OWN choice and nothing else — never the workspace a stored policy or a
+//     scan linkage brings in, which is admin-authored (the doctrine in
+//     OPERATIONS §Multi-user).
 //
 // A workspace's own base_image (seedRequestWorkspace, called AFTER this) is
 // deliberately NOT gated here: it is operator-authored config (the workspace was
@@ -461,13 +455,6 @@ func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req cre
 	// that has nothing to say about them.
 	if req.Agent != "" && s.denyUserCapability(w, r, capAgent, req.Agent, "runs.agent",
 		"you are not granted agent "+req.Agent+" — ask an admin to grant it, or launch one you hold") {
-		return governanceCeiling{}, true
-	}
-	// Tier 1 only (capIntegration's own comment): the run-explicit
-	// integration_id is the sole member-authored tier. A workspace's pin and the
-	// operator's site default fold on untouched.
-	if req.IntegrationID != "" && s.denyUserCapability(w, r, capIntegration, req.IntegrationID, "runs.integration",
-		"you are not granted integration "+req.IntegrationID+" — ask an admin to grant it, or launch without integration_id") {
 		return governanceCeiling{}, true
 	}
 	// The stored policy the caller SELECTED, and only that: a run naming no

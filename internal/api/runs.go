@@ -190,23 +190,20 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fold the run's model-access binding AND each referenced workspace's
-	// requirements contract into the spec BEFORE the confinement floor + risk
-	// grade read it. The deterministic CC3 blast-radius floor is
-	// computed from spec.EligibleGrants, so a workspace's integration:<id>
-	// requirement — a third-party/production api_key grant — must be present when
-	// the floor is computed, or invariant 5's "powerful credentials run in the
-	// strongest sandbox" is silently bypassed. wsRefs is derived from the seeded spec's
-	// mounts/repos, which nothing below mutates, so it is equally valid here and is
-	// reused for the egress union + image resolution. Both folds are the AUDIT-FREE
-	// halves (foldRunIntegration; applyWorkspaceRequirements returns its events) —
-	// the audit is recorded once the run id is minted, below.
+	// Fold each referenced workspace's requirements contract into the spec
+	// BEFORE the confinement floor + risk grade read it. The deterministic CC3
+	// blast-radius floor is computed from spec.EligibleGrants, so a workspace's
+	// integration:<id> requirement — a third-party/production api_key grant —
+	// must be present when the floor is computed, or invariant 5's "powerful
+	// credentials run in the strongest sandbox" is silently bypassed. wsRefs is
+	// derived from the seeded spec's mounts/repos, which nothing below mutates, so
+	// it is equally valid here and is reused for the egress union + image
+	// resolution. The fold is the AUDIT-FREE half (applyWorkspaceRequirements
+	// returns its events) — the audit is recorded once the run id is minted, below.
 	wsRefs := s.referencedWorkspaces(ctx, spec)
 	// Caller-scoped secret namespace, resolved once: the presence map and the
-	// integration fold must read the SAME one. Shared with the warning below.
-	secretOwner := s.secretOwnerFromRequest(r)
-	present := s.presentSecretNamesFor(ctx, secretOwner)
-	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, secretOwner, &spec, req, wsRefs)
+	// requirement fold read the SAME one. Shared with the warning below.
+	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	reqEvents := s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The primary host workspace directory this run will operate in (if any), used
@@ -264,7 +261,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// lanes, does not apply; a Bedrock provider's run is graded with its
 	// owner's Bedrock credential (modelCredential).
 	modelCred := mpChoice.modelCredential()
-	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, nil, ssoSubject, &modelCred, true) {
 		return
 	}
 
@@ -386,9 +383,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 
-	// The model-access + requirements folds that ran ABOVE the confinement floor,
-	// audited now that the run id exists. See recordCreateFolds.
-	s.recordCreateFolds(ctx, runID, foldInteg, foldKind, reqEvents)
+	// The requirements fold that ran ABOVE the confinement floor, audited now
+	// that the run id exists. See recordCreateFolds.
+	s.recordCreateFolds(ctx, runID, reqEvents)
 
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
@@ -424,7 +421,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
-	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject, mpChoice)...)
+	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, nil, ssoSubject, mpChoice)...)
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
@@ -462,7 +459,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
-		bedrockRef: bedrockRef, runToken: id.Token, created: created,
+		runToken: id.Token, created: created,
 	}
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })

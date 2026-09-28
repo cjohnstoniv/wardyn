@@ -482,26 +482,3 @@ func TestLaunchRecordRun_ChoosesAModelProvider(t *testing.T) {
 		}
 	})
 }
-
-// TestFoldRunIntegration_FoldsNothingUnderAProviderBlock: once the block is
-// set, the operator's default AI integration no longer folds a grant reading
-// the operator's secret into a run's policy.
-func TestFoldRunIntegration_FoldsNothingUnderAProviderBlock(t *testing.T) {
-	integ := types.Integration{ID: "corp-default", Kind: types.IntegrationKindAnthropicAPIKey, DefaultFor: []string{"agent_runs"},
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}}}
-	for _, tc := range []struct {
-		name  string
-		block *types.ModelProviders
-		want  int
-	}{{"no block: today's fold", nil, 1}, {"a block", providerBlock(), 0}} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := providerRunFixture(t, types.SiteConfig{ModelProviders: tc.block, Integrations: []types.Integration{integ}}, &capStore{}, nil)
-			srv.cfg.Secrets.(*memSecrets).m["corp-anthropic-key"] = []byte("sk-corp")
-			spec := types.RunPolicySpec{}
-			srv.foldRunIntegration(context.Background(), "", &spec, createRunRequest{Agent: "claude-code"}, nil)
-			if len(spec.EligibleGrants) != tc.want {
-				t.Errorf("folded grants = %v, want %d", spec.EligibleGrants, tc.want)
-			}
-		})
-	}
-}

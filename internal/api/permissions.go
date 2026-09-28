@@ -312,11 +312,9 @@ func canonicalGrantValue(capability, value string) (string, error) {
 			return "", fmt.Errorf("value: %q is not a feature — a feature capability is one of %s, and the resolver compares it exactly, so any other value can never match anything", v, strings.Join(featureValues, ", "))
 		}
 		return lowered, nil
-	case capSecret, capIntegration, capWorkspaceProvider, capModelProvider:
+	case capSecret, capWorkspaceProvider, capModelProvider:
 		grammar, what := secretNameRE, "secret name"
 		switch capability {
-		case capIntegration:
-			grammar, what = integrationRefRE, "integration id"
 		case capWorkspaceProvider:
 			grammar, what = integrationRefRE, "git provider id"
 		case capModelProvider:

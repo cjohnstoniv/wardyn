@@ -407,7 +407,7 @@ type Config struct {
 	// credential at a host of their choosing with no restart and no boot log —
 	// the trust class THREAT-MODEL.md pins as boot-time-only. It is deliberately
 	// NOT folded into LLMGateways either: that map carries brokered
-	// reverse-proxy semantics (ensureLLMGrant mints an api_key grant and the
+	// reverse-proxy semantics (a run's api_key grant targets it and the
 	// proxy serves the host over /wardyn/llm/*), while Bedrock is a CONNECT
 	// tunnel with SigV4, or MITM + bearer.
 	//

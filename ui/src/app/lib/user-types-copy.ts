@@ -113,7 +113,6 @@ export const EXPLAIN = {
   ALL_EGRESS_HOSTS: "All egress hosts",
   ALL_SECRETS: "All secrets",
   ALL_AGENTS: "All agents",
-  ALL_INTEGRATIONS: "All model integrations",
   ALL_GIT_PROVIDERS: "All git providers",
   ALL_MODEL_PROVIDERS: "All model providers",
   ALL_POLICIES: "All stored policies",

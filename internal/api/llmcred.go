@@ -88,10 +88,9 @@ func apiKeyGrantScopeHost(scope json.RawMessage) string {
 }
 
 // apiKeyGrantScopeSecret returns the secret_name an api_key grant's scope
-// carries. A grant may name a NON-convention secret (a workspace's resolved
-// AI-provider Integration does — applyIntegrationCreds grants the
-// INTEGRATION's own secret, not necessarily the provider convention name), so
-// verdict code must key on the grant's secret, not the provider default.
+// carries. A grant may name a NON-convention secret (a policy's own grant or a
+// workspace's required secret, applyRequiredSecretGrant), so verdict code must
+// key on the grant's secret, not the provider default.
 func apiKeyGrantScopeSecret(scope json.RawMessage) string {
 	var sc struct {
 		SecretName string `json:"secret_name"`
@@ -127,44 +126,6 @@ func removeAPIKeyGrantForHost(spec *types.RunPolicySpec, host string) {
 	spec.EligibleGrants = slices.DeleteFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
 		return g.Kind == types.GrantAPIKey && strings.EqualFold(apiKeyGrantScopeHost(g.Scope), host)
 	})
-}
-
-// addAPIKeyGrant proposes ONE api_key grant for host AND couples its exact-host
-// egress entry. The two are a unit, which is why they have one author: the
-// proxy's credential injector consults the exact allowlist only and deliberately
-// does NOT honor allow-all (Policy.AllowedExactHost), so a grant whose host is
-// missing from AllowedDomains fails buildInjector CLOSED at startup and the
-// sandbox gets zero egress — hence the coupling is UNCONDITIONAL, even under
-// allow-all (SPINE-4). Same rule the dispatch/integration-side authors follow
-// (integrations_run.go). TTL 3600 mirrors the broker/clamp 1h ceiling (the
-// clamp caps it regardless).
-//
-// The guards stay with the CALLERS because they differ per lane: never
-// double-grant a host (apiKeyGrantForHost), and never grant an unstored secret
-// (that also fails the proxy closed).
-func addAPIKeyGrant(spec *types.RunPolicySpec, host, header, format, secret string) {
-	scope, _ := json.Marshal(map[string]string{
-		"host": host, "header": header, "format": format, "secret_name": secret,
-	})
-	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
-		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
-	})
-	if !domainAllowedExact(spec.AllowedDomains, host) {
-		spec.AllowedDomains = append(spec.AllowedDomains, host)
-	}
-}
-
-// ensureSubscriptionEgress proposes the Anthropic subscription transport's two
-// egress entries (the wildcard plus the agent's own provider host) — the
-// no-grant, no-secret, no-injection half both subscription lanes need. Under
-// allow-all there is nothing to add; the entries survive the clamp only if the
-// operator ceiling lists them verbatim.
-func ensureSubscriptionEgress(spec *types.RunPolicySpec, host string) {
-	for _, d := range []string{"*.anthropic.com", host} {
-		if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
-			spec.AllowedDomains = append(spec.AllowedDomains, d)
-		}
-	}
 }
 
 // Claude subscription-mode credential mount targets. Dispatch detects
@@ -230,22 +191,17 @@ func (s *Server) isModelProviderHost(h string) bool {
 }
 
 // bedrockLaneHosts are the Bedrock hosts that carry proxy-side credential
-// injection for the EFFECTIVE region: the daemon-wide BedrockRegion pair, plus
-// the pair for the region of ws's own bound bedrock integration when a workspace
-// is in hand (workspaceModelProviderHosts, record.go — the same resolver the
-// record-mode skip list already uses, so all three lanes follow one derivation).
+// injection: the daemon-wide BedrockRegion pair.
 //
-// Both halves go through s.bedrockDataPlaneHost, so a WARDYN_BEDROCK_BASE_URL
-// override (a VPC/PrivateLink endpoint) is picked up here for free rather than
-// derived a sixth time; the control host is deliberately not overridden, exactly
-// as runs_bedrock.go documents. A zero Workspace is fine — the workspace half
-// returns nil when ws declares no LLM credential.
-func (s *Server) bedrockLaneHosts(ctx context.Context, ws types.Workspace) []string {
-	var out []string
+// The data-plane host goes through s.bedrockDataPlaneHost, so a
+// WARDYN_BEDROCK_BASE_URL override (a VPC/PrivateLink endpoint) is picked up
+// here for free rather than derived a sixth time; the control host is
+// deliberately not overridden, exactly as runs_bedrock.go documents.
+func (s *Server) bedrockLaneHosts() []string {
 	if r := s.cfg.BedrockRegion; r != "" {
-		out = append(out, s.bedrockDataPlaneHost(r), bedrockControlHost(r))
+		return []string{s.bedrockDataPlaneHost(r), bedrockControlHost(r)}
 	}
-	return append(out, s.workspaceModelProviderHosts(ctx, ws)...)
+	return nil
 }
 
 // isModelProviderRejectHost is the REJECT-lane model-provider predicate: every
@@ -270,7 +226,7 @@ func (s *Server) bedrockLaneHosts(ctx context.Context, ws types.Workspace) []str
 // callers of the narrow isModelProviderHost are not reject tests — inline_policy.go's
 // 6c own-key ACCEPT arm, and modelProviderEgress, which only filters entries the
 // operator already wrote into their own ceiling.
-func (s *Server) isModelProviderRejectHost(ctx context.Context, ws types.Workspace, h string) bool {
+func (s *Server) isModelProviderRejectHost(h string) bool {
 	if s.isModelProviderHost(h) {
 		return true
 	}
@@ -278,7 +234,7 @@ func (s *Server) isModelProviderRejectHost(ctx context.Context, ws types.Workspa
 	if hl == "" {
 		return false
 	}
-	for _, b := range s.bedrockLaneHosts(ctx, ws) {
+	for _, b := range s.bedrockLaneHosts() {
 		if strings.ToLower(strings.TrimSuffix(strings.TrimSpace(b), ".")) == hl {
 			return true
 		}
@@ -400,336 +356,6 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 	return injected, warns
 }
 
-// subscriptionLane reads an anthropic_subscription integration's Config.lane
-// ("managed" | "resident_host"; "" behaves as "managed" — the same fallback
-// capabilitiesFor's subscriptionCaps documents for an unset/unrecognized
-// value, integrations.go).
-func subscriptionLane(integ types.Integration) string {
-	lane, _ := integ.Config["lane"].(string)
-	return lane
-}
-
-// applyIntegrationCreds folds a resolved AI-provider Integration into the
-// run's policy — the Integration-based successor to the pre-Integration
-// Mode-switch (git history: `git show ecc1903~1:internal/api/llmcred.go`,
-// applyWorkspaceCreds's api_key/managed/bedrock cases). Returns the
-// Integration Type actually applied ("" = no-op: a non-LLM agent, an
-// unresolvable/absent credential, or a type with no sandbox lane at all —
-// per capabilitiesFor) and, for a bedrock
-// integration with a region/model override, that override for dispatch to
-// resolve against (dispatchParams.BedrockRef).
-//
-// The switch below is now a base-component fold with TWO exceptions, not a
-// per-kind table: the default branch takes any row — an api-key AI kind or a
-// generic connection — and turns its proxy-header secret into one api_key grant
-// plus its egress into allowlist entries. anthropic_subscription and bedrock
-// keep bespoke branches because their credential is genuinely not an HTTP
-// header (an OAuth mount/inject lane; SigV4 request signing), and no key
-// has no sandbox lane at all.
-//
-// model_api is deliberately NEVER granted here: resolving an integration for a
-// run grants the TOOL's ability to sign in (the harness), never ambient direct
-// model access for the sandbox WORKLOAD — that comes only from a workspace's
-// secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
-// explicit run grant, never from an integration binding.
-// `owner` is the caller's secret namespace (secretOwnerFromRequest): the
-// uniform-fold branch checks the row's credential is stored for this caller,
-// so a member's own copy of the provider-convention name folds exactly as an
-// operator's row does ("" = operator namespace).
-func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
-	// AI kinds only, even though the default branch below is kind-agnostic: this
-	// function answers "what credentials the run's MODEL". A generic connection
-	// is not a model provider, and resolveRunIntegration already refuses one at
-	// every tier of the ladder — a generic row reaches a run through the
-	// workspace's own `integration:<id>` requirement instead
-	// (applyIntegrationRequirement), which folds the same two halves.
-	if !types.AIProviderKind(integ.Kind) {
-		return "", nil
-	}
-	p, ok := s.llmProviderFor(agent)
-	if !ok {
-		return "", nil // non-LLM agent — nothing to bind
-	}
-	// AGENT×PROVIDER COMPATIBILITY (SPINE-1, security): the harness catalog
-	// (harness.go) is the single source of truth for which AI provider KIND can
-	// drive which agent, and it is consulted here so a run can never fold an
-	// incompatible integration onto the agent's OWN provider host. Without this an
-	// openai_api_key integration on a claude-code run injected the operator's
-	// OpenAI key as x-api-key on api.anthropic.com (credential disclosed to the
-	// wrong vendor), and a subscription/bedrock pin on a codex-cli run silently
-	// removeAPIKeyGrantForHost'd its working OpenAI grant. Bail with no grant and
-	// no removal; the reason is surfaced to the operator via capabilitiesFor and
-	// (for a composed/preflight run) the honest "no model access" verdict.
-	if harnessProviderReason(agent, integ.Kind) != "" {
-		return "", nil
-	}
-	switch integ.Kind {
-	case types.IntegrationKindAnthropicSubscription:
-		// Both lanes (managed / resident_host) displace a competing api-key
-		// grant and ensure Anthropic egress — the part common to the old
-		// pre-Integration managed-mode case. The resident_host lane ADDITIONALLY
-		// needs the ceiling mount; the caller applies that via
-		// applyLLMCredMount (THE single subscription gate) since only it
-		// knows the ceiling — this function only ever sees the resolved spec.
-		removeAPIKeyGrantForHost(spec, p.host)
-		ensureSubscriptionEgress(spec, p.host)
-		return integ.Kind, nil
-	case types.IntegrationKindBedrock:
-		removeAPIKeyGrantForHost(spec, p.host)
-		region, _ := integ.Config["region"].(string)
-		model, _ := integ.Config["model"].(string)
-		if region == "" && model == "" {
-			return integ.Kind, nil // inherit the global Bedrock config
-		}
-		// Widen egress only when this row actually names a region: an empty
-		// region (row sets model only, region inherits from the global config)
-		// would otherwise build a malformed "bedrock-runtime..amazonaws.com"
-		// double-dot host here — the real region is resolved later at dispatch.
-		if region != "" && !spec.AllowAllEgress {
-			unionAllowedDomains(spec, []string{s.bedrockDataPlaneHost(region), bedrockControlHost(region)})
-		}
-		return integ.Kind, &types.WorkspaceBedrockRef{Region: region, Model: model}
-	default:
-		// Uniform fold — the base-component default: an api-key AI kind and a
-		// generic connection are the same thing here. The row's proxy-header
-		// credential becomes ONE api_key grant on the agent's provider host, and
-		// the row's own egress joins the allowlist. The two kinds above keep
-		// bespoke transports because they genuinely are not header credentials
-		// (an OAuth mount/inject lane; SigV4 signing via WorkspaceBedrockRef).
-		secret, header, format := integrationKeyGrant(integ, p)
-		if secret == "" || !s.presentSecretNamesFor(ctx, owner)[secret] {
-			return "", nil // absent secret would fail the proxy closed — fall back rather than hard-fail
-		}
-		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
-			return integ.Kind, nil // an api_key grant for this host was already proposed; respect it
-		}
-		addAPIKeyGrant(spec, p.host, header, format, secret)
-		// The row's OWN egress — where the system lives — comes along, the same
-		// half applyIntegrationRequirement folds for a workspace-named row. Under
-		// allow-all there is nothing to add (the injector's exact entry above is
-		// added regardless, for the reason stated there).
-		if !spec.AllowAllEgress {
-			unionAllowedDomains(spec, integ.Egress)
-		}
-		return integ.Kind, nil
-	}
-}
-
-// integrationKeyGrant is the (secret, header, format) triple a row contributes
-// to the run's model-credential grant: the "api_key"-role secret when the row
-// names one (the convention every AI provider row uses), else its
-// proxy_header-delivered secret whatever role it carries — role-agnostic, per
-// the base-component model.
-//
-// The row's OWN declared delivery wins where it states one; p (the harness
-// catalog's Gateway convention — harness.go) is the fallback for a row that
-// declares none, which is every legacy-folded and every derived AI row.
-func integrationKeyGrant(integ types.Integration, p llmProvider) (secret, header, format string) {
-	for _, s := range integ.Secrets {
-		if s.Role != "api_key" {
-			continue
-		}
-		if d := s.Delivery; d != nil && d.Mode == types.DeliveryProxyHeader {
-			return s.SecretName, d.Header, cmp.Or(d.Format, "%s")
-		}
-		return s.SecretName, p.header, p.format
-	}
-	if name, h, f, ok := integ.HeaderSecret(); ok {
-		return name, h, f
-	}
-	return "", "", ""
-}
-
-// resolveRunIntegration resolves the FULL run-level integration precedence:
-//
-//  1. integrationID (run-explicit: createRunRequest.IntegrationID /
-//     composeRequest.IntegrationID) when set — must already be known to name
-//     an AI-provider integration (validated at request time with a 400; see
-//     decodeAndValidateCreateRun / handleComposeRun) or this tier yields
-//     nothing rather than guessing.
-//  2. workspaceRef — the primary workspace's LLMCred.IntegrationRef, when it
-//     names an AI-provider integration. ok=false — today's honest "no
-//     binding" outcome — for an empty ref, a ref naming nothing at all, or a
-//     ref naming something non-AI-provider: a dangling/miscategorized ref
-//     falls back silently rather than cascading to tier 3 or erroring, since
-//     the operator who bound THIS workspace explicitly chose a SPECIFIC
-//     integration, and a stale binding silently promoting to a different one
-//     is a credential surprise, not a convenience.
-//  3. the operator's DefaultFor:agent_runs default (any AI-provider type).
-//
-// ok=false is today's honest no-model-access / global-provider-config
-// fallback, carried through every tier unchanged.
-func (s *Server) resolveRunIntegration(ctx context.Context, owner, integrationID string, workspaceRef string) (types.Integration, bool) {
-	if integrationID != "" {
-		in, ok := s.resolveIntegrationRef(ctx, owner, integrationID)
-		// bug-integrations-1: a Disabled row must never fold into a run's
-		// model access — this is the actual agent-run credential path
-		// (applyIntegrationCreds authors EligibleGrants/AllowedDomains from
-		// whatever this returns), mirroring applyIntegrationRequirement's
-		// existing check on the probe path. Every tier below shares this
-		// same refusal.
-		if !ok || !types.AIProviderKind(in.Kind) || in.Disabled {
-			return types.Integration{}, false
-		}
-		// SECMODEL-3: a resident_host subscription mounts the OPERATOR'S OWN
-		// resident ~/.claude credentials — §5.1a's consent model is "a
-		// workspace pin or the operator's DefaultFor:agent_runs default", a
-		// durable WORKSPACE property (74d1b16), never a bearer token any run
-		// author may claim by naming its id. This tier may carry a
-		// resident_host lane ONLY when the run's OWN primary workspace is
-		// pinned to that EXACT integration — otherwise it refuses (yields
-		// nothing, same as an unresolvable/miscategorized id above) rather
-		// than handing a run whose task an attacker authored a live,
-		// refreshable copy of the operator's OAuth credentials because it
-		// named a workspace the operator never pinned.
-		if in.Kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(in) == "resident_host" && workspaceRef != integrationID {
-			return types.Integration{}, false
-		}
-		return in, true
-	}
-	if workspaceRef != "" {
-		// A SET workspace ref that fails to resolve to an AI-provider row
-		// (dangling, or naming something else entirely) is the honest "no
-		// binding" outcome — return here rather than falling through to tier
-		// 3: the operator who bound THIS workspace chose a SPECIFIC
-		// integration, and cascading a stale/miscategorized ref to the
-		// site-wide default would be the exact credential surprise this
-		// tier's doc above says it refuses.
-		in, ok := s.resolveIntegrationRef(ctx, owner, workspaceRef)
-		if !ok || !types.AIProviderKind(in.Kind) || in.Disabled {
-			return types.Integration{}, false
-		}
-		return in, true
-	}
-	return s.defaultAgentRunsIntegration(ctx, "")
-}
-
-// foldRunIntegration resolves the run's FULL integration precedence and folds
-// the winner into spec — the AUDIT-FREE fold (run-explicit integration_id →
-// workspace binding → operator default → none): the credential/egress fold
-// (applyIntegrationCreds) plus, for a resident_host subscription, the ceiling
-// mount via applyLLMCredMount (THE single subscription gate) — returning what
-// was applied so the caller can decide whether to audit. The create path
-// (runs.go) emits the run.workspace_cred.resolve audit itself, once the run id is
-// minted, so the fold can run ABOVE the confinement floor (SPINE-2) and
-// preflight can call the SAME fold and discard the result.
-//
-// Both launch and preflight call THIS, so Review cannot predict a different
-// model access than launch grants: an explicit integration_id or an
-// operator's site-wide default must be folded here too, alongside the
-// workspace tier, or a run whose model access came from either would
-// preview as having none.
-// kind == "" means nothing was bound (no integration resolved, a non-LLM
-// agent, or a resolved integration whose fold applied nothing).
-func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) (types.Integration, string, *types.WorkspaceBedrockRef) {
-	// The run's PRIMARY workspace is wsRefs[0] when the spec references any —
-	// shared with preflight (which calls this same function) so the two
-	// cannot disagree about whose credential binding a run inherits.
-	// An exec run (task-mode=exec — a plain governed shell command, "no agent, no
-	// LLM credentials" per its `wardyn run --task-mode exec` contract) makes no
-	// model call, so it binds NO model integration. Without this, an operator's
-	// site-wide default (or a workspace-bound) AI-provider integration would fold
-	// an api-key grant AND append the provider host to egress, and persistRunGrants
-	// would inject the operator's key proxy-side — the same implicit credential the
-	// exec contract forbids, on the api-key transport. resolveLLMTransport already
-	// gates the subscription/managed/Bedrock transports on the same no-model-call
-	// rule; this closes the grant-folding path. Shared with preflight (calls this),
-	// so the checklist's model-access verdict for an exec run matches launch.
-	if req.TaskMode == "exec" {
-		return types.Integration{}, "", nil
-	}
-	var workspaceRef string
-	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
-		workspaceRef = wsRefs[0].LLMCred.IntegrationRef
-	}
-	if _, ok := s.llmProviderFor(req.Agent); !ok {
-		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
-	}
-	// A model-provider block owns every model credential once it is set: the
-	// run's chosen provider supplies it at dispatch, from its owner's own
-	// credential, and an AI integration folds nothing — its grant would read
-	// the operator's secret. An unreadable site config folds nothing either:
-	// the doors that read it next refuse the run.
-	if s.modelProvidersSet(ctx) {
-		return types.Integration{}, "", nil
-	}
-	integ, ok := s.resolveRunIntegration(ctx, owner, req.IntegrationID, workspaceRef)
-	if !ok {
-		return types.Integration{}, "", nil
-	}
-	kind, bedrockRef := s.applyIntegrationCreds(ctx, owner, spec, integ, req.Agent)
-	// Posture: this branch re-injects the operator's ceiling ~/.claude mounts AFTER
-	// the clamp, deliberately (see applyLLMCredMount's contract) — which means any
-	// authenticated member can reach the resident subscription lane by passing
-	// integration_id alone, with no policy of their own. That is exactly the
-	// sharing the posture rule forbids, so refuse it here rather than relying on
-	// the sink: the mount is a filesystem copy of the operator's credential dir,
-	// not a token the injection endpoint ever sees.
-	if kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) == "resident_host" && s.cfg.SubscriptionPostureOK {
-		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true, s.anthropicGatewayHostPort())
-	}
-	return integ, kind, bedrockRef
-}
-
-// modelProvidersSet reports whether the model-provider block is set — or
-// cannot be read, which is answered the same way: no legacy model credential.
-func (s *Server) modelProvidersSet(ctx context.Context) bool {
-	if s.cfg.Store == nil {
-		return false
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	return err != nil || sc.ModelProviders != nil
-}
-
-// ensureLLMGrant gives a COMPOSED run for an LLM-backed agent a path to its model.
-// A composed run defaults to api-key mode: model calls go through the proxy's
-// brokered /wardyn/llm route, which returns 404 "no_llm_credential" unless an
-// auto-mint api_key grant injects the provider key. The analyzer reasons about
-// the TASK's egress, not the agent's OWN model channel, so it routinely omits
-// this (observed: a "no network needed" static-site task proposed zero grants and
-// the agent silently produced nothing).
-//
-// When the run's resolved integration puts it in SUBSCRIPTION mode
-// (subscribed=true: the run half is the resolved integration — resident_host
-// anthropic_subscription — plus a ceiling-blessed cred mount plus Claude), it
-// instead proposes the subscription egress entries (*.anthropic.com + the exact
-// host) pre-clamp — the ceiling must list them verbatim to keep them (the clamp's
-// allowlist intersection is exact-string) — and adds NO api_key grant: the
-// resolved transport choice is respected, not silently doubled up. The cred
-// mounts themselves are injected post-clamp by applyLLMCredMount.
-//
-// It adds BOTH the api_key grant AND its provider host as an EXACT allowlist entry:
-// the proxy's injector fails CLOSED at startup unless the injected host is exactly
-// allowlisted (buildInjector -> AllowedExactHost), so a grant without its egress
-// entry would hard-FAIL the run. The two are a coupled unit.
-//
-// SECRET-AWARE and non-breaking: an auto-mint api_key grant whose secret is absent
-// ALSO fails the proxy at startup (resolveInjection), so the grant is added ONLY
-// when the provider secret is stored. It runs BEFORE the clamp (the operator ceiling
-// still governs grant AND domain), and never overrides a grant already proposed for
-// the same host.
-//
-// It emits NO warning: whether the run actually ENDS UP with model access is decided
-// after the clamp (which may strip the grant or the domain), so reconcileLLMAccess
-// reports the truthful FINAL state — never a pre-clamp promise the clamp revokes.
-func (s *Server) ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscribed bool) {
-	p, ok := s.llmProviderFor(agent)
-	if !ok {
-		return // non-LLM / unknown agent
-	}
-	if subscribed {
-		ensureSubscriptionEgress(spec, p.host) // egress only: no grant, no secret, no injection
-		return
-	}
-	if _, exists := apiKeyGrantForHost(spec, p.host); exists {
-		return // respect an api_key grant already proposed for this provider host
-	}
-	if !secretPresent[p.secret] {
-		return // adding a grant with no secret would fail the proxy at startup
-	}
-	addAPIKeyGrant(spec, p.host, p.header, p.format, p.secret)
-}
-
 // subscriptionInjectEnabled reports whether subscription runs will inject the
 // operator's LIVE OAuth token proxy-side (the safe default: MITM auto-enabled,
 // sandbox holds an inert sentinel) vs. fall back to the resident-copy behavior
@@ -841,15 +467,13 @@ func (s *Server) reconcileLLMAccess(spec *types.RunPolicySpec, agent string, sec
 	// the one case that hard-fails the run.
 	hostAllowed := domainAllowedExact(spec.AllowedDomains, p.host)
 
-	// The verdict keys on the GRANT's own secret when one exists — a workspace
-	// credential binding folds in a grant naming the workspace's secret, which
-	// need not be the provider convention name. Falling back to p.secret keeps
-	// the no-grant CTA pointing at the name a composed run would use.
-	secret := p.secret
+	// The verdict keys on the GRANT's own secret — a policy's grant may name
+	// any secret, not only the provider convention name. With no grant there is
+	// no secret to name: nothing authors one from the operator's convention
+	// secret any more, so storing it would not give the run model access.
+	var secret string
 	if has {
-		if s := apiKeyGrantScopeSecret(g.Scope); s != "" {
-			secret = s
-		}
+		secret = cmp.Or(apiKeyGrantScopeSecret(g.Scope), p.secret)
 	}
 
 	if has && !g.RequiresApproval && secretPresent[secret] && hostAllowed {
@@ -874,15 +498,12 @@ func (s *Server) reconcileLLMAccess(spec *types.RunPolicySpec, agent string, sec
 		subHint = ", or launch this proposal from the wizard with your Claude subscription mounted (the composer cannot mount host credentials)"
 	}
 	switch {
-	case !secretPresent[secret]:
+	case has && !secretPresent[secret]:
 		// Drop a surviving grant whose secret is absent: an auto-mint injection
 		// grant with no resolvable secret fails the proxy CLOSED at startup
 		// (injection.go), hard-killing the launch — degrade to honest
-		// no-model-access instead. (Latent pre-existing hazard: the model can
-		// propose an api_key grant the ceiling blesses while no secret is stored.)
-		if has {
-			removeAPIKeyGrantForHost(spec, p.host)
-		}
+		// no-model-access instead.
+		removeAPIKeyGrantForHost(spec, p.host)
 		return fmt.Sprintf(
 			"no model access for agent %q: a composed run brokers its model key from the %q secret, which is not stored. Add it under Secrets and re-compose%s.",
 			agent, secret, subHint), false

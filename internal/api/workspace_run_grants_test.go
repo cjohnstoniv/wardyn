@@ -49,10 +49,9 @@ func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, r
 	return ws, true, nil
 }
 
-// GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
-// access unconditionally, reaching
-// defaultAgentRunsIntegration's GetSiteConfig read on every call — the
-// embedded nil store.Store would otherwise panic here.
+// GetSiteConfig is a no-op stub: launchRecordRun reads the site config on
+// every call (recordProviderChoice) — the embedded nil store.Store would
+// otherwise panic here.
 func (s *fkGrantStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }

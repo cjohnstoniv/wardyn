@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -47,20 +46,20 @@ func integrationWriteHarness(t *testing.T, stored []types.Integration) (*Server,
 	h := newHarness(t)
 	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: stored}}
 	cfg := baseTestConfig(h, fake)
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-app-id": []byte("123"), "acme-app-key": []byte("key")}}
 	return New(cfg), fake, h.audit
 }
 
 func TestHandlePutIntegration_CreatesStoredRow(t *testing.T) {
 	srv, fake, audit := integrationWriteHarness(t, nil)
-	body := `{"name":"Acme Anthropic","kind":"anthropic_api_key",` +
-		`"secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"}]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
+	body := `{"name":"Acme App","kind":"github_app",` +
+		`"secrets":[{"role":"app_id","secret_name":"acme-app-id"},{"role":"app_key","secret_name":"acme-app-key"}]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-app", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if len(fake.cfg.Integrations) != 1 || fake.cfg.Integrations[0].ID != "acme-anthropic" {
-		t.Fatalf("stored integrations = %+v, want exactly one with id acme-anthropic", fake.cfg.Integrations)
+	if len(fake.cfg.Integrations) != 1 || fake.cfg.Integrations[0].ID != "acme-app" {
+		t.Fatalf("stored integrations = %+v, want exactly one with id acme-app", fake.cfg.Integrations)
 	}
 	if fake.cfg.Integrations[0].CreatedAt.IsZero() || fake.cfg.Integrations[0].UpdatedAt.IsZero() {
 		t.Error("expected CreatedAt/UpdatedAt to be stamped")
@@ -69,8 +68,8 @@ func TestHandlePutIntegration_CreatesStoredRow(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got.Source != "stored" || got.ID != "acme-anthropic" {
-		t.Errorf("response row = %+v, want source=stored id=acme-anthropic", got.integrationRow)
+	if got.Source != "stored" || got.ID != "acme-app" {
+		t.Errorf("response row = %+v, want source=stored id=acme-app", got.integrationRow)
 	}
 	if n := auditCount(audit, "integration.write"); n != 1 {
 		t.Errorf("integration.write audit events = %d, want 1", n)
@@ -96,22 +95,22 @@ func TestHandlePutIntegration_LegacyShapeBodyIs400(t *testing.T) {
 func TestHandlePutIntegration_UpdatesExistingRow_PreservesCreatedAt(t *testing.T) {
 	firstCreated := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	existing := types.Integration{
-		ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
-		Secrets:   []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
+		ID: "acme-app", Kind: types.IntegrationKindGitHubApp,
+		Secrets:   []types.IntegrationSecret{{Role: "app_id", SecretName: "acme-app-id"}},
 		CreatedAt: firstCreated, UpdatedAt: firstCreated,
 	}
 	srv, fake, _ := integrationWriteHarness(t, []types.Integration{existing})
 
-	body := `{"name":"Acme Anthropic (renamed)","kind":"anthropic_api_key",` +
-		`"secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"}]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
+	body := `{"name":"Acme App (renamed)","kind":"github_app",` +
+		`"secrets":[{"role":"app_id","secret_name":"acme-app-id"}]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-app", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	if len(fake.cfg.Integrations) != 1 {
 		t.Fatalf("expected the update to REPLACE the row, not append; got %+v", fake.cfg.Integrations)
 	}
-	if got := fake.cfg.Integrations[0].Name; got != "Acme Anthropic (renamed)" {
+	if got := fake.cfg.Integrations[0].Name; got != "Acme App (renamed)" {
 		t.Errorf("name = %q, want the new value", got)
 	}
 	if fake.cfg.Integrations[0].CreatedAt != firstCreated {
@@ -289,110 +288,35 @@ func TestGenericKindStoredEarlier_StillReadsBack(t *testing.T) {
 	}
 }
 
-func TestHandlePutIntegration_BedrockBothSetIsAccepted(t *testing.T) {
-	srv, fake, _ := integrationWriteHarness(t, nil)
-	body := `{"kind":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3","auth_lane":"auto"}}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-bedrock", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if len(fake.cfg.Integrations) != 1 {
-		t.Fatalf("expected the row to persist, got %+v", fake.cfg.Integrations)
-	}
-}
-
-// TestHandlePutIntegration_BedrockRecognizedSecretNameIsAccepted is the
-// counterfactual to the bug-integrations-2 rejection above: naming one of
-// the four secret names resolveBedrockAuth actually reads must still round-
-// trip cleanly.
-func TestHandlePutIntegration_BedrockRecognizedSecretNameIsAccepted(t *testing.T) {
-	srv, fake, _ := integrationWriteHarness(t, nil)
-	body := `{"kind":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3"},` +
-		`"secrets":[{"role":"access_key","secret_name":"aws-access-key-id"}]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-bedrock", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if len(fake.cfg.Integrations) != 1 {
-		t.Fatalf("expected the row to persist, got %+v", fake.cfg.Integrations)
-	}
-}
-
-// TestHandlePutIntegration_DefaultForRadioSemantics pins the approved spec
-// verbatim: setting a DefaultFor mark on one row CLEARS that same mark from
-// every OTHER row in the SAME write — never a 409.
-func TestHandlePutIntegration_DefaultForRadioSemantics(t *testing.T) {
-	rowA := types.Integration{
-		ID: "acme-a", Kind: types.IntegrationKindAnthropicAPIKey,
-		DefaultFor: []string{"agent_runs", "wardyn_features"},
-	}
-	srv, fake, _ := integrationWriteHarness(t, []types.Integration{rowA})
-	body := `{"kind":"openai_api_key","default_for":["agent_runs"]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-b", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200 (radio semantics must never 409); body=%s", w.Code, w.Body.String())
-	}
-	var a, b *types.Integration
-	for i := range fake.cfg.Integrations {
-		switch fake.cfg.Integrations[i].ID {
-		case "acme-a":
-			a = &fake.cfg.Integrations[i]
-		case "acme-b":
-			b = &fake.cfg.Integrations[i]
+// TestHandlePutIntegration_AIKindIsRefused pins #547: model access is a model
+// provider, so an integration write naming any of the four AI kinds is refused,
+// pointing at Settings → Model providers, and nothing is stored.
+func TestHandlePutIntegration_AIKindIsRefused(t *testing.T) {
+	for _, kind := range []string{types.IntegrationKindAnthropicAPIKey, types.IntegrationKindAnthropicSubscription,
+		types.IntegrationKindBedrock, types.IntegrationKindOpenAIAPIKey} {
+		srv, fake, audit := integrationWriteHarness(t, nil)
+		w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-model", adminToken, `{"kind":"`+kind+`"}`)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Settings → Model providers") {
+			t.Errorf("PUT kind %q: %d %s, want 400 naming Settings → Model providers", kind, w.Code, w.Body.String())
+		}
+		if len(fake.cfg.Integrations) != 0 || auditCount(audit, "integration.write") != 0 {
+			t.Errorf("PUT kind %q persisted %+v", kind, fake.cfg.Integrations)
 		}
 	}
-	if a == nil || b == nil {
-		t.Fatalf("expected both rows to persist, got %+v", fake.cfg.Integrations)
-	}
-	if got := a.DefaultFor; len(got) != 1 || got[0] != "wardyn_features" {
-		t.Errorf("row A DefaultFor = %v, want [wardyn_features] (agent_runs cleared by B's write)", got)
-	}
-	if got := b.DefaultFor; len(got) != 1 || got[0] != "agent_runs" {
-		t.Errorf("row B DefaultFor = %v, want [agent_runs]", got)
-	}
 }
 
-// TestHandlePutIntegration_DefaultForRejectsNonAIProvider pins PLATFORM-API-3:
-// only an AI provider row may carry default_for. Both marks are defined only
-// for those kinds (types.Integration.DefaultFor's doc), and both readers
-// (defaultAgentRunsIntegration, WardynFeaturesBackend) already filter on it —
-// so a non-AI row that took the mark would STEAL it from the real AI default
-// (applyDefaultForRadio clears every other row's mark regardless of kind)
-// while never being able to serve it itself: silent, site-wide loss of model
-// access through a write that validated clean.
-func TestHandlePutIntegration_DefaultForRejectsNonAIProvider(t *testing.T) {
+// TestHandlePutIntegration_DefaultForIsRefused: default_for marked an AI-kind
+// row as a site default. No writable kind takes it, so the strict decode
+// refuses the field by name on every kind.
+func TestHandlePutIntegration_DefaultForIsRefused(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
-	body := `{"kind":"acme-registry","default_for":["agent_runs"]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-registry", adminToken, body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("code = %d, want 400 (default_for is AI-provider-only); body=%s", w.Code, w.Body.String())
+	body := `{"kind":"github_app","default_for":["agent_runs"]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-app", adminToken, body)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "default_for") {
+		t.Fatalf("code = %d, want 400 naming default_for; body=%s", w.Code, w.Body.String())
 	}
 	if len(fake.cfg.Integrations) != 0 {
 		t.Errorf("rejected write must not persist, got %+v", fake.cfg.Integrations)
-	}
-}
-
-// TestHandlePutIntegration_DefaultForClear completes the DefaultFor write-path
-// coverage (set + radio-steal are pinned above): PUT is a FULL REPLACEMENT, so
-// PUTting a row again with default_for omitted clears its own marks — the
-// third write shape the tier-3 precedence and composer-registry boot
-// derivation both need to actually be unset again through the API.
-func TestHandlePutIntegration_DefaultForClear(t *testing.T) {
-	rowA := types.Integration{
-		ID: "acme-a", Kind: types.IntegrationKindAnthropicAPIKey,
-		DefaultFor: []string{"agent_runs", "wardyn_features"},
-	}
-	srv, fake, _ := integrationWriteHarness(t, []types.Integration{rowA})
-	body := `{"kind":"anthropic_api_key"}` // default_for omitted
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-a", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if len(fake.cfg.Integrations) != 1 {
-		t.Fatalf("expected exactly one row, got %+v", fake.cfg.Integrations)
-	}
-	if got := fake.cfg.Integrations[0].DefaultFor; len(got) != 0 {
-		t.Errorf("DefaultFor = %v, want cleared (PUT is a full replacement)", got)
 	}
 }
 
@@ -420,18 +344,17 @@ func TestHandleDeleteIntegration_UnknownIDIs404(t *testing.T) {
 }
 
 // TestPutIntegration_ColonIDRoundTrips keeps the colon-id invariant alive. A
-// colon-qualified id ("anthropic_subscription:managed") must survive a PUT: the
-// URL carries the percent-encoded colon a real browser fetch() sends
-// (encodeURIComponent), so this exercises integrationIDParam's unescape and
-// validateIntegrationWrite's id gate, which must not 400 on it.
+// colon-qualified id ("git_host:ghes.corp.example", the id legacy derivation
+// mints) must survive a PUT: the URL carries the percent-encoded colon a real
+// browser fetch() sends (encodeURIComponent), so this exercises
+// integrationIDParam's unescape and validateIntegrationWrite's id gate, which
+// must not 400 on it.
 func TestPutIntegration_ColonIDRoundTrips(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
-	srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}
-	const id = "anthropic_subscription:managed"
+	const id = "git_host:ghes.corp.example"
 	escapedPath := "/api/v1/integrations/" + url.PathEscape(id)
 
-	body := `{"name":"Claude subscription (managed)","kind":"anthropic_subscription",` +
-		`"config":{"lane":"managed"},"default_for":["agent_runs"]}`
+	body := `{"name":"ghes.corp.example","kind":"git_host"}`
 	w := do(t, srv, http.MethodPut, escapedPath, adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT a colon id: code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -442,9 +365,6 @@ func TestPutIntegration_ColonIDRoundTrips(t *testing.T) {
 	got := fake.cfg.Integrations[0]
 	if got.ID != id {
 		t.Errorf("stored row id = %q, want the colon id retained", got.ID)
-	}
-	if len(got.DefaultFor) != 1 || got.DefaultFor[0] != "agent_runs" {
-		t.Errorf("stored row DefaultFor = %v, want [agent_runs]", got.DefaultFor)
 	}
 
 	// PUT is create-or-REPLACE: the same id again must not duplicate.
@@ -476,9 +396,9 @@ func auditCount(audit *recRecorder, action string) int {
 // This checks each half of that comment against the running handler.
 func TestPutIntegration_DocumentedProcedureIsTheOneThatWorks(t *testing.T) {
 	srv, _, _ := integrationWriteHarness(t, []types.Integration{{
-		ID: "acme-anthropic", Name: "Acme", Kind: types.IntegrationKindAnthropicAPIKey,
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
-		Egress:  []string{"api.anthropic.com"},
+		ID: "acme-app", Name: "Acme", Kind: types.IntegrationKindGitHubApp,
+		Secrets: []types.IntegrationSecret{{Role: "app_id", SecretName: "acme-app-id"}},
+		Egress:  []string{"github.example.com"},
 	}})
 
 	// The GET half of the documented round trip.
@@ -494,12 +414,12 @@ func TestPutIntegration_DocumentedProcedureIsTheOneThatWorks(t *testing.T) {
 	}
 	var row map[string]any
 	for _, r := range listed.Integrations {
-		if r["id"] == "acme-anthropic" {
+		if r["id"] == "acme-app" {
 			row = r
 		}
 	}
 	if row == nil {
-		t.Fatalf("acme-anthropic not in GET /integrations: %s", w.Body.String())
+		t.Fatalf("acme-app not in GET /integrations: %s", w.Body.String())
 	}
 
 	put := func(body map[string]any) int {
@@ -507,7 +427,7 @@ func TestPutIntegration_DocumentedProcedureIsTheOneThatWorks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, string(raw)).Code
+		return do(t, srv, http.MethodPut, "/api/v1/integrations/acme-app", adminToken, string(raw)).Code
 	}
 
 	// Everything the GET emits that the PUT body has no field for is
