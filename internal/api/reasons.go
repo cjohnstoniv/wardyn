@@ -611,6 +611,27 @@ const (
 	reasonProviderStoreRefused = "store_refused"
 )
 
+// http.go's own auth middlewares — local mode's loopback/CSRF gates, and the
+// admin/run/sensor bearer-token chains. Every value here is already the exact
+// string its own auditAuthFailed(As) call wrote before #656 slice 3 put it on
+// the wire too, so an operator correlating a 401 to its audit row sees the
+// same word twice.
+const (
+	reasonLocalModePeerNotLoopback = "local_mode_peer_not_loopback"
+	reasonLocalModeHostNotLoopback = "local_mode_host_not_loopback"
+	reasonAdminTokenNotConfigured  = "admin_token_not_configured"
+	reasonMissingBearerToken       = "missing_bearer_token"
+	reasonInvalidAdminToken        = "invalid_admin_token"
+	// reasonIdentityProviderNotConfigured is shared by internalAuth and
+	// internalAuthGroundtruth: the identical cause (no embedded identity
+	// provider wired) refuses both the run-token and the sensor-token chains.
+	reasonIdentityProviderNotConfigured = "identity_provider_not_configured"
+	reasonMissingRunToken               = "missing_run_token"
+	reasonInvalidRunToken               = "invalid_run_token"
+	reasonMissingSensorToken            = "missing_sensor_token"
+	reasonInvalidSensorToken            = "invalid_sensor_token"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
