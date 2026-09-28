@@ -89,7 +89,7 @@ Both reset paths delete the Postgres volume, and the upstream-proxy secret **and
 live only there — so a plain `reset && setup` returned with broken egress and no step in between
 where the operator could notice.
 
-- `wardyn site-config get|apply` now exists, so the baseline is a file you can keep. It carries
+- `wardyn site-config get|set` now exists, so the baseline is a file you can keep. It carries
   secret **names**, never values, so it is safe to store beside the repo.
 - `make reset`'s and `make reset-all`'s manifests now say explicitly that the corporate baseline dies with the volume,
   and prints the capture command *before* asking for confirmation.
