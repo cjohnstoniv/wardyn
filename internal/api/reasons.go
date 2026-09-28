@@ -632,6 +632,52 @@ const (
 	reasonInvalidSensorToken            = "invalid_sensor_token"
 )
 
+// The UI gateway (uigateway.go, uigateway_session.go): the second,
+// un-authenticated-by-session origin that serves a sandbox's own web app.
+// uiDialError carries one of these from the dial/launch path back out to
+// uiErrorHandler, which is the ONE place that writes the HTTP response for
+// that whole path.
+const (
+	reasonUIGatewayNotFound          = "ui_gateway_not_found"            // no path matched the gateway's own router
+	reasonUIGatewayTicketQueryOnPost = "ui_gateway_ticket_query_on_post" // a POST /__wardyn/enter carried the ticket as a query param
+	reasonUIGatewayInvalidFormBody   = "ui_gateway_invalid_form_body"    // the POST form body did not parse
+	reasonUIGatewayMethodNotAllowed  = "ui_gateway_method_not_allowed"   // /__wardyn/enter saw a method other than GET/POST
+	reasonUIGatewayInvalidRunID      = "ui_gateway_invalid_run_id"       // the run field is missing or not a UUID
+	reasonUIGatewayWrongHost         = "ui_gateway_wrong_host"           // this run's apps are pinned to a different origin (host mode)
+	// reasonUIGatewayTicketInvalid is shared by "not bound to this browser"
+	// and "invalid/expired/already-used" — the SAME refusal, byte for byte,
+	// so a probe cannot tell binding failure from a genuinely bad ticket.
+	reasonUIGatewayTicketInvalid      = "ui_gateway_ticket_invalid"
+	reasonUIGatewayTicketLookupFailed = "ui_gateway_ticket_lookup_failed"
+	// reasonUIGatewayTicketRunMismatch is shared by "the run could not be
+	// read" and "the ticket's stamped principal is not this run's owner" —
+	// the identical existence-oracle-safe shape getRunAuthorized's own foreign
+	// vs missing parity uses, so a probe cannot tell a missing run from one it
+	// does not own.
+	reasonUIGatewayTicketRunMismatch          = "ui_gateway_ticket_run_mismatch"
+	reasonUIGatewayNotRunning                 = "ui_gateway_not_running"                  // the run is not RUNNING, or has no sandbox
+	reasonUIGatewayRunKept                    = "ui_gateway_run_kept"                     // the run is kept (ended/lost); its agent is stopped
+	reasonUIGatewayPolicyLookupFailed         = "ui_gateway_policy_lookup_failed"         // the run's effective UI-apps policy could not be read
+	reasonUIGatewayAppNotDeclared             = "ui_gateway_app_not_declared"             // the named app is not in the run's policy ui_apps
+	reasonUIGatewayNoSession                  = "ui_gateway_no_session"                   // no valid UI relay session cookie for this run/app
+	reasonUIGatewaySessionDestinationMismatch = "ui_gateway_session_destination_mismatch" // the dial address does not match the session's run/port
+	reasonUIGatewayNoRunner                   = "ui_gateway_no_runner"                    // this deployment configures no runner
+	reasonUIGatewayResumeFailed               = "ui_gateway_resume_failed"                // thawing a paused run for the relay failed
+	reasonUIGatewayConnCapReached             = "ui_gateway_conn_cap_reached"             // this run already holds the maximum number of open UI connections
+	reasonUIGatewayExecFailed                 = "ui_gateway_exec_failed"                  // starting the relay's own exec session failed
+	reasonUIGatewayLauncherExecFailed         = "ui_gateway_launcher_exec_failed"         // starting the in-sandbox launcher probe failed
+	reasonUIGatewayLauncherMissing            = "ui_gateway_launcher_missing"             // the image has no launcher script for this app
+	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time
+	reasonUIGatewayLauncherProbeFailed        = "ui_gateway_launcher_probe_failed"        // the launcher probe exited with an unrecognized code
+	reasonUIGatewayConnectionClosed           = "ui_gateway_connection_closed"            // the sandbox closed the relay connection unexpectedly
+	reasonUIGatewayBindMissingTicket          = "ui_gateway_bind_missing_ticket"          // POST /__wardyn/bind's form carried no ticket
+	// reasonUIGatewayBind{NotSameSite,OriginNotConsole} are uiBindRefusal's own
+	// closed set (the ui.authorize/denied row's stable identifiers) — moved
+	// here, not left beside it, so this guard can see them (#656 slice 3).
+	reasonUIGatewayBindNotSameSite      = "bind_not_same_site"
+	reasonUIGatewayBindOriginNotConsole = "bind_origin_not_console"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

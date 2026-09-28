@@ -210,7 +210,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 		case strings.HasPrefix(r.URL.Path, uiRunPrefix):
 			s.handleUIRelay(w, r)
 		default:
-			writeError(w, http.StatusNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
+			writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		}
 	}))
 }
@@ -256,17 +256,17 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		// rather than silently accepted, so there is exactly one place a caller
 		// can put it and exactly one place it can leak from.
 		if r.URL.Query().Has("ticket") {
-			writeError(w, http.StatusBadRequest, "the ticket must be a form field, not a query parameter, on POST")
+			writeErrorReason(w, http.StatusBadRequest, reasonUIGatewayTicketQueryOnPost, "the ticket must be a form field, not a query parameter, on POST")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxUIEnterFormBytes)
 		if err := r.ParseForm(); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid form body")
+			writeErrorReason(w, http.StatusBadRequest, reasonUIGatewayInvalidFormBody, "invalid form body")
 			return
 		}
 		s.uiEnterCommon(w, r, r.PostForm.Get("run"), r.PostForm.Get("app"), r.PostForm.Get("ticket"), http.StatusSeeOther)
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeErrorReason(w, http.StatusMethodNotAllowed, reasonUIGatewayMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -277,7 +277,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, app, ticket string, redirectStatus int) {
 	runID, err := uuid.Parse(runRaw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid or missing run id")
+		writeErrorReason(w, http.StatusBadRequest, reasonUIGatewayInvalidRunID, "invalid or missing run id")
 		return
 	}
 	// Host binding (host mode only): the cookie about to be set is scoped to
@@ -287,7 +287,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
 		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "wrong host for run", "host": r.Host})
-		writeError(w, http.StatusForbidden, "This run's UI apps are served on a different host")
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayWrongHost, "This run's UI apps are served on a different host")
 		return
 	}
 
@@ -297,7 +297,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	if !s.uiTicketBound(w, r, ticket) {
 		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "ticket not bound to this browser"})
-		writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 		return
 	}
 	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, ticket, runID, s.cfg.Now())
@@ -306,19 +306,22 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		// say so, log it, and never leak the database error to a caller who has
 		// not authenticated.
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway ticket lookup failed", "run_id", runID, "err", err)
-		writeError(w, http.StatusInternalServerError, "attach ticket lookup failed")
+		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
 		return
 	}
 	if !ok {
 		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "invalid, expired, or already-used ticket"})
-		writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 		return
 	}
 
 	run, err := s.cfg.Store.GetRun(r.Context(), runID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
+		// Byte-identical to the wrong-owner arm below — including the wire
+		// reason (#656 slice 3) — so a missing run and a foreign one stay
+		// indistinguishable; only the audit differs.
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
 	// Owner-or-admin, re-checked against the just-loaded run: this lane never
@@ -327,25 +330,25 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "not the run owner"}))
-		writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
-		writeError(w, http.StatusConflict, "run is not RUNNING; cannot open a UI app (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, "run is not RUNNING; cannot open a UI app (state="+string(run.State)+")")
 		return
 	}
 	// A kept run is RUNNING with its agent stopped: nothing to open.
 	if runIsKept(run) {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "run has ended"}))
-		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
+		writeErrorReason(w, http.StatusConflict, reasonUIGatewayRunKept, "run has ended; cannot open a UI app")
 		return
 	}
 
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway policy lookup failed", "run_id", runID, "err", err)
-		writeError(w, http.StatusInternalServerError, "run policy lookup failed")
+		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayPolicyLookupFailed, "run policy lookup failed")
 		return
 	}
 	declared, found := types.UIApp{}, false
@@ -358,7 +361,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
-		writeError(w, http.StatusForbidden, "no UI app named "+strconv.Quote(app)+" is declared in this run's policy ui_apps")
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, "no UI app named "+strconv.Quote(app)+" is declared in this run's policy ui_apps")
 		return
 	}
 
@@ -411,19 +414,19 @@ func (s *Server) uiRunOrigin(runID uuid.UUID) string {
 func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	runID, app, ok := parseUIRunPath(r.URL.Path)
 	if !ok {
-		writeError(w, http.StatusNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
+		writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		return
 	}
 	sess, ok := s.decodeUISession(r, s.cfg.Now())
 	if !ok || sess.Run != runID || sess.App != app {
-		writeError(w, http.StatusForbidden, "no valid UI session for this run — open the app again from its run page")
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, "no valid UI session for this run — open the app again from its run page")
 		return
 	}
 	// Re-assert the human here as well as in uiDial, debounced: net/http dials
 	// only when its pool has nothing reusable, so most requests of a busy
 	// session never reach uiDial at all (uiReassertRelay).
 	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
-		writeError(w, de.status, de.msg)
+		writeErrorReason(w, de.status, de.reason, de.msg)
 		return
 	}
 	// Keep the run's idle clock alive for the life of the session, debounced
@@ -641,6 +644,7 @@ func uiIsWardynCookie(name string) bool {
 // instead of collapsing into a generic "bad gateway".
 type uiDialError struct {
 	status int
+	reason string
 	msg    string
 }
 
@@ -683,8 +687,8 @@ func uiExecFailMsg(ctx context.Context, action string, err error) string {
 
 // uiFail records a typed dial failure on the request's box (when there is one)
 // and returns it as the dial error.
-func uiFail(ctx context.Context, status int, msg string) error {
-	err := &uiDialError{status: status, msg: msg}
+func uiFail(ctx context.Context, status int, reason, msg string) error {
+	err := &uiDialError{status: status, reason: reason, msg: msg}
 	if box, ok := ctx.Value(uiDialErrCtxKey{}).(*uiDialErrBox); ok {
 		box.set(err)
 	}
@@ -698,12 +702,12 @@ func uiFail(ctx context.Context, status int, msg string) error {
 func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	if box, ok := r.Context().Value(uiDialErrCtxKey{}).(*uiDialErrBox); ok {
 		if de := box.get(); de != nil {
-			writeError(w, de.status, de.msg)
+			writeErrorReason(w, de.status, de.reason, de.msg)
 			return
 		}
 	}
 	slog.WarnContext(r.Context(), "wardynd: ui relay failed", "path", r.URL.Path, "err", err)
-	writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "the sandbox closed the UI connection", err))
+	writeErrorReason(w, http.StatusBadGateway, reasonUIGatewayConnectionClosed, loggedMsg(r.Context(), "the sandbox closed the UI connection", err))
 }
 
 // uiDial opens ONE relay connection: it re-checks the run is still live,
@@ -714,14 +718,14 @@ func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	sess, ok := uiSessionFromContext(ctx)
 	if !ok {
-		return nil, uiFail(ctx, http.StatusForbidden, "no valid UI session for this connection")
+		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewayNoSession, "no valid UI session for this connection")
 	}
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil || host != sess.Run.String() || portStr != strconv.Itoa(sess.Port) {
-		return nil, uiFail(ctx, http.StatusForbidden, "UI session does not authorize this destination")
+		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewaySessionDestinationMismatch, "UI session does not authorize this destination")
 	}
 	if s.cfg.Runner == nil {
-		return nil, uiFail(ctx, http.StatusServiceUnavailable, "no runner configured; UI apps unavailable")
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, "no runner configured; UI apps unavailable")
 	}
 
 	// Fresh run state on EVERY connection (not just at enter): a killed or
@@ -729,30 +733,30 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// every new connection.
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
-		return nil, uiFail(ctx, http.StatusNotFound, "run not found")
+		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
-		return nil, uiFail(ctx, http.StatusConflict, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
+		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayNotRunning, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
 	}
 	// A kept run is RUNNING with its agent stopped: the UI app is gone.
 	if runIsKept(run) {
-		return nil, uiFail(ctx, http.StatusConflict, "run has ended; the UI app is gone")
+		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayRunKept, "run has ended; the UI app is gone")
 	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
-		return nil, uiFail(ctx, de.status, de.msg)
+		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
 	s.markUIReasserted(sess, s.cfg.Now())
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
-		return nil, uiFail(ctx, http.StatusBadGateway, "run is paused and could not be resumed; try again")
+		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")
 	}
 
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {
-		return nil, uiFail(ctx, http.StatusServiceUnavailable,
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached,
 			fmt.Sprintf("too many open UI connections for this run (max %d) — close a tab and retry", maxUIConnsPerRun))
 	}
 	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
@@ -765,7 +769,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	})
 	if err != nil {
 		release()
-		return nil, uiFail(ctx, http.StatusBadGateway, uiExecFailMsg(ctx, "start ui relay exec", err))
+		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayExecFailed, uiExecFailMsg(ctx, "start ui relay exec", err))
 	}
 
 	// Keepalive per connection, not per inbound request. handleUIRelay touches
@@ -868,7 +872,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port)},
 	})
 	if err != nil {
-		return uiFail(ctx, http.StatusBadGateway, uiExecFailMsg(ctx, "start ui app launcher", err))
+		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherExecFailed, uiExecFailMsg(ctx, "start ui app launcher", err))
 	}
 	// Both streams MUST be drained before Wait: they are unbuffered pipes off
 	// one demux goroutine (runner.ExecSession's contract), so an undrained byte
@@ -902,15 +906,15 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 	case 3:
 		// FROZEN string: the console prints this verbatim under its
 		// missing-launcher error (docs/design/ui-sandboxes-prompt.md §7).
-		return uiFail(ctx, http.StatusBadGateway,
+		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherMissing,
 			"no UI launcher in this image: "+launcher+" not found")
 	case 4:
 		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.start", sess.App, "failure",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": "did not listen in time"})
-		return uiFail(ctx, http.StatusBadGateway,
+		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherNotListening,
 			fmt.Sprintf("%s started but nothing was listening on 127.0.0.1:%d after %ds", launcher, sess.Port, uiEnsureWaitSecs))
 	default:
-		return uiFail(ctx, http.StatusBadGateway,
+		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherProbeFailed,
 			fmt.Sprintf("could not start UI app %q inside the sandbox (probe exit %d; the image needs sh and socat)", sess.App, code))
 	}
 }

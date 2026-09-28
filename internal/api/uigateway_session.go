@@ -297,7 +297,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.authorize", sess.App, "denied",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
 	}
-	return &uiDialError{status: status, msg: msg}
+	return &uiDialError{status: status, reason: reason, msg: msg}
 }
 
 // uiReassertRelay is the REQUEST-path half of the re-check, and it exists
