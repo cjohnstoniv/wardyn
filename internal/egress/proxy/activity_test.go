@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -14,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -82,5 +86,40 @@ func TestActivityReporter_ReportsOnlyAfterBytesMoved(t *testing.T) {
 	}
 	if moved.Load() {
 		t.Error("the mark was not cleared by the report")
+	}
+}
+
+// TestMITMConnect_BytesCountAsActivity: bytes moved on a TLS-terminated (MITM)
+// stream mark the run in use, as on an opaque tunnel. The CONNECT itself does
+// not; the TLS handshake and the request through the tunnel do.
+func TestMITMConnect_BytesCountAsActivity(t *testing.T) {
+	const host = "mirror.corp"
+	cu := captureUpstream(t, true, "upstream-ok")
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Scanner:         forwardScanEngine(t, "block"),
+		CA:              ca,
+		MITMHosts:       []string{host},
+		Resolver:        publicResolver{},
+		TLSClientConfig: testInsecureTLSConfig,
+		Dial:            redirectDial(upstreamAddr(cu.srv)),
+	})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	resp := mitmPost(t, proxySrv.URL, certPEM, host, "/artifact", `{"q":"ok"}`)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("MITM request = %d, want 200", resp.StatusCode)
+	}
+	if !p.streamMoved.Load() {
+		t.Error("bytes through the MITM stream did not mark the run active")
 	}
 }
