@@ -40,7 +40,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, STATES, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CollapsibleCard } from "../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../lib/format";
@@ -77,10 +77,12 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   // #1200 compact cards — one line, absent while unloaded. "0 keys", not the
   // EmptyState's own "No keys yet." — both render at once once expanded, and
   // a query for that canon string must still resolve to a single node. The
-  // error case reuses ErrorState's own default heading (review L4) rather
-  // than inventing a new "Couldn't load" phrase the packet never named.
+  // error case is absent too (review R2-L1): the packet has no error summary
+  // for this card, and ErrorState's own heading (states.tsx's STATES.
+  // ERROR_TITLE) already renders once the card is expanded — showing it here
+  // too would repeat the same string twice on screen at once.
   const summary =
-    status === "loading" ? undefined : status === "error" ? STATES.ERROR_TITLE : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
+    status === "loading" || status === "error" ? undefined : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
 
   // review L2 — nested inside CollapsibleCard on Your account (h3), this
   // table wrapper must not repeat the card's own border+bg-card (CONSOLE-

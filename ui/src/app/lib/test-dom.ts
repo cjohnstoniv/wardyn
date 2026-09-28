@@ -7,15 +7,22 @@
 // starts collapsed, so a suite that used to find a card's body on render now
 // has one extra step first — one helper here rather than a copy of the same
 // two lines in every settings/setup suite this touches.
+//
+// review FINAL-PR-1329-r2.md R2-M1: CollapsibleCard's heading takes its name
+// from its OWN content (no `aria-label` override — that override made screen
+// readers announce the title alone, dropping the summary and expanded state
+// from heading navigation). So both the card's `<h3>` and its toggle
+// `<button>` now share one accessible name, "{title} {summary}", and a query
+// naming only the title must match it as a PREFIX, not the whole string.
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-/** Expands the CollapsibleCard whose header (title + summary) matches
- *  `title` — the button's accessible name is the title AND the summary text
- *  concatenated, so this matches on the title being a PREFIX of it, not the
- *  whole name (which changes with the card's state). */
+/** A `getByRole` name matcher: the accessible name starts with `prefix`. */
+export function startsWith(prefix: string): (name: string) => boolean {
+  return (name: string) => name.startsWith(prefix);
+}
+
+/** Expands the CollapsibleCard whose header (title + summary) matches `title`. */
 export async function expandCard(title: string) {
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: (accessibleName) => accessibleName.startsWith(title) }));
+  await userEvent.setup().click(screen.getByRole("button", { name: startsWith(title) }));
 }

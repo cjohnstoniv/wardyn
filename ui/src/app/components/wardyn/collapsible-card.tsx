@@ -74,14 +74,15 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
             own base-layer margin reset (theme.css) already makes it a
             zero-margin block, so wrapping the (already `w-full`) button adds
             no visible box of its own.
-            `aria-label` pins the heading's OWN accessible name back to the
-            title alone: without it, the heading's name is its full text
-            content, which is now the button's (title + summary), so every
-            "Host"-only heading query would start matching "Host Runs default
-            to Vault" instead. Every real caller's `title` is a plain string;
-            a caller that ever passes a richer node (none does today) simply
-            keeps the old, unoverridden behavior. */}
-        <h3 id={headingId} aria-label={typeof title === "string" ? title : undefined}>
+            No `aria-label` here (review FINAL-PR-1329-r2.md R2-M1) — the
+            plain APG accordion example puts none on the `<h3>`, and the
+            heading takes its name from the button inside it on purpose: NVDA
+            and VoiceOver replace a labelled heading's announced content with
+            the label, which would read "Host" alone on heading navigation
+            and drop the summary and the expanded state a sighted user sees
+            in the same row. The unit tests use `expandCard`'s prefix match
+            instead of an exact heading name for this reason. */}
+        <h3>
           <button
             type="button"
             aria-expanded={open}
@@ -94,7 +95,13 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
             className="flex w-full items-start justify-between gap-3 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
           >
             <span className="min-w-0">
-              <span className="block text-sm font-medium text-foreground">{title}</span>
+              {/* headingId goes here, not on the `<h3>` (review R2-M1): a
+                  caller's own aria-labelledby (branding-card.tsx's region
+                  name) must resolve to the title text alone, not the whole
+                  heading — which no longer carries an id of its own. */}
+              <span id={headingId} className="block text-sm font-medium text-foreground">
+                {title}
+              </span>
               {summary && (
                 <span className="mt-0.5 block truncate text-body leading-snug text-muted-foreground">
                   {summary}

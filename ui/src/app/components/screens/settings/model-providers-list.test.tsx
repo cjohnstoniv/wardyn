@@ -25,7 +25,7 @@ import type { AgentProvider } from "../../../lib/api/agent-providers";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
 import { ModelProvidersList } from "./model-providers-list";
-import { expandCard } from "../../../lib/test-dom";
+import { expandCard, startsWith } from "../../../lib/test-dom";
 
 const CLAUDE: SetupHarnessTool = { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true };
 const CODEX: SetupHarnessTool = { id: "codex-cli", display: "Codex CLI", has_gateway: true, has_login: false, enabled: true };
@@ -73,7 +73,7 @@ describe("ModelProvidersList", () => {
     await expandCard(M.TITLE);
     expect(await screen.findByText(M.EMPTY_TITLE)).toBeInTheDocument();
     expect(screen.getByText(M.EMPTY_BODY)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: M.TITLE })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: startsWith(M.TITLE) })).toBeInTheDocument();
     expect(screen.getByText(MODEL_LEDE)).toBeInTheDocument();
     // No A9 notice over an empty list, even with agents turned on.
     expect(screen.queryByText(M.HARNESS_UNSERVED("Codex CLI"))).toBeNull();

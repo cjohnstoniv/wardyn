@@ -8,9 +8,10 @@
 // breaks the 744px viewport e2e pin (settings-compact-viewport.spec.ts) — see
 // that spec's own comment for the other half of this proof.
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CollapsibleCard } from "./collapsible-card";
+import { startsWith } from "../../lib/test-dom";
 
 describe("CollapsibleCard", () => {
   it("collapsed by default: shows the title and summary, not the body", () => {
@@ -19,10 +20,30 @@ describe("CollapsibleCard", () => {
         <p>Full detail</p>
       </CollapsibleCard>,
     );
-    expect(screen.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: startsWith("Host"), level: 3 })).toBeVisible();
     expect(screen.getByText("Runs default to Vault")).toBeVisible();
     expect(screen.queryByText("Full detail")).not.toBeInTheDocument();
     expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // review FINAL-PR-1329-r2.md R2-M1: an `aria-label` on the heading is what
+  // this card is not allowed to do — it makes NVDA/VoiceOver/TalkBack replace
+  // the heading's announced content with the label, dropping the summary and
+  // the expanded state from heading navigation even though the button's own
+  // name (and Tab order) still carry them. The APG accordion example puts no
+  // label on the `<h3>`; its name comes from its one child, the button.
+  it("the heading takes its name from the button inside it, with no aria-label override", () => {
+    render(
+      <CollapsibleCard title="Host" summary="Runs default to Vault">
+        <p>Full detail</p>
+      </CollapsibleCard>,
+    );
+    const heading = screen.getByRole("heading", { level: 3 });
+    expect(heading).not.toHaveAttribute("aria-label");
+    // The summary is a genuine DESCENDANT of the heading, not swapped out by
+    // a label — proven by finding it scoped inside the heading itself.
+    expect(within(heading).getByText("Runs default to Vault")).toBeVisible();
+    expect(screen.getByRole("heading", { name: startsWith("Host") })).toBe(heading);
   });
 
   it("a click expands the body and flips aria-expanded, another click collapses it", async () => {

@@ -109,9 +109,15 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
     }
     // Every heading is still there — expanding one card never displaced or
-    // unmounted another.
+    // unmounted another. A prefix regex, not a plain substring (review
+    // R2-M1): the heading's own name is now title+summary, same as the
+    // button's, since it carries no `aria-label` override, and a plain
+    // substring match on "Model provider" would also hit "Model providers"'
+    // own heading, or on "Model providers" would also hit its expanded
+    // body's unrelated `<h4>` empty-state heading ("No model providers
+    // yet").
     for (const title of ["Host", "Branding", "Model providers", "Model provider", "Workspace providers", "User drives", "Admin SSH keys"]) {
-      await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: new RegExp(`^${title}( |$)`), level: 3 })).toBeVisible();
     }
   });
 });

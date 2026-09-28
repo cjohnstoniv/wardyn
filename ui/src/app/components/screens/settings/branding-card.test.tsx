@@ -16,7 +16,7 @@ vi.mock("../../../lib/api/branding", () => ({
 import { ThemeProvider } from "../../wardyn/theme-provider";
 import { BrandingCard } from "./branding-card";
 import { BRANDING } from "../../../lib/branding-copy";
-import { expandCard } from "../../../lib/test-dom";
+import { expandCard, startsWith } from "../../../lib/test-dom";
 
 function renderCard() {
   return render(
@@ -57,7 +57,7 @@ afterEach(() => {
 describe("Branding card (#1125)", () => {
   it("renders the canon heading, lede and labels", async () => {
     await validDraft();
-    expect(screen.getByRole("heading", { name: BRANDING.TITLE })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: startsWith(BRANDING.TITLE) })).toBeInTheDocument();
     expect(screen.getByText(BRANDING.LEDE)).toBeInTheDocument();
     expect(screen.getByText(norm(BRANDING.LOGO_HINT))).toBeInTheDocument();
     expect(screen.getByText(BRANDING.LINK_HINT)).toBeInTheDocument();
