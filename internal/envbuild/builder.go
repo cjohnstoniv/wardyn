@@ -3,18 +3,14 @@
 
 //go:build docker
 
-// Package envbuild converts a devcontainer.json repository into a runnable
-// workspace image by driving the coder/envbuilder container as a Docker
-// container, keeping envbuilder out of the main module's dependency tree.
-// A build has two stages: ENVBUILDER clones the repo and builds the
-// devcontainer image in an untrusted-code sandbox, delivering it by PUSHING
-// to the configured OCI registry (fails closed with no registry). FINALIZE
-// then layers Wardyn's runner tools onto that image via a host-daemon
-// FROM + COPY build; FinalizeBase exposes that stage alone as the
-// Bring-Your-Own-Image path. FINALIZE runs outside every confinement tier,
-// so it is wrap-ONLY: bases with Docker ONBUILD triggers are refused by
-// preflight (assertWrapSafeBase). See docs/ENVBUILD.md for the ENVBUILDER_*
-// environment contract.
+// Package envbuild converts a devcontainer.json repository into a runnable workspace image by
+// driving the coder/envbuilder container as a Docker container, keeping envbuilder out of the main
+// module's dependency tree. A build has two stages: envbuilder clones the repo and builds the
+// devcontainer image in an untrusted-code sandbox, delivering it by pushing to the configured OCI
+// registry (fails closed with no registry). Finalize then layers Wardyn's runner tools onto that
+// image via a host-daemon FROM+COPY build; FinalizeBase exposes that stage alone as the
+// Bring-Your-Own-Image path. Finalize runs outside every confinement tier, so it is wrap-only: bases
+// with Docker ONBUILD triggers are refused by preflight (assertWrapSafeBase). See docs/ENVBUILD.md.
 package envbuild
 
 import (
@@ -41,60 +37,48 @@ import (
 )
 
 const (
-	// defaultEnvbuilderImage is the upstream envbuilder release image, pinned
-	// by tag AND digest so the default cannot drift. Override via
-	// Builder.EnvbuilderImage for air-gapped or newer-pin setups.
+	// defaultEnvbuilderImage is the upstream envbuilder release image, pinned by tag AND digest so the
+	// default cannot drift; override via Builder.EnvbuilderImage for air-gapped or newer-pin setups.
 	defaultEnvbuilderImage = "ghcr.io/coder/envbuilder:1.3.0@sha256:b34ade2fb90a8536df76e7a15c6dd8c6352d0ae835a187b13467fa0c8a71e280"
 
-	// defaultBuildTimeout caps runaway builds so a stuck git-clone or package
-	// download does not hold a container slot indefinitely.
+	// defaultBuildTimeout caps runaway builds so a stuck git-clone or package download doesn't hold a container slot indefinitely.
 	defaultBuildTimeout = 30 * time.Minute
 
-	// defaultBuildNetwork is the network mode for the build container when none
-	// is configured; "none" denies untrusted build code any reachability.
+	// defaultBuildNetwork is the network mode when none is configured; "none" denies untrusted build code any reachability.
 	defaultBuildNetwork = "none"
 
-	// Default resource caps for the build container; bound the blast radius of
-	// untrusted build code and are always applied.
+	// Default resource caps for the build container; bound the blast radius of untrusted build code and are always applied.
 	defaultBuildMemoryBytes = int64(4) << 30        // 4 GiB
 	defaultBuildNanoCPUs    = int64(2) * 1000000000 // 2.0 CPUs (1e9 == 1 CPU)
 	defaultBuildPidsLimit   = int64(2048)
 
-	// maxBuildInputLen bounds caller-supplied string inputs (URL/ref/path/tag)
-	// to defeat argument-smuggling specs before they reach envbuilder/git.
+	// maxBuildInputLen bounds caller-supplied string inputs (URL/ref/path/tag) to defeat argument-smuggling specs before they reach envbuilder/git.
 	maxBuildInputLen = 2048
 )
 
-// Environment variables that tune the build sandbox; Builder fields take
-// precedence when set.
+// Environment variables that tune the build sandbox; Builder fields take precedence when set.
 const (
 	envBuildNetwork  = "WARDYN_ENVBUILD_BUILD_NETWORK"
 	envBuildMemoryMB = "WARDYN_ENVBUILD_BUILD_MEMORY_MB"
 	envBuildCPUs     = "WARDYN_ENVBUILD_BUILD_CPUS"
 	envMaxContextMB  = "WARDYN_ENVBUILD_MAX_CONTEXT_MB"
 
-	// envToolsDir points at the host directory holding the runner tool binaries
-	// the finalize stage layers onto the built image (see Builder.ToolsDir).
+	// envToolsDir points at the host directory holding the runner tool binaries the finalize stage layers onto the built image (see Builder.ToolsDir).
 	envToolsDir = "WARDYN_ENVBUILD_TOOLS_DIR"
 
-	// envPushedRef overrides the repository ADDRESS the finalize stage pulls
-	// the pushed base from, when the host daemon reaches the same registry
-	// at a different address than the build container (see docs/ENVBUILD.md).
-	// It names an address only — the per-build tag is always appended on top.
+	// envPushedRef overrides the repository ADDRESS the finalize stage pulls the pushed base from,
+	// when the host daemon reaches the registry differently than the build container (see
+	// docs/ENVBUILD.md); it names an address only — the per-build tag is always appended on top.
 	envPushedRef = "WARDYN_ENVBUILD_PUSHED_REF"
 
-	// envRegistryInsecure opts envbuilder's registry traffic out of TLS
-	// verification (ENVBUILDER_INSECURE), a blanket toggle not scoped to one
-	// host; off by default so a real registry is never silently unverified.
+	// envRegistryInsecure opts envbuilder's registry traffic out of TLS verification
+	// (ENVBUILDER_INSECURE), a blanket toggle not scoped to one host; off by default.
 	envRegistryInsecure = "WARDYN_ENVBUILD_REGISTRY_INSECURE"
 )
 
-// requiredTools is the SINGLE canonical declaration of the Wardyn runner tools
-// that MUST be present in a built/wrapped image for the runner to exec, record,
-// verify, and broker git into it (H5); every gate in this package consumes this
-// list rather than re-hardcoding its own subset. The two shell sites
-// (agent-run --selftest, ci-run.sh) cannot import this Go slice and keep their
-// own hardcoded checks.
+// requiredTools is the single canonical declaration of the Wardyn runner tools that must be present
+// in a built/wrapped image for the runner to exec, record, verify, and broker git into it; every gate
+// in this package consumes this list (the shell sites agent-run --selftest/ci-run.sh keep their own hardcoded checks).
 var requiredTools = []string{
 	"agent-run",         // task entrypoint the runner execs
 	"agent-run-lib.sh",  // sourced by agent-run under `set -euo pipefail` (load-bearing)
@@ -102,23 +86,20 @@ var requiredTools = []string{
 	"wardyn-git-helper", // brokered-token git credential helper
 }
 
-// Builder drives coder/envbuilder as a container to turn a devcontainer.json
-// repository into a local workspace image.
+// Builder drives coder/envbuilder as a container to turn a devcontainer.json repository into a local workspace image.
 type Builder struct {
 	// cli is the Docker API client; set by New / newWithClient.
 	cli        envbuilderDockerAPI
 	liveBuilds liveBuildTracker // in-flight build container IDs; see reaper.go
 
-	// EnvbuilderImage is the envbuilder OCI image reference to use.
-	// Defaults to defaultEnvbuilderImage.
+	// EnvbuilderImage is the envbuilder OCI image reference to use. Defaults to defaultEnvbuilderImage.
 	EnvbuilderImage string
 
-	// CacheRepo is the registry repo envbuilder pushes to; the ONLY delivery
-	// path (no Docker socket mounted). Empty fails closed.
+	// CacheRepo is the registry repo envbuilder pushes to; the only delivery path (no Docker socket mounted). Empty fails closed.
 	CacheRepo string
 
-	// ToolsDir is the host dir holding Wardyn's runner tools (requiredTools);
-	// finalize COPYs them onto the image PATH (H5). Empty => WARDYN_ENVBUILD_TOOLS_DIR.
+	// ToolsDir is the host dir holding Wardyn's runner tools (requiredTools); finalize COPYs them onto
+	// the image PATH. Empty => WARDYN_ENVBUILD_TOOLS_DIR.
 	ToolsDir string
 
 	// DefaultLogSink receives build output when a call passes no per-call sink.
@@ -127,12 +108,10 @@ type Builder struct {
 	// BuildTimeout caps total build time. Zero uses defaultBuildTimeout.
 	BuildTimeout time.Duration
 
-	// --- Build-sandbox hardening: these knobs bound the blast radius of
-	// UNTRUSTED repo-controlled build code and default to secure values. ---
+	// --- Build-sandbox hardening: these knobs bound the blast radius of untrusted repo-controlled build code and default to secure values. ---
 
-	// BuildNetwork is the network mode for the build container. Empty =>
-	// defaultBuildNetwork ("none") or WARDYN_ENVBUILD_BUILD_NETWORK; opting in
-	// also gives the untrusted RUN steps that same network access.
+	// BuildNetwork is the network mode for the build container. Empty => defaultBuildNetwork ("none")
+	// or WARDYN_ENVBUILD_BUILD_NETWORK; opting in also gives the untrusted RUN steps that same network access.
 	BuildNetwork string
 }
 
@@ -140,17 +119,13 @@ type Builder struct {
 type BuildSpec struct {
 	// RepoURL is the git URL envbuilder will clone (ENVBUILDER_GIT_URL).
 	RepoURL string
-	// Ref is the git branch/tag/SHA to check out (ENVBUILDER_GIT_REF).
-	// Optional; envbuilder default applies when empty.
+	// Ref is the git branch/tag/SHA to check out (ENVBUILDER_GIT_REF); optional, envbuilder default applies when empty.
 	Ref string
-	// DevcontainerPath is the path inside the repo to devcontainer.json
-	// (ENVBUILDER_DEVCONTAINER_PATH). Optional.
+	// DevcontainerPath is the path inside the repo to devcontainer.json (ENVBUILDER_DEVCONTAINER_PATH). Optional.
 	DevcontainerPath string
-	// OutputImageTag is the local Docker image reference the FINALIZE stage
-	// tags; Build returns this tag for runner.SandboxSpec.Image.
+	// OutputImageTag is the local Docker image reference the finalize stage tags; Build returns this tag for runner.SandboxSpec.Image.
 	OutputImageTag string
-	// LogSink receives build log bytes; falls back to Builder.DefaultLogSink,
-	// else discarded.
+	// LogSink receives build log bytes; falls back to Builder.DefaultLogSink, else discarded.
 	LogSink io.Writer
 }
 
@@ -179,10 +154,9 @@ func newWithClient(cli envbuilderDockerAPI, envbuilderImage, cacheRepo string) *
 	}
 }
 
-// Build runs envbuilder for the given spec, then finalizes the pushed base
-// image with Wardyn's runner tools, returning spec.OutputImageTag on success.
-// Fails closed with no CacheRepo or a non-zero exit code; the build container
-// is always force-removed on exit, including on cancellation/timeout.
+// Build runs envbuilder for the given spec, then finalizes the pushed base image with Wardyn's
+// runner tools, returning spec.OutputImageTag on success. Fails closed with no CacheRepo or a
+// non-zero exit code; the build container is always force-removed on exit, including on cancellation/timeout.
 func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, err error) {
 	if spec.OutputImageTag == "" {
 		return "", fmt.Errorf("envbuild: BuildSpec.OutputImageTag is required")
@@ -197,20 +171,17 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 	return b.runBuildAndFinalize(ctx, buildEnv(spec, pushRepo), nil, nil, "", spec.LogSink, spec.OutputImageTag, buildTag)
 }
 
-// runBuildAndFinalize drives the container lifecycle shared by Build and
-// BuildFromDevcontainerFiles: preflight, timeout, create/start/wait,
-// always-force-remove, optional log streaming, and finalize. contextTar, when
-// non-nil, is streamed into the container at contextTarDest before start (a
-// bind mount cannot carry it). buildTag is this build's per-build push tag,
-// pulled back via pushedBaseRef so concurrent builds on one CacheRepo never
-// collide.
+// runBuildAndFinalize drives the container lifecycle shared by Build and BuildFromDevcontainerFiles:
+// preflight, timeout, create/start/wait, always-force-remove, optional log streaming, and finalize.
+// contextTar, when non-nil, is streamed into the container at contextTarDest before start (a bind
+// mount cannot carry it). buildTag is this build's per-build push tag, pulled back via pushedBaseRef
+// so concurrent builds on one CacheRepo never collide.
 func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, contextTar io.Reader, contextTarDest string, logSink io.Writer, outputTag, buildTag string) (string, error) {
 	// Registry PUSH is the only delivery path; fail closed with no registry set.
 	if err := b.requireCacheRepo(); err != nil {
 		return "", err
 	}
-	// Preflight the finalize tool sources so a doomed build fails fast, not
-	// after minutes of building.
+	// Preflight the finalize tool sources so a doomed build fails fast, not after minutes of building.
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
 		return "", err
@@ -287,14 +258,12 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 			defer close(streamDone)
 			b.streamLogs(ctx, containerID, logSink)
 		}()
-		// Every return path must join this goroutine before returning: a
-		// caller reusing DefaultLogSink for the next build would otherwise
-		// race this build's still-writing streamLogs.
+		// Every return path must join this goroutine before returning: a caller reusing DefaultLogSink
+		// for the next build would otherwise race this build's still-writing streamLogs.
 		defer func() { <-streamDone }()
 	}
 
-	// Wait for the container to exit; v29 folds status+error into one
-	// ContainerWaitResult.
+	// Wait for the container to exit; v29 folds status+error into one ContainerWaitResult.
 	wait := b.cli.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
 	case <-ctx.Done():
@@ -313,25 +282,22 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		}
 	}
 
-	// Join before finalize writes the same sink below (else the two race);
-	// ContainerLogs closes on its own once the container stops, so this can't hang.
+	// Join before finalize writes the same sink below (else the two race); ContainerLogs closes on its
+	// own once the container stops, so this can't hang.
 	if streamDone != nil {
 		<-streamDone
 	}
 
-	// envbuilder has pushed the base to its per-build ref; layer Wardyn's
-	// runner tools onto it (H5). pullParent=true: the base was just pushed, so
-	// finalize must pull it fresh.
+	// envbuilder has pushed the base to its per-build ref; layer Wardyn's runner tools onto it.
+	// pullParent=true: the base was just pushed, so finalize must pull it fresh.
 	baseRef := b.pushedBaseRef(buildTag)
 	defer b.untagPerBuildBase(ctx, baseRef)
 	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, true)
 }
 
-// untagPerBuildBase drops the local tag finalize pulled its FROM base under
-// (docker rmi only untags; shared layers and the output tag stay intact),
-// else every build leaves a tag pinning a base image against prune.
-// Best-effort, run on the failed path too, and detached from ctx (the common
-// failure is the deadline expiring) with its own short bound.
+// untagPerBuildBase drops the local tag finalize pulled its FROM base under (docker rmi only untags;
+// shared layers and the output tag stay intact), else every build leaves a tag pinning a base image
+// against prune. Best-effort, run on the failed path too, and detached from ctx with its own short bound.
 func (b *Builder) untagPerBuildBase(ctx context.Context, baseRef string) {
 	if strings.TrimSpace(baseRef) == "" {
 		return
@@ -344,24 +310,19 @@ func (b *Builder) untagPerBuildBase(ctx context.Context, baseRef string) {
 	}
 }
 
-// perBuildBaseUntagTimeout bounds the best-effort untag above: long enough for
-// a daemon round-trip, short enough that a wedged daemon cannot hold a build.
+// perBuildBaseUntagTimeout bounds the best-effort untag above: long enough for a daemon round-trip, short enough that a wedged daemon cannot hold a build.
 const perBuildBaseUntagTimeout = 30 * time.Second
 
-// FinalizeBase is the Bring-Your-Own-Image path: wrap an arbitrary
-// user-supplied base image with Wardyn's runner tools, with no untrusted-code
-// build container and no registry push — just a host-side FROM+COPY, so it
-// is wrap-ONLY (assertWrapSafeBase refuses ONBUILD triggers). The base is
-// pulled only if absent, so a pre-pulled private image needs no registry-auth
-// wiring. baseRef may be a mutable tag or digest-pinned; pinning is honored
-// but not enforced. logSink nil falls back to Builder.DefaultLogSink.
+// FinalizeBase is the Bring-Your-Own-Image path: wrap an arbitrary user-supplied base image with
+// Wardyn's runner tools, with no untrusted-code build container and no registry push — just a
+// host-side FROM+COPY, so it is wrap-only (assertWrapSafeBase refuses ONBUILD triggers). The base is
+// pulled only if absent; baseRef may be a mutable tag or digest-pinned (pinning honored, not enforced).
 func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
 		return "", err
 	}
-	// Same timeout ceiling as runBuildAndFinalize, needed since a caller may
-	// detach from request cancellation (e.g. launchRecordRun).
+	// Same timeout ceiling as runBuildAndFinalize, needed since a caller may detach from request cancellation.
 	timeout := b.BuildTimeout
 	if timeout <= 0 {
 		timeout = defaultBuildTimeout
@@ -375,18 +336,15 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, l
 	if logSink == nil {
 		logSink = b.DefaultLogSink
 	}
-	// pullParent=false: ensureImage already made the base present locally; a
-	// registry pull here would fail for a local-only or digest-pinned user image.
+	// pullParent=false: ensureImage already made the base present locally; a registry pull here would fail for a local-only or digest-pinned user image.
 	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, false)
 }
 
-// hardenedHostConfig builds the Docker HostConfig for the build container:
-// locked-down network (default "none"), dropped privileges/capabilities,
-// resource caps, and an optional writable-layer size cap. No Docker socket is
-// ever mounted.
+// hardenedHostConfig builds the Docker HostConfig for the build container: locked-down network
+// (default "none"), dropped privileges/capabilities, resource caps, and an optional writable-layer
+// size cap. No Docker socket is ever mounted.
 //
-// Returns an error when an env-tunable cap is unparseable, rather than
-// silently substituting a default.
+// Returns an error when an env-tunable cap is unparseable, rather than silently substituting a default.
 func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 	mem, err := b.effectiveMemoryBytes()
 	if err != nil {
@@ -404,14 +362,11 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 	hostCfg := &container.HostConfig{
 		AutoRemove: false, // we remove explicitly via defer to always force-remove.
 
-		// Default "none" denies untrusted RUN/feature code any reachability;
-		// opting in (Builder.BuildNetwork) also gives RUN steps that network.
+		// Default "none" denies untrusted RUN/feature code any reachability; opting in (Builder.BuildNetwork) also gives RUN steps that network.
 		NetworkMode: container.NetworkMode(b.effectiveBuildNetwork()),
 
-		// Drop ALL privileges, then add back only the file-ownership caps
-		// envbuilder/kaniko needs to unpack base layers and apply devcontainer
-		// features into a rootfs (chown/chmod/setuid bits). Network/syscall
-		// caps stay dropped, and no-new-privileges blocks setuid escalation.
+		// Drop all privileges, then add back only the file-ownership caps envbuilder/kaniko needs to
+		// unpack base layers and apply devcontainer features (chown/chmod/setuid bits); no-new-privileges blocks setuid escalation.
 		SecurityOpt: []string{"no-new-privileges"},
 		CapDrop:     []string{"ALL"},
 		CapAdd: []string{
@@ -419,8 +374,7 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 			"SETGID", "SETUID", "SETFCAP", "MKNOD",
 		},
 
-		// Resource caps bound the DoS / blast-radius surface of untrusted build
-		// code. Always applied (universally supported by the daemon).
+		// Resource caps bound the DoS/blast-radius surface of untrusted build code. Always applied.
 		Resources: container.Resources{
 			Memory:     mem,
 			MemorySwap: mem, // == Memory disables swap growth on top of the RAM cap
@@ -429,8 +383,7 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 		},
 	}
 
-	// Optional disk/context bound on the writable layer. OFF by default:
-	// StorageOpt "size" needs a quota-capable storage driver, so operators opt in.
+	// Optional disk/context bound on the writable layer. Off by default: StorageOpt "size" needs a quota-capable storage driver, so operators opt in.
 	if maxCtx > 0 {
 		hostCfg.StorageOpt = map[string]string{"size": strconv.FormatInt(maxCtx, 10)}
 	}
@@ -438,8 +391,7 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 	return hostCfg, nil
 }
 
-// effectiveBuildNetwork resolves the build-container network mode: the
-// Builder.BuildNetwork field, else WARDYN_ENVBUILD_BUILD_NETWORK, else "none".
+// effectiveBuildNetwork resolves the build-container network mode: the Builder.BuildNetwork field, else WARDYN_ENVBUILD_BUILD_NETWORK, else "none".
 func (b *Builder) effectiveBuildNetwork() string {
 	if v := strings.TrimSpace(b.BuildNetwork); v != "" {
 		return v
@@ -450,9 +402,8 @@ func (b *Builder) effectiveBuildNetwork() string {
 	return defaultBuildNetwork
 }
 
-// effectiveRegistryInsecure resolves whether envbuilder should skip TLS
-// verification (ENVBUILDER_INSECURE). Unset/empty is false; unparseable is an
-// ERROR, never a silent false.
+// effectiveRegistryInsecure resolves whether envbuilder should skip TLS verification
+// (ENVBUILDER_INSECURE). Unset/empty is false; unparseable is an error, never a silent false.
 func (b *Builder) effectiveRegistryInsecure() (bool, error) {
 	v := strings.TrimSpace(os.Getenv(envRegistryInsecure))
 	if v == "" {
@@ -502,8 +453,7 @@ func (b *Builder) effectiveMaxContextBytes() (int64, error) {
 	return 0, nil
 }
 
-// envInt64 parses a non-negative int64 from env key. Unset/empty is 0 ("not
-// configured"); a present but unparseable/negative value is an ERROR, never 0.
+// envInt64 parses a non-negative int64 from env key. Unset/empty is 0 ("not configured"); a present but unparseable/negative value is an error, never 0.
 func envInt64(key string) (int64, error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -516,8 +466,7 @@ func envInt64(key string) (int64, error) {
 	return n, nil
 }
 
-// envFloat parses a non-negative float64 from env key. Same contract as
-// envInt64: unset/empty is 0 ("not configured"), bad input is an error.
+// envFloat parses a non-negative float64 from env key. Same contract as envInt64: unset/empty is 0, bad input is an error.
 func envFloat(key string) (float64, error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -530,13 +479,11 @@ func envFloat(key string) (float64, error) {
 	return f, nil
 }
 
-// validateBuildInput enforces a scheme allowlist on the caller-supplied git
-// URL/ref: file://, ext::<cmd>, and ssh:// transports enable host file
-// disclosure, RCE, or key abuse. Only https:// and git:// clones are
-// permitted; refs must be sane git ref chars.
+// validateBuildInput enforces a scheme allowlist on the caller-supplied git URL/ref: file://,
+// ext::<cmd>, and ssh:// transports enable host file disclosure, RCE, or key abuse. Only https://
+// and git:// clones are permitted; refs must be sane git ref chars.
 func validateBuildInput(spec BuildSpec) error {
-	// Bound every caller-supplied string so a pathological spec cannot smuggle a
-	// huge / crafted value into envbuilder's environment or git's argv.
+	// Bound every caller-supplied string so a pathological spec cannot smuggle a huge/crafted value into envbuilder's environment or git's argv.
 	for _, f := range []struct{ name, val string }{
 		{"RepoURL", spec.RepoURL},
 		{"Ref", spec.Ref},
@@ -548,8 +495,7 @@ func validateBuildInput(spec BuildSpec) error {
 		}
 	}
 
-	// The output tag reaches envbuilder's env and the finalize Dockerfile, so it
-	// must pass the same validateGeneratedTag check as the generated-files path.
+	// The output tag reaches envbuilder's env and the finalize Dockerfile, so it must pass the same validateGeneratedTag check as the generated-files path.
 	if err := validateGeneratedTag(spec.OutputImageTag); err != nil {
 		return err
 	}
@@ -567,8 +513,7 @@ func validateBuildInput(spec BuildSpec) error {
 		return fmt.Errorf("envbuild: RepoURL scheme not allowed (%q); only https:// and git:// "+
 			"remote clones are permitted (file://, ssh://, and ext:: transports are rejected)", u)
 	}
-	// Reject `ext::`/`fd::`/any `<transport>::` helper smuggled past the prefix
-	// check, plus the scp-like `user@host:path` form git treats as ssh.
+	// Reject `ext::`/`fd::`/any `<transport>::` helper smuggled past the prefix check, plus the scp-like `user@host:path` form git treats as ssh.
 	if strings.Contains(u, "::") {
 		return fmt.Errorf("envbuild: RepoURL must not contain a git transport-helper (\"::\") sequence")
 	}
@@ -577,8 +522,7 @@ func validateBuildInput(spec BuildSpec) error {
 			return fmt.Errorf("envbuild: Ref %q contains illegal characters or a leading dash", r)
 		}
 	}
-	// The devcontainer path is read relative to the cloned repo root; constrain
-	// it to repo-relative with no ".." traversal so it cannot escape the tree.
+	// The devcontainer path is read relative to the cloned repo root; constrain it to repo-relative with no ".." traversal so it cannot escape the tree.
 	if p := spec.DevcontainerPath; p != "" {
 		if err := validateRepoRelPath("DevcontainerPath", p); err != nil {
 			return err
@@ -587,9 +531,8 @@ func validateBuildInput(spec BuildSpec) error {
 	return nil
 }
 
-// validateRepoRelPath ensures a caller-supplied path stays inside the cloned
-// repo: relative, no ".." traversal, no NUL/whitespace/leading-dash. Symlink
-// resolution can't be checked host-side; see the residual note in docs/ENVBUILD.md.
+// validateRepoRelPath ensures a caller-supplied path stays inside the cloned repo: relative, no ".."
+// traversal, no NUL/whitespace/leading-dash. Symlink resolution can't be checked host-side; see docs/ENVBUILD.md.
 func validateRepoRelPath(field, p string) error {
 	if strings.ContainsAny(p, " \t\r\n\x00") {
 		return fmt.Errorf("envbuild: %s %q contains illegal whitespace/control characters", field, p)
@@ -614,10 +557,9 @@ func validateRepoRelPath(field, p string) error {
 	return nil
 }
 
-// buildEnv constructs the envbuilder container environment from a BuildSpec
-// (pure, so testable without a daemon). ENVBUILDER_INIT_SCRIPT="exit 0" makes
-// the container exit after the push; without it envbuilder's default init
-// ("sleep infinity") runs forever and ContainerWait hangs until timeout.
+// buildEnv constructs the envbuilder container environment from a BuildSpec (pure, so testable
+// without a daemon). ENVBUILDER_INIT_SCRIPT="exit 0" makes the container exit after the push; without
+// it envbuilder's default init ("sleep infinity") runs forever and ContainerWait hangs until timeout.
 func buildEnv(spec BuildSpec, cacheRepo string) []string {
 	env := []string{
 		"ENVBUILDER_GIT_URL=" + spec.RepoURL,
@@ -636,9 +578,9 @@ func buildEnv(spec BuildSpec, cacheRepo string) []string {
 	return env
 }
 
-// streamLogs attaches to the build container's log stream and copies to w.
-// Best-effort: errors are silently swallowed. No TTY means ContainerLogs
-// multiplexes stdout/stderr behind an 8-byte frame header; stdcopy strips it.
+// streamLogs attaches to the build container's log stream and copies to w. Best-effort: errors are
+// silently swallowed. No TTY means ContainerLogs multiplexes stdout/stderr behind an 8-byte frame
+// header; stdcopy strips it.
 func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Writer) {
 	rc, err := b.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
@@ -652,11 +594,9 @@ func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Write
 	_, _ = stdcopy.StdCopy(w, w, rc)
 }
 
-// ensureImage pulls ref if not already present locally; fails closed rather
-// than building with an absent image. A digest-pinned ref is resolved by
-// ImageInspect, not a list scan: the daemon reports the fully-qualified
-// `repo:tag@sha256:…` spelling under neither RepoTags nor RepoDigests
-// verbatim, so a naive scan would re-pull a pre-pulled pinned base.
+// ensureImage pulls ref if not already present locally; fails closed rather than building with an
+// absent image. A digest-pinned ref is resolved by ImageInspect, not a list scan: the daemon's
+// `repo:tag@sha256:…` spelling appears under neither RepoTags nor RepoDigests verbatim.
 func (b *Builder) ensureImage(ctx context.Context, ref string) error {
 	if strings.Contains(ref, "@sha256:") {
 		_, err := b.cli.ImageInspect(ctx, ref)
@@ -687,8 +627,7 @@ func (b *Builder) ensureImage(ctx context.Context, ref string) error {
 	return dockerutil.PullImage(ctx, b.cli, ref, "envbuild")
 }
 
-// requireCacheRepo enforces that a registry repository is configured; without
-// one a build cannot deliver an image and must fail closed.
+// requireCacheRepo enforces that a registry repository is configured; without one a build cannot deliver an image and must fail closed.
 func (b *Builder) requireCacheRepo() error {
 	if strings.TrimSpace(b.CacheRepo) == "" {
 		return errors.New("envbuild: refusing to build: no cache/registry repo configured. " +
@@ -699,9 +638,8 @@ func (b *Builder) requireCacheRepo() error {
 	return nil
 }
 
-// validateToolsDir resolves the runner-tools directory (Builder.ToolsDir, else
-// WARDYN_ENVBUILD_TOOLS_DIR) and fails closed unless every required tool is
-// present (H5) — the build-contract preflight.
+// validateToolsDir resolves the runner-tools directory (Builder.ToolsDir, else WARDYN_ENVBUILD_TOOLS_DIR)
+// and fails closed unless every required tool is present — the build-contract preflight.
 func (b *Builder) validateToolsDir() (string, error) {
 	dir := strings.TrimSpace(b.ToolsDir)
 	if dir == "" {
@@ -726,11 +664,9 @@ func (b *Builder) validateToolsDir() (string, error) {
 	return dir, nil
 }
 
-// newPushRef returns a fresh per-build registry ref for this build's
-// envbuilder push, plus the bare tag alone. Each build mints its own tag so
-// concurrent builds sharing one CacheRepo never collide on a shared :latest
-// and pull each other's push. Empty CacheRepo returns ("", ""); the caller's
-// requireCacheRepo fails the build closed before either value is used.
+// newPushRef returns a fresh per-build registry ref for this build's envbuilder push, plus the bare
+// tag alone. Each build mints its own tag so concurrent builds sharing one CacheRepo never collide on
+// a shared :latest. Empty CacheRepo returns ("", ""); requireCacheRepo fails the build closed first.
 func (b *Builder) newPushRef() (pushRepo, tag string) {
 	repo := strings.TrimSpace(b.CacheRepo)
 	if repo == "" {
@@ -740,11 +676,9 @@ func (b *Builder) newPushRef() (pushRepo, tag string) {
 	return repo + ":" + tag, tag
 }
 
-// pushedBaseRef is the registry reference the finalize stage pulls FROM: this
-// build's own per-build tag, resolved against whichever repository the host
-// daemon reaches that registry at. WARDYN_ENVBUILD_PUSHED_REF overrides only
-// the repository ADDRESS (see docs/ENVBUILD.md); buildTag is always appended
-// on top, preserving per-build isolation.
+// pushedBaseRef is the registry reference the finalize stage pulls FROM: this build's own per-build
+// tag, resolved against whichever repository the host daemon reaches that registry at.
+// WARDYN_ENVBUILD_PUSHED_REF overrides only the repository address; buildTag is always appended on top.
 func (b *Builder) pushedBaseRef(buildTag string) string {
 	repo := strings.TrimSpace(os.Getenv(envPushedRef))
 	if repo == "" {
@@ -756,17 +690,14 @@ func (b *Builder) pushedBaseRef(buildTag string) string {
 	return repo + ":" + buildTag
 }
 
-// finalizeImage runs the second-stage build (H5): FROM the pushed image, COPY
-// Wardyn's runner tools onto PATH, tag as outputTag. Only FROM+COPY on the
-// host daemon — no untrusted RUN — so it needs no build sandbox. pullBase
-// pulls fresh before the wrap (devcontainer path); BYOI passes false since
-// ensureImage already made the base present.
+// finalizeImage runs the second-stage build: FROM the pushed image, COPY Wardyn's runner tools onto
+// PATH, tag as outputTag. Only FROM+COPY on the host daemon — no untrusted RUN — so it needs no build
+// sandbox. pullBase pulls fresh before the wrap; BYOI passes false since ensureImage already made the base present.
 func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullBase bool) (string, error) {
 	if strings.ContainsAny(baseRef, " \t\r\n\x00") {
 		return "", fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
 	}
-	// Pull here (not via ImageBuild's PullParent) so the ONBUILD preflight below
-	// inspects the exact image the wrap build resolves as FROM (avoids TOCTOU).
+	// Pull here (not via ImageBuild's PullParent) so the ONBUILD preflight below inspects the exact image the wrap build resolves as FROM (avoids TOCTOU).
 	if pullBase {
 		if err := dockerutil.PullImage(ctx, b.cli, baseRef, "envbuild"); err != nil {
 			return "", err
@@ -784,29 +715,25 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 		Dockerfile:  "Dockerfile",
 		Remove:      true,
 		ForceRemove: true,
-		// The base already passed the ONBUILD preflight above; re-pulling here
-		// would build from an image the preflight never saw.
+		// The base already passed the ONBUILD preflight above; re-pulling here would build from an image the preflight never saw.
 		PullParent: false,
 	})
 	if err != nil {
 		return "", fmt.Errorf("envbuild: finalize image build (COPY runner tools): %w", err)
 	}
 	defer resp.Body.Close()
-	// ImageBuild returns nil even on failure; the error arrives as {"error":...}
-	// in the response stream, so draining it is how failure is detected.
+	// ImageBuild returns nil even on failure; the error arrives as {"error":...} in the response stream, so draining it is how failure is detected.
 	if err := drainBuildResponse(resp.Body, logSink); err != nil {
 		return "", fmt.Errorf("envbuild: finalize image build failed: %w", err)
 	}
 	return outputTag, nil
 }
 
-// assertWrapSafeBase enforces the wrap-only contract: wrapping adds layers,
-// it never EXECUTES base-controlled code on the host. A Docker ONBUILD
-// trigger fires host-side when the image is used as a FROM, so a hostile
-// BYOI base with `ONBUILD RUN curl … | sh` is build-time RCE; Docker cannot
-// suppress or report triggers, so refusing the base is the only fail-closed
-// move. Checking only the direct base suffices: ONBUILD fires one level down
-// and children don't inherit it.
+// assertWrapSafeBase enforces the wrap-only contract: wrapping adds layers, it never executes
+// base-controlled code on the host. A Docker ONBUILD trigger fires host-side when the image is used
+// as a FROM, so a hostile BYOI base with `ONBUILD RUN curl … | sh` is build-time RCE; Docker cannot
+// suppress or report triggers, so refusing the base is the only fail-closed move. Checking only the
+// direct base suffices: ONBUILD fires one level down and children don't inherit it.
 func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) error {
 	res, err := b.cli.ImageInspect(ctx, baseRef)
 	if err != nil {
@@ -823,9 +750,8 @@ func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) error 
 		"image instead", baseRef, len(res.Config.OnBuild), res.Config.OnBuild[0], baseRef)
 }
 
-// drainBuildResponse consumes the daemon's JSON build-output stream, forwarding
-// human-readable "stream" text to logSink (if any) and returning the first build
-// error reported in the stream.
+// drainBuildResponse consumes the daemon's JSON build-output stream, forwarding human-readable
+// "stream" text to logSink (if any) and returning the first build error reported in the stream.
 func drainBuildResponse(body io.Reader, logSink io.Writer) error {
 	dec := json.NewDecoder(body)
 	for {

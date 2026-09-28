@@ -7,13 +7,13 @@
 //
 // HONEST RESIDUAL: masking catches verbatim leakage only — base64/hex/encoded
 // or model-narrated representations are NOT caught. The unit of protection is
-// a RENDERING, not a credential: registering "Bearer sk-abc" does not mask a
-// bare "sk-abc", so it is the REGISTERING side's job to add every rendering a
-// credential can appear in (see upstreamProxy.maskValues in internal/egress).
+// a RENDERING, not a credential: registering "Bearer sk-abc" doesn't mask a
+// bare "sk-abc", so it's the REGISTERING side's job to add every rendering a
+// credential can appear in (see upstreamProxy.maskValues).
 //
-// Fail-CLOSED on masker panic: a recovered panic replaces the affected chunk
-// with the placeholder instead of forwarding it verbatim — this layer must
-// never emit raw, unmasked input bytes on a crash.
+// SECURITY (fail-closed): a recovered masker panic replaces the affected
+// chunk with the placeholder instead of forwarding it verbatim — this layer
+// must never emit raw, unmasked input bytes on a crash.
 package secretmask
 
 import (
@@ -310,13 +310,12 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 }
 
 // Masker returns a Masker over runID's combined corpus (per-run + global),
-// built ONCE per registry generation and shared thereafter — the accessor the
+// built ONCE per registry generation and shared thereafter — the accessor
 // masking hot paths use instead of NewMasker(Snapshot(id)), which clones and
-// sorts the whole set on every masked event (every PTY chunk, every audit
-// event).
+// sorts the whole set on every masked event.
 //
-// The returned Masker is immutable by contract, so handing the same one to
-// every caller is safe. A nil *Registry returns a zero Masker (masks nothing).
+// The returned Masker is immutable by contract, so sharing it across callers
+// is safe. A nil *Registry returns a zero Masker (masks nothing).
 func (r *Registry) Masker(runID uuid.UUID) Masker {
 	if r == nil {
 		return Masker{}
@@ -332,10 +331,10 @@ func (r *Registry) Masker(runID uuid.UUID) Masker {
 }
 
 // JSONVariantMasker returns a Masker over runID's corpus expanded with
-// JSONEscapedVariants — the set the audit recorder needs, since ev.Data is
-// JSON and a secret bearing a newline or quote lands there escaped. Cached on
-// the same generation as Masker, and built lazily since the expansion triples
-// the set and is O(n^2), so the PTY lane never pays for it.
+// JSONEscapedVariants, the set the audit recorder needs since ev.Data is JSON
+// and a secret bearing a newline or quote lands there escaped. Cached on the
+// same generation as Masker, built lazily since the expansion triples the
+// set and is O(n^2), so the PTY lane never pays for it.
 func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
 	if r == nil {
 		return Masker{}
@@ -350,9 +349,9 @@ func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
 	return r.rebuild(runID, true).variant
 }
 
-// rebuild derives runID's Maskers at the CURRENT generation and caches them.
-// It re-checks under the write lock: two masked events racing on a cold cache
-// would otherwise both build, and the second would overwrite a newer entry.
+// rebuild derives runID's Maskers at the CURRENT generation and caches them,
+// re-checking under the write lock: two masked events racing on a cold cache
+// would otherwise both build, the second overwriting a newer entry.
 func (r *Registry) rebuild(runID uuid.UUID, withVariant bool) *runMaskers {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -389,8 +388,8 @@ func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 //
 // The production caller evicts LATE, a grace period after the run goes
 // terminal: masking sites Snapshot lazily at use time, and the audit
-// recorder's finalize event happens after terminal — since this layer fails
-// OPEN by design, evicting early would unmask exactly that event.
+// recorder's finalize event happens after terminal. SECURITY: since this
+// layer fails OPEN by design, evicting early would unmask exactly that event.
 func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
@@ -436,14 +435,14 @@ func (r *Registry) RunIDs() []uuid.UUID {
 
 // JSONEscapedVariants returns snap plus, for each secret, its JSON-escaped
 // rendering as it appears INSIDE a JSON string value (an audit event's Data
-// field, an asciicast "o" event body) — a raw-value Masker misses a
-// multi-line SSH key's escaped newlines otherwise. Covers both JSON encoders
-// wardyn uses: Go's default json.Marshal (HTML-escaping on, audit ev.Data) and
-// SetEscapeHTML(false) (asciinema's cast bodies). No variant for a secret with
-// no JSON-special bytes; duplicates are dropped.
+// field, an asciicast "o" event body) — a raw-value Masker otherwise misses
+// a multi-line SSH key's escaped newlines. Covers both JSON encoders wardyn
+// uses: Go's default json.Marshal (HTML-escaping on) and SetEscapeHTML(false)
+// (asciinema). No variant for a secret with no JSON-special bytes;
+// duplicates dropped.
 //
-// ponytail: O(n²) de-dup over the snapshot, which holds a handful of secrets per
-// run; switch to a set only if a run ever registers thousands.
+// ponytail: O(n²) de-dup over the snapshot (a handful of secrets per run);
+// switch to a set only if a run ever registers thousands.
 func JSONEscapedVariants(snap [][]byte) [][]byte {
 	out := make([][]byte, len(snap), len(snap)*3)
 	copy(out, snap)
@@ -458,10 +457,9 @@ func JSONEscapedVariants(snap [][]byte) [][]byte {
 }
 
 // jsonStringEscape returns the bytes of s as they appear INSIDE a JSON string
-// (json.Marshal's output minus the surrounding quotes). escapeHTML selects the
+// (json.Marshal's output minus surrounding quotes). escapeHTML selects the
 // encoder mode: false matches asciinema's cast bytes, true matches Go's
-// default json.Marshal (audit ev.Data). ok=false only on encode failure or a
-// degenerate result.
+// default json.Marshal. ok=false only on encode failure or a degenerate result.
 func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -519,9 +517,9 @@ func NewMasker(secrets [][]byte) Masker {
 }
 
 // Secrets returns the masking set, longest-first, filtered to values of at
-// least MinLen (exactly the set Mask applies) — for a caller that needs the
-// corpus as well as the masking (api's liveMaskWriter) to read it off the
-// cached Masker instead of taking a second Snapshot.
+// least MinLen (exactly the set Mask applies), for a caller needing the
+// corpus as well as the masking to read it off the cached Masker instead of
+// taking a second Snapshot.
 //
 // The returned slices are the Masker's own; callers must READ them only.
 func (m Masker) Secrets() [][]byte { return m.secrets }
@@ -549,8 +547,8 @@ func (m Masker) Mask(p []byte) []byte {
 // ─── MaskingWriter ───────────────────────────────────────────────────────────
 
 // MaskingWriter wraps a downstream io.Writer and masks secret values in the
-// stream, even when a secret spans two adjacent Write calls (e.g. chunked PTY
-// or asciicast frames).
+// stream, even when a secret spans two adjacent Write calls (chunked PTY or
+// asciicast frames).
 //
 // Invariant: after each Write, it retains a tail of (maxSecretLen-1) bytes
 // from the masked buffer, prepended to the next chunk before masking again.

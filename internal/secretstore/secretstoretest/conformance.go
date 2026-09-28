@@ -321,6 +321,7 @@ func FlipCiphertext(pool *pgxpool.Pool) func(t *testing.T, owner, name string) {
 		}
 	}
 }
+
 // testEraseOwnerRemovesOwnRowsOnly: secretstore.EraseOwner over this store
 // removes every row of one owner and nothing of another owner's or the
 // operator's, and refuses the operator namespace outright.

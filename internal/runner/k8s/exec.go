@@ -31,43 +31,36 @@ const byoiImagePrefix = "wardyn-byoi/"
 const (
 	execWaitPollInterval = 1 * time.Second
 	// execWaitMaxProbeErrors mirrors docker's waitMaxProbeErrors BUDGET
-	// (~1 minute), not its raw number: docker polls at 200ms so 300 errors
-	// there is ~1 minute; this package polls at 1s, so the same ~1 minute
-	// budget is 60, not 300 (the copied literal carried
-	// docker's cadence-scaled count, not its time budget). A transient
-	// error is NOT "the agent exited" — it must not surface as one (see
-	// docker's identical comment on waitMaxProbeErrors).
+	// (~1 minute), not its raw number: docker polls at 200ms so 300 errors is
+	// ~1 minute there; this package polls at 1s, so the same budget is 60.
+	// A transient error is NOT "the agent exited" and must not surface as one.
 	execWaitMaxProbeErrors = 60
 )
 
 // notFoundExitCode is what Wait reports when the pod vanishes without ever
 // showing a terminated exec status ("pod NotFound is authoritative
-// completion" — the A0 contract correction). Non-zero (routes to FAILED, not
-// a false COMPLETED): most of the time this is our OWN KillSandbox having
-// already deleted the pod, in which case the run is already KILLED and this
-// value is never written (runs_lifecycle.go's completion-watcher CAS only
-// applies FROM RUNNING) — but on the rarer path where the pod disappeared for
-// some other reason (node drain, an external delete) while the run was still
-// RUNNING, reporting failure is the honest choice: Wardyn has no idea what
-// actually happened and must never claim a vanished sandbox as a false
-// success.
+// completion"). Non-zero (routes to FAILED, not a false COMPLETED): most of
+// the time this is our own KillSandbox having already deleted the pod, so the
+// run is already KILLED and this value is never written — but on the rarer
+// path where the pod disappeared for some other reason (node drain, an
+// external delete) while still RUNNING, reporting failure is the honest
+// choice: Wardyn must never claim a vanished sandbox as a false success.
 const notFoundExitCode = -1
 
 // Exec launches the agent process as an ephemeral container named
-// "wardyn-agent" (execContainerName) on the sandbox ref. THREE hard API
-// facts drive this shape (the A0 contract):
+// "wardyn-agent" (execContainerName) on the sandbox ref. THREE hard API facts
+// drive this shape:
 //   - the ephemeral container's OWN securityContext must carry the full
 //     restricted set — Pod Security Standards admission checks ephemeral
 //     containers, not just the pod;
 //   - it must NOT set Resources — the apiserver rejects a resource request on
 //     an ephemeral container (pod-level bounding only);
 //   - ephemeral containers are ADD-ONLY, so this is one-shot per ref: a
-//     second Exec (see errSecondExec) and a BYOI image (see errBYOIUnsupported,
-//     refused before the first) both fail closed with a clear error rather
-//     than a silent no-op or a stale id.
+//     second Exec and a BYOI image (refused before the first) both fail
+//     closed with a clear error rather than a silent no-op or a stale id.
 //
-// Env is copied from the pod's existing main container spec — ephemeral
-// containers inherit nothing — read from the live pod object, so this is
+// Env is copied from the pod's existing main container spec (ephemeral
+// containers inherit nothing), read from the live pod object, so this is
 // restart-safe (no in-memory state).
 func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, error) {
 	if len(argv) == 0 {
@@ -85,7 +78,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	}
 	// BYOI refusal BEFORE any ephemeral container is created — see
 	// errBYOIUnsupported's doc for why this must happen on the FIRST Exec
-	// call (the selftest), not merely the second.
+	// call, not merely the second.
 	if strings.HasPrefix(main.Image, byoiImagePrefix) {
 		return "", errBYOIUnsupported
 	}
@@ -110,20 +103,19 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 			Image:   main.Image,
 			Command: cmd,
 			Env:     main.Env, // copied verbatim: ephemeral containers inherit nothing
-			// The user drive AND the disk budget's scratch volumes, for the same
-			// reason as Env and read the same way — from the live pod. An ephemeral
-			// container inherits no mounts either, and the agent's real work happens
-			// HERE, not in the idle main container: without this the member's drive
-			// would be mounted into a container their agent never touches, and
-			// ephemeralScratchVolumes would bound a filesystem the agent does not
-			// write. Copying the main container's mounts rather than rebuilding them
-			// keeps the two in step by construction and cannot invent anything (the
-			// apiserver refuses a mount naming a volume the pod does not have).
-			// Those two sources are the only mounts that ever appear here —
-			// spec.Mounts is refused outright by CreateSandbox — and NONE of them may
-			// carry a subPath, which the apiserver forbids on an ephemeral container:
-			// this verbatim copy is what would turn one into a dispatch failure, and
-			// TestCreateSandbox_NoMountCarriesASubPath is the pin.
+			// The user drive AND the disk budget's scratch volumes, read the
+			// same way as Env — from the live pod. Ephemeral containers
+			// inherit no mounts either, and the agent's real work happens
+			// HERE, not in the idle main container: without this the
+			// member's drive would be mounted into a container the agent
+			// never touches, and ephemeralScratchVolumes would bound a
+			// filesystem it doesn't write. Copying rather than rebuilding
+			// keeps the two in step by construction (the apiserver refuses a
+			// mount naming a volume the pod lacks). These two sources are the
+			// only mounts here — spec.Mounts is refused outright by
+			// CreateSandbox — and none may carry a subPath, which the
+			// apiserver forbids on an ephemeral container:
+			// TestCreateSandbox_NoMountCarriesASubPath pins it.
 			VolumeMounts:    main.VolumeMounts,
 			SecurityContext: agentSecurityContext(),
 			// Resources deliberately left zero-value: the apiserver rejects a
@@ -146,42 +138,35 @@ func findContainer(containers []corev1.Container, name string) (corev1.Container
 	return corev1.Container{}, false
 }
 
-// recordCmd wraps argv with the recorder — mirrors docker's recordCmd
-// (internal/runner/docker/driver_exec.go's recordCmd), but simpler: k8s has
-// no RecordingMount config (SandboxSpec's Recording doc:
-// "no shared-volume path" — mounts are impossible on this substrate), so
-// delivery is ALWAYS the masked brokered upload, never the unmasked
+// recordCmd wraps argv with the recorder — mirrors docker's recordCmd, but
+// simpler: k8s has no RecordingMount config (mounts are impossible on this
+// substrate), so delivery is ALWAYS the masked brokered upload, never a
 // shared-mount fallback. hostAliases + NO_PROXY + the agent NetworkPolicy
 // already permit exactly this route (the agent's only egress peer is the
-// proxy on 3128). castDir is a plain "/tmp", and WHAT that path is depends on
-// the run's disk budget. Unlike docker (one container, one filesystem), an
-// ephemeral container inherits no filesystem from the main container: with no
-// budget it writes its cast to its OWN rootfs /tmp, and AgentIdleScript's
-// /tmp/wardyn (written by the MAIN container's idle process) is not visible
-// here. With disk_mib > 0 the VolumeMounts copied from the main container
-// above carry ephemeralScratchVolumes' /tmp emptyDir, so /tmp is then ONE
-// filesystem shared by the main container and every ephemeral container of the
-// SAME run — and of that run only, since an emptyDir lives and dies with its
-// pod. Assume a shared /tmp only when those scratch volumes are present.
+// proxy on 3128). castDir is a plain "/tmp", but WHAT that path resolves to
+// depends on the run's disk budget: unlike docker (one container, one
+// filesystem), an ephemeral container inherits no filesystem from the main
+// container, so with no budget it writes to its OWN rootfs /tmp (the main
+// container's idle-script /tmp/wardyn is not visible here). With disk_mib > 0
+// the VolumeMounts copied from the main container carry
+// ephemeralScratchVolumes' /tmp emptyDir, making /tmp ONE filesystem shared
+// by every container of the SAME run only (an emptyDir lives and dies with
+// its pod).
 //
 // runID mirrors docker's own tolerance for an unresolvable label: recording
 // is best-effort, so a missing/corrupt wardyn.run-id label degrades to a
 // local-only (never-uploaded) cast rather than failing Exec outright.
 //
 // The Command IS the bare recorder argv — no shell, no "is wardyn-rec on
-// PATH" fallback. Exec calls this only when Config.Record is on (mirrors
-// docker's Config.Record opt-out — see Config's doc); when it is off, Exec
-// runs argv unwrapped and this function is never reached. While Record is
-// on, an image that cannot honour it must fail closed, not silently
-// downgrade to unrecorded — the same fail-closed posture invariant 5
+// PATH" fallback. Exec calls this only when Config.Record is on; when off,
+// Exec runs argv unwrapped and this function is never reached. While Record
+// is on, an image that can't honour it must fail closed, not silently
+// downgrade to unrecorded, the same fail-closed posture invariant 5
 // (runner/substrate's package doc) requires everywhere else. An agent image
-// on this substrate MUST ship wardyn-rec (image contract §3,
-// deploy/images/README.md); one that doesn't fails Exec closed via the
-// normal container-start error path (parity with docker: a Record-enabled
-// docker exec with a missing wardyn-rec fails the same way, for the same
-// reason). The conformance suite's own agent image is built from
-// deploy/kind/Dockerfile.conformance-agent specifically so this path is
-// exercised for real, not skipped.
+// on this substrate MUST ship wardyn-rec (image contract §3); one that
+// doesn't fails Exec closed via the normal container-start error path
+// (parity with docker). The conformance suite's own agent image
+// (deploy/kind/Dockerfile.conformance-agent) exercises this path for real.
 func recordCmd(runID uuid.UUID, argv []string) []string {
 	uploadURL := ""
 	if runID != uuid.Nil {
@@ -192,15 +177,13 @@ func recordCmd(runID uuid.UUID, argv []string) []string {
 
 // Wait blocks until the ephemeral exec Exec added terminates and returns its
 // exit code. Restart-safe by construction: every poll reads live from the
-// apiserver (pod.Status.EphemeralContainerStatuses), carrying no in-memory
-// exec-id map to lose across a wardynd restart (unlike docker's agentExecs
-// map). Returns an error if Exec was never called for ref.
+// apiserver, carrying no in-memory exec-id map to lose across a wardynd
+// restart (unlike docker's agentExecs map). Errors if Exec was never called for ref.
 func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	// ponytail: a 1s Get-poll of the pod, not a Watch. A watch.Interface
-	// (informer) would save the apiserver a little chatter per in-flight run,
-	// but polling is a five-line loop against the exact same
-	// kubernetes.Interface every fake and real clientset already satisfies.
-	// Upgrade to a watch if poll volume ever shows up as real apiserver load.
+	// would save apiserver chatter, but polling is a five-line loop against
+	// the same kubernetes.Interface every clientset satisfies. Upgrade if
+	// poll volume ever shows up as real apiserver load.
 	errs := 0
 	for {
 		pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
@@ -221,16 +204,13 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 					continue
 				}
 				// Fail closed on a Waiting status the platform will never
-				// resolve on its own (terminalWaitingReasons, canary.go) --
-				// the shape a platform admission/policy engine or a missing
+				// resolve on its own (terminalWaitingReasons) — the shape a
+				// platform admission/policy engine or a missing
 				// ephemeral-container feature produces: the container never
 				// starts, so polling for Terminated would run out the ctx
 				// deadline instead of ever returning. Without this, run.exec
-				// still read success (the apiserver accepted the container
-				// add) and the caller had no way to tell "still starting"
-				// from "will never start" -- exactly the shape that made a
-				// k8s connectivity probe hang for its full wait budget
-				// whatever the network did.
+				// still read success and the caller had no way to tell
+				// "still starting" from "will never start".
 				if w := cs.State.Waiting; w != nil && execNeverStartedReasons[w.Reason] {
 					return 0, fmt.Errorf("k8s: exec wait: agent container never started (%s: %s): %w",
 						w.Reason, w.Message, runner.ErrExecNeverStarted)
@@ -257,7 +237,7 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 // ephemeral container's status straight from the apiserver on every call, so
 // there is no in-memory state to lose across a wardynd restart. When
 // agentExecID is "" (Exec never ran, or an exec-less path — none exists on
-// this substrate today) it falls back to Status, where the pod IS the agent.
+// this substrate today) it falls back to Status, where the pod is the agent.
 func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
 	if agentExecID == "" {
 		return d.Status(ctx, ref)
@@ -280,24 +260,20 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 			return runner.Status{State: types.RunRunning}, nil
 		}
 		if w := cs.State.Waiting; w != nil {
-			// Named, not just RunStarting: this is the one detail an
-			// operator (or the site-config probe's timed_out detail,
-			// site_config_probe.go) has no other way to see -- whether the
-			// container is still legitimately starting or is stuck on a
-			// Reason that will never resolve (terminalWaitingReasons).
+			// Named, not just RunStarting: the one detail an operator has no
+			// other way to see — whether the container is still legitimately
+			// starting or stuck on a Reason that will never resolve.
 			return runner.Status{State: types.RunStarting, Message: waitingMessage(w)}, nil
 		}
 		return runner.Status{State: types.RunStarting}, nil // no state populated yet
 	}
 	// Present in Spec but absent from Status is the pre-kubelet window: the
-	// apiserver accepted the exec and the kubelet has not published its first
-	// status yet. Reporting THAT terminal (with a nil error, so nothing retries)
-	// makes sweepRunWatchers and reconcileWatch finalize a healthy just-started
-	// run FAILED and tear its sandbox down. It is the k8s half of
-	// GAP-RECONCILE-1, which the docker driver hardened ("ambiguous; daemon
-	// restart under live-restore?", driver.go) and this substrate never did --
-	// with strictly better evidence available, since the pod Get succeeded.
-	// An exec id absent from Spec was never exec'd against this pod; terminal
+	// apiserver accepted the exec and the kubelet hasn't published its first
+	// status yet. Reporting THAT terminal (nil error, so nothing retries)
+	// would make sweepRunWatchers/reconcileWatch finalize a healthy
+	// just-started run FAILED and tear its sandbox down — avoided here with
+	// strictly better evidence available, since the pod Get succeeded. An
+	// exec id absent from Spec was never exec'd against this pod; terminal
 	// is the right answer there and stays.
 	for _, ec := range pod.Spec.EphemeralContainers {
 		if ec.Name == agentExecID {
@@ -314,8 +290,8 @@ func terminalExecStatus(pod *corev1.Pod, execID string) (runner.Status, bool) {
 			return runner.Status{State: types.RunStopped, ExitCode: &code}, true
 		}
 	}
-	// Eviction or node loss can terminate the pod without an updated exec status.
-	// The idle main container's success does not prove the task finished.
+	// Eviction or node loss can terminate the pod without an updated exec
+	// status. The idle main container's success doesn't prove the task finished.
 	switch pod.Status.Phase {
 	case corev1.PodFailed:
 		return runner.Status{State: types.RunFailed, Message: failureDetail(pod)}, true
@@ -327,11 +303,10 @@ func terminalExecStatus(pod *corev1.Pod, execID string) (runner.Status, bool) {
 }
 
 // execNeverStartedReasons are the Waiting reasons under which the ephemeral
-// exec container will never run its process: terminalWaitingReasons
-// (canary.go) minus CrashLoopBackOff, because a crash-looping container DID
-// start -- its process ran and died, which is a task failure, not
-// ErrExecNeverStarted's "the task never ran". (Ephemeral containers are not
-// restarted, so the reason is not expected here; excluded for correctness.)
+// exec container will never run its process: terminalWaitingReasons minus
+// CrashLoopBackOff, because a crash-looping container DID start — its
+// process ran and died, a task failure, not ErrExecNeverStarted's "the task
+// never ran" (ephemeral containers aren't restarted, so excluded for correctness).
 var execNeverStartedReasons = map[string]bool{
 	"ImagePullBackOff":           true,
 	"ErrImagePull":               true,

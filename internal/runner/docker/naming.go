@@ -15,18 +15,18 @@ import (
 const (
 	driverName = "docker"
 
-	// agentNamePrefix is the deterministic prefix of every agent container name
-	// (agentContainerName). teardown recovers a run id from the name when the
-	// run-id label is unreadable.
+	// agentNamePrefix is the deterministic prefix of every agent container
+	// name; teardown recovers a run id from it when the run-id label is
+	// unreadable.
 	agentNamePrefix = "wardyn-agent-"
 
-	// demoAgentImagePrefix is the repository prefix of the demo agent images
-	// `make agent-images` builds. They live in no registry, so a failed pull
-	// for one of these has a make target as its fix.
+	// demoAgentImagePrefix is the repository prefix of demo agent images
+	// `make agent-images` builds; they live in no registry, so a failed pull
+	// points at that make target.
 	demoAgentImagePrefix = "wardyn/agent-"
 
 	// labelRun tags every Wardyn-owned object with its run UUID for audit and
-	// teardown selectors.
+	// teardown lookups.
 	labelRun       = "wardyn.run-id"
 	labelComponent = "wardyn.component" // "agent" | "proxy"
 	labelManaged   = "wardyn.managed"   // "true"
@@ -35,15 +35,14 @@ const (
 	componentProxy = "proxy"
 )
 
-// Object names are deterministic per run so teardown is selector-free and
-// idempotent: a crashed control plane can reconstruct every name from the run
-// UUID alone.
+// Object names are deterministic per run, so teardown is selector-free and
+// idempotent — a crashed control plane can reconstruct every name from the
+// run UUID alone.
 func agentContainerName(runID uuid.UUID) string { return agentNamePrefix + runID.String() }
 
 // runIDFromAgentName recovers the run UUID from a deterministic agent
-// container name. The Docker daemon reports the name with a leading slash;
-// both forms are accepted. Teardown fallback when the wardyn.run-id label is
-// unreadable.
+// container name (the daemon may report it with a leading slash; both forms
+// accepted) — teardown's fallback when the wardyn.run-id label is unreadable.
 func runIDFromAgentName(name string) (uuid.UUID, error) {
 	name = strings.TrimPrefix(name, "/")
 	if !strings.HasPrefix(name, agentNamePrefix) {
@@ -53,15 +52,14 @@ func runIDFromAgentName(name string) (uuid.UUID, error) {
 }
 func proxyContainerName(runID uuid.UUID) string { return "wardyn-proxy-" + runID.String() }
 
-// internalNetName is the per-run user-defined *internal* network joined by
-// both the agent and the proxy. Internal=true => no gateway => L0 preserved.
+// internalNetName is the per-run internal network joined by agent and proxy;
+// internal=true means no gateway, preserving L0.
 func internalNetName(runID uuid.UUID) string { return "wardyn-int-" + runID.String() }
 
-// wardynLabels stamps every Wardyn-owned object so audit and teardown
-// selectors can find them by run and component. extra is applied FIRST and
-// the three reserved keys are stamped LAST (same rule as the k8s driver's
-// naming.go): extra is caller-supplied, and applying it last stops an entry
-// named wardyn.run-id from renaming the run on every object it stamps.
+// wardynLabels stamps every Wardyn-owned object for audit/teardown lookup by
+// run and component. extra applies first and the three reserved keys stamp
+// last (matching the k8s driver), so a caller-supplied wardyn.run-id entry
+// can't rename the run.
 func wardynLabels(runID uuid.UUID, component string, extra map[string]string) map[string]string {
 	l := make(map[string]string, len(extra)+3)
 	for k, v := range extra {

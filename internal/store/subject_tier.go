@@ -8,29 +8,18 @@ import (
 	"fmt"
 )
 
-// The SQL half of the one precedence-select (authz design K3). Governance
-// assignments and user drive grants pick ONE winning row per caller over the
-// same subject vocabulary, so the match and the ranking are written once here
-// and spliced into both resolvers and both console listings. Two copies of one
-// rule is how one of them quietly stops ranking a new tier: UT-3 had to insert
-// user_type into each by hand. internal/api's selectByTier is the Go half, the
-// one stale-snapshot rule over what these resolvers return.
+// The SQL half of the one precedence-select shared by governance assignments and user
+// drive grants; internal/api's selectByTier is the Go half. Keep both in sync — UT-3
+// broke when a new tier was added to only one side.
 
-// subjectTierOrder ranks the four subject tiers MOST SPECIFIC FIRST —
-// user > group > user_type > all. A person's type sits below their groups so a
-// group row overrides the type's, and above `all` so a type's row binds
-// everyone of that type.
-//
-// subject_type is deliberately UNQUALIFIED so the one string works in the
-// resolvers' JOINs as well as the single-table listings. That is safe because
-// neither joined table (governance_profiles, user_drives) has a subject_type
-// column. A migration that added one would make this ambiguous, and Postgres
-// would say so loudly rather than silently re-rank.
+// subjectTierOrder ranks tiers most-specific-first: user > group > user_type > all.
+// subject_type stays unqualified so it works in both JOINs and single-table listings;
+// safe only while no joined table has its own subject_type column, else Postgres errors
+// on the ambiguity instead of silently mis-ranking.
 const subjectTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 WHEN 'user_type' THEN 2 ELSE 3 END`
 
-// subjectMatch is the WHERE a resolver filters the subject rows aliased row
-// with. $1 is the caller's user subjects, $2 their groups, $3 their one user
-// type ("" matches no row).
+// subjectMatch builds the WHERE clause matching subject rows aliased row: $1 user
+// subjects, $2 groups, $3 the caller's single user type ("" matches nothing).
 func subjectMatch(row string) string {
 	return fmt.Sprintf(`(%[1]s.subject_type = 'all'
 		   OR (%[1]s.subject_type = 'user'  AND %[1]s.subject = ANY($1::text[]))
@@ -38,31 +27,14 @@ func subjectMatch(row string) string {
 		   OR (%[1]s.subject_type = 'user_type' AND %[1]s.subject = $3))`, row)
 }
 
-// subjectPrecedence is the ORDER BY both resolvers rank by, over the subject
-// rows aliased row joined to the named rows aliased named. Ranked, in order:
-//
-//  1. tier (subjectTierOrder). A row is one admin explicitly naming one
-//     principal, so the more specific naming wins outright; no priority in the
-//     group tier can beat a user-tier row. A person holds one type, so the type
-//     tier matches at most one row.
-//  2. within the user tier, a sub-keyed match beats an email-keyed one.
-//     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
-//     email) and an admin may have written a row against either. Sub wins
-//     because it is the stable identifier: an email is reassignable, and
-//     inheriting a departed colleague's ceiling or drive by taking their
-//     address is not a thing this may permit. Encoded as the MATCH POSITION in
-//     the caller's own $1 (array_position), so the caller's documented ordering
-//     IS the precedence.
-//  3. priority DESC: the admin's explicit tie-break, and the group tier's
-//     working lever (a person is usually in several groups at once).
-//  4. named.name ASC, in EVERY tier: without it two same-priority rows make
-//     LIMIT 1 depend on the plan. Both named tables have a UNIQUE name.
-//  5. row.subject ASC, the total-order FLOOR. Two rows can name the SAME
-//     profile or drive (UNIQUE(subject_type, subject) is per subject), and a
-//     drive grant carries per-row overrides (writable, size, home, enabled), so
-//     the losing coin-flip would be an admin's read-only narrowing silently not
-//     applying. Subject is distinct within a tier and explainable ("the
-//     alphabetically first group's row wins"), which a row id would not be.
+// subjectPrecedence is the ORDER BY ranking subject rows (row) joined to named rows
+// (named):
+//  1. tier (subjectTierOrder) — an explicit single-principal row always beats a group row.
+//  2. within the user tier, sub-keyed match beats email: sub is stable, so a departed
+//     colleague's row can't be inherited by reusing their email.
+//  3. priority DESC, then name ASC (UNIQUE, for a deterministic LIMIT 1).
+//  4. subject ASC as a total-order floor — two rows can target the same profile/drive
+//     with different overrides, so a tie could otherwise silently drop an admin's narrowing.
 func subjectPrecedence(row, named string) string {
 	return subjectTierOrder + fmt.Sprintf(`,
 			CASE %[1]s.subject_type WHEN 'user'
@@ -73,17 +45,9 @@ func subjectPrecedence(row, named string) string {
 			%[1]s.subject ASC`, row, named)
 }
 
-// hasGroupTierRows reports whether ANY group-tier row exists in table.
-//
-// It is the gate on the stale/truncated-snapshot refusal, and it is a separate,
-// deliberately cheap read because that refusal must fire on exactly one
-// deployment shape. A caller whose group snapshot is missing or truncated
-// cannot have their group rows evaluated, but on a deployment with NO
-// group-tier rows there is nothing an unknown group could have matched, so
-// refusing there would break "no row ⇒ exactly as before" for every
-// pre-upgrade session and every deployment that never adopted group rows.
-// EXISTS, not a count: the answer is a boolean and Postgres stops at the first
-// row. table is one of this package's literals, never caller input.
+// hasGroupTierRows gates the stale/truncated-snapshot refusal: it must fire only when
+// group rows actually exist to evaluate, or every pre-upgrade/no-group deployment would
+// wrongly refuse. table must be one of this package's literals, never caller input.
 func (s PG) hasGroupTierRows(ctx context.Context, table, what string) (bool, error) {
 	var has bool
 	err := s.Pool.QueryRow(ctx,

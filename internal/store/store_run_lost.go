@@ -1,10 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Lost runs (long-holds design rev 4, RL-9; migration 0083): the token stamp
-// the renew door writes, the read the lapsed-token sweep makes, and the claim
-// that marks a run lost. Kept out of store.go for the same size reason as
-// store_run_lease.go.
+// Lost-run surface (long-holds design rev 4, RL-9; migration 0083): token
+// stamp, lapsed-token read, and lost claim. Split out of store.go for size,
+// like store_run_lease.go.
 package store
 
 import (
@@ -17,26 +16,24 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RunLoser is the lost-run surface. Optional for RunLeaser's reason: the test
-// doubles that embed store.Store would route these calls to a nil interface.
-// The api layer type-asserts; production is always PG.
+// RunLoser is the lost-run surface, kept optional because test doubles that
+// embed store.Store would otherwise route these calls to a nil interface;
+// the api layer type-asserts, and production is always PG.
 type RunLoser interface {
-	// StampRunTokenRenewed records that run id's token was just renewed, at the
-	// database's clock. false means the run is kept (lost or ended), so the
-	// renew must be refused: nothing may carry a lost run's identity forward.
+	// StampRunTokenRenewed records id's token renewal at the database's clock.
+	// false means the run is already kept (lost/ended), so the renew must be
+	// refused — a lost run's identity must never carry forward.
 	StampRunTokenRenewed(ctx context.Context, id uuid.UUID) (bool, error)
-	// ListLapsedTokenRuns returns every RUNNING run that is not kept and whose
-	// token was last renewed more than life ago, by the database's clock.
+	// ListLapsedTokenRuns returns every RUNNING, not-kept run whose token was
+	// last renewed more than life ago, by the database's clock.
 	ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error)
-	// MarkRunLost marks run id kept and lost for reason at now, but only while
-	// it is RUNNING and not already kept. With tokenLife > 0 it also requires
-	// the token to be lapsed by that much still, so a renew that lands between
-	// the list and the mark wins. Exactly one caller sees true. It clears a
-	// pause ONLY for a reboot: that is the one reason whose agent container is
-	// actually gone (docker start on revive, run_revive.go), so a stale
-	// pause mark would otherwise survive on an unfrozen agent. An outage's
-	// agent keeps running, frozen or not — clearing its mark here would have
-	// resume (run_pause.go) skip the thaw a still-frozen agent still needs.
+	// MarkRunLost marks id kept and lost for reason at now, only while RUNNING
+	// and not already kept; with tokenLife>0 it re-requires the token still
+	// lapsed by that much, so a race with a renew resolves to the renew.
+	// Exactly one caller sees true. It clears a pause only for reboot — the
+	// one reason whose container is truly gone — since an outage's agent
+	// keeps running (frozen or not) and clearing here would make resume skip
+	// a thaw a still-frozen agent still needs.
 	MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error)
 }
 
@@ -53,9 +50,8 @@ func (s PG) StampRunTokenRenewed(ctx context.Context, id uuid.UUID) (bool, error
 	return tag.RowsAffected() > 0, nil
 }
 
-// ListLapsedTokenRuns — see RunLoser. Both sides of the comparison are the
-// database's clock (the stamp is its now() too), so replica clock skew cannot
-// make a live run look lapsed.
+// ListLapsedTokenRuns — see RunLoser. Both sides use the database's clock, so
+// replica clock skew cannot make a live run look lapsed.
 func (s PG) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
 		WHERE state = $1 AND lost_at IS NULL

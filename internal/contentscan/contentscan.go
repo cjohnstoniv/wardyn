@@ -2,23 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package contentscan implements Wardyn's OPTIONAL, off-by-default outbound
-// content-inspection layer. It scans outbound LLM request bodies for known
+// content-inspection layer: scans outbound LLM request bodies for known
 // secret values before they leave the sandbox boundary and yields a
 // CONTENT-FREE finding.
 //
-// HONEST FRAMING (see threatmodel/THREAT-MODEL.md): this is a guardrail +
-// visibility layer, NOT exfiltration prevention. It catches an HONEST agent
-// that includes a known secret value verbatim; a malicious/prompt-injected
-// agent can encode/split/encrypt around any scanner, and that residual
-// stands. This package never claims "DLP".
+// HONEST FRAMING (see threatmodel/THREAT-MODEL.md): a guardrail + visibility
+// layer, NOT exfiltration prevention. It catches an HONEST agent including a
+// known secret verbatim; a malicious/prompt-injected agent can
+// encode/split/encrypt around any scanner, and that residual stands. This
+// package never claims "DLP".
 //
 // Design invariants:
 //   - Findings NEVER carry raw matched bytes or a reversible hash; Sample is
 //     always the masking placeholder.
-//   - The engine is channel-agnostic: only the extractors (extract.go) know a
-//     wire schema.
-//   - A nil *Engine is a safe no-op. NewEngine returns nil when the mode is
-//     off or there is nothing to detect.
+//   - The engine is channel-agnostic: only the extractors (extract.go) know
+//     a wire schema.
+//   - A nil *Engine is a safe no-op; NewEngine returns nil when the mode is
+//     off or there's nothing to detect.
 package contentscan
 
 import (
@@ -31,41 +31,40 @@ import (
 
 // maskedPlaceholder is the content-free sample emitted for every finding,
 // byte-identical to secretmask's placeholder. Deliberately no surrounding
-// context and no hash of the secret (a crackable confirmation oracle); the
-// location fields alone prove the hit.
+// context and no hash of the secret (a crackable oracle); location fields
+// alone prove the hit.
 const maskedPlaceholder = "<secret-hidden>"
 
-// defaultMaxScanBytes caps the size of a single extracted text span the engine
-// will scan. A span larger than this is skipped (fail-open) and recorded, so a
-// multi-MB file paste cannot turn every model turn into an unbounded regex run.
+// defaultMaxScanBytes caps a single extracted text span the engine will
+// scan. Over-cap is skipped (fail-open) and recorded, so a multi-MB file
+// paste can't turn every model turn into an unbounded regex run.
 const defaultMaxScanBytes = 1 << 20 // 1 MiB
 
-// defaultMaxTotalScanBytes bounds the TOTAL bytes scanned across every span of
-// ONE request, on top of the per-span defaultMaxScanBytes cap: the extractors
+// defaultMaxTotalScanBytes bounds the TOTAL bytes scanned across every span
+// of ONE request, on top of the per-span defaultMaxScanBytes cap: extractors
 // impose no bound on span COUNT, so a body split into many sub-cap spans
-// burns CPU proportional to the whole body regardless of the per-span cap
-// (measured 8-15s of proxy CPU for a 22-31 MiB body of thousands of ~1 KiB
-// spans). Once the running total crosses this budget the scan stops for the
-// rest of the request (fail-open, recorded as Skipped{scan_budget}).
+// burns CPU proportional to the whole body (measured 8-15s of proxy CPU for
+// a 22-31 MiB body of thousands of ~1 KiB spans). Once the running total
+// crosses this budget the scan stops for the rest of the request (fail-open,
+// Skipped{scan_budget}).
 const defaultMaxTotalScanBytes = 4 << 20 // 4 MiB
 
 // defaultMaxFindings bounds the number of findings a single ScanRequest
 // REPORTS to the audit. Nothing else bounds this: a body split into many
-// spans can fan out into hundreds of thousands of findings (measured 600,000
-// findings for one 22.4 MiB request). Once the cap is hit, findings past it
-// are dropped (Result.FindingsDropped) and the result is marked
-// Skipped{findings_capped} — EXCEPT a finding at or above the engine's
-// blockMin, kept up to a hard ceiling so a request cannot buy a quiet forward
-// by fanning out cheap noise ahead of the real secret.
+// spans can fan out into hundreds of thousands of findings (measured
+// 600,000 for one 22.4 MiB request). Past the cap, findings are dropped
+// (Result.FindingsDropped) and marked Skipped{findings_capped} — EXCEPT a
+// finding at or above blockMin, kept up to a hard ceiling so a request can't
+// buy a quiet forward by fanning out cheap noise ahead of the real secret.
 //
 // Severity priority applies in every mode by two mechanisms: block mode
 // GROWS the report to a hard 2*maxFindings ceiling (enforcement evidence
 // must survive), while every other mode DISPLACES a retained below-blockMin
 // finding instead, keeping the report exactly maxFindings long (measured:
-// dropping alert-mode findings by arrival order let 900 cheap entropy
-// findings evict the one high-severity key a human needed to see). Scanning
-// itself is NOT stopped by this cap — scan_budget above bounds CPU; this cap
-// bounds only the audit stream's size.
+// arrival-order dropping let 900 cheap entropy findings evict the one
+// high-severity key a human needed to see). Scanning itself is NOT stopped
+// by this cap — scan_budget bounds CPU; this cap bounds only the audit
+// stream's size.
 const defaultMaxFindings = 500
 
 // Mode is the inspection action. Off => the engine is never constructed.
@@ -122,9 +121,9 @@ type Finding struct {
 	Severity  Severity `json:"severity"`
 	Sample    string   `json:"sample"` // ALWAYS masked; never raw bytes, never a hash
 
-	// matchID is a content-free per-corpus-secret discriminator (the 1-based
-	// corpus INDEX of the matched known secret; 0 for non-corpus detectors),
-	// unexported so it never enters the audit log. Its sole use is dedup: two
+	// matchID is a content-free per-corpus-secret discriminator (1-based
+	// corpus INDEX of the matched secret; 0 for non-corpus detectors),
+	// unexported so it never enters the audit log. Sole use is dedup: two
 	// distinct corpus secrets of identical length in the same decoded variant
 	// would otherwise collapse and undercount the leak.
 	matchID int
@@ -138,26 +137,25 @@ type Result struct {
 	SkipReason string    `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "attachment_decode_error" | "scan_budget" | "findings_capped"
 
 	// FindingsDropped counts every finding examined past the per-request cap
-	// once exceeded — including a block-relevant finding that was kept back
-	// rather than dropped, so this is an UPPER BOUND on what was actually
-	// pushed out, not an exact count of loss. No JSON tag — the proxy copies
-	// this onto egress.ScanSummary.FindingsPastCap, the wire field.
+	// once exceeded, including a block-relevant finding kept back rather than
+	// dropped, so this is an UPPER BOUND on what was pushed out, not an exact
+	// count. No JSON tag; the proxy copies it onto
+	// egress.ScanSummary.FindingsPastCap, the wire field.
 	FindingsDropped int `json:"-"`
 
 	// FindingsSeen is the number of findings the detectors PRODUCED across
 	// every scanned span, counted before the per-request cap trimmed the
-	// list — a COUNTED fact rather than an inferred one, since
-	// len(Findings) + FindingsDropped double-counts every block-mode
-	// keep-back (measured: reported=800 dropped=700 for a true total of
-	// 1,200, not the sum's 1,500). Pre-dedupe: the cap fires during
-	// scanning, dedupeFindings runs once at the end. No JSON tag — the proxy
-	// copies this onto egress.ScanSummary.FindingsTotal, the wire field.
+	// list — a COUNTED fact, since len(Findings)+FindingsDropped
+	// double-counts every block-mode keep-back (measured: reported=800
+	// dropped=700 for a true total of 1,200, not the sum's 1,500).
+	// Pre-dedupe. No JSON tag; the proxy copies it onto
+	// egress.ScanSummary.FindingsTotal, the wire field.
 	FindingsSeen int `json:"-"`
 
 	// FindingsCapped records that the per-request cap TRUNCATED this result,
-	// independently of SkipReason. SkipReason holds a single value and the
-	// first writer keeps it, so a body whose first span was oversize reported
-	// span_oversize and said nothing at all about the truncation that followed.
+	// independent of SkipReason: SkipReason holds a single value that the
+	// first writer keeps, so a body whose first span was oversize would
+	// otherwise say nothing about the truncation that followed.
 	FindingsCapped bool `json:"-"`
 }
 
@@ -215,10 +213,9 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		return nil, fmt.Errorf("contentscan: invalid mode %q", spec.Mode)
 	}
 
-	// Fail CLOSED on an invalid detector combination: the proxy builds the
-	// engine from WARDYN_PROXY_CONFIG_JSON without re-running
-	// validatePolicySpec, so a malformed spec reaching the sidecar must not
-	// silently disable scanning.
+	// SECURITY (fail-closed): the proxy builds the engine from
+	// WARDYN_PROXY_CONFIG_JSON without re-running validatePolicySpec, so a
+	// malformed spec reaching the sidecar must not silently disable scanning.
 	if !spec.DetectSecrets && !spec.DetectSecretPatterns && !spec.DetectEntropy &&
 		!spec.DetectPII && spec.DetectorSidecarURL == "" && len(spec.ClassifiedMarkers) == 0 {
 		return nil, fmt.Errorf("contentscan: mode %q requires at least one detector", mode)
@@ -226,14 +223,13 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 
 	// Filter ONCE and hold on the engine: used both to build the known-secret
 	// detector and to corpus-mask every finding's FieldPath centrally, so a
-	// corpus secret used as a JSON key is masked even when no corpus detector
-	// is enabled.
+	// corpus secret used as a JSON key is masked even with no corpus detector enabled.
 	filtered := filterCorpus(corpus)
 
 	var dets []Detector
 	if spec.DetectSecrets {
-		// Known-secret exact match needs a non-empty corpus to do anything; if it
-		// is empty, this detector is simply omitted (other detectors may still run).
+		// Known-secret exact match needs a non-empty corpus; if empty, this
+		// detector is simply omitted (others may still run).
 		if len(filtered) > 0 {
 			dets = append(dets, &knownSecretDetector{secrets: filtered, normalize: true})
 		}
@@ -254,8 +250,8 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		dets = append(dets, newSidecarDetector(spec.DetectorSidecarURL, nil))
 	}
 	if len(dets) == 0 {
-		// Configured WITH a detector but nothing active (e.g. only
-		// detect_secrets and an empty corpus). No-op; NewServer logs it.
+		// Configured WITH a detector but nothing active (e.g. detect_secrets
+		// with an empty corpus). No-op; NewServer logs it.
 		return nil, nil
 	}
 
@@ -275,7 +271,7 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		maxFindings:       defaultMaxFindings,
 		corpus:            filtered,
 		// Defaults to "pass" (fail-open): a guardrail must not brick the
-		// agent's only path to the model on a scan hiccup.
+		// agent's only model path on a scan hiccup.
 		failOpen:        !strings.EqualFold(strings.TrimSpace(spec.OnScannerError), "block"),
 		blockMin:        blockMin,
 		scanAttachments: spec.ScanAttachments,
@@ -298,16 +294,17 @@ func (e *Engine) Mode() Mode {
 }
 
 // sanitizeFieldPath is the single content-free guarantee for a Finding's
-// FieldPath: it masks well-known secret FORMATS (sanitizePath) and the
-// operator-declared corpus (maskCorpus) so NO detector can carry a raw secret —
-// used as an agent-controlled JSON key — into the append-only audit. Idempotent.
+// FieldPath: masks well-known secret FORMATS (sanitizePath) and the
+// operator-declared corpus (maskCorpus) so NO detector can carry a raw
+// secret, used as an agent-controlled JSON key, into the append-only audit.
+// Idempotent.
 func (e *Engine) sanitizeFieldPath(path string) string {
 	return maskCorpus(sanitizePath(path), e.corpus)
 }
 
-// capFindings enforces the per-request findings cap on res, in place. vetted and
-// displace are the arm's cursors, carried across spans by ScanRequest and
-// returned updated.
+// capFindings enforces the per-request findings cap on res, in place. vetted
+// and displace are the arm's cursors, carried across spans by ScanRequest
+// and returned updated.
 func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 	// Caps what this request REPORTS, never what block mode ENFORCES
 	// (scanning continues; scan_budget is the CPU bound). Findings past the
@@ -317,11 +314,10 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 	// the alert, and without the keep-back 900 low-severity findings could
 	// evict the one high-severity key from it.
 	//
-	// vetted tracks findings this arm already examined across EARLIER spans:
-	// without it, every later span above maxFindings re-walks the same
-	// already-vetted tail from scratch, making the arm's cost
-	// O(span_count x maxFindings). Starting at vetted (never below
-	// maxFindings) means each finding is looked at exactly once.
+	// vetted tracks findings this arm already examined across EARLIER spans,
+	// or every later span above maxFindings re-walks the already-vetted tail
+	// from scratch (O(span_count x maxFindings)). Starting at vetted (never
+	// below maxFindings) means each finding is looked at exactly once.
 	start := e.maxFindings
 	if vetted > start {
 		start = vetted
@@ -330,8 +326,8 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 	// mode: ModeBlock GROWS the report to a hard 2*maxFindings ceiling
 	// (enforcement evidence must survive); every other mode DISPLACES a
 	// retained below-blockMin finding instead, keeping the report exactly
-	// maxFindings long. Appending as block mode does would instead widen the
-	// very cap this arm is.
+	// maxFindings long — appending as block mode does would widen the very
+	// cap this arm is.
 	kept := res.Findings[:start]
 	for _, f := range res.Findings[start:] {
 		res.FindingsDropped++
@@ -353,9 +349,8 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 		}
 	}
 	res.Findings = kept
-	// A FLAG, not a reason, so a leading span_oversize or scan_budget cannot
-	// hide the truncation: SkipReason holds one value and the first writer
-	// keeps it.
+	// A FLAG, not a reason, so a leading span_oversize or scan_budget can't
+	// hide the truncation (SkipReason holds one value, first writer keeps it).
 	res.FindingsCapped = true
 	if !res.Skipped {
 		res.Skipped = true
@@ -365,19 +360,19 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 }
 
 // ScanRequest extracts spans for channel from body, runs the detectors, and
-// returns the Result. The second return value is the (possibly-rewritten) body —
-// in this phase it is always body unchanged (redaction is a later phase). A nil
-// or off engine returns an unscanned, empty Result.
+// returns the Result. The second return value is the (possibly-rewritten)
+// body — in this phase always body unchanged (redaction is a later phase).
+// A nil or off engine returns an unscanned, empty Result.
 //
-// A malformed/unknown body is reported as Skipped{parse_error} plus the error;
-// the caller decides allow-vs-block via ShouldBlock (honoring fail-open).
+// A malformed/unknown body is reported as Skipped{parse_error} plus the
+// error; the caller decides allow-vs-block via ShouldBlock (honoring fail-open).
 func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []byte, err error) {
 	if e == nil || e.mode == ModeOff {
 		return Result{Scanned: false}, body, nil
 	}
 	// CENTRAL content-free chokepoint: EVERY finding's FieldPath, whichever
 	// detector produced it, is masked here for well-known secret formats and
-	// the operator corpus, so a secret used as a JSON key can never ride into
+	// the operator corpus, so a secret used as a JSON key never rides into
 	// the audit. Deferred so no return path can bypass it.
 	defer func() {
 		for i := range res.Findings {
@@ -388,7 +383,7 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 	scannedBytes := 0
 	vetted := 0 // findings already examined by the truncation arm below
 	// displace is that arm's cursor into the RETAINED head, carried across
-	// spans so each retained position is examined at most once.
+	// spans so each position is examined at most once.
 	displace := 0
 	scanSpan := func(s Span) {
 		if e.maxBytes > 0 && len(s.Text) > e.maxBytes {
@@ -397,8 +392,8 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 			return // skip this oversize span; keep scanning the rest (partial coverage)
 		}
 		if e.maxTotalScanBytes > 0 && scannedBytes >= e.maxTotalScanBytes {
-			// Budget exhausted — stop running detectors over the rest of the
-			// body. !res.Skipped: a later budget hit must not clobber an
+			// Budget exhausted: stop running detectors over the rest of the
+			// body. !res.Skipped guards a later hit from clobbering an
 			// earlier skip's reason.
 			if !res.Skipped {
 				res.Skipped = true
@@ -408,15 +403,14 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 		}
 		scannedBytes += len(s.Text)
 		// The PRE-CAP total, counted as produced (Result.FindingsSeen): the
-		// cap below trims res.Findings in place, so no arithmetic afterward
-		// can recover how many there were.
+		// cap below trims res.Findings in place, so no later arithmetic can
+		// recover how many there were.
 		beforeDetectors := len(res.Findings)
 		for _, d := range e.detectors {
 			// The sidecar is a NETWORK detector that can fail; unlike
 			// in-process detectors its failure must be VISIBLE, so an audit
-			// can tell "inspected clean" from "scanner never ran". The
-			// !res.Skipped guard: a sidecar outage on a later span must not
-			// clobber an earlier span's block-eligible skip reason.
+			// can tell "inspected clean" from "scanner never ran". !res.Skipped
+			// guards a later outage from clobbering an earlier skip reason.
 			if sc, ok := d.(*sidecarDetector); ok {
 				if serr := sc.scanReport(s, &res.Findings); serr != nil && !res.Skipped {
 					res.Skipped = true
@@ -437,8 +431,8 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 		return res, body, err
 	}
 	// Opt-in: also decode+scan base64 attachment bytes (Anthropic only).
-	// Best-effort, but a genuine decode failure is recorded honestly, not as
-	// a clean scan.
+	// Best-effort, but a genuine decode failure is recorded honestly, not a
+	// clean scan.
 	if e.scanAttachments && channel == ChannelAnthropicMessages {
 		if extractAnthropicAttachments(body, scanSpan) && !res.Skipped {
 			res.Skipped = true
@@ -449,14 +443,14 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 	return res, body, nil
 }
 
-// ShouldBlock reports whether a Result must cause the request to be refused.
-// Only ModeBlock ever blocks. A qualifying finding (severity >= blockMin)
-// blocks. A SKIP (content that could not be inspected) blocks ONLY when
+// ShouldBlock reports whether a Result must cause the request to be
+// refused. Only ModeBlock ever blocks. A qualifying finding (severity >=
+// blockMin) blocks. A SKIP (uninspectable content) blocks ONLY when
 // fail-open is disabled (OnScannerError=block); by default a skip never
-// blocks, since oversize/odd bodies are normal for coding agents and bricking
-// the only model path would be a self-DoS. A "sidecar_error" skip is treated
-// the same way: fail-open by default, fail-CLOSED only when the operator has
-// explicitly set OnScannerError=block.
+// blocks, since oversize/odd bodies are normal for coding agents and
+// bricking the only model path would be a self-DoS. "sidecar_error" is
+// treated the same: fail-open by default, fail-CLOSED only when the
+// operator has explicitly set OnScannerError=block.
 func (e *Engine) ShouldBlock(res Result) bool {
 	if e == nil || e.mode != ModeBlock {
 		return false
@@ -476,15 +470,16 @@ func (e *Engine) ShouldBlock(res Result) bool {
 }
 
 // BlocksOnError reports whether the engine is configured to fail CLOSED on
-// content it cannot inspect (block mode with OnScannerError=block). The proxy
+// content it can't inspect (block mode with OnScannerError=block). The proxy
 // uses this for the body-too-large-to-buffer path, which never produces a
 // Result to pass to ShouldBlock.
 func (e *Engine) BlocksOnError() bool {
 	return e != nil && e.mode == ModeBlock && !e.failOpen
 }
 
-// filterCorpus copies the corpus, dropping values shorter than secretmask.MinLen
-// (the same low-false-positive floor the masking layer uses) and exact dupes.
+// filterCorpus copies the corpus, dropping values shorter than
+// secretmask.MinLen (the masking layer's own low-false-positive floor) and
+// exact dupes.
 func filterCorpus(corpus [][]byte) [][]byte {
 	seen := make(map[string]struct{}, len(corpus))
 	out := make([][]byte, 0, len(corpus))
@@ -503,13 +498,13 @@ func filterCorpus(corpus [][]byte) [][]byte {
 	return out
 }
 
-// dedupeFindings removes findings identical in (detector, field path, offset,
-// length, matchID), which the raw + normalized passes can otherwise both
-// emit. Length and matchID are both in the key because decoded-variant hits
-// all carry Offset == -1: without a discriminator, two DISTINCT secrets
-// matched inside the same decoded variant would collapse to one and
-// undercount the leak. Both are content-free: matchID is a position, never
-// the matched bytes.
+// dedupeFindings removes findings identical in (detector, field path,
+// offset, length, matchID), which the raw + normalized passes can otherwise
+// both emit. Length and matchID are both in the key because decoded-variant
+// hits all carry Offset == -1: without a discriminator, two DISTINCT
+// secrets matched inside the same decoded variant would collapse to one and
+// undercount the leak. Both content-free: matchID is a position, never the
+// matched bytes.
 func dedupeFindings(in []Finding) []Finding {
 	if len(in) < 2 {
 		return in

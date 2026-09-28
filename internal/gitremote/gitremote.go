@@ -1,15 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package gitremote deterministically detects the git remotes configured in a
-// local directory tree, so Wardyn can ground a composed run's GitHub grant on the
-// workspace's ACTUAL remotes rather than an LLM guess.
+// Package gitremote deterministically detects the git remotes configured in
+// a local directory tree, so Wardyn can ground a composed run's GitHub grant
+// on the workspace's ACTUAL remotes rather than a guess.
 //
-// It is read-only and runs NO subprocess: it parses .git/config and .gitmodules
-// as plain files (never triggering a git hook or a malicious include.path /
-// core.fsmonitor). The walk is bounded (depth, .git count, file size), never
-// follows symlinks, reads REGULAR files only, and fails safe — any error yields
-// fewer/zero detected repos, never a grant on uncertainty.
+// It is read-only and runs NO subprocess: it parses .git/config and
+// .gitmodules as plain files (never triggering a git hook or a malicious
+// include.path / core.fsmonitor). The walk is bounded (depth, .git count,
+// file size), never follows symlinks, reads REGULAR files only, and fails
+// safe — any error yields fewer/zero detected repos, never a grant on
+// uncertainty.
 package gitremote
 
 import (
@@ -51,8 +52,8 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 		// Never descend or follow symlinks (also prevents escaping `root`). The
 		// ROOT is exempt: WalkDir lstats it like every other entry, so a root
 		// that is ITSELF a link would otherwise end the walk on its first
-		// callback and silently report zero repos. ResolveRoot has already
-		// canonicalised it; this arm is what still holds when that failed.
+		// callback and silently report zero repos. ResolveRoot already
+		// canonicalised it; this arm holds when that failed.
 		if p != root && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
@@ -90,11 +91,11 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 	return ToSorted(ghSet), ToSorted(otherSet)
 }
 
-// ResolveRoot canonicalises a scan root before a walk: cleaned, and with every
-// symlink in it resolved. Dispatch bind-mounts the RESOLVED tree, so a scanner
-// that stops at the link would describe a tree the run never sees. Resolution
-// failure falls back to the cleaned path: the walk then finds nothing, the
-// fail-safe "no evidence" answer both callers already treat it as. Shared with
+// ResolveRoot canonicalises a scan root before a walk: cleaned, with every
+// symlink resolved. Dispatch bind-mounts the RESOLVED tree, so a scanner
+// stopping at the link would describe a tree the run never sees. Resolution
+// failure falls back to the cleaned path — the walk then finds nothing, the
+// fail-safe "no evidence" answer both callers already expect. Shared with
 // internal/workspacescan.
 func ResolveRoot(root string) string {
 	clean := filepath.Clean(root)
@@ -150,13 +151,12 @@ func within(root, p string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// readCapped reads at most maxConfigBytes from a REGULAR file, failing safe to
-// nil for anything else. It is the single chokepoint behind all three read
-// sites (the .gitmodules scan, the .git/config scan, and resolveConfigPath's
-// gitdir pointer): OpenRegular gives O_NOFOLLOW (no symlinked final component)
-// and O_NONBLOCK+IsRegular (a FIFO can't block open(2) forever), and this
-// wraps them with io.ReadFull over a LimitReader, since a single Read can
-// return fewer bytes than the buffer holds and silently truncate mid-line.
+// readCapped reads at most maxConfigBytes from a REGULAR file, failing safe
+// to nil for anything else. It is the single chokepoint behind all three
+// read sites: OpenRegular gives O_NOFOLLOW (no symlinked final component)
+// and O_NONBLOCK+IsRegular (a FIFO can't block open(2) forever), wrapped
+// with io.ReadFull over a LimitReader since a single Read can silently
+// truncate mid-line.
 func readCapped(p string) []byte {
 	f, err := OpenRegular(p)
 	if err != nil {
@@ -172,14 +172,14 @@ func readCapped(p string) []byte {
 }
 
 // OpenRegular opens a file for reading that is PROVABLY an ordinary file and
-// is never reached through a symlink — the shared door for every read a
+// never reached through a symlink — the shared door for every read a
 // workspace walk performs, since such walks run on an HTTP handler goroutine
-// with no ctx over a tree the scanned party controls. O_NOFOLLOW refuses a
-// symlinked final component; O_NONBLOCK makes open(2) RETURN on a FIFO instead
-// of waiting forever for a writer, and the fstat then decides nothing is read
-// from it — race-free, since the flags pick what gets opened and the fstat
-// judges the thing actually opened. The caller closes and bounds what it
-// reads; this only says WHAT may be opened.
+// over a tree the scanned party controls. O_NOFOLLOW refuses a symlinked
+// final component; O_NONBLOCK makes open(2) return on a FIFO instead of
+// waiting forever, and the fstat then decides nothing is read from it —
+// race-free, since the flags pick what gets opened and the fstat judges the
+// thing actually opened. The caller closes and bounds what it reads; this
+// only says WHAT may be opened.
 func OpenRegular(p string) (*os.File, error) {
 	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -339,11 +339,11 @@ func twoSegments(p string) string {
 	return parts[0] + "/" + parts[1]
 }
 
-// FieldSafe reports whether s carries no control character and no whitespace.
-// It is THE predicate for both doors that judge an attacker-influenceable repo
-// slug or remote URL: this package's classify(), and internal/api's
-// repoFieldSafe, which delegates here — one predicate, deliberately, so the two
-// doors can never judge the same value by different rules.
+// FieldSafe reports whether s carries no control character and no
+// whitespace. It is THE predicate for both doors that judge an
+// attacker-influenceable repo slug or remote URL: this package's classify(),
+// and internal/api's repoFieldSafe, which delegates here — one predicate, so
+// the two doors can never judge the same value by different rules.
 func FieldSafe(s string) bool {
 	return !strings.ContainsFunc(s, func(r rune) bool {
 		return unicode.IsControl(r) || unicode.IsSpace(r)

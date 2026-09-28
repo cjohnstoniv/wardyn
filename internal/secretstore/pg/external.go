@@ -19,15 +19,15 @@ import (
 )
 
 // extVersion is the store-mode row (credential-storage design §2.2, §2.3a): a
-// POINTER. The value lives in the external store; kek_id is
-// "<store>:<ref>", and wrapped_dek and ciphertext are empty. Wardyn does no
-// cryptography for such a row.
+// POINTER. The value lives in the external store; kek_id is "<store>:<ref>",
+// and wrapped_dek/ciphertext are empty. Wardyn does no cryptography for such
+// a row.
 //
-// The ordering is what keeps the two systems safe to disagree: Put writes the
-// store before the row, Delete removes the value before the row. A failure in
-// between leaves at worst a value no row points to (-reconcile reports it) or
-// a row whose value is gone, which reads as a definitive refusal, never as
-// someone else's value and never as not-found (rules 17, 18).
+// The ordering keeps the two systems safe to disagree: Put writes the store
+// before the row, Delete removes the value before the row. A failure in
+// between leaves at worst a value no row points to (-reconcile reports it)
+// or a row whose value is gone, which reads as a definitive refusal, never
+// as someone else's value and never as not-found (rules 17, 18).
 const extVersion = 2
 
 // splitRef splits a pointer row's kek_id into its store and ref.
@@ -126,10 +126,10 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 }
 
-// bounded bounds one store-mode write, the wait for the row's lock included,
-// at six times the per-call timeout: it holds a pooled connection and the lock
-// for its whole store conversation, which an outage (retries, Retry-After,
-// purge waits) would otherwise stretch to minutes.
+// bounded bounds one store-mode write, including the wait for the row's
+// lock, at six times the per-call timeout: it holds a pooled connection and
+// lock for its whole store conversation, which an outage (retries,
+// Retry-After, purge waits) would otherwise stretch to minutes.
 func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 	t := s.extTimeout
 	if t <= 0 {
@@ -139,8 +139,8 @@ func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFun
 }
 
 // lockRow takes the row's store-mode write lock (db.SecretRowLockClass) for
-// the rest of tx. owner and name are text, which holds no NUL, so the key
-// bytes are unambiguous; a crc32 collision only serialises two rows; two
+// the rest of tx. owner/name are text with no NUL, so the key bytes are
+// unambiguous; a crc32 collision only serialises two rows; two
 // DeleteEverywhere calls could deadlock through one, which Postgres detects
 // and one retries.
 func lockRow(ctx context.Context, tx pgx.Tx, owner, name string) error {
@@ -185,13 +185,12 @@ func (s *Store) currentRef(ctx context.Context, tx pgx.Tx, name string) (string,
 	return "", nil
 }
 
-// deleteLocked deletes one row inside tx and reports whether there was one. It
-// takes the row's store-mode write lock first — the lock putExternal holds —
-// so a concurrent Put of the row waits for tx and lands after it, never
-// between the value's removal and the row's (a live value no row points to).
-// A pointer row loses its external value before the row; a pointer into a
-// store this wardynd cannot reach is refused, since removing only the row
-// would leave the value behind with nothing pointing at it. On any error the
+// deleteLocked deletes one row inside tx and reports whether there was one.
+// It takes the row's store-mode write lock first — the lock putExternal
+// holds — so a concurrent Put waits for tx and lands after it, never between
+// the value's removal and the row's. A pointer row loses its external value
+// before the row; a pointer into an unreachable store is refused, since
+// removing only the row would leave the value behind. On any error the
 // caller rolls tx back, and the row stays.
 func (s *Store) deleteLocked(ctx context.Context, tx pgx.Tx, owner, name string) (bool, error) {
 	ref := rowRef(owner, name)
@@ -238,16 +237,16 @@ type MigrateResult struct {
 }
 
 // Migrate moves every row not already at target ("local", or the configured
-// external store's name) there, one row per transaction (design §2.3a.9). For
-// each row it reads the value through the row's current location, writes it
-// to the target, flips the row, and removes the old copy. onRead is called
-// once per value read, for the audit.
+// external store's name), one row per transaction (design §2.3a.9). For each
+// row it reads the value through its current location, writes it to the
+// target, flips the row, and removes the old copy. onRead is called once per
+// value read, for the audit.
 //
 // Safe while a daemon serves: each row is locked while it moves, a row that
 // reached the target meanwhile is skipped, and an external write refuses to
-// overwrite a value already at the target path (a concurrent Put landing, or
-// an orphan -reconcile lists). Idempotent and resumable: it aborts on the
-// first row it cannot move, naming it, with every earlier row committed.
+// overwrite a value already at the target path. Idempotent and resumable: it
+// aborts on the first row it can't move, naming it, with every earlier row
+// committed.
 func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (MigrateResult, error) {
 	var res MigrateResult
 	if target == MigrateLocal && s.kek == nil && !s.serviceWrites {
@@ -296,10 +295,10 @@ func (s *Store) atTarget(target string, e envelope) bool {
 	return e.version == extVersion && store == target
 }
 
-// migrateRow moves one row under the row's store-mode write lock and a row
-// lock. The old external copy is removed only AFTER the row flip commits: a
-// failure there leaves an orphan the error names, never a row pointing at
-// nothing. soft reports an old copy the store kept soft-deleted.
+// migrateRow moves one row under the row's store-mode write lock. The old
+// external copy is removed only AFTER the row flip commits: a failure there
+// leaves an orphan the error names, never a row pointing at nothing. soft
+// reports an old copy the store kept soft-deleted.
 func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRead func(owner, name string)) (moved, soft bool, err error) {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
@@ -390,15 +389,15 @@ type ReconcileReport struct {
 	// Orphans are values in the store that no row points to.
 	Orphans []secretstore.ExternalEntry
 	// SoftDeleted are values the store deleted but can still recover, that no
-	// row points to: a removal whose purge was withheld or failed. Reported,
-	// not drift: nothing reads them, but the organisation can recover them.
+	// row points to — reported, not drift: nothing reads them, but the
+	// organisation can recover them.
 	SoftDeleted []secretstore.ExternalEntry
 }
 
 // Reconcile lists both sides of store mode and reports where they disagree
 // (design §2.3a.1). It reads store metadata only, never a value, and deletes
 // nothing. A transient store failure aborts it: a half-checked report would
-// read as drift that is not there.
+// read as drift that isn't there.
 func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	var rep ReconcileReport
 	if s.ext == nil {

@@ -1,10 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The landing-page GET /runs scoping surface (#1197 L1a): RunFilter, the
-// filtered list read and its companion hidden-row counts. Attention
-// projection (kind/by/pending) is L1b's job and does not live here — this
-// file only scopes, windows and orders the bare AgentRun rows.
+// Landing-page GET /runs scoping: RunFilter, the filtered list read, and
+// hidden-row counts. Attention projection lives elsewhere; this file only
+// scopes, windows and orders the bare AgentRun rows.
 package store
 
 import (
@@ -16,55 +15,45 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// killedVisibleFor is how long a KILLED run stays visible on the landing page
-// by default: a run that ended KILLED longer ago than this is hidden
-// unless the caller opts in with include_killed=1. Fixed, not configurable —
-// it is a display default, not a retention policy.
+// killedVisibleFor: a KILLED run older than this is hidden unless
+// include_killed=1. A display default, not a retention policy.
 const killedVisibleFor = 24 * time.Hour
 
 // RunFilter narrows ListRunsFiltered/CountHiddenRuns to the landing page's
-// opt-in contract. The zero value matches every row (no owner scope, no
-// status filter, no age window, killed rows still subject to killedVisibleFor).
+// opt-in contract. Zero value matches every row (killed rows still subject
+// to killedVisibleFor).
 type RunFilter struct {
-	// Owner exact-matches created_by. Empty = every creator. The api layer
-	// resolves ?owner=me|all (and the view=user owner force) to this before
-	// calling down — RunFilter itself has no opinion on who "me" is.
+	// Owner exact-matches created_by; empty = every creator. The api layer
+	// resolves ?owner=me|all before calling down.
 	Owner string
-	// Statuses is a subset of "active", "ended", "failed", "killed" (OR'd
-	// together); empty = no status filter. "needs" reads an attention
-	// projection this lane does not compute, and is rejected at the api
-	// layer, never reaches here.
+	// Statuses is a subset of "active"/"ended"/"failed"/"killed", OR'd
+	// together; empty = no filter. "needs" is rejected at the api layer.
 	Statuses []string
-	// EndedWithin bounds ended rows' age; <= 0 means "all" (unbounded). Live
-	// rows are NEVER windowed by this, regardless of value.
+	// EndedWithin bounds ended rows' age; <= 0 = unbounded. Live rows are
+	// never windowed by this.
 	EndedWithin time.Duration
 	// IncludeKilled disables killedVisibleFor's default hide.
 	IncludeKilled bool
 	// Workspace exact-matches COALESCE(NULLIF(repo,''), workspace_path).
 	Workspace string
-	// Query ILIKE-searches title/task/repo/created_by. Raw (unescaped) — the
-	// store escapes '%', '_' and '\' itself, so a caller never has to know the
-	// wire format of a LIKE pattern.
+	// Query ILIKE-searches title/task/repo/created_by. Raw — the store
+	// escapes '%', '_' and '\' itself.
 	Query string
 }
 
-// runLiveSQL is TRUE for a row the landing page's end-time window must never
-// apply to: not terminal (types.NonTerminalRunStates, the POSITIVE list — see
-// that type's own doc for why this reads the non-terminal set rather than
-// hand-copying its terminal complement) and not lease-ended. This is the same
-// "active" predicate the status filter's "active" value selects.
+// runLiveSQL is TRUE for a row the end-time window must never apply to: not
+// terminal (types.NonTerminalRunStates) and not lease-ended. Same predicate
+// the "active" status value selects.
 const runLiveSQL = `(state = ANY(%[1]s) AND lost_reason IS DISTINCT FROM 'ended')`
 
-// runEndTimeSQL corrects a lease-ended run's end time: it stays RUNNING until
-// the ended-run grace stops it, so ITS end time is lost_at (the lease end),
-// never ended_at (which that later grace stop would set, moving "ended at
-// its end time" to the wrong moment). Every other terminal row's end time is
-// ended_at.
+// runEndTimeSQL corrects a lease-ended run's end time: it stays RUNNING
+// until the ended-run grace stops it, so its end time is lost_at, never
+// ended_at. Every other terminal row's end time is ended_at.
 const runEndTimeSQL = `CASE WHEN lost_reason = 'ended' THEN lost_at ELSE ended_at END`
 
-// nonTerminalStateList renders types.NonTerminalRunStates as the []string the
-// driver binds to state = ANY($n) — computed once per call so a state added
-// to the enum reaches every query built here without a second copy of the set.
+// nonTerminalStateList renders types.NonTerminalRunStates as the []string
+// bound to state = ANY($n); computed once per call so a new enum value
+// reaches every query here automatically.
 func nonTerminalStateList() []string {
 	out := make([]string, len(types.NonTerminalRunStates))
 	for i, st := range types.NonTerminalRunStates {
@@ -73,27 +62,22 @@ func nonTerminalStateList() []string {
 	return out
 }
 
-// bindArg appends v to *args and returns its positional placeholder — the
-// same growth Page.appendTo uses, pulled out here because this file builds
-// several independent clauses that must all agree on one running count.
+// bindArg appends v and returns its $n placeholder, shared by every clause
+// built here so they agree on one running count.
 func bindArg(args *[]any, v any) string {
 	*args = append(*args, v)
 	return fmt.Sprintf("$%d", len(*args))
 }
 
-// escapeLikePattern escapes '\', '%' and '_' (in that order — '\' first, so
-// the escapes it introduces are not themselves re-escaped) and wraps the
-// result for a substring ILIKE, so a caller's literal '%' or '_' in ?q= is
-// matched literally rather than as a LIKE wildcard.
+// escapeLikePattern escapes '\', '%', '_' in that order — backslash first,
+// so its own escapes aren't re-escaped — and wraps for substring ILIKE.
 func escapeLikePattern(q string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return "%" + r.Replace(q) + "%"
 }
 
-// statusSQL renders one RunFilter.Statuses value as a boolean SQL expression,
-// or "" for an unrecognised one (the api layer validates the enum before this
-// is ever reached, so "" here would only mean a caller bypassed that gate —
-// filterStatusClauses drops it rather than building an always-false OR arm).
+// statusSQL renders one status value as SQL, or "" if unrecognized (the api
+// layer validates the enum; "" here means that gate was bypassed).
 func statusSQL(status string, nonTerminal string) string {
 	switch status {
 	case "active":
@@ -109,12 +93,10 @@ func statusSQL(status string, nonTerminal string) string {
 	}
 }
 
-// baseWhere builds the owner/status/workspace/query predicate — the part of
-// RunFilter that says WHICH rows the caller asked for, before either
-// visibility carve-out (the age window, the killed-hide default) narrows that
-// further. CountHiddenRuns shares this exact clause with ListRunsFiltered's
-// WHERE, so "hidden" always means "matched what was asked, hidden only by a
-// carve-out" — never a row the filter itself would not have shown.
+// baseWhere builds the owner/status/workspace/query predicate, before either
+// visibility carve-out (age window, killed-hide default) narrows further.
+// CountHiddenRuns shares this exact clause with ListRunsFiltered's WHERE, so
+// "hidden" always means "matched, hidden only by a carve-out".
 func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	var clauses []string
 	if f.Owner != "" {
@@ -143,38 +125,32 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	return strings.Join(clauses, " AND ")
 }
 
-// ageWindowSQL is TRUE for a row the ended_within window keeps: every live
-// row (never windowed) plus an ended row whose end time falls inside the
-// window. secsParam is a nullable int placeholder — NULL means "all" (no
-// window at all).
+// ageWindowSQL is TRUE for a row ended_within keeps: every live row plus an
+// ended row whose end time falls inside the window. secsParam NULL = no
+// window.
 func ageWindowSQL(nonTerminal, secsParam string) string {
 	return fmt.Sprintf("(%s OR %s::int IS NULL OR %s >= now() - make_interval(secs => %s::int))",
 		fmt.Sprintf(runLiveSQL, nonTerminal), secsParam, runEndTimeSQL, secsParam)
 }
 
-// killedVisibleSQL is TRUE for a row killedVisibleFor's default does not hide:
-// anything but a KILLED row, or include_killed=1, or a KILLED row that ended
-// within killedVisibleFor (killedSecsParam). A KILLED row with no ended_at
-// (should not happen past migration 0092 — every terminal transition stamps
-// it — but a defensive read, not an assumed invariant) is treated as too old
-// to show.
+// killedVisibleSQL is TRUE for a row killedVisibleFor's default doesn't
+// hide: non-KILLED, or include_killed=1, or KILLED within killedSecsParam.
+// A KILLED row with no ended_at (defensive; shouldn't happen post-migration
+// 0092) is treated as too old to show.
 func killedVisibleSQL(includeParam, killedSecsParam string) string {
 	return fmt.Sprintf("(state <> 'KILLED' OR %s::boolean OR (%s IS NOT NULL AND %s >= now() - make_interval(secs => %s::int)))",
 		includeParam, runEndTimeSQL, runEndTimeSQL, killedSecsParam)
 }
 
-// runOrderSQL is the landing page's order — "needs first" is a client-side
-// sectioning of this same live set, not a separate server order: every live
-// row before every ended row, live rows by created_at DESC, ended rows by
-// their end time DESC, id DESC as the final tie-break so two rows with an
-// identical timestamp still sort deterministically across pages.
+// runOrderSQL: live rows before ended rows, live by created_at DESC, ended
+// by end time DESC, id DESC as tie-break for deterministic paging.
 func runOrderSQL(nonTerminal string) string {
 	live := fmt.Sprintf(runLiveSQL, nonTerminal)
 	return fmt.Sprintf("NOT %[1]s ASC, CASE WHEN %[1]s THEN created_at ELSE %[2]s END DESC, id DESC", live, runEndTimeSQL)
 }
 
-// endedWithinSecs renders RunFilter.EndedWithin as the nullable-int arg
-// ageWindowSQL/CountHiddenRuns bind: nil ("all") for <= 0, else whole seconds.
+// endedWithinSecs renders EndedWithin as nil ("all") for <= 0, else whole
+// seconds.
 func endedWithinSecs(d time.Duration) *int {
 	if d <= 0 {
 		return nil
@@ -183,34 +159,28 @@ func endedWithinSecs(d time.Duration) *int {
 	return &secs
 }
 
-// RunsFilteredPager is the landing-page scoping surface for GET /runs (#1197
-// L1a). Kept out of Pager and Store for the reason every capability interface
-// in this package is: widening either would silently route a test double's
-// embedded-but-not-overridden method to the wrong (unscoped) behaviour. An
-// absent implementation is handled fail-CLOSED at the api-layer call site —
-// the same posture as RunsByCreatorPager, and for the same reason: this is an
-// ownership/visibility-scoped read, and a silent unscoped fallback would leak
-// every run to a caller the filter was supposed to narrow.
+// RunsFilteredPager is the landing-page scoping surface for GET /runs. Kept
+// out of Pager/Store: widening either would silently route a test double's
+// embedded method to the wrong (unscoped) behaviour. An absent
+// implementation fails CLOSED at the api-layer call site, same as
+// RunsByCreatorPager — a silent unscoped fallback would leak every run to a
+// caller the filter was meant to narrow.
 type RunsFilteredPager interface {
 	ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.AgentRun, error)
-	// CountHiddenRuns answers the two X-Wardyn-Hidden-* headers: how many rows
-	// baseWhere(f) matches but the ended_within window excludes (olderHidden),
-	// and how many more killedVisibleFor's default excludes on top of that
-	// (killedHidden). Both are computed by one query (one FILTER'd count each)
-	// so a caller never pays for two round trips per page.
+	// CountHiddenRuns answers the X-Wardyn-Hidden-* headers: rows baseWhere
+	// matches but ended_within excludes (olderHidden), plus rows
+	// killedVisibleFor additionally excludes (killedHidden) — one query.
 	CountHiddenRuns(ctx context.Context, f RunFilter) (olderHidden, killedHidden int, err error)
 }
 
 // Compile-time assertion: PG satisfies RunsFilteredPager.
 var _ RunsFilteredPager = PG{}
 
-// ListRunsFiltered is ListRunsPage narrowed and reordered per f. The
-// owner-scoped read rides the pre-existing agent_runs_created_by_idx
-// (EXPLAIN ANALYZE against a 200k-row seed: a bitmap index scan there, then
-// an in-memory filter and sort); an org-wide read is a parallel sequential
-// scan with a top-N heapsort. Both are linear in the caller's history, which
-// the spec accepted — see migration 0092's own doc for why no ended_at index
-// backs the CASE-expression ordering/window this function builds.
+// ListRunsFiltered is ListRunsPage narrowed and reordered per f. Owner-
+// scoped reads ride agent_runs_created_by_idx (bitmap scan + in-memory
+// sort); an org-wide read is a parallel seq scan with top-N heapsort — both
+// linear in the caller's history, which the spec accepted (no ended_at
+// index backs this CASE-based order/window).
 func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.AgentRun, error) {
 	var args []any
 	nonTerminal := bindArg(&args, nonTerminalStateList())
@@ -238,14 +208,11 @@ func (s PG) CountHiddenRuns(ctx context.Context, f RunFilter) (olderHidden, kill
 	killedSecsParam := bindArg(&args, int(killedVisibleFor.Seconds()))
 	live := fmt.Sprintf(runLiveSQL, nonTerminal)
 
-	// olderHidden: matches baseWhere, is an ended row, and falls outside the
-	// (bounded) ended_within window.
+	// olderHidden: matches baseWhere, ended, outside the ended_within window.
 	olderClause := fmt.Sprintf("NOT %s AND %s::int IS NOT NULL AND %s < now() - make_interval(secs => %s::int)",
 		live, secsParam, runEndTimeSQL, secsParam)
-	// killedHidden: matches baseWhere, is a KILLED row the window itself would
-	// keep (inside it, or the window is "all"), but killedVisibleFor's default
-	// still hides it — moot (always 0) once include_killed=1, since nothing is
-	// hidden by that rule then.
+	// killedHidden: matches baseWhere, KILLED, kept by the window itself, but
+	// hidden by killedVisibleFor's default — moot once include_killed=1.
 	killedClause := fmt.Sprintf(
 		"state = 'KILLED' AND NOT %s::boolean AND (%s::int IS NULL OR %s >= now() - make_interval(secs => %s::int)) AND (%s IS NULL OR %s < now() - make_interval(secs => %s::int))",
 		includeParam, secsParam, runEndTimeSQL, secsParam, runEndTimeSQL, runEndTimeSQL, killedSecsParam)

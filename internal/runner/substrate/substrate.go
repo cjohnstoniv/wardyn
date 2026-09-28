@@ -2,31 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package substrate defines the confinement-substrate sub-interface: the seam
-// beneath runner.Runner that lets a non-OCI microVM VMM (SmolVM, Firecracker,
-// …) back a Confinement Class alongside the OCI/Docker substrate, without the
-// control plane re-implementing the runner contract. The build-tag-free
-// orchestrator (internal/runner/orchestrator) is the runner.Runner the control
-// plane talks to; it multiplexes Substrates by Confinement Class and
-// aggregates their capabilities.
+// beneath runner.Runner that lets a non-OCI microVM VMM back a Confinement
+// Class alongside the OCI/Docker substrate.
 //
-// A Substrate brings up + tears down one governed sandbox (its per-run
-// network, the wardyn-proxy sidecar, the agent unit). Every Substrate MUST:
-//   - Prove confined egress, never merely assert it — EITHER L0 structural (no
-//     default route; sole egress is the proxy sidecar) OR L1 network-policy
-//     (a packet-filter default-denies egress except the proxy AND a boot-time
-//     canary has positively confirmed enforcement on this host/cluster — a
-//     policy object existing is not proof; see ClassSupport.NetworkPolicy).
-//   - Advertise NO Confinement Classes if it can prove neither (fail closed,
-//     never overclaim), except behind an explicit operator opt-out env var —
-//     itself an admission of unconfined egress, not a third proof: the
-//     substrate must still warn at construction/CreateSandbox naming what's
-//     unconfined, AND keep advertising StructuralEgress=false,
-//     NetworkPolicy=false, so an opted-out substrate never reads as confined
-//     on /healthz.
-//   - Error from CreateSandbox (never silently downgrade) before creating
-//     anything, when the demanded Confinement Class can't be enforced.
-//   - Never let the run token / secrets enter the agent's environment.
-//   - Make teardown idempotent and reconstructable from the run id.
+// A Substrate brings up + tears down one governed sandbox. Every Substrate
+// MUST: prove confined egress rather than merely assert it (L0 structural or
+// L1 network-policy, see ClassSupport.NetworkPolicy); advertise NO
+// Confinement Classes if it can prove neither, except behind an explicit,
+// still-warning operator opt-out; error from CreateSandbox, never silently
+// downgrade, when the demanded class can't be enforced; never let the run
+// token/secrets reach the agent's environment; make teardown idempotent and
+// reconstructable from the run id.
 package substrate
 
 import (
@@ -36,99 +22,48 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ClassSupport reports the Confinement Classes a substrate can enforce on this
-// host and the concrete substrate label backing each (e.g. CC3 -> "oci/kata-qemu").
-// It is the substrate-level analogue of runner.Capabilities; the orchestrator
-// aggregates these across substrates into the runner.Capabilities it advertises.
+// ClassSupport reports the Confinement Classes a substrate can enforce and
+// the substrate label backing each.
 type ClassSupport struct {
-	// Classes the substrate can enforce, strongest last. A class is listed ONLY
-	// when its enforcing runtime is actually available (never overclaim).
-	Classes []types.ConfinementClass
-	// Resolved maps each available class to its substrate label ("oci/<runtime>").
-	Resolved map[types.ConfinementClass]string
-	// StructuralEgress reports L0 (no default route; sole egress = wardyn-proxy).
-	StructuralEgress bool
-	// NetworkPolicy reports L1 (packet-filter default-deny except the proxy
-	// sidecar), true only once a boot-time canary has positively confirmed
-	// enforcement (see the package doc) — a policy object that exists but is
-	// silently ignored by a non-enforcing CNI must never read true here.
-	NetworkPolicy bool
-	// NetworkPolicyAcknowledged (B1): an OPERATOR (not the canary) has accepted
-	// an ambient-default-deny-shaped canary failure as expected
-	// (WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY on k8s today). An acknowledgment,
-	// never proof — mutually exclusive with NetworkPolicy=true and never a
-	// substitute for it.
-	NetworkPolicyAcknowledged bool
-	// SessionRecording reports wardyn-rec PTY recording support.
-	SessionRecording bool
-	// UserDrives reports whether this substrate can BIND a member's user drive
-	// (migration 0054) into the sandbox. False is the fail-closed default: the
-	// control plane refuses a drive-carrying run rather than admit one this
-	// substrate would reject at CreateSandbox. Aggregated as a CONJUNCTION (not
-	// a union, unlike every OR-merged flag below) because it's consulted
-	// BEFORE routing — one substrate unable to bind a drive caps the whole
-	// deployment.
-	UserDrives bool
-	// ManagedFiles reports whether this substrate can deliver a root-owned
-	// file (runner.SandboxSpec.ManagedFiles) in place before the agent's main
-	// process runs. Same CONJUNCTION aggregation as UserDrives, same reason:
-	// read before routing.
+	Classes                   []types.ConfinementClass          // strongest last; never overclaim
+	Resolved                  map[types.ConfinementClass]string // substrate label ("oci/<runtime>") per class
+	StructuralEgress          bool                              // L0: no default route; sole egress = wardyn-proxy
+	NetworkPolicy             bool                              // L1, true only once a boot-time canary confirms enforcement
+	NetworkPolicyAcknowledged bool                              // an OPERATOR accepted a canary failure; never a substitute for NetworkPolicy=true
+	SessionRecording          bool                              // wardyn-rec PTY recording support
+	// UserDrives and ManagedFiles are CONJUNCTION-aggregated (read BEFORE
+	// routing, unlike every OR-merged flag above): can this substrate BIND a
+	// member's user drive / deliver a root-owned file; false fail-closed.
+	UserDrives   bool
 	ManagedFiles bool
-	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS runner.Resources.DiskMiB
-	// on this substrate — `filesystem` (a storage-driver quota refuses the
-	// write), `eviction` (the kubelet kills the pod over the limit; never
-	// refuses the write), or `none`/empty. Aggregated as the WEAKEST, not a
-	// union: this is what the control plane tells an admin the number means,
-	// so one substrate enforcing nothing caps the promise for the deployment.
+	// EphemeralDiskEnforcement names what binds runner.Resources.DiskMiB —
+	// `filesystem`, `eviction`, or `none`/empty. Aggregated as the WEAKEST.
 	EphemeralDiskEnforcement types.StorageEnforcement
-	// Freeze reports, PER CLASS, whether this substrate can pause/resume the
-	// agent without losing state (the substrate-level analogue of
-	// runner.Capabilities.Freeze). Copied straight through by the orchestrator
-	// since only one substrate ever backs a given class; absent or false means
-	// no freeze support for that class.
-	Freeze map[types.ConfinementClass]bool
+	Freeze                   map[types.ConfinementClass]bool // per-class pause/resume support; absent/false = none
 }
 
-// Substrate is runner.Runner's lifecycle contract for ONE confinement substrate,
-// with Capabilities replaced by Classes (per-class substrate detail). The OCI
-// substrate (internal/runner/docker) satisfies it today; a non-OCI VMM satisfies
-// the same contract to plug into CC3.
+// Substrate is runner.Runner's lifecycle contract for ONE confinement substrate.
 type Substrate interface {
-	// Name reports the substrate kind ("docker"/OCI today), surfaced on /healthz.
+	// Name reports the substrate kind, surfaced on /healthz.
 	Name() string
 	// Classes reports the enforceable Confinement Classes + their substrate labels.
 	Classes(ctx context.Context) (ClassSupport, error)
-	// CreateSandbox provisions the run's isolated network + proxy + agent unit,
-	// fail-closed with full rollback on any error.
+	// CreateSandbox provisions the run's sandbox, fail-closed with full rollback on any error.
 	CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error)
-	// Exec launches the agent process inside ref, returning the
-	// substrate-specific agent exec id ("" for exec-less/main-process
-	// substrates) so the control plane can persist it for restart-safe
-	// liveness.
-	//
-	// A substrate MAY support only ONE Exec per ref over its lifetime:
-	// Kubernetes ephemeral containers are ADD-ONLY, so k8s can't honour a
-	// second Exec the way docker's "latest Exec wins" re-exec does. Callers
-	// MUST treat Exec as one-shot; a substrate that can't honour a second
-	// Exec MUST error — never no-op, never return the PRIOR exec's id (a
-	// stale agentExecID would misreport AgentStatus). EXEC-SPECIFIC: ExecStream
-	// (below) MUST support repeated calls against the same ref.
+	// Exec launches the agent process inside ref, returning the exec id for
+	// restart-safe liveness. A substrate MAY support only ONE Exec per ref
+	// (k8s ephemeral containers are ADD-ONLY) and MUST error rather than
+	// no-op or return the PRIOR id when it can't honour a second.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process for ref exits and returns its code.
 	Wait(ctx context.Context, ref string) (int, error)
 	// Attach opens an interactive PTY session inside ref.
 	Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error)
-	// ExecStream launches spec.Argv inside ref as a fresh, streamable exec. See
-	// runner.ExecStream's doc for the streaming/TTY-merge/invariant-3/4
-	// contract. UNLIKE Exec, it MUST be repeatable against the SAME ref (one
-	// long-lived sandbox, e.g. one call per SSH/SFTP channel); k8s implements
-	// it on the streaming exec subresource, not an ephemeral container.
+	// ExecStream launches a fresh, streamable exec, repeatable against the SAME ref (see runner.ExecStream's doc).
 	ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error)
 	// Status reports the sandbox lifecycle state.
 	Status(ctx context.Context, ref string) (runner.Status, error)
-	// AgentStatus reports the AGENT's state restart-safely given the persisted
-	// agentExecID (inspects the exec for exec-based substrates; falls back to
-	// Status when agentExecID is "").
+	// AgentStatus reports the AGENT's state restart-safely, falling back to Status when agentExecID is "".
 	AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error)
 	// StopSandbox is the graceful teardown (idempotent on a gone sandbox).
 	StopSandbox(ctx context.Context, ref string) error

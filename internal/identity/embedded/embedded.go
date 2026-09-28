@@ -12,7 +12,7 @@
 // mint; ErrRequiresSPIRE is the typed refusal.
 //
 // All security decisions fail closed: signature, expiry, audience, and
-// revocation are each independently verified, and any RevocationStore error is
+// revocation are each independently verified; any RevocationStore error is
 // treated as revoked.
 package embedded
 
@@ -225,18 +225,16 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		AnyAudience: jwt.Audience{expectedAudience},
 		Time:        p.now(),
 	}); err != nil {
-		// EXPIRY, specifically, is reported with the run id attached. It is the
-		// one verify failure that is a FACT ABOUT A RUN rather than about a
-		// presented string: a healthy long run whose renews were refused through
-		// a control-plane outage holds a dead token and 401s every /internal/*
-		// call from then on, forever, with nothing in the audit trail naming the
-		// run (see internal/api's run.identity.expire). Expiry is checked here,
-		// BEFORE revocation below, so an expired token never reads as a revoked
-		// one; the run id comes from the actor claim, which the signature above
-		// already covered. Everything else — a forged signature, a wrong
-		// audience, a not-yet-valid token — stays a flat error: no run of ours is
-		// named by it, and saying which half a prober got wrong is exactly what
-		// this boundary refuses to do.
+		// EXPIRY alone is reported with the run id attached: it is the one verify
+		// failure that is a fact about a run rather than about a presented
+		// string (a healthy long run whose renews were refused by a
+		// control-plane outage holds a dead token and 401s forever with nothing
+		// in the audit trail naming the run — see internal/api's
+		// run.identity.expire). Checked before revocation below, so an expired
+		// token never reads as a revoked one; the run id comes from the actor
+		// claim, already covered by the signature check. Every other failure
+		// (forged signature, wrong audience, not-yet-valid) stays a flat error
+		// naming no run — this boundary never says which half a prober got wrong.
 		if errors.Is(err, jwt.ErrExpired) {
 			if runID, rerr := p.runIDFromActor(claims.Act.Sub); rerr == nil {
 				return nil, &identity.ExpiredTokenError{
@@ -291,13 +289,12 @@ func (p *Provider) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	return nil
 }
 
-// RevokeJTI revokes a single token by its own jti, without revoking the
-// whole run (O2, least-privilege credentials): a revive uses this to retire
-// a run's OLD token the moment a fresh one is minted, distinct from RevokeRun
-// (the run-wide kill-switch cascade). Not part of identity.Provider — callers
-// reach it through their own narrow capability interface (internal/api's
-// jtiRevoker), the way every other optional capability in this tree is
-// reached, rather than widening the Provider contract for one caller.
+// RevokeJTI revokes a single token by its own jti without revoking the whole
+// run: a revive uses this to retire a run's old token the moment a fresh one
+// is minted, distinct from RevokeRun's kill-switch cascade. Not part of
+// identity.Provider — callers reach it through their own narrow capability
+// interface (internal/api's jtiRevoker) rather than widening the Provider
+// contract for one caller.
 func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
 	if err := p.revocations.RevokeJTI(ctx, jti, runID); err != nil {
 		p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "failure")
@@ -346,9 +343,9 @@ func (p *Provider) runIDFromActor(actor string) (uuid.UUID, error) {
 }
 
 // audit records an attribution event; failures must not block the operation
-// (the Recorder owns durability/retry semantics), but a dropped audit write is
-// logged loudly rather than silently swallowed — invariant 6 (every mint/revoke
-// is an audit event) is best-effort here, so a swallowed write must stay visible.
+// (the Recorder owns durability/retry semantics), but a dropped write is
+// logged loudly rather than silently swallowed since every mint/revoke being
+// an audit event is otherwise only best-effort here.
 func (p *Provider) audit(ctx context.Context, runID uuid.UUID, actor, action, jti, outcome string) {
 	run := runID
 	ev := types.AuditEvent{
@@ -369,11 +366,10 @@ func (p *Provider) audit(ctx context.Context, runID uuid.UUID, actor, action, jt
 // keyID derives the stable JWT header kid from the public key: base64url of the
 // SHA-256 of the marshaled EC point.
 func keyID(pub *ecdsa.PublicKey) string {
-	// Uncompressed SEC1 point bytes (0x04||X||Y) as the stable, deterministic
-	// thumbprint input, via crypto/ecdh (elliptic.Marshal is deprecated). The
-	// encoding is byte-identical, so the derived kid is unchanged. ECDH() only
-	// errors for a non-ECDH curve; the issuer key is always P-256 (ES256), so
-	// fall back to the equivalent deprecated encoding rather than panic.
+	// Uncompressed SEC1 point bytes (0x04||X||Y), via crypto/ecdh
+	// (elliptic.Marshal is deprecated but byte-identical). ECDH() only errors
+	// for a non-ECDH curve; the issuer key is always P-256, so fall back to the
+	// deprecated encoding rather than panic.
 	if ep, err := pub.ECDH(); err == nil {
 		sum := sha256.Sum256(ep.Bytes())
 		return base64.RawURLEncoding.EncodeToString(sum[:])

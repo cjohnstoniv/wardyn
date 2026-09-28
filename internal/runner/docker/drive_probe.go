@@ -19,16 +19,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ProbeDrive implements runner.DriveProber (#165): a short-lived container,
-// run AS THE AGENT'S OWN UID rather than the daemon's root, tests whether a
-// host_path drive's resolved directory is actually readable. An inline
-// daemon-side os.Stat can't establish this — the daemon runs as root, which
+// ProbeDrive implements runner.DriveProber: a short-lived container, run AS THE AGENT'S OWN UID
+// rather than the daemon's root, tests whether a host_path drive's resolved directory is actually
+// readable. An inline daemon-side os.Stat can't establish this — the daemon runs as root, which
 // can read a directory the agent's uid 1000 cannot.
 //
-// Scoped to host_path: a docker_volume is Docker's own managed object
-// (never chowned away from default by ensureDriveVolume), so there's
-// nothing worth inspecting — DriveProbeUnknown is the honest answer here,
-// not a guessed pass.
+// Scoped to host_path: a docker_volume is Docker's own managed object (never chowned away from
+// default by ensureDriveVolume), so there's nothing worth inspecting — DriveProbeUnknown is the
+// honest answer here, not a guessed pass.
 func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner.DriveProbe, error) {
 	if drive.Backend != types.DriveBackendHostPath {
 		return runner.DriveProbe{Result: runner.DriveProbeUnknown,
@@ -118,11 +116,11 @@ const (
 	driveProbeUser   = "1000:1000"
 	driveProbeTarget = "/wardyn-probe"
 	// defaultDriveProbeImage is the busybox-class placeholder ProbeDrive runs
-	// `sh`/`test` in when Config.DriveProbeImage is unset. Pinned by digest
-	// (SF-14), not `:latest`: it's bind-mounted with a host directory on the
-	// request path, so a floating tag would be one registry push (or MITM)
-	// away from running something other than busybox against that mount.
-	// Refresh by re-pulling `busybox:latest` and updating the digest.
+	// `sh`/`test` in when Config.DriveProbeImage is unset. Pinned by digest,
+	// not `:latest`: it's bind-mounted with a host directory on the request
+	// path, so a floating tag would be one registry push (or MITM) away from
+	// running something other than busybox against that mount. Refresh by
+	// re-pulling `busybox:latest` and updating the digest.
 	defaultDriveProbeImage = "busybox@sha256:cac8f90bbee42dc962a6b38bb1a235948d070385bb9d996bba15a6db8d364008"
 )
 

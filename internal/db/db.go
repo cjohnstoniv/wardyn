@@ -22,10 +22,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// migrationExecutor is the subset of *pgxpool.Pool / *pgxpool.Conn the migration
-// steps need. Migrate runs ALL of them on the SINGLE advisory-lock-holding
-// connection (never re-acquiring from the pool), so a pool_max_conns=1 DSN can't
-// self-deadlock — the held lock conn would otherwise starve the loop.
+// migrationExecutor is the subset of *pgxpool.Pool / *pgxpool.Conn the migration steps need. Migrate
+// runs ALL of them on the SINGLE advisory-lock-holding connection, so a pool_max_conns=1 DSN can't
+// self-deadlock against the held lock conn.
 type migrationExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -35,23 +34,18 @@ type migrationExecutor interface {
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// retiredMigrations is the closed set of RELEASED migration filenames that a
-// later commit renamed or retired without changing what they applied — so a
-// database migrated by the old name is not "a newer wardynd migrated it", it
-// is this exact schema under a name this tree no longer ships.
+// retiredMigrations is the closed set of RELEASED migration filenames that a later commit renamed
+// or retired without changing what they applied — so a database migrated by the old name is not "a
+// newer wardynd migrated it", it is this exact schema under a name this tree no longer ships.
 //
-// v0.7.12 shipped 0065_secret_envelope_v1.sql; main renumbered it to
-// 0069_secret_envelope_v1.sql (byte-identical text) to make room for migrations
-// 0065-0068 added after the 0.7 branch point. Every 0.7.12 database therefore
-// carries a schema_migrations row this binary does not ship under that name,
-// and unknownAppliedMigrations must not read that as a downgrade (#675).
+// v0.7.12 shipped 0065_secret_envelope_v1.sql; main renumbered it to 0069_secret_envelope_v1.sql
+// (byte-identical) to make room for migrations added after the 0.7 branch point, so every 0.7.12
+// database carries a schema_migrations row this binary doesn't ship under that name, and
+// unknownAppliedMigrations must not read that as a downgrade.
 //
-// Built from evidence, not memory: for every released tag v0.7.0 through
-// v0.7.12, `git ls-tree --name-only <tag> internal/db/migrations/` compared
-// against this tree's migrations/ finds exactly this one name absent.
-// testdata/released_migrations_v0.7.txt pins that same tag-derived list so
-// TestRetiredMigrationsCoverEveryReleasedName fails the day a name is neither
-// shipped nor retired. A migration renamed again later adds a second entry
+// Built from evidence, not memory: for every released v0.7.x tag, comparing that tag's
+// migrations/ against this tree's finds exactly this one name absent, pinned by
+// TestRetiredMigrationsCoverEveryReleasedName. A migration renamed again later adds a second entry
 // here; it never needs one removed.
 var retiredMigrations = map[string]string{
 	"0065_secret_envelope_v1.sql": "0069_secret_envelope_v1.sql",
@@ -71,44 +65,35 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Migrate applies all migrations in internal/db/migrations/*.sql in lexical
-// order. Each migration runs inside its own transaction; already-applied
-// filenames (tracked in schema_migrations) are skipped. Idempotent.
-//
-// It REFUSES a database that records an applied migration this binary does not
-// ship: see unknownAppliedMigrations.
+// Migrate applies all migrations in internal/db/migrations/*.sql in lexical order. Each migration
+// runs inside its own transaction; already-applied filenames are skipped. Idempotent. It REFUSES a
+// database that records an applied migration this binary does not ship: see unknownAppliedMigrations.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return migrate(ctx, pool, false)
 }
 
-// MigrateAllowingUnknown is Migrate with the unknown-migration refusal turned
-// into a WARN — the break-glass behind WARDYN_ALLOW_UNKNOWN_MIGRATIONS, for an
-// operator who has decided to run an older wardynd against a newer schema anyway.
+// MigrateAllowingUnknown is Migrate with the unknown-migration refusal turned into a WARN — the
+// break-glass behind WARDYN_ALLOW_UNKNOWN_MIGRATIONS.
 func MigrateAllowingUnknown(ctx context.Context, pool *pgxpool.Pool) error {
 	return migrate(ctx, pool, true)
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, allowUnknown bool) error {
-	// N5: serialize concurrent boots. Take a session-level advisory lock on a
-	// SINGLE dedicated pooled connection (lock + unlock must hit the same
-	// session) so a second wardynd blocks here until the first finishes the loop.
+	// Serialize concurrent boots: a session-level advisory lock on a SINGLE dedicated pooled
+	// connection (lock + unlock must hit the same session) so a second wardynd blocks here.
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("db: acquire migration lock conn: %w", err)
 	}
 	defer conn.Release()
-	// Register the best-effort unlock BEFORE acquiring, on a background context,
-	// so the lock is released even if ctx is cancelled at the instant the server
-	// grants it (pgx can return the ctx error after the grant); unlocking a
-	// non-held lock is a harmless no-op.
+	// Registered BEFORE acquiring, on a background context, so the lock releases even if ctx is
+	// cancelled at the instant the server grants it; unlocking a non-held lock is a harmless no-op.
 	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrateAdvisoryLockKey) //nolint:errcheck // best-effort release
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateAdvisoryLockKey); err != nil {
 		return fmt.Errorf("db: acquire migration advisory lock: %w", err)
 	}
 
-	// Every statement below runs on `conn` (NOT `pool`) so the migration needs
-	// exactly ONE connection — a pool_max_conns=1 DSN must not self-deadlock
-	// against the lock-holding conn.
+	// Runs on `conn`, not `pool`, so a pool_max_conns=1 DSN can't self-deadlock against this conn.
 	return migrateOn(ctx, conn, allowUnknown)
 }
 
@@ -138,9 +123,8 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 	}
 	sort.Strings(names)
 
-	// Before anything is written: a newer wardynd migrated this database — or
-	// this schema was migrated under a RELEASED name this tree later renamed
-	// (retiredMigrations), which is not a downgrade at all.
+	// Before anything is written: check whether a newer wardynd migrated this database, or it was
+	// migrated under a retired name (retiredMigrations), which is not a downgrade at all.
 	shipped := append(slices.Clone(names), slices.Sorted(maps.Keys(retiredMigrations))...)
 	unknown, err := unknownAppliedMigrations(ctx, db, shipped)
 	if err != nil {
@@ -158,46 +142,24 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 			slog.String("newest_unknown", newest), slog.Any("unknown_migrations", unknown))
 	}
 
-	// Read the operator's ENABLE ALWAYS hardening BEFORE anything runs. Every
-	// migration that (re)defines an audit trigger does so with DROP TRIGGER IF
-	// EXISTS + CREATE TRIGGER, and CREATE TRIGGER always yields tgenabled='O' —
-	// so the loop below, and the trigger-restore replay inside
-	// ensureAuditTriggers, both silently revert 'A' back to 'O'. This is the
-	// WRITE side of the invariant auditTriggerNames states on the READ side.
+	// Read the operator's ENABLE ALWAYS hardening BEFORE anything runs. Every migration that
+	// (re)defines an audit trigger does DROP TRIGGER IF EXISTS + CREATE TRIGGER, and CREATE TRIGGER
+	// always yields tgenabled='O', so the loop below silently reverts 'A' back to 'O'.
 	hardened, err := auditAlwaysTriggers(ctx, db)
 	if err != nil {
 		return err
 	}
-	// DEFERRED, not called on the success path, and the difference is the whole
-	// promise. A migration that FAILS is not an exotic state here: 0059 and 0060
-	// both fail loudly by design and nominate "fix the rows and re-run" as the
-	// supported response, and 0056-0058 sit BEFORE them in apply order — so by
-	// the time the loop returns an error, three committed DROP TRIGGER + CREATE
-	// TRIGGER pairs have already put tgenabled back to 'O'. Returning there left
-	// the hardening stripped with nothing logged, and stripped FOR GOOD: the
-	// remediated boot's capture reads that 'O' as the shipped state and finds
-	// 0056-0058 already recorded applied, so there is nothing left to restore
-	// and nothing left to notice. Deferring it here covers every exit — a loop
-	// error, an ensureAuditTriggers refusal, a cancelled ctx — with the same
-	// re-apply-or-say-so the success path always had. It still runs LAST, after
-	// ensureAuditTriggers, which is what the tail call was careful about: that
-	// function's restore path replays the trigger-defining migrations and
-	// re-creates the trigger as plain 'O' for the same reason the loop does.
+	// DEFERRED, not called on the success path: some migrations fail loudly by design ("fix the rows
+	// and re-run") after earlier ones already committed DROP+CREATE TRIGGER pairs that reverted
+	// tgenabled to 'O'. Returning there would strip the hardening for GOOD, since the next boot's
+	// capture would read 'O' as the shipped state with those migrations already recorded applied.
+	// Deferring covers every exit with the same re-apply-or-say-so the success path has, and runs
+	// LAST, after ensureAuditTriggers (whose own restore path reverts the trigger the same way).
 	//
-	// And on a context the caller cannot cancel, which is what makes the
-	// "cancelled ctx" claim above true rather than aspirational. wardynd gives
-	// the whole connect-and-migrate step a deadline (cmd/wardynd/boot_deps.go),
-	// and the loop deliberately logs each file's elapsed time so a slow one is
-	// visible BEFORE that deadline turns it fatal — i.e. a deadline firing
-	// between two migrations is a designed-for outcome, not an exotic one. Handed
-	// the same expired ctx, every statement in the restore fails before it
-	// reaches the wire, so the deferred call could only log that it could not
-	// tell — and the hardening is then lost for good for exactly the reason the
-	// loop-error case was: the next boot's capture reads the reverted 'O' and
-	// 0056-0058 are already recorded applied. context.WithoutCancel keeps the
-	// caller's values (logging/trace) and drops only its cancellation; the fresh
-	// deadline keeps a wedged server from turning a best-effort restore into a
-	// boot that never returns.
+	// Runs on a context the caller cannot cancel: a deadline firing mid-loop is designed-for, and the
+	// same expired ctx would make the restore's statements fail the same way. context.WithoutCancel
+	// keeps the caller's values but drops cancellation; the fresh deadline keeps a wedged server from
+	// turning a best-effort restore into a boot that never returns.
 	defer func() {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreHardeningTimeout)
 		defer cancel()
@@ -218,10 +180,8 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 			return fmt.Errorf("db: read migration %s: %w", name, err)
 		}
 
-		// Log elapsed time per applied migration so a slow one (e.g. an
-		// index build on an unbounded table) is VISIBLE in the boot log before its
-		// caller's timeout turns it fatal, rather than the boot just going silent
-		// for however long the timeout allows.
+		// Log elapsed time per migration so a slow one is VISIBLE in the boot log before the
+		// caller's timeout turns it fatal, rather than the boot going silent until then.
 		start := time.Now()
 		if err := applyMigration(ctx, db, name, string(data)); err != nil {
 			return err
@@ -231,60 +191,28 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 	if err := ensureAuditTriggers(ctx, db); err != nil {
 		return err
 	}
-	// The hardening restore is the deferred call registered above, so it runs
-	// after this returns however it returns.
+	// The hardening restore is the deferred call registered above; it runs after this returns.
 	return auditChainCanary(ctx, db)
 }
 
-// auditChainCanary appends ONE synthetic audit row inside a transaction it
-// always rolls back, and asserts the row came out chained: row_hash set, and
-// prev_hash equal to the head read under the same lock. It is the FUNCTIONAL
-// half of the boot check.
+// auditChainCanary appends ONE synthetic audit row inside a transaction it always rolls back, and
+// asserts it came out chained: row_hash set, prev_hash equal to the head read under the same lock.
+// It is the FUNCTIONAL half of the boot check — catalog shape (trigger present, enabled, shipped
+// function) is not enough: 0057 shipped a trigger that was all three and did not work (a SECURITY
+// DEFINER pinned to the wrong search_path), so Migrate reported success while every audit insert
+// then failed or silently linked to the wrong table's head. Never committed, so there is no
+// synthetic row in anybody's audit log — cost is one burned seq per boot, which the sweep tolerates.
 //
-// Catalog shape is not enough, and the release has the receipt. Everything
-// above this asks the catalog: is the trigger there, is it enabled, is it the
-// function we ship. 0057 shipped a trigger that was all three and did not work
-// — a SECURITY DEFINER pinned to `pg_catalog, public` while its body named
-// audit_events unqualified, so on a deployment whose objects live in another
-// schema Migrate reported success and then EVERY audit insert failed from inside
-// the trigger, or (quieter and worse, where public held a second Wardyn schema)
-// linked the chain to the wrong table's head and never linked at all. 0058
-// repaired that particular body; nothing made the failure CLASS visible at boot.
-// A single round trip does, and it converts the class from post-hoc to
-// boot-time.
+// A chain that demonstrably does not chain refuses the boot, since serving over it writes a log the
+// verify sweep will report broken for as long as it runs. A canary that could not be RUN (chain lock
+// busy, statement cancelled) reports at ERROR and lets the boot continue — those are bounded,
+// transient and self-clearing.
 //
-// Never committed, so there is no synthetic row in anybody's audit log and no
-// question about what an operator is looking at. The cost is one burned seq per
-// boot — which the sweep already tolerates by design: auditChainWalk's own
-// doc records that seq gaps below the chain come from rolled-back inserts and
-// that seq is not hashed.
-//
-// What refuses and what only reports. A chain that demonstrably does not chain
-// — the insert succeeded and the row came back with no row_hash, or with a
-// prev_hash that is not the head — refuses the boot: that is the 0057 state, and
-// a wardynd serving over it writes an audit log the verify sweep will report as
-// broken for as long as it runs. A canary that could not be RUN because the
-// chain lock was busy or the statement was cancelled reports at ERROR and lets
-// the boot continue: those are bounded, transient and self-clearing (the whole
-// subject of AuditChainLockTimeout), and bricking a boot over one is a failure
-// this check would cause rather than one it would find.
-// AuditChainCanary runs the boot canary against an arbitrary pool, for the ONE
-// caller that needs it on a pool Migrate never touched.
-//
-// Why the split-role posture needs it. Migrate — and so the canary at its tail —
-// runs on the MIGRATE pool when WARDYN_PG_MIGRATE_DSN is set, and that is the
-// posture the daemon's own boot log recommends. But the migrate role is not the
-// role that writes audit rows: every real audit write goes through the APP pool,
-// as a different role, with a different search_path and different privileges. A
-// canary that only ever ran as the migrator therefore proved the chain works for
-// a connection nothing audits on, and a split-role boot could start clean while
-// the app pool's very next audit write came back unchained — the exact failure
-// class this check exists to convert from post-hoc to boot-time.
-//
-// Same function, not a second copy: the refusal rules, the rolled-back
-// transaction, the READ COMMITTED pin and the transient-error treatment are the
-// ones documented on auditChainCanary below, so the two boot paths cannot come
-// to different conclusions about what a working chain is.
+// AuditChainCanary runs the same check against an arbitrary pool, for the caller that needs it on a
+// pool Migrate never touched: with a split migrate/app DSN, real audit writes go through a different
+// role with different search_path/privileges, so a canary that only ever ran as the migrator would
+// prove nothing about the pool that actually writes audit rows. Same function, not a second copy, so
+// the two boot paths can't disagree about what a working chain is.
 func AuditChainCanary(ctx context.Context, pool *pgxpool.Pool) error {
 	return auditChainCanary(ctx, pool)
 }
@@ -301,12 +229,11 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if err != nil {
 		return fmt.Errorf("db: begin audit chain canary: %w", err)
 	}
-	// Background context, and it is the ONE thing this function must not fail to
-	// do: a cancelled ctx must still roll the canary row back.
+	// Background context: a cancelled ctx must still roll the canary row back.
 	defer tx.Rollback(context.Background()) //nolint:errcheck // the canary is never committed
 
-	// Same bound and same lock the real writers take, so the canary queues
-	// behind a busy chain instead of waiting for a boot timeout.
+	// Same bound and same lock the real writers take, so the canary queues behind a busy chain
+	// instead of waiting for a boot timeout.
 	if _, err := tx.Exec(ctx, AuditChainLockTimeoutSQL()); err != nil {
 		return auditCanaryTransient(ctx, "bound the canary's chain lock wait", err)
 	}
@@ -339,25 +266,18 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	return nil
 }
 
-// beginReadCommitted starts a transaction and PINS it to READ COMMITTED, so it
-// does not inherit default_transaction_isolation — a USERSET GUC any role can
-// set per-role or per-database, which nothing in this tree pinned or checked.
+// beginReadCommitted starts a transaction and PINS it to READ COMMITTED, so it does not inherit
+// default_transaction_isolation — a USERSET GUC any role can set per-role or per-database. A
+// transaction that touches the audit chain must not have its snapshot semantics decided by that
+// setting: the canary reads the chain head and then INSERTs, and the trigger reads the head again
+// inside that INSERT; at REPEATABLE READ both reads would answer from a stale snapshot, and at
+// SERIALIZABLE the transaction can abort with a failure this function would wrongly report as a
+// broken chain and refuse the boot over.
 //
-// Same class as store.InsertAuditEvent's pinned Begin, and here for the same
-// reason: a transaction that touches the audit chain must not have its snapshot
-// semantics decided by a deployment setting. The canary reads the chain head and
-// then INSERTs, and the trigger reads the head again inside that INSERT; at
-// REPEATABLE READ both reads answer from a snapshot taken by the advisory-lock
-// statement BEFORE the lock was granted, so the canary validates a world that
-// may already be stale, and at SERIALIZABLE the same transaction can be aborted
-// with a serialization failure that this function would report as a broken chain
-// and REFUSE THE BOOT over. Neither is a thing to leave to a GUC.
-//
-// SET TRANSACTION rather than a BeginTx on the interface: migrationExecutor is
-// deliberately the small subset of pgxpool.Pool/Conn the migration steps need,
-// and `SET TRANSACTION ISOLATION LEVEL` is exactly equivalent as long as it is
-// the first statement of the transaction, which it is here. A failed SET leaves
-// no transaction behind for the caller to clean up.
+// SET TRANSACTION rather than a BeginTx on the interface: migrationExecutor is deliberately the
+// small subset of pgxpool.Pool/Conn the migration steps need, and `SET TRANSACTION ISOLATION LEVEL`
+// is exactly equivalent as the first statement of the transaction. A failed SET leaves no
+// transaction behind for the caller to clean up.
 func beginReadCommitted(ctx context.Context, db migrationExecutor) (pgx.Tx, error) {
 	tx, err := db.Begin(ctx)
 	if err != nil {
@@ -370,10 +290,9 @@ func beginReadCommitted(ctx context.Context, db migrationExecutor) (pgx.Tx, erro
 	return tx, nil
 }
 
-// auditCanaryTransient decides the one direction this check must not get wrong:
-// a lock wait that timed out (SQLSTATE 55P03) or a statement that was cancelled
-// (57014) says nothing about whether the chain works, so it is reported and the
-// boot continues. Anything else is returned and refuses.
+// auditCanaryTransient decides the one direction this check must not get wrong: a lock wait timeout
+// (55P03) or cancelled statement (57014) says nothing about whether the chain works, so it is
+// reported and the boot continues. Anything else is returned and refuses.
 func auditCanaryTransient(ctx context.Context, what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.Code == "55P03" || pgErr.Code == "57014") {
@@ -406,37 +325,26 @@ func auditAlwaysTriggers(ctx context.Context, db migrationExecutor) ([]string, e
 	return names, nil
 }
 
-// restoreAlwaysTriggers re-applies ENABLE ALWAYS to each trigger in want that is
-// no longer 'A'. docs/OPERATIONS.md promises a hardened trigger is left "exactly
-// as it is"; auditTriggerNames keeps that promise on the READ side by counting
-// 'A' as firing, and this keeps it on the WRITE side, for the whole of Migrate.
-// Without it the promise would hold only for a database with nothing left to
-// apply: an already-hardened deployment would lose the hardening the moment it
-// upgraded, with nothing logged, and the next boot would then read the
-// resulting 'O' as the normal shipped state.
+// restoreAlwaysTriggers re-applies ENABLE ALWAYS to each trigger in want that is no longer 'A'.
+// docs/OPERATIONS.md promises a hardened trigger is left "exactly as it is"; this keeps that promise
+// for the whole of Migrate — without it an already-hardened deployment would lose the hardening the
+// moment it upgraded, with nothing logged, and the next boot would read the reverted 'O' as normal.
 //
-// Idempotent, and deliberately narrow: it re-reads the catalog and issues the
-// ALTER only for a trigger that WAS 'A' and is not any more, so a run with
-// nothing pending — or on a deployment that never hardened anything — touches
-// nothing at all. A trigger nobody hardened is never promoted to 'A' by this.
+// Idempotent and deliberately narrow: re-reads the catalog and issues the ALTER only for a trigger
+// that WAS 'A' and is not any more, so a trigger nobody hardened is never touched.
 //
-// A failure is logged, not returned. Refusing the boot would not save the
-// hardening: the migrations have already been applied and re-recorded, so the
-// NEXT boot's capture reads the reverted 'O' and has nothing left to restore.
-// An ERROR line naming the exact statement to re-run is the honest outcome, and
-// it keeps the "never continue silently" property that ensureAuditTriggers has.
+// A failure is logged, not returned: refusing the boot would not save the hardening, since the
+// migrations are already applied and re-recorded, so the next boot's capture has nothing left to
+// restore. An ERROR naming the exact statement to re-run is the honest outcome instead.
 func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []string) {
 	if len(want) == 0 {
 		return
 	}
 	still, err := auditAlwaysTriggers(ctx, db)
 	if err != nil {
-		// Naming the statements, not just the trigger names: this branch is
-		// reached exactly when the connection or the context is no longer good
-		// enough to read the catalog (a boot whose deadline expired mid-loop is
-		// the live case), so it is the last chance the operator gets to be told
-		// what to run. docs/OPERATIONS.md promises an ERROR that names the
-		// statement whenever the hardening cannot be re-applied.
+		// Naming the statements, not just the trigger names: this is the last chance the operator
+		// gets to be told what to run when the catalog can no longer be read (e.g. an expired
+		// boot deadline mid-loop).
 		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled and re-apply by hand if it is not 'A'",
 			slog.Any("error", err), slog.Any("hardened_before", want),
 			slog.Any("statements", alwaysTriggerStatements(want)))
@@ -508,27 +416,19 @@ func auditShippedTriggerFuncs() map[string]string {
 	return m
 }
 
-// ensureAuditTriggers is the boot-time answer to "the migration ran once, years
-// of restarts ago". schema_migrations records a FILENAME, so an owner or
-// superuser who DROPs (or DISABLEs) one of the audit_events triggers leaves a
-// database that every later Migrate happily reports as fully migrated: the
-// catalog no longer matches the schema the migrations describe, and nothing
-// looked. Every row written after that is unchained — and an unchained row is
-// exactly what the verify sweep now names as a break, so the two halves of this
-// hole close together.
+// ensureAuditTriggers is the boot-time answer to "the migration ran once, years of restarts ago".
+// schema_migrations records a FILENAME, so an owner or superuser who DROPs (or DISABLEs) an
+// audit_events trigger leaves a database every later Migrate happily reports as fully migrated,
+// while every row written after that is unchained — exactly what the verify sweep names as a break.
 //
-// The chain trigger is RESTORED rather than refused: it is defined by
-// idempotent DROP-IF-EXISTS/CREATE migrations that can simply be replayed, and a
-// wardynd that refuses to boot leaves the deployment with no audit log at all —
-// worse than one that puts the trigger back and says so loudly. The append-only
-// triggers are only CHECKED: they are defined by 0001, the whole initial schema,
-// and replaying that at boot to fix one trigger is a far bigger blast radius
-// than refusing. Either way the process does not continue silently, which is the
-// property that was missing.
+// The chain trigger is RESTORED rather than refused: it is defined by idempotent
+// DROP-IF-EXISTS/CREATE migrations that can simply be replayed, and refusing to boot would leave the
+// deployment with no audit log at all. The append-only triggers are only CHECKED: they are defined
+// by the whole initial schema, and replaying that at boot to fix one trigger is a far bigger blast
+// radius than refusing. Either way the process does not continue silently.
 //
-// A missing audit_events table is not this function's business (an empty
-// database mid-bootstrap has none yet); it reports protected-by-absence and
-// leaves the rest of the boot to say so.
+// A missing audit_events table is not this function's business (an empty database mid-bootstrap has
+// none yet); it reports protected-by-absence and leaves the rest of the boot to say so.
 func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	present, err := auditTriggerNames(ctx, db)
 	if err != nil {
@@ -537,18 +437,11 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	if present == nil { // no audit_events table at all
 		return nil
 	}
-	// A name is not an identity, and every check above this line was keyed on
-	// one. auditTriggerNames reports a trigger PRESENT when the catalog holds
-	// its name; auditForeignTriggers excludes the three shipped names from the
-	// foreign set by that same name. So the one shape neither can see is a
-	// trigger WEARING a shipped name over a body nobody shipped —
-	// DROP TRIGGER audit_events_chain, then CREATE TRIGGER audit_events_chain
-	// ... EXECUTE FUNCTION somebody_elses_function(). That is the quiet bypass
-	// in its strongest form: the boot log is clean, every catalog check passes,
-	// and the trigger the whole audit design rests on is the forger's. The
-	// append-only arm is the same hole with a worse ending — a function that
-	// returns NEW puts UPDATE and DELETE back on the audit log while this check
-	// reports the guarantee in force.
+	// A name is not an identity, and every check above this line was keyed on one: a trigger WEARING
+	// a shipped name over a body nobody shipped (DROP + CREATE TRIGGER ... EXECUTE FUNCTION
+	// somebody_elses_function()) passes every catalog check while the trigger the whole audit design
+	// rests on is the forger's. The append-only arm is the same hole with a worse ending — a function
+	// that returns NEW puts UPDATE/DELETE back on the audit log while this check reports it enforced.
 	impostors, err := auditImpostorTriggers(ctx, db)
 	if err != nil {
 		return err
@@ -596,8 +489,7 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 				name, fn, auditAppendOnlyFunc)
 		}
 	}
-	// The shipped guards being armed is not the same as nothing ELSE being
-	// armed beside them. auditTriggerNames already read the complete list.
+	// The shipped guards being armed is not the same as nothing ELSE being armed beside them.
 	tamperCapable, other, err := auditForeignTriggers(ctx, db)
 	if err != nil {
 		return err
@@ -608,9 +500,6 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	}
 	reportTransactionIsolation(ctx, db)
 	if len(tamperCapable) > 0 {
-		// Wrapped only to satisfy lll; the sentence is the operator's whole
-		// explanation of why a boot refusal is the proportionate response, so
-		// it is split rather than shortened.
 		return fmt.Errorf("db: row-level BEFORE INSERT trigger(s) on audit_events that Wardyn does not ship (%s); "+
 			"such a trigger sees NEW and its changes are what Postgres stores, so it can rewrite or drop any "+
 			"audit row on the way in while every shipped guard stays armed and the verify sweep still reports "+
@@ -619,28 +508,21 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	return nil
 }
 
-// reportTransactionIsolation names a default_transaction_isolation that is not
-// READ COMMITTED, at ERROR, with the statement to fix it — the same "never
-// continue silently" treatment a missing guard gets.
+// reportTransactionIsolation names a default_transaction_isolation that is not READ COMMITTED, at
+// ERROR, with the statement to fix it — the same "never continue silently" treatment a missing
+// guard gets.
 //
-// Why the chain cares at all: since 0056 the head read that decides prev_hash
-// runs INSIDE the trigger, i.e. inside the inserting transaction. Under
-// REPEATABLE READ that read uses the transaction's snapshot, which the advisory
-// -lock statement takes BEFORE the lock is granted — so a writer that queued
-// behind the lock reads a head from before the winner committed and chains to
-// it. Two rows claim one predecessor and the verify sweep reports a break.
-// default_transaction_isolation is a USERSET GUC: any role can set it, per role
-// or per database, with no superuser involved.
+// Why the chain cares: the head read that decides prev_hash runs INSIDE the trigger, inside the
+// inserting transaction. Under REPEATABLE READ that read uses a snapshot taken before the advisory
+// lock was granted, so a writer that queued behind the lock reads a stale head and chains to it —
+// two rows claim one predecessor and the verify sweep reports a break. This GUC is USERSET: any role
+// can set it, per role or per database, with no superuser involved.
 //
-// Report, not refuse, and the two halves are deliberate. Wardyn's OWN writers no
-// longer depend on it — store.InsertAuditEvent and the broker's mint transaction
-// pin pgx.ReadCommitted on their Begin, and a transaction-level isolation level
-// overrides the GUC — so this is about writers this package knows nothing about,
-// which is a deployment posture to report rather than a defect to refuse over.
-// It is also read on whichever connection Migrate holds: in a split-DSN deploy
-// that is the MIGRATE role, and the app role may carry a different ALTER ROLE
-// setting, so a clean line here is not a promise about the serving pool. Said
-// plainly so nobody reads it as one.
+// Report, not refuse: Wardyn's OWN writers no longer depend on it (they pin ReadCommitted on their
+// own Begin, which overrides the GUC), so this is a deployment posture to report for writers this
+// package knows nothing about, not a defect to refuse over. Also read on whichever connection
+// Migrate holds — in a split-DSN deploy that's the MIGRATE role, which the app role may not match —
+// so a clean line here is not a promise about the serving pool.
 func reportTransactionIsolation(ctx context.Context, db migrationExecutor) {
 	var iso string
 	if err := db.QueryRow(ctx, `SELECT current_setting('default_transaction_isolation')`).Scan(&iso); err != nil {
@@ -658,39 +540,23 @@ func reportTransactionIsolation(ctx context.Context, db migrationExecutor) {
 		slog.String("statement", "ALTER DATABASE <db> SET default_transaction_isolation = 'read committed'"))
 }
 
-// replayTriggerMigrations re-executes every embedded migration that defines
-// trigger, in filename order, WITHOUT touching schema_migrations: those rows
-// still describe what was applied and when, and a restore is not a new
-// migration. Discovered by content rather than listed, so a later migration
-// that redefines the trigger is replayed too — replaying only the original
-// would reinstate a superseded definition (0047's unserialized chain function,
-// which 0056 replaced).
+// replayTriggerMigrations re-executes every embedded migration that defines trigger, in filename
+// order, WITHOUT touching schema_migrations: those rows still describe what was applied and when,
+// and a restore is not a new migration. Discovered by content rather than listed, so a later
+// migration that redefines the trigger is replayed too, instead of reinstating a superseded body.
 func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger string) error {
 	names, err := triggerMigrationFiles(trigger)
 	if err != nil {
 		return err
 	}
-	// One transaction around the whole set, for the reason applyMigration wraps
-	// each forward file: a replay that stops partway leaves the database bound to
-	// a definition NOBODY SHIPPED AS FINAL. The set is ordered, and each file
-	// REPLACES the previous function body — 0047's chain function reads the head
-	// with no advisory lock, and 0056 replaced it precisely because of that — so
-	// a failure after the first file commits the superseded version.
-	//
-	// And it never self-heals, which is what separates this from the forward
-	// path. The entry condition is "the trigger is missing or wears an impostor
-	// body", and 0047 alone satisfies neither: the next boot finds the shipped
-	// name executing the shipped function (auditImpostorTriggers cannot see a
-	// replaced BODY) and the single-threaded canary chains fine, so nothing
-	// replays and nothing reports. Two concurrent inserters then read one head,
-	// the chain forks, and GET /audit/chain/verify reports a tamper verdict no
-	// operator can clear.
-	//
-	// The exits are ordinary: migrateOn runs under wardynd's connect-and-migrate
-	// deadline and a context that expires mid-loop is a designed-for exit. None
-	// of the files in this set uses CREATE INDEX CONCURRENTLY (applyMigration
-	// already wraps them all, so none can), which is the one thing a transaction
-	// here would refuse.
+	// One transaction around the whole set: it is ordered, and each file REPLACES the previous
+	// function body, so a failure partway would leave the database bound to a definition NOBODY
+	// SHIPPED AS FINAL. This never self-heals like the forward path does: an intermediate body still
+	// satisfies "trigger present, not an impostor", so the next boot's canary chains fine and nothing
+	// replays or reports — until two concurrent inserters read one head, the chain forks, and the
+	// verify sweep reports a tamper verdict no operator can clear. A context expiring mid-loop is a
+	// designed-for exit; none of these files uses CREATE INDEX CONCURRENTLY, the one thing a
+	// transaction here would refuse.
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("db: begin tx to restore trigger %s: %w", trigger, err)
@@ -713,19 +579,13 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 	return nil
 }
 
-// triggerMigrationFiles returns, in apply order, the embedded migrations whose
-// text defines trigger — the REPLAY SET that replayTriggerMigrations re-executes
-// verbatim, against a database where all of them are already applied and none is
-// re-recorded in schema_migrations.
+// triggerMigrationFiles returns, in apply order, the embedded migrations whose text defines trigger
+// — the REPLAY SET replayTriggerMigrations re-executes verbatim, against a database where all of
+// them are already applied and none is re-recorded in schema_migrations.
 //
-// Exists as its own function so the guard that keeps those files idempotent is
-// derived from the SAME predicate the replay uses instead of restating it. A
-// test that re-implemented the rule would be right until the day the rule
-// changed, and the failure that day is a boot refusing on exactly the database
-// whose audit trigger already went missing — the case the replay exists to
-// rescue. Content-derived rather than listed for the same reason
-// replayTriggerMigrations was: a later migration that redefines the trigger
-// joins the set on its own, and 0058 did.
+// Its own function so the idempotency guard derives from the SAME predicate the replay uses,
+// instead of a hand-written list that could drift and then fail on exactly the database whose
+// trigger already went missing — the case the replay exists to rescue.
 func triggerMigrationFiles(trigger string) ([]string, error) {
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
@@ -748,16 +608,11 @@ func triggerMigrationFiles(trigger string) ([]string, error) {
 	return names, nil
 }
 
-// unknownAppliedMigrations returns, oldest first, the filenames schema_migrations
-// records that are not in shipped — the migrations a NEWER wardynd applied.
-//
-// This is the binary-side downgrade refusal. Without it an older wardynd skips
-// every file it knows is applied, never looks at the ones it does not know, and
-// boots over a schema whose one-way conversions it cannot read (a CHECK it will
-// violate, a re-encoded secret it cannot decrypt, a document key it will drop on
-// its next write). install.sh refused a downgrade; helm rollback and a pinned
-// image tag did not. COLLATE "C" so "newest" is Go's byte order, not the
-// database's locale.
+// unknownAppliedMigrations returns, oldest first, the filenames schema_migrations records that are
+// not in shipped — the migrations a NEWER wardynd applied. This is the binary-side downgrade
+// refusal: without it an older wardynd boots over a schema whose one-way conversions it cannot read
+// (a CHECK it will violate, a re-encoded secret it cannot decrypt). COLLATE "C" so "newest" is Go's
+// byte order, not the database's locale.
 func unknownAppliedMigrations(ctx context.Context, db migrationExecutor, shipped []string) ([]string, error) {
 	var unknown []string
 	if err := db.QueryRow(ctx, `

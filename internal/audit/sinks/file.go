@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// FileConfig holds the configuration for a FileSink.
+// FileConfig configures a FileSink.
 type FileConfig struct {
 	// Path is the log file path (required). Rotated files are named
 	// <path>.1, <path>.2, … <path>.N.

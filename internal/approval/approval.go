@@ -3,16 +3,12 @@
 
 // Package approval implements the ApprovalRequest FSM service.
 //
-// States:   PENDING -> APPROVED | DENIED | EXPIRED | CANCELLED
+// States: PENDING -> APPROVED | DENIED | EXPIRED | CANCELLED
 //
-// Transitions are single-direction and fail-closed: any attempt to decide
-// an already-decided approval returns ErrAlreadyDecided. Every state
-// change emits an audit event with actor_type=human (for decisions) or
-// actor_type=system (for expirations and for the terminal-run cancellation
-// cascade, CancelForRun).
-//
-// Pure business logic: storage is injected via the Store interface so this
-// package can be tested with an in-memory fake.
+// Transitions are single-direction and fail-closed: deciding an
+// already-decided approval returns ErrAlreadyDecided. Every state change
+// emits an audit event, actor_type=human for decisions or system for
+// expirations/CancelForRun.
 package approval
 
 import (
@@ -30,24 +26,19 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ErrAlreadyDecided is re-exported here for callers that import only this
-// package. It IS the store's sentinel — one value, defined in internal/types —
+// ErrAlreadyDecided re-exports the store's sentinel (defined in internal/types)
 // so errors.Is matches whichever layer raised it.
 var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 
 // Store is the narrow persistence interface the approval FSM needs.
-// The real implementation is internal/store; tests supply a fake.
 type Store interface {
-	// CreateApproval persists a new PENDING approval and returns it.
 	CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error)
-	// GetApproval fetches an approval by id.
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	// ListApprovals returns approvals filtered by state (empty = all).
 	ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error)
-	// DecideApproval transitions state from PENDING to decision.State; returns
-	// ErrAlreadyDecided if the approval is not PENDING.
+	// DecideApproval transitions PENDING to decision.State; returns
+	// ErrAlreadyDecided if not PENDING.
 	DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error)
-	// Record appends an audit event (approval.decide, approval.expire).
 	Record(ctx context.Context, ev types.AuditEvent) error
 }
 
@@ -71,23 +62,18 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 	req.DecidedBy = ""
 	req.MintedJTI = ""
 	req.Reason = ""
-	// A freshly-raised approval has no decision, so it has no scope either —
-	// this is the chokepoint the "a compromised sidecar cannot pre-seed the
-	// scope" claim actually rests on (handleInternalRequestApproval decodes
-	// only {Kind, RequestedScope} into a fresh struct, but this zeroing is
-	// what makes that safe by CONSTRUCTION rather than by accident of which
-	// Store backs this call).
+	// SECURITY: a fresh approval has no decision, so it has no scope either —
+	// this zeroing, not the caller's decoding, is what guarantees a compromised
+	// sidecar cannot pre-seed the scope.
 	req.DecisionScope = ""
 	req.DecisionExpiresAt = nil
 
 	created, err := st.CreateApproval(ctx, req)
 	if err != nil {
-		// The list-then-create dedup above has a race window: a concurrent raise of
-		// the same run+kind+scope can slip in between our list and our insert. The
-		// partial unique index (migration 0022 for non-credential kinds, 0002 for
-		// credential) rejects the loser, surfacing as store.ErrDuplicatePending.
-		// Tolerate it as a dedup signal — re-read and return the winner's row —
-		// exactly as if the pre-insert scan had seen it.
+		// The list-then-create dedup has a race window: a concurrent raise can
+		// slip in between list and insert. The partial unique index (migrations
+		// 0022/0002) rejects the loser as ErrDuplicatePendingApproval; tolerate
+		// it as a dedup signal and re-read the winner's row.
 		if errors.Is(err, types.ErrDuplicatePendingApproval) {
 			if existing, found, rerr := findPendingDup(ctx, st, req, hash); rerr != nil || found {
 				return existing, rerr
@@ -115,13 +101,12 @@ func findPendingDup(ctx context.Context, st Store, req types.ApprovalRequest, ha
 	return types.ApprovalRequest{}, false, nil
 }
 
-// Decide transitions an existing approval request to decision.State (which
-// the caller sets — APPROVED or DENIED; ExpireStale below bypasses Decide
-// entirely for EXPIRED, since a sweep is not a decision). decision.DecidedBy
-// is the principal that decided and decidedByType is its actor type (human
-// for an OIDC session or a LocalMode operator; system for a bare admin-token
-// caller). The audit event records that exact type so an admin-token decision
-// is not mislabelled as a human approval (invariant 4/6 attribution honesty).
+// Decide transitions an approval to decision.State (APPROVED or DENIED;
+// ExpireStale bypasses Decide for EXPIRED, since a sweep is not a decision).
+// decidedByType is human (OIDC session or LocalMode operator) or system (bare
+// admin-token caller); the audit event records that exact type so an
+// admin-token decision is never mislabelled as a human approval (attribution
+// honesty invariant).
 func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	result, err := st.DecideApproval(ctx, id, decision)
 	if err != nil {
@@ -137,22 +122,16 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 		"decision":    string(decision.State),
 		"reason":      decision.Reason,
 	}
-	// Self-joining SIEM stream: surface the
-	// approval's own requested-scope host at the top level, when it has one, so
-	// a consumer of this event never has to parse the nested requested_scope
-	// JSON to learn which host a human just approved/denied. Best-effort — a
-	// kind whose scope carries no "host" (credential approvals commonly do,
-	// tool_call approvals may not) simply omits the key rather than adding an
-	// empty one.
+	// Surface the requested-scope host at the top level so a SIEM consumer
+	// never has to parse nested JSON; best-effort, omitted when the kind's
+	// scope carries no "host".
 	if host := requestedScopeHost(result.RequestedScope); host != "" {
 		data["host"] = host
 	}
-	// The decision's BLAST RADIUS, emitted raw (never Normalize()d): "" means
-	// "no scope recorded", and asserting `run` for a decision nobody scoped is
-	// exactly what the empty-string column exists to avoid. Present
-	// unconditionally, like "reason" above, so a SIEM consumer can key on it —
-	// a permanent grant must be readable from the audit stream ALONE, which is
-	// what the demo harness's publish checklist verifies.
+	// SECURITY: decision_scope is the decision's blast radius, emitted raw
+	// (never Normalize()d) and unconditionally, so a permanent grant is
+	// readable from the audit stream alone — "" means no scope recorded, never
+	// inferred as `run`.
 	data["decision_scope"] = string(decision.Scope)
 	if decision.ExpiresAt != nil {
 		data["decision_expires_at"] = decision.ExpiresAt.UTC()
@@ -169,10 +148,9 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 		Outcome:   "success",
 		Data:      json.RawMessage(auditData),
 	}
-	// FIX #5: the audit log is the system of record — do NOT silently swallow a
-	// failed decide audit. Log loudly (matching Server.recordAudit's intent) so a
-	// dropped approval.decide event is visible. The write does not shadow the
-	// primary return value (the decision itself already succeeded and is durable).
+	// Audit log is the system of record: log-loud on a failed write instead of
+	// swallowing it. Doesn't shadow the return value — the decision itself
+	// already succeeded and is durable.
 	if err := st.Record(ctx, ev); err != nil {
 		audit.LogWriteFailure(ctx, ev, err)
 	}
@@ -180,11 +158,9 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 	return result, nil
 }
 
-// requestedScopeHost best-effort-extracts the "host" field from an approval's
-// RequestedScope JSON — present on an egress_domain scope (egressScope,
-// internal/egress/proxy/approvals.go) and on the api_key credential scopes
-// planArtifactRedirect/authorBedrockBearerInjection author, absent on a
-// tool_call scope or malformed/empty JSON, in which case it returns "".
+// requestedScopeHost best-effort-extracts "host" from RequestedScope JSON;
+// present on egress_domain and some api_key credential scopes, absent
+// (returns "") on a tool_call scope or malformed/empty JSON.
 func requestedScopeHost(scope json.RawMessage) string {
 	var s struct {
 		Host string `json:"host"`
@@ -195,29 +171,24 @@ func requestedScopeHost(scope json.RawMessage) string {
 	return s.Host
 }
 
-// ExpireStale transitions to EXPIRED every PENDING approval that was requested
-// before the cutoff (time.Now().UTC().Add(-olderThan)), or whose own ExpiresAt
-// (the run's wait and end) has passed, and emits one audit event per
-// expiration. Returns the number of approvals expired. The cutoff is the
-// deployment's ceiling and binds every row, whatever its run's wait says.
+// ExpireStale transitions to EXPIRED every PENDING approval requested before
+// the cutoff, or whose own ExpiresAt has passed, emitting one audit event per
+// expiration. Returns the count expired. The cutoff is the deployment's
+// ceiling and binds every row regardless of its run's wait.
 func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, error) {
 	n, _, err := ExpireStaleByKind(ctx, st, olderThan)
 	return n, err
 }
 
 // ExpireStaleByKind is ExpireStale plus a tally of what it moved, keyed by
-// TallyKey — not the bare Kind: a credential_reauth row is either an Azure
-// DevOps sign-in/consent or an AWS SSO re-auth, and CancelForRun's own tally
-// (and wardyn_credential_reauth_total{outcome="cancelled"}) already key on the
-// same split. Keying this tally on the bare Kind would fold both lanes into
-// one "credential_reauth" bucket, and a caller counting a metric whose HELP
-// promises the AWS SSO population alone (the sweeper, cmd/wardynd) would
-// silently count Azure DevOps sign-ins too.
+// TallyKey rather than the bare Kind: a credential_reauth row is either an
+// Azure DevOps sign-in/consent or an AWS SSO re-auth, and keying on the bare
+// Kind would fold both into one bucket, silently miscounting a metric whose
+// HELP promises the AWS SSO population alone.
 //
-// The tally is incremented HERE, where the state actually changes, not at a
-// later resolve that happens to meet a terminal row — that would count
-// retries rather than outcomes. A separate function rather than a changed
-// signature: every existing caller asks the question it always asked.
+// Tallied HERE, where the state actually changes, not at a later resolve that
+// happens to meet a terminal row — that would count retries, not outcomes.
+// Kept as a separate function so every existing caller's signature is unchanged.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[string]int, error) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-olderThan)
@@ -230,26 +201,22 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	expired := 0
 	byKind := map[string]int{}
 	// Collected, not returned on the first failure: ListApprovals is ordered
-	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
-	// same order every tick, so returning early would strand every approval
-	// sorted after the first failure, fleet-wide. The sweep instead expires
-	// what it can and reports every row it could not, the shape FSStore.Sweep
-	// already uses.
+	// and re-listed the same way every tick, so returning early would strand
+	// every row sorted after the first failure. Expire what can be, report the
+	// rest — same shape FSStore.Sweep uses.
 	var failures []error
 	for _, ap := range pending {
 		runBound := ap.ExpiresAt != nil && !ap.ExpiresAt.After(now)
 		if ap.RequestedAt.After(cutoff) && !runBound {
 			continue
 		}
-		// Scope is left at its zero value ("", not ScopeRun): an expiry is a
-		// sweep nobody decided, not a decision — see types.ApprovalDecision.
+		// Scope left at zero value (not ScopeRun): an expiry is a sweep nobody
+		// decided, not a decision.
 		if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
 			State: types.ApprovalExpired, DecidedBy: "system", Reason: "stale",
 		}); err != nil {
 			if errors.Is(err, ErrAlreadyDecided) {
-				// Race with a concurrent Decide — not an error, and deliberately
-				// not collected either: on a busy deployment every sweep would
-				// otherwise report a failure it did not have.
+				// Race with a concurrent Decide, not a failure to report.
 				continue
 			}
 			failures = append(failures, fmt.Errorf("approval: expire %s: %w", ap.ID, err))
@@ -274,8 +241,8 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 			Outcome:   "success",
 			Data:      json.RawMessage(auditData),
 		}
-		// FIX #5: log-loud instead of swallowing — a dropped approval.expire audit
-		// must be visible, not silently lost.
+		// Log-loud instead of swallowing — a dropped approval.expire audit must
+		// be visible.
 		if err := st.Record(ctx, ev); err != nil {
 			audit.LogWriteFailure(ctx, ev, err)
 		}
@@ -284,20 +251,17 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 }
 
 // ExpireOne transitions a single PENDING approval straight to EXPIRED,
-// regardless of age — the same terminal state and audit action
-// ExpireStaleByKind's periodic sweep gives a stale row, but raised eagerly by
-// the CLIENT that is giving up on it (wardyn-toolgate at its own -deadline)
-// rather than waited out by the sweep's next tick. Without this, a row the
-// gate has already treated as denied stays PENDING — and approvable in the
-// console — for up to one sweep interval after the gate stopped waiting for
-// it (#811).
+// regardless of age — the same terminal state ExpireStaleByKind's sweep would
+// eventually give it, but raised eagerly by the client giving up on it
+// (wardyn-toolgate at its own -deadline). Without this, a row the gate already
+// treats as denied stays PENDING and approvable for up to one sweep interval
+// (#811).
 //
-// Idempotent: a row already decided, by a human or by a concurrent sweep, is
-// left untouched — ErrAlreadyDecided is swallowed as the race it is, exactly
-// as ExpireStaleByKind and CancelForRun already treat it.
+// Idempotent: a row already decided (human or concurrent sweep) is left
+// untouched, ErrAlreadyDecided swallowed as the race it is.
 //
-// The audit row is attributed to the run's agent (actor), not the system: the
-// sandbox can call this at any time, so nothing ties it to a deadline.
+// Attributed to the run's agent, not the system: the sandbox can call this at
+// any time, so nothing ties it to a deadline.
 func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string) error {
 	result, err := st.DecideApproval(ctx, id, types.ApprovalDecision{
 		State: types.ApprovalExpired, DecidedBy: "system", Reason: reason,
@@ -327,10 +291,8 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 }
 
 // Tally keys for the rows one kind carries with two meanings (#151). Every
-// other row is tallied under its kind as-is: egress_domain, credential, a hook
-// tool_call as `tool_call`, and a credential_reauth of no shape below as
-// `credential_reauth`. Documented on docs/AUDIT-ACTIONS.md's
-// approval.cancel row.
+// other row is tallied under its bare kind. Documented on
+// docs/AUDIT-ACTIONS.md's approval.cancel row.
 const (
 	// TallyToolCallADO is an Azure DevOps capability escalation.
 	TallyToolCallADO = "tool_call:azure_devops"
@@ -343,12 +305,8 @@ const (
 )
 
 // TallyKey is the key CancelForRun counts ap under, read off the stored row
-// alone. It restates internal/api's own definitions — adoEscalationScope (a
-// tool_call whose grant_id column is set, which only the control plane can
-// set, and whose scope names the same grant on the azure_devops lane),
-// adoSignInScope and adoConsentScope (lane + mechanism), and the AWS raise's
-// scope (no lane, a credential_source) — and
-// TestApprovalTallyKeyAgreesWithTheLanes (internal/api) pins that they agree.
+// alone; restates internal/api's own lane-detection logic, and
+// TestApprovalTallyKeyAgreesWithTheLanes pins that they agree.
 func TallyKey(ap types.ApprovalRequest) string {
 	var sc struct {
 		Lane             string    `json:"lane"`
@@ -377,31 +335,23 @@ func TallyKey(ap types.ApprovalRequest) string {
 	return string(ap.Kind)
 }
 
-// CancelForRun transitions every still-PENDING approval belonging to runID to
-// CANCELLED and returns how many it moved, per TallyKey — counted where the
-// CAS lands, so a row a human decided first is not in it. reason is the
-// transition that ended
-// the run ("run_killed", "run_completed", "run_failed", "run_stopped"), recorded
-// on each row and on the ONE audit event this emits.
+// CancelForRun transitions every still-PENDING approval for runID to
+// CANCELLED, returning how many moved per TallyKey (counted where the CAS
+// lands, so a row a human decided first is excluded). reason is the run's
+// ending transition, recorded on each row and on the one audit event emitted.
 //
-// It is ExpireStale's shape deliberately: list PENDING, then move each row with
-// the SAME CAS primitive a human decision uses (DecideApproval is
-// WHERE state='PENDING', which IS the FSM guard), so a human deciding
-// concurrently with the kill cascade wins and is never overwritten —
-// ErrAlreadyDecided is a race, not an error. DecidedBy is "system" for the same
-// reason the sweeper's is: nobody decided this, the run ended.
+// Mirrors ExpireStale's shape: list PENDING, move each row with the same CAS
+// primitive (DecideApproval's WHERE state='PENDING' IS the FSM guard) so a
+// concurrent human decision wins and ErrAlreadyDecided is treated as a race,
+// not an error. DecidedBy is "system": nobody decided this, the run ended.
 //
-// ONE audit row for the batch, carrying the count and by_kind, rather than one per approval:
-// unlike an expiry sweep (whose rows are independent events spread over days),
-// these all belong to a single run transition an operator reads as one fact, and
-// the row is keyed to the run so it lands in that run's evidence rail. A run
-// with nothing pending emits nothing at all, which is what makes a re-kill
-// idempotent in the audit log as well as in the store.
+// ONE audit row for the whole batch (count + by_kind), not one per approval:
+// these all belong to a single run transition an operator reads as one fact,
+// keyed to the run so it lands in that run's evidence rail. Nothing pending
+// means nothing emitted, keeping a re-kill idempotent in the audit log too.
 //
-// The row is emitted on the failure path too, carrying however many rows DID
-// move plus the error, so a partial cancel never leaves rows durably CANCELLED
-// with nothing in the trail — the same reason ExpireStale records inside its
-// own loop rather than after it.
+// Emitted on the failure path too, with however many rows DID move plus the
+// error, so a partial cancel never leaves CANCELLED rows with no trail.
 func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (map[string]int, error) {
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
@@ -409,10 +359,8 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 	}
 	cancelled := 0
 	byKind := map[string]int{}
-	// recordCancelled writes the ONE summary row for whatever this call actually
-	// moved. failure is nil on the clean path and the CAS error on the partial
-	// one; either way a call that moved NOTHING writes nothing, because there is
-	// no state change to explain.
+	// recordCancelled writes the one summary row for whatever actually moved;
+	// a call that moved nothing writes nothing.
 	recordCancelled := func(failure error) {
 		if cancelled == 0 {
 			return
@@ -425,9 +373,8 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 		}
 		outcome := "success"
 		if failure != nil {
-			// The count is now a PARTIAL one, and saying so is the point: an
-			// operator reading "3 cancelled" against a queue that still holds two
-			// would have no way to tell a bug from an interrupted cascade.
+			// A partial count, and saying so is the point: an operator must be
+			// able to tell a bug from an interrupted cascade.
 			outcome = "failure"
 			data["error"] = failure.Error()
 		}
@@ -443,8 +390,7 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			Outcome:   outcome,
 			Data:      json.RawMessage(auditData),
 		}
-		// Log-loud instead of swallowing, same rule as the expiry sweep: a dropped
-		// approval.cancel row would leave the queue's emptying unexplained.
+		// Log-loud, same rule as the expiry sweep.
 		if rerr := st.Record(ctx, ev); rerr != nil {
 			audit.LogWriteFailure(ctx, ev, rerr)
 		}
@@ -453,15 +399,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 		if ap.RunID != runID {
 			continue
 		}
-		// Scope is left at its zero value ("", not ScopeRun), exactly as an
-		// expiry does: a cancellation is not a decision, so it authorizes
-		// nothing for the rest of the run — see types.ApprovalDecision.
+		// Scope left at zero value, as an expiry does: a cancellation is not a
+		// decision and authorizes nothing.
 		if _, derr := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
 			State: types.ApprovalCancelled, DecidedBy: "system", Reason: reason,
 		}); derr != nil {
 			if errors.Is(derr, ErrAlreadyDecided) {
-				// A human decided it between the list and the CAS — their
-				// decision stands.
+				// A human decided it between the list and the CAS — stands.
 				continue
 			}
 			cerr := fmt.Errorf("approval: cancel %s: %w", ap.ID, derr)
@@ -478,11 +422,9 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 // scopeHash produces a stable content hash over (runID, kind, scope) for
 // deduplication. The scope JSON is re-encoded to normalise key ordering.
 func scopeHash(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) string {
-	// Normalise scope JSON: unmarshal/remarshal to sort keys.
 	var raw any
 	if err := json.Unmarshal(scope, &raw); err != nil {
-		// If scope is not valid JSON, use the raw bytes directly.
-		raw = string(scope)
+		raw = string(scope) // not valid JSON: hash the raw bytes
 	}
 	norm, _ := json.Marshal(raw)
 

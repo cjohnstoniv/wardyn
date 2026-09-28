@@ -20,21 +20,17 @@ import (
 )
 
 // ParseUserDriveHostRoots parses WARDYN_USER_DRIVE_HOST_ROOTS — a CSV of
-// absolute, already-cleaned host directories — into the roots a host_path drive
-// may be authored inside, plus boot WARNINGS for a dangerously wide root. It
-// reuses parseRootList, so a malformed value REFUSES BOOT like
-// WARDYN_USER_WORKSPACE_ROOTS does.
+// absolute, already-cleaned host directories — into the roots a host_path
+// drive may be authored inside, plus boot WARNINGS for a dangerously wide
+// root. Reuses parseRootList, so a malformed value REFUSES BOOT.
 //
-// Three values are allowed but warned about: the daemon's own $HOME (too WIDE —
-// every dotfile tree becomes authorable, and per-person subdirectories get
-// bound into other sandboxes); "/" (DEAD, not wide — withinAnyRoot never
-// matches it, so it refuses every drive); and a root under a denied bind prefix
-// (dead the same way, and previously silent — UserDriveHostRootCheck runs
-// ValidateMountSource before comparing against roots).
+// Three values are allowed but warned about: the daemon's own $HOME (too
+// WIDE); "/" (DEAD — withinAnyRoot never matches it, so it refuses every
+// drive); and a root under a denied bind prefix (dead the same way).
 //
-// The deny-list runs LEXICALLY on the configured value, not the resolved path:
-// boot must not touch a share that may not be mounted yet. UserDriveHostRootCheck
-// re-runs the same list on the real path at authoring and bind time.
+// The deny-list runs LEXICALLY on the configured value, not the resolved
+// path: boot must not touch a share that may not be mounted yet.
+// UserDriveHostRootCheck re-runs the same list on the real path later.
 func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err error) {
 	roots, err = parseRootList("WARDYN_USER_DRIVE_HOST_ROOTS", raw)
 	if err != nil {
@@ -62,16 +58,15 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 
 // MountCeilingOverlapWarnings returns boot WARNINGS when the two operator-set
 // mount ceilings (WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS)
-// name overlapping trees. They are one level apart by design — a drive's
-// host_root is a share's mount point and Wardyn binds only one person's
-// subdirectory of it, while a workspace root may be bound WHOLE and writable —
-// so overlap lets a member onboard a drive's share as a workspace and bind every
-// person's home through a surface that never consults drive allocation.
+// name overlapping trees. SECURITY: a drive's host_root binds only one
+// person's subdirectory, while a workspace root may be bound WHOLE and
+// writable — overlap lets a member onboard a drive's share as a workspace and
+// bind every person's home through a surface that never consults allocation.
 //
 // A WARNING, not a refusal: an operator may have deliberately opened a tree to
 // both, and refusing at boot would take a running deployment down on upgrade.
-// Comparison is LEXICAL, on configured values, and covers the shared list plus
-// every per-principal override (which replaces rather than extends it).
+// Comparison is LEXICAL and covers the shared list plus every per-principal
+// override.
 func MountCeilingOverlapWarnings(member UserMountPolicy, driveRoots []string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -129,16 +124,14 @@ func userCeilingRoots(member UserMountPolicy) []string {
 
 // UserDriveHostRootCheck returns the ceiling predicate the API write boundary
 // composes with types.ValidateUserDrive: nil when hostRoot is inside one of
-// roots, an error naming the ceiling otherwise. Satisfies
-// types.UserDriveHostRootCheck.
+// roots, an error naming the ceiling otherwise.
 //
 // Empty roots refuses EVERY host_path drive by design — a deployment that has
 // not opted in cannot acquire one via an admin form.
 //
 // Resolves symlinks and matches on the REAL path, failing closed on any
-// resolve error (including "does not exist") — stricter than
-// ValidateMountSource, since a drive's host root asserts a share is mounted
-// HERE, not merely a path being looked at.
+// resolve error — stricter than ValidateMountSource, since a drive's host
+// root asserts a share is mounted HERE, not merely a path being looked at.
 func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 	return func(hostRoot string) error {
 		if len(roots) == 0 {
@@ -221,29 +214,25 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 	}
 }
 
-// UserDriveHomeWithinItsRoot asserts that real — the symlink-resolved directory
-// a host_path drive is about to be bound from — is a STRICT SUBDIRECTORY of
-// hostRoot, THIS drive's own root, resolved the same way.
+// UserDriveHomeWithinItsRoot asserts that real — the symlink-resolved
+// directory a host_path drive is about to be bound from — is a STRICT
+// SUBDIRECTORY of hostRoot, THIS drive's own root, resolved the same way.
 //
-// The deployment ceiling (UserDriveMountSourceCheck) only bounds the bind to
-// the union of every configured root, not to which root THIS drive was
-// authored against — so on a deployment with two share drives, a home replaced
-// host-side by a link to the same-named home under a DIFFERENT drive's root
-// would pass every other check and bind the wrong drive's tree. The per-drive
-// root closes that gap; a drive must satisfy both bounds.
+// SECURITY: the deployment ceiling (UserDriveMountSourceCheck) only bounds
+// the bind to the union of every configured root, not to which root THIS
+// drive was authored against — so on a deployment with two share drives, a
+// home replaced host-side by a link into a DIFFERENT drive's root would pass
+// every other check and bind the wrong drive's tree. The per-drive root
+// closes that gap.
 //
-// An empty hostRoot is a REFUSAL, not a skip: types.DriveMount.HostRoot is set
-// from the resolved row for every host_path drive, so "" means the mount was
-// built by something that doesn't know this field (an older control plane, or
-// a caller that assembled a SandboxSpec directly) — never the standalone
-// runner's -spec JSON, which cannot produce a drive at all
-// (TestLoadSpec_CannotProduceADrive).
+// An empty hostRoot is a REFUSAL, not a skip: HostRoot is set for every
+// host_path drive, so "" means the mount was built by something that doesn't
+// know this field.
 //
 // STRICT: a source resolved TO the root is refused here too, since a check
-// stated only once is a check a refactor can drop.
-//
-// The returned error names the drive and directory only (DriveSubject); the
-// host_root, real path, and resolve error go to slog for the operator.
+// stated only once is a check a refactor can drop. The returned error names
+// the drive and directory only; host_root, real path, and resolve error go
+// to slog for the operator.
 func UserDriveHomeWithinItsRoot(drive *types.DriveMount, real string) error {
 	if drive == nil {
 		return fmt.Errorf("user drive: this mount carries no drive to be contained by")
