@@ -189,6 +189,9 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_KIND_SSO_NODE":      true,
 	"WARDYN_KIND_SSO_TOKEN_TTL": true, "WARDYN_KIND_SSO_ROLE_CRED_TTL": true, "WARDYN_KIND_SSO_PROXY_INJECT": true,
 	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true,
+	// The walk's throwaway local registry for a cold aws-sso image pull (#891) —
+	// scripts/kind-sso-walk.sh only.
+	"WARDYN_KIND_SSO_REGISTRY": true, "WARDYN_KIND_SSO_REGISTRY_PORT": true,
 	// scripts/compose-sso-roles.sh's inputs (the compose SSO role walk), read
 	// only by that script and ui/e2e/walk/sso-roles.spec.ts.
 	"WARDYN_TEST_SSO_ROLES": true, "WARDYN_ROLES_WARDYND_IMAGE": true,
