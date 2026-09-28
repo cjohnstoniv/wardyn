@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -108,11 +109,18 @@ func run() error {
 		return err
 	}
 
-	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
-	// Extracted into a pure helper (validateConfig) so the fail-closed rules —
-	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation — are
-	// unit-testable without standing up the whole daemon.
-	posture, err := validateConfig(*f.dsn, *f.tlsCert, *f.tlsKey, *f.listen, *f.tlsTerminated, *f.allowPlaintextListen)
+	// Validate + derive the TLS/DSN posture from the resolved flag/env values,
+	// then (resolveTLSPosture, boot_serve.go) load the built-in TLS keypair
+	// when TLS is enabled — combined into resolveTLSPosture, rather than a
+	// branch of its own here, so run() keeps this single err-check instead of
+	// gaining one (run()'s cyclomatic budget is already at golangci-lint's
+	// gocyclo ceiling; see boot_deps.go's warnAllowUnknownMigrations for the
+	// same reasoning). validateConfig itself stays a pure, disk-free helper —
+	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation —
+	// unit-testable without standing up the whole daemon; the key's mode
+	// check goes through the same shared _FILE rule every other secret file
+	// uses (loadTLSConfig, boot_serve.go).
+	posture, err := resolveTLSPosture(*f.dsn, *f.tlsCert, *f.tlsKey, *f.listen, *f.tlsTerminated, *f.allowPlaintextListen)
 	if err != nil {
 		return err
 	}
@@ -537,9 +545,14 @@ func run() error {
 // config. tlsEnabled is true only when wardynd serves built-in TLS (cert+key both
 // set); secureCookies is true when the connection is TLS-protected end to end
 // (built-in TLS OR an upstream TLS-terminating proxy via WARDYN_TLS_TERMINATED).
+// tlsConfig is nil unless tlsEnabled: it holds the keypair loadTLSConfig
+// (boot_serve.go) already read and mode-checked, so both HTTP(S) listeners
+// (serveAndShutdown, startUISandboxGateway) reuse it instead of each re-reading
+// WARDYN_TLS_KEY.
 type tlsPosture struct {
 	tlsEnabled    bool
 	secureCookies bool
+	tlsConfig     *tls.Config
 }
 
 // validateConfig applies the boot-time fail-closed configuration rules and

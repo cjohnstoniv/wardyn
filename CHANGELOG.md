@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`WARDYN_TLS_KEY` now gets the same secret-file mode rule as every other secret file
+  (#1297).** The console's TLS private key was read by `ListenAndServeTLS` with no file-mode
+  check, so a group- or world-readable key was accepted silently. Loading it now goes through
+  the shared `_FILE` mode rule (`cliutil.ReadSecretFile`) before the certificate is built, and a
+  group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
+  refused with the same message as every other secret-file setting. `WARDYN_TLS_CERT` is public
+  and is not mode-checked.
 - **`git_pat`/`ssh_key` grants refuse a `wardyn-provider-*` secret name at write time (#1048).**
   Those two kinds return a stored secret's raw value into the sandbox, so they need the same
   wider reserved-name guard `env_secret`/`llm_inspection` already used (`nameSinkReservedSecret`)
