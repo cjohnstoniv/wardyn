@@ -197,7 +197,7 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
 	req, msg := decodeGovernanceProfileRequest(w, r)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, msg)
 		return
 	}
 	// The structural bound (governance_grantbound.go). A profile may narrow the
@@ -206,7 +206,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	// time because Config.DefaultPolicy is env-borne and a redeploy that drops
 	// a pairing must not leave old profiles serving it.
 	if err := governanceGrantsWithinCeiling(req.Ceiling.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid ceiling: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: "+err.Error())
 		return
 	}
 	p := types.GovernanceProfile{
@@ -218,7 +218,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	}
 	saved, err := s.cfg.Store.UpsertGovernanceProfile(r.Context(), p)
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict,
+		writeErrorReason(w, http.StatusConflict, reasonGovernanceProfileNameConflict,
 			fmt.Sprintf("a governance profile named %q already exists", req.Name))
 		return
 	}
@@ -279,7 +279,7 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict,
+		writeErrorReason(w, http.StatusConflict, reasonGovernanceProfileInUse,
 			"this governance profile is still assigned — delete its assignments first "+
 				"(deleting it while assigned would silently widen everyone it bounds back to the deployment ceiling)")
 		return
@@ -384,7 +384,7 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 		Priority:    req.Priority,
 	}
 	if err := validateGovernanceAssignment(&a); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid assignment: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceAssignmentInvalid, "invalid assignment: "+err.Error())
 		return
 	}
 	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
@@ -523,12 +523,12 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 	}
 	users, msg := normalizeGovernancePreviewClaims(req.UserSubjects, "user_subjects")
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
 	groups, msg := normalizeGovernancePreviewGroups(req.Groups)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
 	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, strings.TrimSpace(req.UserType))
@@ -672,7 +672,7 @@ func writeCeilingError(w http.ResponseWriter, r *http.Request, err error) {
 		// Identical to err.Error() now that the sentinel carries the message;
 		// spelled out because THIS is the site that defines what the body is,
 		// and a reader should not have to chase the sentinel to find out.
-		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 		return
 	}
 	writeServerError(w, r, "resolve governance ceiling", err)
@@ -695,7 +695,7 @@ func writeCeilingError(w http.ResponseWriter, r *http.Request, err error) {
 // is the 500 an operator reads, not the member.
 func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix string, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
-		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 		return
 	}
 	writeServerError(w, r, strings.TrimRight(prefix, ": "), err)

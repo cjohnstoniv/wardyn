@@ -699,15 +699,15 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return // readCappedBody already answered
 	}
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRequestInvalid, msg)
 		return
 	}
 	if err := foldLegacyArtifactOverrides(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigArtifactOverrideInvalid, err.Error())
 		return
 	}
 	if len(cfg.Integrations) > 0 {
-		writeError(w, http.StatusBadRequest, "integrations are managed through their own endpoints, not PUT /site-config")
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigIntegrationsViaOwnRoute, "integrations are managed through their own endpoints, not PUT /site-config")
 		return
 	}
 	// Normalize BEFORE validating, so what validateSiteConfig passes is exactly
@@ -720,15 +720,15 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
 	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages, s.cfg.BedrockModel); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
 	if err := validateSiteConfig(cfg); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
 	if err := validateModelProviders(cfg.ModelProviders, s.cfg.AllowTestEndpoints); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
 	imageOK := s.claudeSignInImageOK(r.Context(), cfg.ModelProviders)
@@ -747,7 +747,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// integrations-carry-forward uses below — no other writer can land between
 	// this check and the Put that follows it.
 	if !ifMatchSatisfied(r, computeETag(existing)) {
-		writeError(w, http.StatusPreconditionFailed,
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonSiteConfigStale,
 			"If-Match does not match the current site config — GET /site-config again and retry")
 		return
 	}
@@ -783,13 +783,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// sign-in help link against the stored one (signInHelpURLHTTPS).
 	if err := cmp.Or(validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders),
 		signInHelpURLHTTPS(cfg.SignInHelpURL, existing.SignInHelpURL)); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
 	// E4 against the stored block: this door is the one re-applied on every
 	// boot, so a subscription it already holds must never be refused here.
 	if err := validateModelProviderImagePrereqs(cfg.ModelProviders, existing.ModelProviders, imageOK); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
 	// Narrowing is never silent on this door either, and this is the door where

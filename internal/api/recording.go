@@ -9,10 +9,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -63,14 +66,40 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 // beyond the cap cause http.MaxBytesReader to error, which we surface as 413.
 const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 
+// recordingPartLimitReason is recording.upload's reason for a part above
+// types.RecordingMaxParts; nothing of that part is stored.
+const recordingPartLimitReason = "part_limit"
+
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from
 // wardyn-rec running inside the agent container. The caller must hold a valid
 // run token (enforced by internalAuth). The run ID in the path must match the
 // sub claim of the token to prevent cross-run pollution.
 //
 // The request body is the raw asciicast stream. Content-Type is not enforced
-// so the fallback .log uploads also work.
+// so the fallback .log uploads also work. It is the whole cast of a short run,
+// or part 1 of a long one's tail upload (see handleUploadRecordingPart).
 func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
+	s.saveRecording(w, r, 1)
+}
+
+// handleUploadRecordingPart accepts PUT
+// /api/v1/internal/recordings/{runID}/parts/{part}: part n >= 2 of a long run's
+// cast, which wardyn-rec uploads every 24 h or 32 MiB (RL-12). Each part is
+// masked, capped and audited exactly like part 1, and stored under its own key;
+// replay joins them (recording.OpenJoined). Part 1 has one address, the bare
+// route, so a number that is not canonical decimal >= 2 is a 404; one above
+// types.RecordingMaxParts is refused (saveRecording).
+func (s *Server) handleUploadRecordingPart(w http.ResponseWriter, r *http.Request) {
+	raw := chi.URLParam(r, "part")
+	part, err := strconv.Atoi(raw)
+	if err != nil || part < 2 || strconv.Itoa(part) != raw {
+		writeError(w, http.StatusNotFound, "invalid recording part")
+		return
+	}
+	s.saveRecording(w, r, part)
+}
+
+func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int) {
 	// Cross-run guard: the caller must hold the run's OWN token — prevent a
 	// token from run A uploading a recording under run B.
 	claims, ok := claimsForRunUpload(w, r)
@@ -80,6 +109,13 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 
 	if s.cfg.RecordingStore == nil {
 		writeError(w, http.StatusNotImplemented, "recording store not configured")
+		return
+	}
+	if part > types.RecordingMaxParts {
+		runID := claims.RunID
+		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
+			runID.String(), "failure", mustJSON(map[string]any{"part": part, "reason": recordingPartLimitReason})))
+		writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds its part limit")
 		return
 	}
 
@@ -100,17 +136,29 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	// an independent goroutine blocked reading the request body.
 	body := buildMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID)
 
-	saveErr := s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body)
+	var saveErr error
+	if part == 1 {
+		saveErr = s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body)
+	} else {
+		saveErr = s.cfg.RecordingStore.SaveCastNamed(r.Context(), claims.RunID.String(), recording.PartSuffix(part), body)
+	}
 
 	// Audit BOTH outcomes, like every sibling recording lane: a full store or
 	// an over-cap upload is exactly how a long session's provenance gets lost,
 	// and a success-only trail renders that loss invisible.
 	runIDUUID := claims.RunID
 	outcome := "success"
-	var data []byte
+	fields := map[string]any{}
+	if part > 1 {
+		fields["part"] = part
+	}
 	if saveErr != nil {
 		outcome = "failure"
-		data = mustJSON(map[string]any{"error": saveErr.Error()})
+		fields["error"] = saveErr.Error()
+	}
+	var data []byte
+	if len(fields) > 0 {
+		data = mustJSON(fields)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(
 		&runIDUUID,
