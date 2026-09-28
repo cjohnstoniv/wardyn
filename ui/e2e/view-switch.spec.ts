@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { BrowserContext, Page } from "@playwright/test";
-import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
-import { CONSOLE_VIEW, USER_PREVIEW } from "../src/app/components/wardyn/copy/console-view";
+import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
+import { CONSOLE_VIEW, USER_PREVIEW, VIEW_DROPPED } from "../src/app/components/wardyn/copy/console-view";
 import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 
@@ -189,6 +189,72 @@ test.describe("the view switch", () => {
     await sheet.getByRole("button", { name: CONSOLE_VIEW.ADMIN }).click();
     await expect(page).toHaveURL(/\/admin\/runs$/);
     await expect(sheet).toBeHidden();
+  });
+});
+
+// #912 — the type picker. GET /user-types is unmocked (the ssoAdminSession
+// helper only intercepts /me and /me/view), so a real bearer-authenticated
+// admin caller reads REAL rows this seeds through the API — the same rows the
+// User Types screen itself manages (user-types.spec.ts).
+async function seedUserType(request: APIRequestContext, id: string, name: string): Promise<void> {
+  const res = await request.post("/api/v1/user-types", {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    data: { id, name },
+  });
+  expect(res.status(), await res.text()).toBeLessThan(300);
+}
+
+test.describe("the type picker (#912)", () => {
+  test("with two or more types, the User segment opens a menu; entering names the picked type on the wire", async ({
+    page,
+    context,
+    request,
+  }) => {
+    await seedUserType(request, "e2e-vs-pm", "Portfolio manager");
+    await seedUserType(request, "e2e-vs-dev", "Developer");
+    const session = await ssoAdminSession(context);
+    await gotoConsole(page, "admin");
+
+    await segment(page, CONSOLE_VIEW.USER).click();
+    await page.getByRole("menuitem", { name: "Developer" }).click();
+    await expect(page).toHaveURL(/\/runs$/);
+    await expectUserChrome(page);
+    expect(session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev" }]);
+  });
+
+  test("the eyebrow reopens the picker; choosing another type re-enters without leaving the view", async ({
+    page,
+    context,
+    request,
+  }) => {
+    await seedUserType(request, "e2e-vs-pm2", "Portfolio manager 2");
+    await seedUserType(request, "e2e-vs-dev2", "Developer 2");
+    const session = await ssoAdminSession(context, { user_type: { id: "e2e-vs-pm2", name: "Portfolio manager 2" } });
+    session.userView = true;
+    await gotoConsole(page);
+    await expectUserChrome(page);
+
+    const eyebrow = page.locator("aside").getByRole("button", { name: CONSOLE_VIEW.EYEBROW_USER("Portfolio manager 2") });
+    await expect(eyebrow).toBeVisible();
+    await eyebrow.click();
+    await page.getByRole("menuitem", { name: "Developer 2" }).click();
+    await expect(page).toHaveURL(/\/runs$/);
+    expect(session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev2" }]);
+  });
+
+  test("a dropped type shows the notice; Choose another type re-enters as the picked one", async ({ page, context, request }) => {
+    await seedUserType(request, "e2e-vs-analyst", "Analyst");
+    const session = await ssoAdminSession(context, {
+      user_view_dropped: { user_type: "e2e-vs-contractor", reason: "deleted" },
+    });
+    await gotoConsole(page, "admin");
+
+    const notice = page.getByRole("status").filter({ hasText: VIEW_DROPPED.BODY("e2e-vs-contractor") });
+    await expect(notice).toBeVisible();
+    await notice.getByRole("button", { name: VIEW_DROPPED.CHOOSE_ANOTHER }).click();
+    await page.getByRole("menuitem", { name: "Analyst" }).click();
+    await expect(page).toHaveURL(/\/runs$/);
+    expect(session.posts).toEqual([{ view: "user", user_type: "e2e-vs-analyst" }]);
   });
 });
 

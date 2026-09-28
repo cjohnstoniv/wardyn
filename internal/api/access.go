@@ -117,8 +117,14 @@ type accessMappingView struct {
 	Source      string    `json:"source"` // "chart" | "console"
 	Shadowed    bool      `json:"shadowed"`
 	ShadowCause string    `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
-	CreatedAt   time.Time `json:"created_at,omitzero"`
-	CreatedBy   string    `json:"created_by,omitempty"`
+	// MigratedFromMember (migration 0098) is set only on a console row 0074's
+	// rename rewrote from role='member' — never on a chart row, whose target
+	// arrives from ChartRoleMap already resolved to "user" by ParseRoleMap
+	// (derive.go), with no trace of the alias left to carry. Cleared the
+	// moment an admin picks a real type for the row (UpsertRoleMapping).
+	MigratedFromMember bool      `json:"migrated_from_member,omitempty"`
+	CreatedAt          time.Time `json:"created_at,omitzero"`
+	CreatedBy          string    `json:"created_by,omitempty"`
 }
 
 type accessPosture struct {
@@ -243,7 +249,7 @@ func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oi
 	for _, m := range rows {
 		mv := accessMappingView{
 			ID: m.ID.String(), Value: m.Value, Role: m.Role, UserType: m.UserType, Source: "console",
-			CreatedBy: m.CreatedBy, CreatedAt: m.CreatedAt,
+			CreatedBy: m.CreatedBy, CreatedAt: m.CreatedAt, MigratedFromMember: m.MigratedFromMember,
 		}
 		if m.Role == oidc.RoleUser && m.UserType == "" {
 			mv.UserType = types.UserTypeStandard

@@ -10,9 +10,12 @@ export const CONSOLE_VIEW = {
   ADMIN: "Admin view",
   USER: "User view",
   SWITCH_FAILED: "Could not switch — try again.",
-  // The Admin view's sidebar eyebrow. The User view's "User view · {type} ▾"
-  // arrives with the type picker (UT-13 / UT-7a).
+  // The Admin view's sidebar eyebrow.
   EYEBROW_ADMIN: "Admin view",
+  // The User view's own eyebrow (UT-13 / UT-7a, #912), shown only when the
+  // org has more than one user type — an admin looking through {type} reopens
+  // the same picker from here without leaving the view.
+  EYEBROW_USER: (type: string) => `User view · ${type}`,
   TITLE_ADMIN: "Wardyn admin",
   TITLE_USER: "Wardyn",
   // Packet M-B (QM-7, modes-b.html): a link straight to the same object in
@@ -21,6 +24,20 @@ export const CONSOLE_VIEW = {
   // failure block or reauth card on the admin's own run (whose door is User
   // view only) all reuse this one string.
   OPEN_IN_USER: "Open in user view",
+  // #912's type picker: offered only once the org has more than one type
+  // (the built-in one counts) — with just Standard user the switch stays the
+  // plain two-way toggle.
+  CHOOSE_TYPE_LABEL: "User type",
+} as const;
+
+// The deleted-type notice (UT-13, #912): an admin's user view dropped back to
+// Admin because the type they were looking through was removed — read off
+// /me's user_view_dropped. BODY deliberately omits the sentence's own
+// "Choose another type to use the User view." clause: that is a real button
+// here, not prose.
+export const VIEW_DROPPED = {
+  BODY: (type: string) => `The ${type} user type was removed, so you're back in the Admin view.`,
+  CHOOSE_ANOTHER: "Choose another type",
 } as const;
 
 export const NAV = {

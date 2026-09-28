@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const roleMappingCols = `id, value, role, COALESCE(user_type, ''), created_at, created_by`
+const roleMappingCols = `id, value, role, COALESCE(user_type, ''), migrated_from_member, created_at, created_by`
 
 // UpsertRoleMapping writes one row, keyed on the natural UNIQUE (value):
 // re-adding an already-mapped value FLIPS its role in place rather than
@@ -40,6 +40,12 @@ const roleMappingCols = `id, value, role, COALESCE(user_type, ''), created_at, c
 // creation provenance (who ADDED this mapping) stays with the original
 // creator across a later role flip by a different admin, the same way
 // created_at is untouched on conflict (no SET at all, so Postgres leaves it).
+//
+// The conflict path also forces migrated_from_member to false, unconditionally
+// (never EXCLUDED.migrated_from_member, which the caller never sets to true
+// anyway — see the type's own doc comment): any write that flips an existing
+// row IS an admin picking a type for it, which is what migration 0098's
+// marker exists to prompt, so the row's job is done the moment one lands.
 func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.RoleMapping, error) {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
@@ -48,7 +54,7 @@ func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.R
 		INSERT INTO role_mappings (id, value, role, user_type, created_by)
 		VALUES ($1,$2,$3,NULLIF($4,''),$5)
 		ON CONFLICT (value) DO UPDATE
-			SET role = EXCLUDED.role, user_type = EXCLUDED.user_type
+			SET role = EXCLUDED.role, user_type = EXCLUDED.user_type, migrated_from_member = false
 		RETURNING ` + roleMappingCols
 	saved, err := scanRoleMapping(s.Pool.QueryRow(ctx, q, m.ID, m.Value, m.Role, m.UserType, m.CreatedBy))
 	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -82,7 +88,7 @@ func (s PG) ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error) {
 
 func scanRoleMapping(row pgx.Row) (types.RoleMapping, error) {
 	var m types.RoleMapping
-	err := row.Scan(&m.ID, &m.Value, &m.Role, &m.UserType, &m.CreatedAt, &m.CreatedBy)
+	err := row.Scan(&m.ID, &m.Value, &m.Role, &m.UserType, &m.MigratedFromMember, &m.CreatedAt, &m.CreatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RoleMapping{}, ErrNotFound
 	}

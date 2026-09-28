@@ -213,6 +213,63 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByText(PEOPLE.SHADOWED_OPERATOR_BADGE)).toBeVisible();
   });
 
+  // (b, #913) A console row migration 0098 marked: the badge, the hint, and
+  // a Choose a type action that prefills the Add form and re-upserts the row
+  // — the same POST any re-add sends, which is what clears the marker server-
+  // side (access.go's UpsertRoleMapping; pinned in Go).
+  test("(b) a migrated-from-member row carries the badge and Choose a type re-upserts it", async ({ page }) => {
+    await mockSsoStatus(page);
+    await mockAccessGet(
+      page,
+      baseAccessBody({
+        mappings: [
+          {
+            id: "m1",
+            value: "eng-team",
+            role: "user",
+            user_type: "standard",
+            source: "console",
+            shadowed: false,
+            shadow_cause: "",
+            migrated_from_member: true,
+            created_at: "2026-08-30T00:00:00Z",
+          },
+        ],
+        user_types: [
+          { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
+          { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false },
+        ],
+        // Bypasses the FIRST_ROW posture guard (map_empty by default here) —
+        // not this test's business; see the dedicated posture-flip test above.
+        posture: { map_empty: false, before: "", after: "", changes: false },
+      }),
+    );
+    const postCalls: Array<{ value: string; role: string; user_type?: string }> = [];
+    await page.route("**/api/v1/access/mappings", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      const body = route.request().postDataJSON() as { value: string; role: string; user_type?: string };
+      postCalls.push(body);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "m1", value: body.value, role: body.role, user_type: body.user_type, created_at: "2026-08-30T00:00:00Z" }),
+      });
+    });
+    await gotoPeopleStep(page);
+
+    await expect(page.getByText(PEOPLE.MIGRATED_FROM_MEMBER_BADGE)).toBeVisible();
+    await expect(page.getByText(PEOPLE.MIGRATED_FROM_MEMBER_HINT)).toBeVisible();
+
+    await page.getByRole("button", { name: `${PEOPLE.CHOOSE_TYPE} eng-team` }).click();
+    await expect(page.getByLabel(PEOPLE.FIELD_VALUE, { exact: true })).toHaveValue("eng-team");
+    await page.getByRole("combobox", { name: PEOPLE.FIELD_USER_TYPE }).click();
+    await page.getByRole("option", { name: "Portfolio manager" }).click();
+    await page.getByRole("button", { name: PEOPLE.ADD_CTA }).click();
+
+    await expect.poll(() => postCalls.length).toBe(1);
+    expect(postCalls[0]).toEqual({ value: "eng-team", role: "user", user_type: "portfolio-manager" });
+  });
+
   test("(b) an email-shaped row gets no unverified-claim badge when email mappings are off", async ({ page }) => {
     await mockSsoStatus(page);
     await mockAccessGet(

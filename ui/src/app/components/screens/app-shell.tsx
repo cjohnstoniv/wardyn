@@ -60,7 +60,7 @@ import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
 import { appURL } from "../../lib/base-path";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
-import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
+import { useShellView, useViewResync, UserViewDroppedNotice, UserViewEyebrow, ViewSwitch } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
@@ -135,6 +135,12 @@ export interface ShellMeta {
   // field here comes from (operator-context.tsx's MeIdentity.userType).
   // Absent reads as null.
   userType?: UserTypeMeta | null;
+  /** #912 — the type the switch's dropdown preselects before the view is
+   *  entered (/me's user_view_preselect_type). "" means nothing to preselect. */
+  userViewPreselectType: string;
+  /** #912 (UT-13) — the type whose deletion turned this session's user view
+   *  off, until the next switch (/me's user_view_dropped). null otherwise. */
+  userViewDropped: { user_type: string } | null;
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
   /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
@@ -189,6 +195,8 @@ function identityFromMe(me: Me | null) {
     userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
     userDriveUnavailable: me?.user_drive_unavailable ?? "",
     userType: me?.user_type ?? null,
+    userViewPreselectType: me?.user_view_preselect_type ?? "",
+    userViewDropped: me?.user_view_dropped ?? null,
     memberMode: me?.user_view ?? false,
     memberModeNoCredential: me?.user_view_no_credential ?? false,
     memberPreviewAvailable: me?.user_preview_available ?? false,
@@ -220,6 +228,8 @@ function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
     userType: null,
+    userViewPreselectType: "",
+    userViewDropped: null,
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
@@ -468,10 +478,20 @@ function SidebarNav({
     <>
       {/* Below sm the switch leaves the top bar for the top of this sheet, so
           New run and the avatar stay on screen (F7-F2). */}
-      {onNavigate && hasSwitch && <ViewSwitch access={access} view={view} onNavigate={onNavigate} className="mb-3 sm:hidden" />}
+      {onNavigate && hasSwitch && (
+        <ViewSwitch
+          access={access}
+          view={view}
+          onNavigate={onNavigate}
+          className="mb-3 sm:hidden"
+          currentUserType={meta.userType}
+          preselectType={meta.userViewPreselectType}
+        />
+      )}
       {view === "admin" && items.length > 0 && (
         <div className="label-eyebrow mb-2 px-2.5">{CONSOLE_VIEW.EYEBROW_ADMIN}</div>
       )}
+      {view === "user" && <UserViewEyebrow access={access} currentUserType={meta.userType} />}
       <nav className="space-y-0.5">
         {items.map((item) => {
           const count =
@@ -675,6 +695,10 @@ export function AppShell({
           banners and not hidden in focus mode: it explains the refusals the
           others might be mistaken for. The plain User view has no band. */}
             <UserPreviewBanner active={meta.memberModeNoCredential} />
+            {/* #912 (UT-13): why this admin is back in the Admin view, with a
+                real way to pick another type — never hidden in focus mode,
+                same reasoning as the preview band above. */}
+            <UserViewDroppedNotice access={access} dropped={meta.userViewDropped} />
             {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
           cannot paint over it: this banner is the only thing that separates a
           quiet fleet from a dead daemon, and a full-bleed terminal is exactly

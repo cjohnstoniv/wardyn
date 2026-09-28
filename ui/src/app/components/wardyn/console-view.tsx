@@ -155,11 +155,11 @@ export function isSwitching(): boolean {
   return switching;
 }
 
-export async function switchView(to: ConsoleView, target: string, noCredential = false): Promise<void> {
+export async function switchView(to: ConsoleView, target: string, noCredential = false, userType?: string): Promise<void> {
   releaseUnloadGuard(true);
   switching = true;
   try {
-    await health.setMemberMode(to === "user", noCredential);
+    await health.setMemberMode(to === "user", noCredential, userType);
   } catch (e) {
     releaseUnloadGuard(false);
     switching = false;

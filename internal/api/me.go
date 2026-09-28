@@ -109,6 +109,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// The type whose deletion turned the user view off, until the next
 	// switch: the console says why it is back in the Admin view.
 	body["user_view_dropped"] = meUserViewDropped(r.Context())
+	// #912: the type the switch's dropdown preselects before the view is
+	// entered — "" when there is nothing to preselect (already in the view,
+	// or no human identity to remember a choice for).
+	body["user_view_preselect_type"] = s.meUserViewPreselectType(r)
 	// The AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
 	// an operator (the dialog never renders the hint for one) and for a member

@@ -99,9 +99,10 @@ func reSigned(t *testing.T, w *httptest.ResponseRecorder) (*http.Cookie, oidc.Se
 type uvMe struct {
 	Role            string            `json:"role"`
 	Operator        bool              `json:"operator"`
-	MemberMode      bool              `json:"user_view"`
-	UserType        *meUserTypeView   `json:"user_type"`
-	UserViewDropped map[string]string `json:"user_view_dropped"`
+	MemberMode        bool              `json:"user_view"`
+	UserType          *meUserTypeView   `json:"user_type"`
+	UserViewDropped   map[string]string `json:"user_view_dropped"`
+	UserViewPreselect string            `json:"user_view_preselect_type"`
 }
 
 func uvGetMe(t *testing.T, srv *Server, c *http.Cookie) (uvMe, *httptest.ResponseRecorder) {
@@ -303,5 +304,49 @@ func TestRunCreateCarriesTheViewedType(t *testing.T) {
 	}
 	if d := withRunUserType(ctx, utPM, map[string]any{}); d["user_type"] != utPM || d["user_view"] != nil {
 		t.Fatalf("outside the view = %v", d)
+	}
+}
+
+// TestMeUserViewPreselectType (#912): /me's user_view_preselect_type is the
+// same resolution POST /me/view applies with no type named — the remembered
+// choice, else the admin's own stamped type, else the built-in one — computed
+// BEFORE the view is entered so the switch's dropdown has a first value to
+// show. It answers "" once the view is already on and for a real user, since
+// neither ever renders the picker.
+func TestMeUserViewPreselectType(t *testing.T) {
+	srv, st, _ := uvServer(t)
+
+	// No remembered choice yet: the admin's own stamped type.
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, "")
+	me, _ := uvGetMe(t, srv, admin)
+	if me.UserViewPreselect != utDev {
+		t.Fatalf("preselect with no remembered choice = %q, want the stamped type %q", me.UserViewPreselect, utDev)
+	}
+
+	// Remember a different choice; a NEW session of the same principal, still
+	// outside the view, preselects it over the stamped type.
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","user_type":"`+utPM+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("choose %q: %d %s", utPM, w.Code, w.Body.String())
+	}
+	fresh := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, "")
+	me, _ = uvGetMe(t, srv, fresh)
+	if me.UserViewPreselect != utPM {
+		t.Fatalf("preselect with a remembered choice = %q, want %q", me.UserViewPreselect, utPM)
+	}
+
+	// Already in the view: /me's own user_type field answers this, so the
+	// preselect is blank.
+	inView := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, utPM)
+	me, _ = uvGetMe(t, srv, inView)
+	if me.UserViewPreselect != "" {
+		t.Fatalf("preselect while already in the view = %q, want empty", me.UserViewPreselect)
+	}
+
+	// A real user never renders the picker either.
+	st.userTypes = utKnown
+	user := uvSession(t, "sub-uv-preselect-user", oidc.RoleUser, types.UserTypeStandard, "")
+	me, _ = uvGetMe(t, srv, user)
+	if me.UserViewPreselect != "" {
+		t.Fatalf("preselect for a real user = %q, want empty", me.UserViewPreselect)
 	}
 }

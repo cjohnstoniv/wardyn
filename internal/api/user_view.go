@@ -212,6 +212,30 @@ func (s *Server) userViewType(ctx context.Context, sub, asked string) (id, refus
 	return types.UserTypeStandard, "", nil
 }
 
+// meUserViewPreselectType is /me's user_view_preselect_type (#912): the type
+// the switch's dropdown preselects BEFORE an admin has entered the view — the
+// same resolution POST /me/view applies when asked for none (userViewType),
+// so the console never has to guess a first value from client-side data.
+// "" for anyone with no human identity (admin token, local mode) and for a
+// real user — role user never renders the picker (it is not a person
+// choosing which type to look through, it IS one), and that ONE check also
+// covers "the view is already on": entering the view always clamps role to
+// user (this file's own doc above), so there is no separate guard to keep in
+// sync with it. A store failure degrades to "" too — this is a UI
+// convenience, never a control, so it is never worth a 500.
+func (s *Server) meUserViewPreselectType(r *http.Request) string {
+	ctx := r.Context()
+	sub := oidcHumanFromContext(ctx)
+	if sub == "" || oidcRoleFromContext(ctx) == oidc.RoleUser {
+		return ""
+	}
+	id, _, err := s.userViewType(ctx, sub, "")
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 func (s *Server) userTypeExists(ctx context.Context, id string) (bool, error) {
 	if id == types.UserTypeStandard {
 		return true, nil

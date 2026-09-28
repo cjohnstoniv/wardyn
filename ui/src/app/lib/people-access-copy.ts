@@ -70,6 +70,16 @@ export const PEOPLE = {
   SHADOWED_OPERATOR_BADGE: "Shadowed by your operator allowlist",
   SHADOWED_OPERATOR_BODY:
     "This value is on your chart's WARDYN_OIDC_OPERATOR_EMAILS and always resolves to admin. The row is stored but has no effect until the allowlist entry or this row is removed.",
+  // 0.8 (user-types design §4, #913): a console row the 0070/0074 rename
+  // rewrote from role='member', with nothing picked since. Owner-approved
+  // packet A ("Migrated from member · from your chart · still works · Choose
+  // a type") — the chart-alias half of that packet is out of scope here (a
+  // chart value is resolved to "user" by ParseRoleMap before it ever reaches
+  // the console, with no trace of the alias left to carry); this row is
+  // exactly the console-row half migration 0098 marks.
+  MIGRATED_FROM_MEMBER_BADGE: "Migrated from member",
+  MIGRATED_FROM_MEMBER_HINT: "Still works.",
+  CHOOSE_TYPE: "Choose a type",
   EMAIL_KEY_BADGE: "Unverified claim",
   // Post-adjudication canon addition (backend review round): the
   // email_verified clause only applies when WARDYN_OIDC_EMAIL_DOMAINS is
