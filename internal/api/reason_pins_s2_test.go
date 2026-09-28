@@ -68,8 +68,9 @@ func TestSlice2_QueryAndBodyReasons(t *testing.T) {
 }
 
 // TestCreateAPIToken_FromAPIToken_ReasonLiteral (#656 slice 2 review round
-// S4) pins the LITERAL wire reason for apitokens.go:270 — an API token
-// cannot mint another — not just the Go constant. Calls the handler directly
+// S4) pins the LITERAL wire reason handleCreateAPIToken writes when an API
+// token tries to mint another — not just the Go constant. Calls the handler
+// directly
 // (bypassing the auth middleware) with a context carrying both a signed-in
 // human AND a stamped API-token id, the exact shape apiTokenAuth leaves an
 // API-token-authenticated request in.
@@ -121,8 +122,8 @@ func (s *personMintFakeStore) MarkPersonSignedIn(context.Context, string, time.T
 }
 
 // TestMintPersonAPIToken_NoSignIn_ReasonLiteral (#656 slice 2 review round
-// F3) pins people.go:235 at the HTTP level: the handler, not just the
-// personMintRefusal helper (already pinned by TestPersonMintRefusal_DerivationArms),
+// F3) pins handleMintPersonAPIToken at the HTTP level: the handler, not just
+// the personMintRefusal helper (already pinned by TestPersonMintRefusal_DerivationArms),
 // writes the refusal's reason to the wire. Drives POST
 // /people/{principal}/tokens through the real router with a person whose
 // email matches no role-mapping row and no default role, the "no_sign_in"
