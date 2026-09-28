@@ -477,7 +477,7 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 	}
 	// Not audited under authz.denied: that action's `reason` is a documented
 	// CLOSED enum (docs/OPERATIONS.md), and this create-time 422 follows
-	// writeLLMRefusal's own precedent (runs_dispatch_llm_mechanism.go) — the
+	// writeProviderRefusal's own precedent (run_model_provider.go) — the
 	// sibling model_credential refusal at this same door is likewise
 	// unaudited; only a run that actually DISPATCHES and then fails audits,
 	// under run.create.

@@ -33,7 +33,6 @@ var (
 	_ client.WorkspaceStatus
 	_ client.WorkspaceAttachment
 	_ client.WorkspaceLLMCred
-	_ client.WorkspaceBedrockRef
 	_ client.BaseImageEntry
 	_ client.SiteConfig
 	_ map[string]client.ArtifactOverride

@@ -395,87 +395,41 @@ func TestDispatchEnvSplit_CredentialsLeaveEnv(t *testing.T) {
 	}
 }
 
-// TestDispatchEnvSplit_BedrockCredentialsLeaveEnv is the OTHER half of the same
-// premise, and the half nothing pinned: env_secret grants are not the only lane
-// that writes a real credential into the composed sandbox env. A resident
-// Bedrock posture puts static AWS SigV4 keys there (SigV4 cannot be
-// proxy-injected the way a static api key can), and the captured-AWS-SSO posture
-// puts a base64 blob there whose payload IS the access and refresh token.
+// TestDispatchEnvSplit_BedrockCredentialsLeaveEnv: the one Bedrock mode that
+// puts real credential material in the sandbox env — a captured AWS sign-in,
+// whose base64 payload carries the SSO access and refresh token in the
+// generated ~/.aws cache file — reports the variable, so splitSecretEnv moves
+// it onto SandboxSpec.SecretEnv instead of leaving it where the k8s driver
+// writes Env inline into an API-readable Pod spec.
 //
-// Driven through resolveLLMTransport rather than applyBedrockTransport directly,
-// because the assignment is the thing under test: reverting
-// `t.secretEnvKeys = s.applyBedrockTransport(...)` to a bare call leaves the
-// keys unreported, splitSecretEnv moves nothing, and the credentials stay in Env
-// — where the k8s driver writes them inline into an API-readable Pod spec. A
-// test that called applyBedrockTransport itself would keep passing through that
-// revert.
+// Driven through the provider's own arm (providerBedrockTransport) rather than
+// applyBedrockTransport directly, because the assignment is the thing under
+// test: reverting `t.secretEnvKeys, ... = s.applyBedrockTransport(...)` to a
+// bare call leaves the key unreported and the credential in Env.
 func TestDispatchEnvSplit_BedrockCredentialsLeaveEnv(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		setup func(*testing.T, *Server)
-		want  []string
-	}{
-		{
-			// Resident static SigV4 keys: no bearer token, no captured SSO, no
-			// ~/.aws mount, so resolveBedrockAuth falls to the resident lane.
-			name:  "resident SigV4 keys",
-			setup: func(*testing.T, *Server) {},
-			want:  []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"},
-		},
-		{
-			// Captured AWS SSO: one variable, whose base64 payload carries the
-			// SSO access + refresh token in the generated ~/.aws cache file.
-			name: "captured SSO blob",
-			setup: func(t *testing.T, s *Server) {
-				s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
-				putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(time.Hour))
-			},
-			want: []string{awsSSOConfigEnvVar},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// New (not a bare &Server{}) so the transport runs with the same
-			// defaults dispatch gives it — cfg.Now above all, which the Bedrock
-			// audit event reads.
-			srv := New(Config{
-				BedrockRegion:         "us-east-1",
-				BedrockModel:          "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-				SubscriptionPostureOK: true,
-				MaskRegistry:          secretmask.NewRegistry(),
-				Secrets: &memSecrets{m: map[string][]byte{
-					bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
-					bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
-					// A session token only exists on the resident lane; harmless
-					// on the SSO one, which never reads it.
-					bedrockSessionTokenSecret: []byte("FwoGZXItesttesttesttesttestSESSION"),
-				}},
-			})
-			tc.setup(t, srv)
+	srv := New(Config{MaskRegistry: secretmask.NewRegistry(), Now: func() time.Time { return awsSSOTestFixedNow },
+		Secrets: &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}})
+	blob := putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour))
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: awsSSOTestOwner}
+	policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}}
+	sandboxEnv := map[string]string{"WARDYN_TASK_MODE": "agent"}
+	llm := srv.providerBedrockTransport(context.Background(), run, policy, sandboxEnv,
+		chosenProvider{provider: awsSSOTestProvider(), owner: awsSSOTestOwner}, blob)
+	if !llm.bedrockReady {
+		t.Fatalf("bedrockReady = false; the fixture never reached the lane under test")
+	}
 
-			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
-			policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}}
-			sandboxEnv := map[string]string{"WARDYN_TASK_MODE": "agent"}
-			llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, nil,
-				false, "", "http://wardyn-proxy:3128", nil, awsSSOScope{})
-			if !llm.bedrockReady {
-				t.Fatalf("bedrockReady = false; the fixture never reached the lane under test")
-			}
-
-			secretEnv := splitSecretEnv(sandboxEnv, llm.secretEnvKeys)
-			for _, k := range tc.want {
-				if secretEnv[k] == "" {
-					t.Errorf("SecretEnv[%s] is empty, want the credential value (keys reported: %v)", k, llm.secretEnvKeys)
-				}
-				if v, still := sandboxEnv[k]; still {
-					t.Errorf("Env still carries %s = %q after the split — the k8s driver would write it inline into an API-readable pod spec", k, v)
-				}
-			}
-			// The non-secret Bedrock configuration stays put: the split moves
-			// credentials out, it does not sweep the transport's whole env.
-			if sandboxEnv["CLAUDE_CODE_USE_BEDROCK"] != "1" || sandboxEnv["WARDYN_TASK_MODE"] != "agent" {
-				t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
-			}
-		})
+	secretEnv := splitSecretEnv(sandboxEnv, llm.secretEnvKeys)
+	if secretEnv[awsSSOConfigEnvVar] == "" {
+		t.Errorf("SecretEnv[%s] is empty, want the credential value (keys reported: %v)", awsSSOConfigEnvVar, llm.secretEnvKeys)
+	}
+	if v, still := sandboxEnv[awsSSOConfigEnvVar]; still {
+		t.Errorf("Env still carries %s = %q after the split — the k8s driver would write it inline into an API-readable pod spec", awsSSOConfigEnvVar, v)
+	}
+	// The non-secret Bedrock configuration stays put: the split moves
+	// credentials out, it does not sweep the transport's whole env.
+	if sandboxEnv["CLAUDE_CODE_USE_BEDROCK"] != "1" || sandboxEnv["WARDYN_TASK_MODE"] != "agent" {
+		t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
 	}
 }
 

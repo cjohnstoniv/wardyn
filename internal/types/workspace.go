@@ -31,39 +31,14 @@ const (
 	WorkspaceKindContainer WorkspaceKind = "container"
 )
 
-// WorkspaceLLMCred is the operator-owned model/harness credential binding on a
-// workspace: a run that picks it inherits model access via the named
-// Integration (refs/names only). Nil/IntegrationRef="" means no binding; the
-// run uses the global provider config.
+// WorkspaceLLMCred is the operator-owned model binding on a workspace: a run
+// that picks it uses the pinned model provider unless it names another. Nil or
+// ProviderRef="" means no pin.
 type WorkspaceLLMCred struct {
-	// IntegrationRef names the Integration model/harness access resolves through.
-	IntegrationRef string `json:"integration_ref,omitempty"`
-	// ProviderRef pins a run to one model provider (by id), replacing
-	// IntegrationRef once AI-kind integrations retire. A disallowed/ineligible
-	// pin refuses the run rather than falling through to another provider.
+	// ProviderRef pins a run to one model provider (by id). A disallowed or
+	// ineligible pin refuses the run rather than falling through to another
+	// provider.
 	ProviderRef string `json:"provider_ref,omitempty"`
-}
-
-// UnmarshalJSON decodes WorkspaceLLMCred, tolerating the pre-Integration wire
-// shape ({"mode":...,"api_key_secret":...,"bedrock":{...}}); those fields have
-// no home here, so they're silently dropped, yielding an empty IntegrationRef
-// rather than a decode error.
-func (c *WorkspaceLLMCred) UnmarshalJSON(b []byte) error {
-	var wire struct {
-		IntegrationRef string `json:"integration_ref"`
-		ProviderRef    string `json:"provider_ref"`
-	}
-	if err := json.Unmarshal(b, &wire); err != nil {
-		return err
-	}
-	c.IntegrationRef, c.ProviderRef = wire.IntegrationRef, wire.ProviderRef
-	return nil
-}
-
-// WorkspaceBedrockRef is a workspace's Bedrock model selection (non-secret; AWS credentials are unchanged).
-type WorkspaceBedrockRef struct {
-	Region string `json:"region,omitempty"`
-	Model  string `json:"model,omitempty"`
 }
 
 // WorkspaceStatus is the onboarding/scan lifecycle of a Workspace: not-yet-
@@ -253,22 +228,16 @@ type Workspace struct {
 // carrying its own secrets/egress/config. UI grouping DERIVES from kind;
 // there is no stored category.
 const (
-	IntegrationKindAnthropicAPIKey       = "anthropic_api_key"
-	IntegrationKindAnthropicSubscription = "anthropic_subscription"
-	IntegrationKindBedrock               = "bedrock"
-	IntegrationKindOpenAIAPIKey          = "openai_api_key"
-	// IntegrationKindAzureOpenAI is GONE as of 0.5 (its one caller, the AI Run
-	// Composer, no longer exists); a stored row of this kind now fails closed
-	// like any other unknown kind.
+	// The four AI kinds (anthropic_api_key, anthropic_subscription, bedrock,
+	// openai_api_key) are GONE as of 0.8: model access is a model provider, and
+	// migration 0099 converted and deleted every stored row of them.
 	IntegrationKindGitHubApp = "github_app"
 	IntegrationKindGitHost   = "git_host"
 )
 
 // ClosedIntegrationKinds is the closed kind set — the kinds with bespoke
 // behavior in code, and as of 0.5 the ONLY kinds a write may name
-// (validateIntegrationWrite). The four AI kinds left it in 0.8: model access
-// is a model provider, and a stored AI row is kept only for the conversion to
-// read (AIProviderKind).
+// (validateIntegrationWrite).
 var ClosedIntegrationKinds = map[string]bool{
 	IntegrationKindGitHubApp: true, IntegrationKindGitHost: true,
 }
@@ -277,18 +246,6 @@ var ClosedIntegrationKinds = map[string]bool{
 // "want one of: …" half of a rejected write's error.
 func ClosedIntegrationKindList() []string {
 	return slices.Sorted(maps.Keys(ClosedIntegrationKinds))
-}
-
-// AIProviderKind reports whether kind is one of the retired AI provider
-// flavors. No resolver hands such a row out any more; it names what the
-// conversion to model providers reads.
-func AIProviderKind(kind string) bool {
-	switch kind {
-	case IntegrationKindAnthropicAPIKey, IntegrationKindAnthropicSubscription,
-		IntegrationKindBedrock, IntegrationKindOpenAIAPIKey:
-		return true
-	}
-	return false
 }
 
 // Integration delivery modes: how one secret reaches the run.
@@ -338,8 +295,8 @@ type IntegrationSecret struct {
 // (write-new; see foldLegacyIntegration).
 type Integration struct {
 	// ID is an operator-chosen stable slug, unique within
-	// SiteConfig.Integrations (no generated uuid —
-	// WorkspaceLLMCred.IntegrationRef/DefaultFor point at it).
+	// SiteConfig.Integrations (no generated uuid — egress redirects'
+	// token_integration_ref and workspace requirements point at it).
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	// Kind is the ONE field saying what this connects to: a closed-set kind
@@ -362,12 +319,9 @@ type Integration struct {
 	Config map[string]any `json:"config,omitempty"`
 	Docs   string         `json:"docs,omitempty"`
 	// DisabledCapabilities lists capability names this integration does NOT support.
-	DisabledCapabilities []string `json:"disabled_capabilities,omitempty"`
-	// DefaultFor lists what this is the operator-chosen default for:
-	// "agent_runs" and/or "wardyn_features" (Wardyn's own internal usage).
-	DefaultFor []string  `json:"default_for,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	DisabledCapabilities []string  `json:"disabled_capabilities,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 
 	// legacyTopology marks a row folded from a legacy artifact_mirror/host_proxy
 	// category (network topology, not an integration); IntegrationList drops these.
@@ -418,19 +372,6 @@ func (in Integration) HeaderSecret() (secretName, header, format string, ok bool
 	return "", "", "", false
 }
 
-// AIKeyDelivery is the proxy-header injection convention an AI api-key kind's
-// "api_key" secret rides (mirrors the harness catalog's Gateway rows). nil
-// for a kind with no proxy-header lane.
-func AIKeyDelivery(kind string) *IntegrationDelivery {
-	switch kind {
-	case IntegrationKindAnthropicAPIKey:
-		return &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: "x-api-key", Format: "%s"}
-	case IntegrationKindOpenAIAPIKey:
-		return &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}
-	}
-	return nil
-}
-
 // legacyIntegrationJSON is the pre-base-component wire/storage shape, decoded
 // only by the read-time fold below; the field set is frozen, never written.
 type legacyIntegrationJSON struct {
@@ -446,7 +387,6 @@ type legacyIntegrationJSON struct {
 	Credentials          map[string]string `json:"credentials"`
 	Config               map[string]any    `json:"config"`
 	DisabledCapabilities []string          `json:"disabled_capabilities"`
-	DefaultFor           []string          `json:"default_for"`
 	CreatedAt            time.Time         `json:"created_at"`
 	UpdatedAt            time.Time         `json:"updated_at"`
 }
@@ -485,8 +425,8 @@ func (in *Integration) UnmarshalJSON(b []byte) error {
 }
 
 // foldLegacyIntegration maps a legacy-shaped row onto the base-component
-// shape: kind = old Type (or Category), egress = Hosts, config = Config
-// (bedrock's "lane" renamed "auth_lane"), secrets = Credentials with each
+// shape: kind = old Type (or Category), egress = Hosts, config = Config,
+// secrets = Credentials with each
 // role's delivery derived from how it actually delivered. A legacy
 // artifact_mirror/host_proxy row is marked legacyTopology so IntegrationList
 // drops it.
@@ -495,36 +435,24 @@ func foldLegacyIntegration(l legacyIntegrationJSON) Integration {
 	if kind == "" {
 		kind = l.Category
 	}
-	cfg := l.Config
-	if kind == IntegrationKindBedrock {
-		if lane, ok := cfg["lane"]; ok {
-			// Shallow clone so the fold never mutates the caller's map.
-			cfg = maps.Clone(cfg)
-			delete(cfg, "lane")
-			cfg["auth_lane"] = lane
-		}
-	}
 	var secrets []IntegrationSecret
 	for _, role := range slices.Sorted(maps.Keys(l.Credentials)) { // deterministic order
 		name := l.Credentials[role]
 		var d *IntegrationDelivery
-		switch {
-		case role == IntegrationCredentialToken && l.Header != "":
+		if role == IntegrationCredentialToken && l.Header != "" {
 			format := l.Format
 			if format == "" {
 				format = "%s"
 			}
 			d = &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: l.Header, Format: format}
-		case role == "api_key":
-			d = AIKeyDelivery(kind)
 		}
 		secrets = append(secrets, IntegrationSecret{Role: role, SecretName: name, Delivery: d})
 	}
 	return Integration{
 		ID: l.ID, Name: l.Name, Kind: kind, Disabled: l.Disabled,
-		Secrets: secrets, Egress: l.Hosts, Config: cfg, Docs: l.Docs,
-		DisabledCapabilities: l.DisabledCapabilities, DefaultFor: l.DefaultFor,
-		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
+		Secrets: secrets, Egress: l.Hosts, Config: l.Config, Docs: l.Docs,
+		DisabledCapabilities: l.DisabledCapabilities,
+		CreatedAt:            l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		legacyTopology: l.Category == "artifact_mirror" || l.Category == "host_proxy",
 	}
 }

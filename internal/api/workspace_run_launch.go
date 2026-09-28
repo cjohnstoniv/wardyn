@@ -624,19 +624,9 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// toolchain isn't in the convention agent image) — same lane as verify.
 	image := s.workspaceRunImage(ctx, runID, ws)
 
-	// The model provider is part of the HARNESS the operator configured (getting
-	// started), not per-workspace app egress they approve — so its host must be
-	// reachable in EVERY agent session, confined replay included. A learning session
-	// is AllowAllEgress so it's fine; a confined replay's AllowedDomains is
-	// baseline+approved and would NOT list api.anthropic.com, which makes
-	// applyLLMCredMount refuse the subscription mount (anthropicReachable=false) and
-	// silently fall back to a broken api-key path. Union the ceiling's model-provider
-	// egress in first so subscription/api-key wiring below attaches in both modes.
-	// Under a provider block only the chosen provider's host joins, at dispatch.
-	if !mp.governs {
-		unionAllowedDomains(&policy, s.modelProviderEgress(s.cfg.DefaultPolicy))
-	}
-
+	// The chosen model provider's host joins at dispatch, like any run's; it is
+	// part of the harness the operator configured, not per-workspace app egress
+	// they approve.
 	var injections []runner.InjectionGrant
 
 	// The workspace's REQUIRED contract rows ride a session the SAME way they
@@ -663,7 +653,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
 	injections = append(injections, minted...)
-	llmMode := s.recordSessionModelAccess(&policy, mp, len(injections) > 0)
+	llmMode := recordSessionModelAccess(mp)
 
 	// Save the resolved auth mode + model onto the session entry so it's visible and a
 	// later confined replay reflects the SAME provider the operator configured (not a
@@ -678,7 +668,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
-	var resolvedManaged bool
 	// adoEntraUngraded: the record/verify session door runs no autonomy gate —
 	// it is operator-only and no rubric caps it — so there is no frozen grade
 	// for dispatch to hold the Azure DevOps lane to.
@@ -704,23 +693,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// path) — and even for a member's, it gates that workspace's OWN binds
 		// only, never the session's operator-staged credential mounts.
 		UserMounts: s.userMountPosture([]types.Workspace{ws}),
-		// The pre-dispatch llmMode guess above
-		// cannot see the Wardyn-managed subscription lane at all — correct it
-		// below against what dispatch ACTUALLY resolved.
-		ResolvedManaged: &resolvedManaged,
 	})
-	// The mount/integration-based guess above already covers a host-staged
-	// subscription and a bound Bedrock/api-key integration; only the managed
-	// lane can flip "none"/"api-key" to "subscription" post-dispatch (the
-	// fallback grant it should have preempted was never minted in that case —
-	// see resolveLLMTransport's managed precedence comment).
-	if resolvedManaged && llmMode != "subscription" {
-		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
-			RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
-			Status: recordStatusRecording, StartedAt: startedAt,
-			LLMMode: "subscription", Model: s.cfg.AgentAnthropicModel,
-			Caveats: repoDevcontainerImageCaveats(ws),
-		}, recordStatusRecording)
-	}
 	return result, weakCC, nil
 }

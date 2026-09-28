@@ -136,32 +136,6 @@ func TestInternalInjection_ManagedTokenIsAStoredCredential(t *testing.T) {
 	}
 }
 
-// The Bedrock bearer arm used to read an unreadable key as an ABSENT one: a
-// store blip became "not in the store", and a refusal did too.
-func TestBedrockBearerSink_StoreOutageIsTransientRefusalDefinitive(t *testing.T) {
-	for _, tc := range []struct {
-		err        error
-		wantStatus int
-		wantReason string
-	}{
-		{errStoreDown, http.StatusServiceUnavailable, "store_unavailable"},
-		{errStoreRefused, http.StatusFailedDependency, "refused"},
-	} {
-		st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code"},
-			site: bearerRow(types.CredentialSourceShared)}
-		h, sec := bearerGuardHarness(t, st)
-		h.srv.cfg.Secrets = failingSecrets{sec, tc.err}
-		rr := resolveRecordedBearerGrant(t, h, st, "", "shared")
-		assertBedrockBearerRefused(t, rr, h, tc.wantStatus, "", tc.wantReason)
-	}
-
-	st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code"}, site: bearerRow(types.CredentialSourceShared)}
-	h, _ := bearerGuardHarness(t, st)
-	if ri := decodeResolved(t, resolveRecordedBearerGrant(t, h, st, "", "shared").Body.Bytes()); ri.ExpiresAt == 0 {
-		t.Error("the Bedrock bearer key resolved with no expiry; a stored key must be re-read")
-	}
-}
-
 // The captured AWS SSO arm answered every store error with the 503 the proxy
 // now rides out: an access-denied store would have kept a revoked session
 // injected for the whole grace.
@@ -402,60 +376,6 @@ func TestManagedCredProvider_CachesAMinuteButNeverAFailure(t *testing.T) {
 	_, _ = p.Current(context.Background())
 	if got := st.gets.Load(); got != 3 {
 		t.Fatalf("store reads = %d after the minute, want 3", got)
-	}
-}
-
-// Replacing or disconnecting the managed token lets go of the old one at once:
-// the cache serves the new token (or none), and its process-wide mask copy is
-// retired and then swept, instead of held for the daemon's life (F5).
-func TestHarnessCredential_ReplaceAndDisconnectLetGoOfTheOldToken(t *testing.T) {
-	const first, second = "sk-ant-oat01-first-managed-token", "sk-ant-oat01-second-managed-token"
-	reg := secretmask.NewRegistry()
-	h := newHarness(t)
-	cfg := h.srv.cfg
-	sec := &memSecrets{m: map[string][]byte{}}
-	cfg.Secrets, cfg.MaskRegistry = sec, reg
-	cfg.ManagedToken = NewManagedCredProvider(sec, "anthropic")
-	h.srv = New(cfg)
-	paste := func(tok string) {
-		t.Helper()
-		if w := do(t, h.srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken, `{"token":"`+tok+`"}`); w.Code != http.StatusOK {
-			t.Fatalf("paste: %d %s", w.Code, w.Body.String())
-		}
-	}
-	current := func() string {
-		tok, _ := h.srv.cfg.ManagedToken.Current(context.Background())
-		return tok.Value
-	}
-	held := func(v string) bool {
-		return !bytes.Contains(reg.Masker(uuid.New()).Mask([]byte(v)), []byte(v))
-	}
-
-	paste(first)
-	if got := current(); got != first {
-		t.Fatalf("after the first capture Current = %q", got)
-	}
-	paste(second)
-	if got := current(); got != second {
-		t.Fatalf("after replacing the token Current = %q, want the new one at once (the cache must be evicted)", got)
-	}
-	reg.SweepGlobals(time.Now().Add(time.Second))
-	if held(first) || !held(second) {
-		t.Fatalf("after the replace and a sweep: first held=%v second held=%v, want only the current token", held(first), held(second))
-	}
-
-	if w := do(t, h.srv, http.MethodDelete, "/api/v1/setup/harness-credential/anthropic", adminToken, ""); w.Code != http.StatusOK {
-		t.Fatalf("disconnect: %d %s", w.Code, w.Body.String())
-	}
-	if got := current(); got != "" {
-		t.Fatalf("after disconnect Current = %q, want nothing (the cache must be evicted)", got)
-	}
-	if !held(second) {
-		t.Fatal("the disconnected token stopped being masked at once; it must stay masked until swept")
-	}
-	reg.SweepGlobals(time.Now().Add(time.Second))
-	if held(second) {
-		t.Fatal("the disconnected token's mask copy is still held after the sweep")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -23,10 +24,10 @@ import (
 // ssoLoginRunStore is a minimal store.Store returning a fixed run from GetRun
 // plus that run's audit trail from QueryAuditEvents — the two reads the
 // sso-token upload handler makes against trusted server state (the run kind,
-// and the operator's own start URL recorded on harness.login.start).
-// siteCfg is the third read (0.7.2): the agent roster says WHOSE namespace a
-// capture lands in, so the handler asks for it on every upload. The zero value
-// is legacy open mode — the operator namespace, i.e. these cases unchanged.
+// and the provider values recorded on harness.login.start). siteCfg is the
+// third read: a capture lands only while the provider it was launched for is
+// still the one the live block holds. The zero value answers
+// uploadSite(defaultUploadProvider()), the provider every default stamp names.
 type ssoLoginRunStore struct {
 	store.Store
 	run     types.AgentRun
@@ -39,6 +40,9 @@ func (s ssoLoginRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, er
 }
 
 func (s ssoLoginRunStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	if s.siteCfg.ModelProviders == nil {
+		return uploadSite(defaultUploadProvider()), nil
+	}
 	return s.siteCfg, nil
 }
 
@@ -46,33 +50,70 @@ func (s ssoLoginRunStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]t
 	return s.events, nil
 }
 
-// ssoLoginStartedEvents is the harness.login.start row launchHarnessLoginRun
-// writes for runID, carrying the operator's declared access-portal URL. The
-// upload handler binds the uploaded start_url to it.
-func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent {
+// The provider every upload fixture here was launched for, and its launcher
+// (mintRunToken's subject).
+const (
+	uploadOwner       = "alice@example.com"
+	uploadProviderUID = "u-bedrock-upload"
+	uploadModel       = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+)
+
+// uploadProvider is a bedrock_sso provider on the portal and region
+// validSSOBody carries, pinned to pinAccount/pinRole ("" = unpinned), serving
+// claude-code on model.
+func uploadProvider(pinAccount, pinRole, model string) types.ModelProvider {
+	return types.ModelProvider{ID: "bedrock-upload", UID: uploadProviderUID, Kind: types.ModelProviderBedrockSSO,
+		Bedrock: &types.BedrockSettings{Region: "us-west-2", SSOStartURL: "https://my-sso.awsapps.com/start",
+			SSOAccountID: pinAccount, SSORoleName: pinRole},
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: model}}}
+}
+
+// defaultUploadProvider is uploadProvider unpinned, on a model that names no
+// account — the shape that binds only the region and the portal.
+func defaultUploadProvider() types.ModelProvider { return uploadProvider("", "", uploadModel) }
+
+func uploadSite(p types.ModelProvider) types.SiteConfig {
+	return types.SiteConfig{ModelProviders: providerBlock(p)}
+}
+
+// uploadStamp is the harness.login.start row the provider door writes for
+// owner's sign-in to p (launchHarnessLoginRun): the provider's values as they
+// read at launch, which the upload binds to.
+func uploadStamp(runID uuid.UUID, p types.ModelProvider, owner string) []types.AuditEvent {
+	b := providerBedrockSettings(p)
 	return []types.AuditEvent{{
 		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
 		Action: "harness.login.start", Target: runID.String(), Outcome: "success",
-		Data: mustJSON(map[string]any{"provider": awsSSOProvider, "sso_start_url": startURL}),
+		Data: mustJSON(map[string]any{
+			"provider": awsSSOProvider, "sso_start_url": b.SSOStartURL,
+			"credential_source": string(types.CredentialSourcePerUser), "owner": owner,
+			"sso_account_id": b.SSOAccountID, "sso_role_name": b.SSORoleName,
+			"model_provider": p.ID, "model_provider_uid": p.UID, "sso_region": b.Region,
+			"model": providerModel(p, "claude-code"), "model_provider_address": providerAddressDigest(p),
+		}),
 	}}
 }
 
-// ssoLoginStartedPerUser is ssoLoginStartedEvents PLUS the launch-time
-// credential-scope stamp launchHarnessLoginRun writes under a per_user roster
-// row. handleUploadSSOToken reads WHOSE namespace a capture may land in off
-// this row, never off the live roster — see loginRunScope.
-//
-// The unstamped ssoLoginStartedEvents above is left as it is on purpose: it is
-// what a login run launched BEFORE the stamp existed looks like, and every
-// caller of it runs on a shared/legacy roster, which is the one fallback
-// loginRunScope still admits.
+// ssoLoginStartedEvents is uploadStamp for uploadOwner's sign-in to
+// defaultUploadProvider launched on startURL.
+func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent {
+	return ssoLoginStartedPerUser(runID, startURL, uploadOwner)
+}
+
+// ssoLoginStartedPerUser is ssoLoginStartedEvents for another launcher.
 func ssoLoginStartedPerUser(runID uuid.UUID, startURL, owner string) []types.AuditEvent {
-	ev := ssoLoginStartedEvents(runID, startURL)
-	ev[0].Data = mustJSON(map[string]any{
-		"provider": awsSSOProvider, "sso_start_url": startURL,
-		"credential_source": string(types.CredentialSourcePerUser), "owner": owner,
-	})
-	return ev
+	p := defaultUploadProvider()
+	p.Bedrock.SSOStartURL = startURL
+	return uploadStamp(runID, p, owner)
+}
+
+// uploadedBlob is what an upload stored in owner's namespace under the upload
+// provider's name, and whether anything was.
+func uploadedBlob(sec *memSecrets, owner string) ([]byte, bool) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	v, ok := sec.owned[owner][providerSecretName(uploadProviderUID, providerSSOPart)]
+	return v, ok
 }
 
 // newSSOUploadSrv wires a Server over an aws-sso harness-login run + an
@@ -131,7 +172,7 @@ func TestUploadSSOToken_HappyPath(t *testing.T) {
 		t.Fatalf("upload: code = %d, want 204; body=%s", w.Code, w.Body.String())
 	}
 
-	raw, ok := sec.m[harnessCredSecretName(awsSSOProvider)]
+	raw, ok := uploadedBlob(sec, uploadOwner)
 	if !ok {
 		t.Fatal("sso token blob was not stored under the reserved harness name")
 	}
@@ -164,7 +205,7 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("incomplete blob: code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
 		t.Error("an invalid blob must not be stored")
 	}
 }
@@ -172,11 +213,9 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 // TestUploadSSOToken_HalfResolvedCaptureRejected: wardyn-aws-sso's account/role
 // resolution is best-effort and can come up empty (no accounts, a timeout, a
 // malformed response) while every other field is well-formed.
-// awsSSOBlob.valid() requires account_id/role_name because resolveBedrockAuth
-// selects a stored SSO credential ahead of the host-mode ~/.aws mount and
-// static-key lanes: a half-resolved capture that can never satisfy
-// GetRoleCredentials would silently pre-empt lanes that might have actually
-// worked.
+// awsSSOBlob.valid() requires account_id/role_name: a half-resolved capture
+// can never satisfy GetRoleCredentials, so storing one would only turn every
+// later run into a refusal that names nothing.
 func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
 	halfResolved := `{
@@ -190,7 +229,7 @@ func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("half-resolved capture (no account_id/role_name): code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
 		t.Error("a half-resolved capture must not be stored — it would pre-empt a working Bedrock lane")
 	}
 }
@@ -216,7 +255,7 @@ func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("newline in start_url: code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
 		t.Error("a blob with a control character in start_url must not be stored")
 	}
 }
@@ -244,7 +283,7 @@ func TestUploadSSOToken_ControlCharsInAccountOrRoleRejected(t *testing.T) {
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("control char in %s: code = %d, want 400; body=%s", name, w.Code, w.Body.String())
 			}
-			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+			if _, ok := uploadedBlob(sec, uploadOwner); ok {
 				t.Errorf("a blob with a control character in %s must not be stored", name)
 			}
 		})
@@ -401,6 +440,28 @@ type barrierSecrets struct {
 }
 
 func (b *barrierSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	b.gate()
+	return b.memSecrets.Get(ctx, name)
+}
+
+// For keeps the barrier on the owner's namespace, the one a provider sign-in
+// is read and written in.
+func (b *barrierSecrets) For(owner string) secretstore.Store {
+	return barrierView{Store: b.memSecrets.For(owner), b: b}
+}
+
+type barrierView struct {
+	secretstore.Store
+	b *barrierSecrets
+}
+
+func (v barrierView) Get(ctx context.Context, name string) ([]byte, error) {
+	v.b.gate()
+	return v.Store.Get(ctx, name)
+}
+
+// gate is the barrier itself: the first two reads wait for each other.
+func (b *barrierSecrets) gate() {
 	b.mu.Lock()
 	b.arrived++
 	n := b.arrived
@@ -414,5 +475,4 @@ func (b *barrierSecrets) Get(ctx context.Context, name string) ([]byte, error) {
 		case <-time.After(500 * time.Millisecond): // serialised: nobody else is coming
 		}
 	}
-	return b.memSecrets.Get(ctx, name)
 }

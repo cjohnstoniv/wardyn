@@ -454,8 +454,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 // (harnessCatalog, harness.go): display name, plus whether Wardyn can wire it
 // a managed model credential (Gateway) and/or a container-login subscription
 // (Login), or whether it is the BYOA row (NoManagedAuth). This is the STATIC
-// "what tools does Wardyn know how to run" catalog — distinct from
-// SetupHarness, which reports a CAPTURED credential's live readiness.
+// "what tools does Wardyn know how to run" catalog.
 type SetupHarnessTool struct {
 	ID            string `json:"id"`
 	Display       string `json:"display"`
@@ -472,36 +471,6 @@ type SetupHarnessTool struct {
 	// rather than hiding it. A roster that silently drops agents is how "Claude
 	// Code is just gone" becomes a support ticket.
 	Enabled bool `json:"enabled"`
-	// Mechanism and CredentialSource are the row's declared model-access lane and
-	// whose credential it uses, empty when no block exists or no row names this
-	// agent. They are the MEMBER-SAFE half of the agent policy: a lane name and
-	// "shared"/"per_user" carry no host, no secret name and never the AWS access
-	// portal URL, which is why redactSetupStatusForUser keeps them — a member
-	// deciding whether to sign in has to be able to see that their org captures
-	// credentials per person.
-	Mechanism        string `json:"mechanism,omitempty"`
-	CredentialSource string `json:"credential_source,omitempty"`
-	// CredentialResidency is published for exactly ONE row shape: an enabled
-	// `per_user` + `bedrock_sso` row, which is "sandbox". EMPTY for every other
-	// row, and that is the whole design.
-	//
-	// A roster cannot say where a credential lands — the RESOLVED lane decides
-	// that, and resolving one here would mean dry-running a body New Run never
-	// sends (it sends a policy_id or a minimal inline_policy, and create folds the
-	// run/workspace/default integration first), so the answer could be confidently
-	// wrong in either direction. The per-user Bedrock SSO row is the one case the
-	// row settles by itself: it admits no other lane (resolveBedrockAuth stops at
-	// the per-user branch, mechanismSatisfied accepts only bedrock_sso), and that
-	// lane writes the captured session into the sandbox and mints resident SigV4
-	// credentials from it whatever policy, workspace or integration the run
-	// carries. It is also the field report's own estate, and the one state where
-	// the precise answer is unavailable: Preflight 422s a member who has not
-	// signed in.
-	//
-	// Every other row reads "Resolved at launch." in the console until the caller
-	// presses Preflight, which answers for the exact run. Member-safe for the same
-	// reason the two fields above are.
-	CredentialResidency string `json:"credential_residency,omitempty"`
 	// ProvidersUngranted (#1052) is true when at least one enabled model
 	// provider serves this harness but this caller's own granted set
 	// (setupModelProviderState's capVisible-narrowed model_providers) serves
@@ -537,7 +506,7 @@ type SetupHarnessTool struct {
 // id IS what the admin typed into their own WARDYN_AGENT_IMAGES/roster entry.
 //
 // A zero-value sc (no store, or a read that failed) is legacy open mode: every
-// catalog row enabled, no mechanism claimed, no roster to fold in (an empty
+// catalog row enabled, no roster to fold in (an empty
 // AgentProviders block is never stored — agentProvidersConfigured's doc).
 // That is the conservative direction here — it claims nothing unavailable on
 // a blip.
@@ -582,11 +551,6 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 		if configured {
 			row, ok := agentProviderFor(sc, d.ID)
 			tool.Enabled = ok && !row.Disabled
-			if ok {
-				tool.Mechanism = string(row.Mechanism)
-				tool.CredentialSource = string(row.CredentialSource)
-				tool.CredentialResidency = rowFixedResidency(row)
-			}
 		}
 		out[i] = tool
 	}
@@ -597,11 +561,8 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 			}
 			out = append(out, SetupHarnessTool{
 				ID: row.ID, Display: row.ID, NoManagedAuth: true,
-				Enabled:             !row.Disabled,
-				Mechanism:           string(row.Mechanism),
-				CredentialSource:    string(row.CredentialSource),
-				CredentialResidency: rowFixedResidency(row),
-				ProvidersUngranted:  serving[row.ID] && !grantedFor[row.ID],
+				Enabled:            !row.Disabled,
+				ProvidersUngranted: serving[row.ID] && !grantedFor[row.ID],
 			})
 		}
 	}

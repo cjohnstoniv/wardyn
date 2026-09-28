@@ -163,44 +163,17 @@ func TestValidateLLMGateways_GatewayAuthRefusals(t *testing.T) {
 	}
 }
 
-// TestAnthropicBaseURL pins the subscription/managed lanes' dispatch target
-// (runs_dispatch_llm.go): unset must stay byte-identical to today, and a
-// configured gateway must be dialed verbatim instead.
-func TestAnthropicBaseURL(t *testing.T) {
-	s := &Server{}
-	if got := s.anthropicBaseURL(); got != "https://api.anthropic.com" {
-		t.Fatalf("unset: anthropicBaseURL() = %q, want the vendor default", got)
-	}
-	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
-	if got, want := s.anthropicBaseURL(), "https://llm-gateway.corp.internal:8443/v1"; got != want {
-		t.Fatalf("configured: anthropicBaseURL() = %q, want %q", got, want)
-	}
-}
-
-// TestAnthropicGatewayHostAndHostPort pins the bare-host and host:port forms
-// authorSubscriptionInjection and the injection-host allowlist consume: unset
-// is empty (no widening), a configured gateway with no explicit port defaults
-// to 443, and an explicit port is preserved.
-func TestAnthropicGatewayHostAndHostPort(t *testing.T) {
+// TestAnthropicGatewayHost pins the bare-host form the injection-host
+// allowlist consumes: unset is empty (no widening), and a configured gateway
+// yields its host with any port and path dropped.
+func TestAnthropicGatewayHost(t *testing.T) {
 	s := &Server{}
 	if h := s.anthropicGatewayHost(); h != "" {
 		t.Fatalf("unset: anthropicGatewayHost() = %q, want \"\"", h)
 	}
-	if hp := s.anthropicGatewayHostPort(); hp != "" {
-		t.Fatalf("unset: anthropicGatewayHostPort() = %q, want \"\"", hp)
-	}
-
-	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
 	if h, want := s.anthropicGatewayHost(), "llm-gateway.corp.internal"; h != want {
 		t.Fatalf("anthropicGatewayHost() = %q, want %q", h, want)
-	}
-	if hp, want := s.anthropicGatewayHostPort(), "llm-gateway.corp.internal:443"; hp != want {
-		t.Fatalf("no explicit port: anthropicGatewayHostPort() = %q, want %q (default 443)", hp, want)
-	}
-
-	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
-	if hp, want := s.anthropicGatewayHostPort(), "llm-gateway.corp.internal:8443"; hp != want {
-		t.Fatalf("explicit port: anthropicGatewayHostPort() = %q, want %q", hp, want)
 	}
 }
 

@@ -32,16 +32,12 @@ const (
 )
 
 // runProviderChoice is chooseModelProvider's answer. chosen=false with no
-// refusal is "no provider serves this harness": the run launches on today's
-// path with today's advisory.
+// refusal is "no provider serves this harness": the run launches with no model
+// credential and the advisory that says so.
 type runProviderChoice struct {
 	provider types.ModelProvider
 	chosen   bool
-	// governs: a provider block is set and this is a model run, so the legacy
-	// lanes are bypassed — the run is credentialed by its provider or by
-	// nothing (resolveRunLLMAccess, dispatch's resolveProviderLane).
-	governs bool
-	refusal string
+	refusal  string
 	// notGranted marks a refusal the caller's capability decided — a 403
 	// authz.denied row, not an org-configuration 422.
 	notGranted bool
@@ -164,9 +160,9 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 
 // enforceRunModelProvider is the model-provider choice at BOTH doors, create
 // and Review, so Review answers the refusal launch would. With no provider
-// block it changes nothing unless the request named a provider, which it
-// refuses rather than ignores. wsRefs[0] is the primary workspace, the one
-// whose pin a run inherits.
+// block nothing serves the run, and a request that named a provider is refused
+// rather than ignored. wsRefs[0] is the primary workspace, the one whose pin a
+// run inherits.
 //
 // A chosen provider is checked live at both doors, as dispatch will check it
 // again (providerLiveness, one check per kind): the caller's own credential for
@@ -180,10 +176,9 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 //
 // The returned runProviderChoice is launch's (runs.go) only source for
 // AgentRun.ModelProviderID and the run.create audit snapshot (#527); Review
-// uses it only for its model-access row. choice.chosen is false with no
-// provider block (the zero runProviderChoice, today's path) and under a block
-// that serves no provider for this agent (governs=true: no model credential
-// at all). Neither is a choice, and callers must not treat a zero
+// uses it only for its model-access row. choice.chosen is false when no
+// provider serves this agent (no model credential at all), and for a run that
+// makes no model call. Neither is a choice, and callers must not treat a zero
 // provider.ID as one.
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace,
@@ -193,10 +188,9 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
 		return runProviderChoice{}, false
 	}
-	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is
-	// llmMechanismGateApplies' own predicate, shared here (#767 step 2) so this
-	// door and that one can never again ask a different question of the same
-	// request.
+	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is the one
+	// predicate for which create requests are model runs (#767 step 2), so no
+	// two doors ask a different question of the same request.
 	_, needsModel := agentLLMProvider(req.Agent)
 	if !needsModel || !createDoorIsModelRun(req) {
 		if req.ModelProvider != "" {
@@ -218,12 +212,9 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			return runProviderChoice{}, false
 		}
 	}
-	if sc.ModelProviders == nil {
-		if req.ModelProvider != "" {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
-			return runProviderChoice{}, false
-		}
-		return runProviderChoice{}, true
+	if sc.ModelProviders == nil && req.ModelProvider != "" {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
+		return runProviderChoice{}, false
 	}
 	var pin string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
@@ -264,7 +255,6 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)
 		return runProviderChoice{}, false
 	}
-	choice.governs = true
 	return choice, true
 }
 
@@ -275,8 +265,8 @@ const (
 	mpAccessAWSSignIn   = "model access provisioned for agent %q: your own AWS sign-in for model provider %s serves it."
 )
 
-// providerLLMAccess is the model-access verdict under a provider block: the
-// chosen provider's (its credential was checked when it was chosen), or none.
+// providerLLMAccess is a model run's model-access verdict: the chosen
+// provider's (its credential was checked when it was chosen), or none.
 // An AWS sign-in is the one kind not claimed never-resident: the sandbox's AWS
 // SDK exchanges the session for role credentials it then holds.
 func providerLLMAccess(agent string, mp runProviderChoice) *composeLLMAccess {

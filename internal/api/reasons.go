@@ -38,10 +38,6 @@ const (
 	// AWS SSO resolve only.
 	reasonSSOHostNotPortal = "sso_host_not_portal" // the requested host is outside the credential's own SSO portal
 
-	// Bedrock bearer resolve only.
-	reasonPerUserBearerAbsent = "per_user_bearer_absent" // the roster names a per-user bearer this owner has none of
-	reasonBearerAbsent        = "bearer_absent"          // no bedrock-api-key secret is in the store
-
 	// The Azure DevOps capability-escalation chain and the sign-in/consent
 	// HOLD chain — shared with AWS SSO's re-auth hold below, because both
 	// are the same shape: an approval-backed hold that can go terminal, hit

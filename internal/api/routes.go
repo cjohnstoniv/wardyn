@@ -301,26 +301,8 @@ func (s *Server) routes() chi.Router {
 			// (capability disclosure) and must never sit on the public /healthz.
 			r.Get("/setup/status", s.handleSetupStatus)
 
-			// Managed harness login: launch an interactive login sandbox where
-			// the caller runs `claude setup-token` (or `aws sso login`), then
-			// paste the resulting long-lived subscription token so Wardyn injects
-			// it proxy-side into every run (compose-mode subscription without a
-			// host ~/.claude). Secret store required (the token is stored
-			// age-encrypted).
-			//
-			// RBAC, and it is SPLIT. The token PASTE and DISCONNECT are on
-			// operatorOnly like policy/workspace/site-config below: humanOrAdminAuth
-			// is AUTHENTICATION only, so a signed-in MEMBER gets
-			// 403 there — they write the deployment's SHARED credential, which every
-			// run inherits. The LOGIN LAUNCH is on this group instead, with its
-			// predicate inside the handler: when the agent roster declares
-			// `credential_source: per_user`, the session it captures is the
-			// caller's OWN, so an admin-only door would leave a member with no route
-			// to model access at all. A member with no such row still gets 403 —
-			// from authorizeHarnessLogin, which also requires capAgent on the row's
-			// agent. Every connect/disconnect is audited
-			// (harness.credential.capture/disconnected).
-			s.mountSetupMutationRoutes(r, operatorOnly)
+			// The setup flow's mutating endpoints (the onboarding mark).
+			s.mountSetupMutationRoutes(operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO
 			// session or the admin token). WRITES are additionally operator-only:

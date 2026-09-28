@@ -17,31 +17,29 @@ import (
 type Reason string
 
 const (
-	ReasonAdminSurface                   Reason = "admin_surface"
-	ReasonSecurityAdminSurface           Reason = "security_admin_surface"
-	ReasonNotOwner                       Reason = "not_owner"
-	ReasonAttachTicketForeignRun         Reason = "attach_ticket_foreign_run"
-	ReasonBYOIUser                       Reason = "byoi_user"
-	ReasonCapabilityAgent                Reason = "capability_agent"
-	ReasonCapabilityEgressHost           Reason = "capability_egress_host"
-	ReasonCapabilityFeature              Reason = "capability_feature"
-	ReasonCapabilityPolicy               Reason = "capability_policy"
-	ReasonCapabilitySecret               Reason = "capability_secret"
-	ReasonCapabilityWorkspace            Reason = "capability_workspace"
-	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
-	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
-	ReasonGovernanceProfile              Reason = "governance_profile"
-	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
-	ReasonGroupsSnapshotStale            Reason = "groups_snapshot_stale"
-	ReasonHarnessLoginMechanismPrincipal Reason = "harness_login_mechanism_principal"
-	ReasonHarnessLoginNotPerUser         Reason = "harness_login_not_per_user"
-	ReasonRunKept                        Reason = "run_kept"
-	ReasonRunNotFound                    Reason = "run_not_found"
-	ReasonRunTerminal                    Reason = "run_terminal"
-	ReasonSecondHumanRequired            Reason = "second_human_required"
-	ReasonRunQuota                       Reason = "run_quota"
-	ReasonUserTypeUnknown                Reason = "user_type_unknown"
-	ReasonUserViewTypeDeleted            Reason = "user_view_type_deleted"
+	ReasonAdminSurface                Reason = "admin_surface"
+	ReasonSecurityAdminSurface        Reason = "security_admin_surface"
+	ReasonNotOwner                    Reason = "not_owner"
+	ReasonAttachTicketForeignRun      Reason = "attach_ticket_foreign_run"
+	ReasonBYOIUser                    Reason = "byoi_user"
+	ReasonCapabilityAgent             Reason = "capability_agent"
+	ReasonCapabilityEgressHost        Reason = "capability_egress_host"
+	ReasonCapabilityFeature           Reason = "capability_feature"
+	ReasonCapabilityPolicy            Reason = "capability_policy"
+	ReasonCapabilitySecret            Reason = "capability_secret"
+	ReasonCapabilityWorkspace         Reason = "capability_workspace"
+	ReasonCapabilityWorkspaceProvider Reason = "capability_workspace_provider"
+	ReasonCapabilityModelProvider     Reason = "capability_model_provider"
+	ReasonGovernanceProfile           Reason = "governance_profile"
+	ReasonGrantPairingNotEligible     Reason = "grant_pairing_not_eligible"
+	ReasonGroupsSnapshotStale         Reason = "groups_snapshot_stale"
+	ReasonRunKept                     Reason = "run_kept"
+	ReasonRunNotFound                 Reason = "run_not_found"
+	ReasonRunTerminal                 Reason = "run_terminal"
+	ReasonSecondHumanRequired         Reason = "second_human_required"
+	ReasonRunQuota                    Reason = "run_quota"
+	ReasonUserTypeUnknown             Reason = "user_type_unknown"
+	ReasonUserViewTypeDeleted         Reason = "user_view_type_deleted"
 	// ReasonModelProviderUnavailable: a run's model provider cannot credential
 	// it — none by that name, off, not serving the agent, none chosen among
 	// several, no usable credential of the caller's for it, or a policy grant
@@ -73,34 +71,32 @@ type Refusal struct {
 const requiresAdminRole = "requires admin role"
 
 var refusals = map[Reason]Refusal{
-	ReasonAdminSurface:                   {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
-	ReasonSecurityAdminSurface:           {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
-	ReasonNotOwner:                       {Effect: EffectHidden, Audit: true},
-	ReasonAttachTicketForeignRun:         {Effect: EffectHidden, Audit: true},
-	ReasonBYOIUser:                       {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityAgent:                {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityEgressHost:           {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityFeature:              {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityPolicy:               {Effect: EffectDeny, Audit: true},
-	ReasonCapabilitySecret:               {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
-	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
-	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},
-	ReasonGroupsSnapshotStale:            {Effect: EffectDeny, Audit: true},
-	ReasonHarnessLoginMechanismPrincipal: {Effect: EffectUnprocessable, Audit: true},
-	ReasonHarnessLoginNotPerUser:         {Effect: EffectDeny, Audit: true},
-	ReasonRunKept:                        {Effect: EffectDeny, Audit: true},
-	ReasonRunNotFound:                    {Effect: EffectDeny, Audit: true},
-	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
-	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},
-	ReasonRunQuota:                       {Effect: EffectUnprocessable},
-	ReasonModelProviderUnavailable:       {Effect: EffectUnprocessable, Audit: true},
-	ReasonUserTypeUnknown:                {Effect: EffectDeny, Audit: true},
-	ReasonUserViewTypeDeleted:            {Effect: EffectDeny, Audit: true},
-	ReasonAdminView:                      {Effect: EffectConflict},
-	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
+	ReasonAdminSurface:                {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
+	ReasonSecurityAdminSurface:        {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
+	ReasonNotOwner:                    {Effect: EffectHidden, Audit: true},
+	ReasonAttachTicketForeignRun:      {Effect: EffectHidden, Audit: true},
+	ReasonBYOIUser:                    {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityAgent:             {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityEgressHost:        {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityFeature:           {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityPolicy:            {Effect: EffectDeny, Audit: true},
+	ReasonCapabilitySecret:            {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityWorkspace:         {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityWorkspaceProvider: {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityModelProvider:     {Effect: EffectDeny, Audit: true},
+	ReasonGovernanceProfile:           {Effect: EffectDeny, Audit: true},
+	ReasonGrantPairingNotEligible:     {Effect: EffectDeny, Audit: true},
+	ReasonGroupsSnapshotStale:         {Effect: EffectDeny, Audit: true},
+	ReasonRunKept:                     {Effect: EffectDeny, Audit: true},
+	ReasonRunNotFound:                 {Effect: EffectDeny, Audit: true},
+	ReasonRunTerminal:                 {Effect: EffectDeny, Audit: true},
+	ReasonSecondHumanRequired:         {Effect: EffectDeny, Audit: true},
+	ReasonRunQuota:                    {Effect: EffectUnprocessable},
+	ReasonModelProviderUnavailable:    {Effect: EffectUnprocessable, Audit: true},
+	ReasonUserTypeUnknown:             {Effect: EffectDeny, Audit: true},
+	ReasonUserViewTypeDeleted:         {Effect: EffectDeny, Audit: true},
+	ReasonAdminView:                   {Effect: EffectConflict},
+	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

@@ -12,8 +12,9 @@ package main
 // frozen, so a later edit to a shared migration on this branch cannot make the
 // fixture drift toward what it is meant to check.
 //
-// MP-4a (#548) and MP-4b (#549) add their boot conversions to this test when
-// they land: the PENDING credential_reauth row below is the one MP-4a cancels.
+// MP-4a (#548) is 0099_model_provider_conversion: the PENDING credential_reauth
+// row below names no provider, so the conversion cancels it. MP-4b (#549) adds
+// its own boot conversion here when it lands.
 
 import (
 	"bytes"
@@ -219,15 +220,15 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		t.Error("the 0.7.12 backport's own record is gone; 0.7.12 filenames stay recorded")
 	}
 
-	var role, runState, autonomy, runLimits, approvalKind, approvalState string
+	var role, runState, autonomy, runLimits, approvalKind, approvalState, approvalReason string
 	var configSame, standardType bool
 	if err := pool.QueryRow(ctx, `
-		SELECT m.role, r.state, r.autonomy_level, r.run_limits::text, a.kind, a.state,
+		SELECT m.role, r.state, r.autonomy_level, r.run_limits::text, a.kind, a.state, COALESCE(a.reason, ''),
 		       (SELECT config = $4::jsonb FROM site_config),
 		       EXISTS (SELECT 1 FROM user_types WHERE id = 'standard')
 		  FROM role_mappings m, agent_runs r, approvals a
 		 WHERE m.id = $1 AND r.id = $2 AND a.id = $3`, mappingID, runID, reauthID, siteConfig,
-	).Scan(&role, &runState, &autonomy, &runLimits, &approvalKind, &approvalState, &configSame, &standardType); err != nil {
+	).Scan(&role, &runState, &autonomy, &runLimits, &approvalKind, &approvalState, &approvalReason, &configSame, &standardType); err != nil {
 		t.Fatalf("read the 0.7.12 rows back: %v", err)
 	}
 	for _, c := range []struct{ what, got, want string }{
@@ -236,7 +237,8 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		{"run autonomy_level (0065 default)", autonomy, ""},
 		{"run run_limits (0072 default)", runLimits, "{}"},
 		{"approval kind", approvalKind, "credential_reauth"},
-		{"approval state", approvalState, "PENDING"},
+		{"approval state", approvalState, "CANCELLED"},
+		{"approval reason", approvalReason, "model_provider_conversion"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q after the upgrade, want %q", c.what, c.got, c.want)

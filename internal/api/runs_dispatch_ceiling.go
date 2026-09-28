@@ -608,19 +608,18 @@ const bedrockCeilingLane = "bedrock"
 // Why this exists alongside dropBrokeredLanes. The re-assertion already
 // dropped the Bedrock BEARER injection, because a bearer token rides an
 // injection rule and injection rules are filtered by host. But the bearer is the
-// one Bedrock mode that is NEVER RESIDENT. The resident modes were untouched:
-// the SigV4 keys applyBedrockTransport wrote into sandboxEnv stayed there,
-// llm.secretEnvKeys still named them so splitSecretEnv moved them onto
-// SandboxSpec.SecretEnv, buildRunMounts still bind-mounted the operator's whole
-// host ~/.aws read-only into the sandbox, and the per-run MITM host survived. So
-// a profile that walls off Bedrock produced a run that could not REACH Bedrock
-// and held the credentials for it anyway — credential RESIDENCY inside a
-// sandbox whose principal is denied the service those credentials are for.
+// one Bedrock mode that is NEVER RESIDENT. The resident mode was untouched: the
+// captured session applyBedrockTransport wrote into sandboxEnv stayed there,
+// llm.secretEnvKeys still named it so splitSecretEnv moved it onto
+// SandboxSpec.SecretEnv, and the per-run MITM host survived. So a profile that
+// walls off Bedrock produced a run that could not REACH Bedrock and held the
+// credential for it anyway — credential RESIDENCY inside a sandbox whose
+// principal is denied the service that credential is for.
 //
 // It narrows the TRANSPORT rather than the spec, because the transport is what
-// every consumer downstream of this phase reads: buildRunMounts takes
-// llm.bedrockReady/awsMount, splitSecretEnv takes llm.secretEnvKeys, and
-// ProxyConfig.MITMHosts takes the plan's bedrock entries. Narrowing here means
+// every consumer downstream of this phase reads: splitSecretEnv takes
+// llm.secretEnvKeys, and ProxyConfig.MITMHosts takes the plan's bedrock
+// entries. Narrowing here means
 // none of them has to learn about ceilings.
 //
 // Deliberately NOT a refusal: this phase's whole doctrine is that it only adds

@@ -276,7 +276,7 @@ func assertJoinDispatchRefusal(t *testing.T, h *harness, st *subStore, ok bool, 
 	}
 	wantRow := map[string]any{"error": want.msg, "provider": want.provider}
 	if want.kind != "" {
-		wantRow["kind"], wantRow["mechanism"] = string(want.kind), string(want.kind)
+		wantRow["kind"] = string(want.kind)
 	}
 	if want.credential {
 		wantRow["reason"] = llmRefusalAuditReason

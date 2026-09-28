@@ -45,7 +45,7 @@ func TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal(t *testi
 	first := make(chan struct{})
 	go func() {
 		defer close(first)
-		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob)
 	}()
 	<-started // the first flight is now parked inside CreateToken
 
@@ -55,7 +55,7 @@ func TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal(t *testi
 	}
 	second := make(chan result, 1)
 	go func() {
-		b, msg := s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+		b, msg := s.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob)
 		second <- result{b, msg}
 	}()
 
@@ -90,12 +90,12 @@ func TestAWSSSORefresh_AnExpiredTokenStillWaitsForTheRenewal(t *testing.T) {
 			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
 		})
 	})
-	unlock := s.lockAWSSSOOwner("")
+	unlock := s.lockAWSSSOOwner(awsSSOTestScope().owner)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob)
 	}()
 	select {
 	case <-done:
@@ -138,13 +138,13 @@ func TestAWSSSORefresh_ATokenTooCloseToExpiryStillWaits(t *testing.T) {
 	first := make(chan struct{})
 	go func() {
 		defer close(first)
-		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob)
 	}()
 	<-started // the first flight is parked inside CreateToken
 
 	second := make(chan awsSSOBlob, 1)
 	go func() {
-		b, _ := s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+		b, _ := s.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob)
 		second <- b
 	}()
 	select {

@@ -83,10 +83,10 @@ func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
 // sinkReservedSecret is the reserved-name guard at the credential SINKS — the
 // api_key injection resolver (handleInternalInjection), the git_pat/ssh_key
 // broker mints, and the policy write-time checks that mirror them. It is
-// reservedSecret() PLUS the three RESIDENT AWS SigV4 credential names that
-// resolveBedrockAuth reads DIRECTLY from the store to sign Bedrock requests
+// reservedSecret() PLUS the three RESIDENT AWS SigV4 credential names the
+// retired static-key Bedrock lane read DIRECTLY from the store to sign requests
 // (aws-access-key-id / aws-secret-access-key / aws-session-token). Those never
-// flow through a grant on the legitimate Bedrock path, so an api_key/git_pat/
+// flow through a grant on any legitimate path, so an api_key/git_pat/
 // ssh_key grant naming one is only ever an attempt to exfiltrate the operator's
 // long-lived AWS secret key to an allowlisted host (as a Bearer header or git
 // password) — reject it at every sink. bedrock-api-key is deliberately EXCLUDED:
@@ -176,17 +176,16 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, "secret name is reserved for platform internals")
 		return false
 	}
-	// The three RESIDENT AWS SigV4 names are ALWAYS resolved from the operator
-	// namespace (resolveBedrockAuth signs with them off For("")) — a member row
-	// under one of them would read as "Bedrock is configured" in setup while
-	// dispatch never actually used it, a confusing dead end rather than a
-	// working BYOK path. sinkReservedSecret is exactly that three-name set on
+	// The three RESIDENT AWS SigV4 names were only ever read from the operator
+	// namespace, and since 0.8 no run reads them at all — a member row under
+	// one of them would be a confusing dead end rather than a working BYOK
+	// path. sinkReservedSecret is exactly that three-name set on
 	// top of the platform keys, so this arm is it.
 	//
-	// bedrock-api-key is NOT among them, and that is the one widening here: the
-	// BEARER is a static Authorization header the proxy injects per run from the
-	// RUN OWNER's own namespace, so a member's own bearer is a credential their
-	// runs really authenticate with (bedrockBearerFor, runs_bedrock.go). Widening
+	// bedrock-api-key is NOT among them, and that is the one widening here: a
+	// member's own row under it is inert since 0.8 (a Bedrock key is the run
+	// owner's own wardyn-provider-<uid>-key) and no sink serves it
+	// (resolveBedrockBearerInjection refuses every grant naming it). Widening
 	// this predicate any further hands a member the three SigV4 names too, which
 	// compiles and passes almost everything — see the per-name tests in
 	// secrets_test.go. Shared by Put and Delete so both paths carry it.

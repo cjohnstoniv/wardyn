@@ -141,7 +141,10 @@ func TestEveryMigrationIsWellFormedDDL(t *testing.T) {
 				t.Fatalf("migration %q has no leading keyword", name)
 			}
 			switch first[0] {
-			case "CREATE", "ALTER", "DROP", "INSERT", "UPDATE", "COMMENT", "GRANT", "REVOKE", "SET":
+			case "CREATE", "ALTER", "DROP", "INSERT", "UPDATE", "COMMENT", "GRANT", "REVOKE", "SET",
+				// DO: an anonymous plpgsql block, for a data conversion that
+				// reads the document it rewrites (0099_model_provider_conversion).
+				"DO":
 				// ok
 			default:
 				t.Errorf("migration %q starts with unexpected keyword %q", name, first[0])

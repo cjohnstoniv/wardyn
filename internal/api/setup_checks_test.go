@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -689,195 +688,38 @@ func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
 	}
 }
 
-// finding 3: bedrock_provider / llm_provider under a per-principal caller
-
-// bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
-// request would compute for scope and rosterSC — real per_user zeroing and
-// roster mechanism-lookup included — so these tests pin the end-to-end
-// behaviour, not a hand-built SetupBedrock the production code path would
-// never actually produce.
-//
-// bedrockProviderCheck's OWN sc argument stays types.SiteConfig{} regardless
-// of rosterSC — that argument folds in the UNRELATED roster-PIN posture
-// (BedrockSSOPinUnenforced and friends), which these tests do not exercise and
-// must not start asserting on as a side effect of naming a roster row's
-// mechanism.
-func bedrockRowVia(t *testing.T, scope awsSSOScope, rosterSC types.SiteConfig) SetupCheck {
-	t.Helper()
+// TestBedrockProviderRow_PartialBootEnvText pins the boot-environment Bedrock
+// row's partially-configured text, byte for byte.
+func TestBedrockProviderRow_PartialBootEnvText(t *testing.T) {
 	srv := New(Config{
 		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets: &memSecrets{m: map[string][]byte{}},
 	})
-	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, rosterSC, scope)
-	chk, ok := bedrockProviderCheck(bedrock, types.SiteConfig{}, true)
+	chk, ok := bedrockProviderRow(srv.setupBedrock(map[string]bool{}))
 	if !ok {
-		t.Fatal("a region+model-configured Bedrock row must always surface a check")
+		t.Fatal("a region+model-configured Bedrock row must surface a check")
 	}
-	return chk
-}
-
-// perUserBearerRosterRow is the site config a per_user row whose MECHANISM is
-// bedrock_bearer (#153) reads from — the roster shape bedrockRowVia needs to
-// reach bedrockProviderRow's bearer branch (#320) at all.
-func perUserBearerRosterRow() types.SiteConfig {
-	return types.SiteConfig{AgentProviders: agentBlock(types.AgentProvider{
-		ID: modelAccessAgent, Mechanism: types.AgentMechanismBedrockBearer, CredentialSource: types.CredentialSourcePerUser,
-	})}
-}
-
-// perUserSSORosterRow is perUserBearerRosterRow's SSO twin — an EXPLICIT
-// bedrock_sso row, not just the zero-value SiteConfig a caller with no roster
-// read would pass. Pinning against this (rather than only the zero value)
-// proves the SSO wording survives an actual roster lookup, not merely the
-// absence of one.
-func perUserSSORosterRow() types.SiteConfig {
-	return types.SiteConfig{AgentProviders: agentBlock(types.AgentProvider{
-		ID: modelAccessAgent, Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: types.CredentialSourcePerUser,
-	})}
-}
-
-// TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn is finding 3: a per_user
-// admin with no session of their own must be told to sign in, not offered the
-// three operator-only remedies per_user resolution skips outright (the bearer,
-// host-~/.aws-mount and static-key arms). The roster row here is an EXPLICIT
-// bedrock_sso row (see perUserSSORosterRow) — the SSO half of #320's two-way
-// pin.
-func TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: "member-x"}, perUserSSORosterRow())
-	if chk.Status != "warn" {
-		t.Errorf("status = %q, want warn (a real person has something to do)", chk.Status)
-	}
-	if strings.Contains(chk.Fix, "-bedrock-aws-dir") {
-		t.Errorf("fix = %q, must not offer the operator-only ~/.aws mount flag to a per-user caller", chk.Fix)
-	}
-	if !strings.Contains(chk.Fix, "Sign in to AWS") {
-		t.Errorf("fix = %q, want it to name the sign-in", chk.Fix)
-	}
-	if strings.Contains(chk.Fix, "bedrock-api-key bearer") == false {
-		t.Errorf("fix = %q, want the SSO row to still name the bearer among what cannot carry runs (unchanged wording)", chk.Fix)
-	}
-	if chk.Detail != bedrockPerUserDetail {
-		t.Errorf("detail = %q, want the per_user DRAFT sentence verbatim", chk.Detail)
-	}
-}
-
-// TestBedrockProviderCheck_PerUserBearerNamesStoringABearer is #320: a
-// per_user row whose roster MECHANISM is bedrock_bearer (#153) must tell a
-// caller with no bearer of their own that storing one IS the remedy — never
-// "sign in to AWS", and never list the bearer among the things that "cannot
-// carry your runs" (the old sentence, still correct for the SSO row above,
-// was exactly backwards here).
-func TestBedrockProviderCheck_PerUserBearerNamesStoringABearer(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: "member-x"}, perUserBearerRosterRow())
-	if chk.Status != "warn" {
-		t.Errorf("status = %q, want warn (a real person has something to do)", chk.Status)
-	}
-	if strings.Contains(chk.Detail, "sign in to AWS") {
-		t.Errorf("detail = %q, must not tell a bearer-row caller to sign in to AWS", chk.Detail)
-	}
-	if strings.Contains(chk.Fix, "Sign in to AWS") {
-		t.Errorf("fix = %q, must not offer the sign-in remedy to a bearer-row caller", chk.Fix)
-	}
-	if !strings.Contains(chk.Fix, "wardyn secret set bedrock-api-key") {
-		t.Errorf("fix = %q, want it to name storing a bearer as the remedy", chk.Fix)
-	}
-	if strings.Contains(chk.Fix, "and aws-access-key-id + aws-secret-access-key cannot") == false {
-		t.Errorf("fix = %q, want the bearer row to still say the OTHER lanes cannot carry the run", chk.Fix)
-	}
-	if chk.Detail != bedrockPerUserBearerDetail {
-		t.Errorf("detail = %q, want the per_user bearer DRAFT sentence verbatim", chk.Detail)
-	}
-}
-
-// TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn is finding 5's
-// other half: the shared admin token under a per_user row cannot act on this
-// row, so it must never read as a warning the operator will chase forever.
-func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: adminTokenPrincipal}, perUserSSORosterRow())
-	if chk.Status != "info" {
-		t.Errorf("status = %q, want info", chk.Status)
-	}
-	if chk.Detail != bedrockMechanismDetail || chk.Fix != bedrockMechanismFix {
-		t.Errorf("mechanism row text drifted: %+v", chk)
-	}
-}
-
-// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing shared-row
-// text, byte-for-byte, through the per_user/mechanism split.
-func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
-	chk := bedrockRowVia(t, awsSSOScope{}, types.SiteConfig{})
 	want := SetupCheck{
 		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
 		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
-		Fix:    "Still needed: a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, a container AWS SSO login, or aws-access-key-id + aws-secret-access-key secrets.",
+		Fix:    "Still needed: a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, or aws-access-key-id + aws-secret-access-key secrets.",
 	}
 	if chk != want {
-		t.Errorf("shared-row text drifted:\n got  %+v\n want %+v", chk, want)
+		t.Errorf("row text drifted:\n got  %+v\n want %+v", chk, want)
 	}
 }
 
-// TestLLMProviderCheck_NoBedrockRowUnchanged pins the OTHER load-bearing
-// text: an install with no Bedrock row at all keeps the exact
-// optional-provider sentence.
-func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
-	got := llmProviderCheck("", SetupBedrock{}, nil)
+// TestLLMProviderCheck_NoProviderIsInfo pins the optional-provider sentence: a
+// caller no model provider serves reads INFO, never a gap they must clear.
+func TestLLMProviderCheck_NoProviderIsInfo(t *testing.T) {
+	got := llmProviderCheck(nil)
 	want := SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
-		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
-		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Settings → Model provider, or the \"Secrets\" setup step), or bind creds to a workspace/container.",
+		Detail: "No model provider serves you (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
+		Fix:    "Optional — an admin adds a model provider under Settings → Model providers, then you connect your own credential for it.",
 	}
 	if got != want {
-		t.Errorf("no-bedrock-row text drifted:\n got  %+v\n want %+v", got, want)
-	}
-}
-
-// TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured is
-// finding 3's second contradiction: llm_provider must not claim "no provider
-// configured" while bedrock_provider (fed the same bedrock value) says Bedrock
-// IS configured.
-func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *testing.T) {
-	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true}
-	got := llmProviderCheck("", b, nil)
-	if strings.Contains(got.Detail, "No model/harness provider configured") {
-		t.Errorf("detail = %q, must not claim no provider when Bedrock IS configured per_user", got.Detail)
-	}
-	if got.Detail != llmProviderPerUserDetail || got.Fix != llmProviderPerUserFix {
-		t.Errorf("detail/fix = %+v, want the per_user DRAFT sentence verbatim", got)
-	}
-}
-
-// TestLLMProviderCheck_PerUserBearerNamesStoringABearer is #320's sibling
-// defect on the llm_provider row: a per_user row whose roster MECHANISM is
-// bedrock_bearer must never tell that caller to sign in to AWS — the row must
-// name storing a bearer as the remedy, the same split bedrockProviderRow
-// applies via PerUserBearer.
-func TestLLMProviderCheck_PerUserBearerNamesStoringABearer(t *testing.T) {
-	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, PerUserBearer: true}
-	got := llmProviderCheck("", b, nil)
-	if strings.Contains(got.Detail, "sign in to AWS") {
-		t.Errorf("detail = %q, must not tell a bearer-row caller to sign in to AWS", got.Detail)
-	}
-	if strings.Contains(got.Fix, "Sign in to AWS") {
-		t.Errorf("fix = %q, must not offer the sign-in remedy to a bearer-row caller", got.Fix)
-	}
-	if !strings.Contains(got.Fix, "wardyn secret set bedrock-api-key") {
-		t.Errorf("fix = %q, want it to name storing a bearer as the remedy", got.Fix)
-	}
-	if got.Detail != llmProviderPerUserBearerDetail || got.Fix != llmProviderPerUserBearerFix {
-		t.Errorf("detail/fix = %+v, want the per_user bearer DRAFT sentence verbatim", got)
-	}
-}
-
-// TestLLMProviderCheck_MechanismPrincipalIsInfo mirrors the Bedrock row's
-// info-not-warn rule for the same caller.
-func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
-	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, Mechanism: true}
-	got := llmProviderCheck("", b, nil)
-	if got.Status != "info" {
-		t.Errorf("status = %q, want info", got.Status)
-	}
-	if got.Detail != llmProviderMechanismDetail {
-		t.Errorf("detail = %q, want the mechanism DRAFT sentence verbatim", got.Detail)
+		t.Errorf("no-provider text drifted:\n got  %+v\n want %+v", got, want)
 	}
 }
 
@@ -903,7 +745,7 @@ var setupCheckBlockingStatus = map[string]string{
 // golden fixture's 14 ids (setup_check_ids_golden.json's six fixtures never
 // set DefaultPolicy, so confinement_floor never appears there at all) — this
 // is the full inventory, read off every `ID: "..."` literal in setup.go,
-// setup_checks.go and modelaccess.go. assertSetupCheckBlocking is strict
+// setup_checks.go and provider_access.go. assertSetupCheckBlocking is strict
 // about an id in NEITHER table on purpose: a check added later with no
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
@@ -913,8 +755,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
-	"claude_subscription_staging": true, "agent_image": true,
-	"harness_credential": true, "harness_credential_aws": true,
+	"agent_image":        true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,
@@ -1036,61 +877,23 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, permissionsPostureCheck(nil))
 
-	assertSetupCheckBlocking(t, llmProviderCheck("a model provider is connected", SetupBedrock{}, nil))
-	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{}, nil))
-	// per_user warn — one of the four per-person rows; must stay non-blocking.
-	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}, nil))
+	assertSetupCheckBlocking(t, llmProviderCheck(nil))
+	// warn — the caller's own provider credential is missing; per person, so
+	// it must stay non-blocking.
+	assertSetupCheckBlocking(t, llmProviderCheck([]SetupProviderAccess{{Provider: "corp-gateway", State: modelAccessNotConfigured}}))
 
 	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", CredsPresent: true}); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("bedrockProviderRow absent")
 	}
-	// per_user warn — the other of the four per-person rows.
-	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}); ok {
+	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m"}); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("bedrockProviderRow absent")
-	}
-	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", Mechanism: true}); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("bedrockProviderRow absent")
-	}
-
-	if chk, ok := claudeSubscriptionStagingCheck(true, false, "~/.claude/.credentials.json"); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("claudeSubscriptionStagingCheck absent")
-	}
-	if chk, ok := claudeSubscriptionStagingCheck(true, true, ""); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("claudeSubscriptionStagingCheck absent")
 	}
 
 	assertSetupCheckBlocking(t, agentImageCheck(nil))
-
-	if chk, ok := harnessCredentialCheck(SetupHarness{Captured: true, Provider: "anthropic", Aging: true}, SetupModelAccess{}); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("harnessCredentialCheck absent")
-	}
-	if chk, ok := harnessCredentialCheck(SetupHarness{Captured: true, Provider: "anthropic"}, SetupModelAccess{}); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("harnessCredentialCheck absent")
-	}
-	// harness_credential_aws — the 0.7.6 field report's own row: a lapsed
-	// admin AWS SSO session grades warn here and must never gate.
-	if chk, ok := harnessCredentialCheck(
-		SetupHarness{Captured: true, Provider: awsSSOProvider, ExpiresAt: "2020-01-01T00:00:00Z"},
-		SetupModelAccess{State: modelAccessExpiredSignin},
-	); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("harnessCredentialCheck (aws) absent")
-	}
 
 	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", false, "detail", nil))
 	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", true, "detail", nil))

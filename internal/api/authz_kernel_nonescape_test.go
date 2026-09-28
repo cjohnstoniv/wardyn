@@ -64,7 +64,6 @@ var kernelDoors = map[string][]string{
 	"handleCreateAPIToken":        {"capFeature"},
 	"handlePutProviderCredential": {"capModelProvider"},
 	"signInProvider":              {"capModelProvider"},
-	"authorizeHarnessLogin":       {"capAgent"},
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.

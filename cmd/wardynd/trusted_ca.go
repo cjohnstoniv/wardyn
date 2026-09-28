@@ -182,8 +182,7 @@ func warnMissingGatewayHosts(defaultPolicy types.RunPolicySpec, llmGateways map[
 }
 
 // upstreamProxyNoBypassStore is the one read warnUpstreamProxyNoBypass makes
-// — an interface so the check is testable without a database, matching
-// bedrockPinRosterStore's shape (boot_deps.go).
+// — an interface so the check is testable without a database.
 type upstreamProxyNoBypassStore interface {
 	GetSiteConfig(context.Context) (types.SiteConfig, error)
 }
@@ -206,9 +205,8 @@ type upstreamProxyNoBypassStore interface {
 //
 // WARN, never a refusal, matching warnMissingGatewayHosts: most deployments
 // configure no upstream proxy at all, so this is advisory only for the
-// estates that do chain one. A GetSiteConfig failure is silent here, matching
-// warnBedrockSSOPinPosture — a boot that cannot reach the store has louder
-// problems than this notice.
+// estates that do chain one. A GetSiteConfig failure is silent here — a boot
+// that cannot reach the store has louder problems than this notice.
 func warnUpstreamProxyNoBypass(ctx context.Context, st upstreamProxyNoBypassStore, llmGateways map[string]string) {
 	sc, err := st.GetSiteConfig(ctx)
 	if err != nil {

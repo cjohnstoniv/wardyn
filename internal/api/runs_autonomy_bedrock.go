@@ -97,7 +97,7 @@ func bedrockPowerfulSecretCause(boundBy []string, g bedrockCredGrade) string {
 // dispatch may proceed; false once the run is already FAILED.
 //
 // Sited ahead of the per-run certificate authority and every grant author, so a
-// refused run mints nothing — enforceConfiguredLLMMechanism's placement.
+// refused run mints nothing.
 //
 // Only the escape direction refuses, as adoEntraGradeHolds does: a run graded
 // WITH a Bedrock credential that dispatch now resolves without one is capped

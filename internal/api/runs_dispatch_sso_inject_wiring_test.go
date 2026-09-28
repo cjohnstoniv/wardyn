@@ -24,23 +24,29 @@ import (
 // authorBedrockSSOInjection called by hand, so the derivation, the kill switch
 // and the other lanes' silence were asserted nowhere.
 
-// ssoInjectServer is a Bedrock deployment whose captured-SSO credential is
-// stored and live — the lane resolveBedrockAuth selects for ssoInject.
+// ssoInjectServer is a deployment whose run chose reauthProvider's
+// bedrock_sso provider, with the run owner's own captured session for it
+// stored and live — the lane providerBedrockTransport derives ssoInject for.
 func ssoInjectServer(t *testing.T, proxyInject bool) *Server {
 	t.Helper()
-	s := fullyConfiguredBedrockServer()
-	s.cfg.BedrockRegion = "eu-west-2"
-	s.cfg.AWSSSOProxyInject = proxyInject
-	s.cfg.Now = func() time.Time { return time.Now().UTC() }
-	s.cfg.MaskRegistry = secretmask.NewRegistry()
-	blob := liveSSOBlob()
-	raw, err := json.Marshal(blob)
+	s := &Server{cfg: Config{
+		Secrets:           &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}},
+		AWSSSOProxyInject: proxyInject,
+		Now:               func() time.Time { return time.Now().UTC() },
+		MaskRegistry:      secretmask.NewRegistry(),
+	}}
+	raw, err := json.Marshal(liveSSOBlob())
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.cfg.Secrets.(*memSecrets).m[harnessCredSecretName(awsSSOProvider)] = raw
+	if err := s.cfg.Secrets.For(wiringOwner).Put(context.Background(), reauthScope(wiringOwner).ssoSecret(), raw); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
+
+// wiringOwner is the run owner every dispatch here is for.
+const wiringOwner = "alice@example.com"
 
 // dispatchLLM drives the REAL phase — resolveLLMInjections — which is what
 // dispatchRun calls: it resolves the transport (so the injectBedrockSSO
@@ -52,20 +58,20 @@ func ssoInjectServer(t *testing.T, proxyInject bool) *Server {
 // authorBedrockSSOInjection directly, so forcing the real derivation to false
 // and detaching the CA condition and the authoring block left every one of them
 // green (round-2 F3). A test that re-types the thing it pins pins nothing.
-func dispatchLLM(t *testing.T, s *Server, sso awsSSOScope) (dispatchLLMPlan, *captureGrantStore, map[string]string, bool) {
+func dispatchLLM(t *testing.T, s *Server) (dispatchLLMPlan, *captureGrantStore, map[string]string, bool) {
+	t.Helper()
+	return dispatchLLMOn(t, s, reauthProviderSite(reauthProvider()), reauthProviderID)
+}
+
+// dispatchLLMOn is dispatchLLM for a run that chose providerID ("" = none)
+// under site.
+func dispatchLLMOn(t *testing.T, s *Server, site types.SiteConfig, providerID string) (dispatchLLMPlan, *captureGrantStore, map[string]string, bool) {
 	t.Helper()
 	captured := &captureGrantStore{}
 	s.cfg.Store = captured
-	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: wiringOwner, ModelProviderID: providerID}
 	policy := types.RunPolicySpec{}
 	sandboxEnv := map[string]string{}
-	site := types.SiteConfig{}
-	if sso.perUser {
-		site = agentRoster(types.AgentProvider{
-			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-			CredentialSource: types.CredentialSourcePerUser,
-		})
-	}
 	plan, ok := s.resolveLLMInjections(context.Background(), run,
 		dispatchParams{Interactive: false, TaskMode: ""},
 		&policy, sandboxEnv, nil, "", artifactRedirectPlan{}, false, site, true, false, bedrockCredUngraded())
@@ -101,12 +107,12 @@ func decodeStagedCache(t *testing.T, env string) string {
 // entry, and stages a placeholder cache.
 func TestDispatchWiring_SwitchOnAuthorsThePhaseBLane(t *testing.T) {
 	s := ssoInjectServer(t, true)
-	plan, captured, sandboxEnv, ok := dispatchLLM(t, s, awsSSOScope{})
+	plan, captured, sandboxEnv, ok := dispatchLLM(t, s)
 	if !ok {
 		t.Fatal("the dispatch LLM phase refused an ssoInject run")
 	}
 	if !plan.llm.injectBedrockSSO {
-		t.Fatal("resolveLLMTransport did not derive injectBedrockSSO on a resolved captured-SSO lane with the switch on")
+		t.Fatal("providerBedrockTransport did not derive injectBedrockSSO on a resolved captured-SSO lane with the switch on")
 	}
 
 	// EXACTLY ONE api_key grant, on the BARE portal host.
@@ -158,7 +164,7 @@ func TestDispatchWiring_SwitchOnAuthorsThePhaseBLane(t *testing.T) {
 // and no grant, no MITM entry, nothing that could raise a row.
 func TestDispatchWiring_SwitchOffIsThePreviousBehaviour(t *testing.T) {
 	s := ssoInjectServer(t, false)
-	plan, captured, _, ok := dispatchLLM(t, s, awsSSOScope{})
+	plan, captured, _, ok := dispatchLLM(t, s)
 	if !ok {
 		t.Fatal("the dispatch LLM phase refused an ssoInject run with the switch off")
 	}
@@ -205,7 +211,7 @@ func TestDispatchWiring_AFlipDoesNotChangeALaneUnderARunningRun(t *testing.T) {
 	loginRun := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com", CreatedAt: ap.RequestedAt.Add(time.Second)}
 	f.st.loginRun = loginRun
 	f.putBlob(t, "alice@example.com", liveSSOBlob())
-	f.srv.resolvePendingReauth(context.Background(), awsSSOScope{perUser: true, owner: "alice@example.com"}, "alice@example.com", loginRun)
+	f.srv.resolvePendingReauth(context.Background(), reauthScope("alice@example.com"), "alice@example.com", loginRun)
 	got, err := f.srv.cfg.Approvals.Get(context.Background(), ap.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -218,31 +224,29 @@ func TestDispatchWiring_AFlipDoesNotChangeALaneUnderARunningRun(t *testing.T) {
 	}
 }
 
-// The other lanes author nothing, through the real dispatch: a bearer, a
-// static-key or a ~/.aws-mount run must acquire no portal.sso grant and no MITM
-// entry for it.
+// The other lanes author nothing, through the real dispatch: a Bedrock key
+// provider's run, and a run that chose no provider, must acquire no
+// portal.sso grant and no MITM entry for it.
 func TestDispatchWiring_OtherBedrockLanesAuthorNoSSOInjection(t *testing.T) {
 	portal := "portal.sso.eu-west-2.amazonaws.com"
+	bearer := types.ModelProvider{ID: "bedrock-key", UID: "u-wiring-bedrock-key", Kind: types.ModelProviderBedrockBearer,
+		Bedrock:   &types.BedrockSettings{Region: reauthRegion},
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}}}
 	for _, tc := range []struct {
-		name  string
-		setup func(*Server)
+		name       string
+		site       types.SiteConfig
+		providerID string
 	}{
-		{"bearer", func(s *Server) {
-			s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
-		}},
-		{"resident static keys", func(s *Server) {
-			delete(s.cfg.Secrets.(*memSecrets).m, harnessCredSecretName(awsSSOProvider))
-		}},
-		{"host ~/.aws mount", func(s *Server) {
-			delete(s.cfg.Secrets.(*memSecrets).m, harnessCredSecretName(awsSSOProvider))
-			dir := t.TempDir()
-			s.cfg.BedrockAWSConfigDir = dir
-		}},
+		{"a Bedrock key provider", reauthProviderSite(bearer), bearer.ID},
+		{"no provider chosen", types.SiteConfig{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := ssoInjectServer(t, true) // the switch is ON: only the LANE differs
-			tc.setup(s)
-			plan, captured, _, ok := dispatchLLM(t, s, awsSSOScope{})
+			if err := s.cfg.Secrets.For(wiringOwner).Put(context.Background(),
+				providerSecretName(bearer.UID, providerKeyPart), []byte("bedrock-bearer-token-xyz")); err != nil {
+				t.Fatal(err)
+			}
+			plan, captured, _, ok := dispatchLLMOn(t, s, tc.site, tc.providerID)
 			if !ok {
 				t.Fatalf("the dispatch LLM phase refused the %s lane", tc.name)
 			}
@@ -273,7 +277,7 @@ func TestDispatchWiring_OtherBedrockLanesAuthorNoSSOInjection(t *testing.T) {
 // for egress this run was just denied.
 func TestDispatchWiring_CeilingNarrowingClearsTheSSOFlag(t *testing.T) {
 	s := ssoInjectServer(t, true)
-	plan, _, _, ok := dispatchLLM(t, s, awsSSOScope{})
+	plan, _, _, ok := dispatchLLM(t, s)
 	if !ok || !plan.llm.injectBedrockSSO {
 		t.Fatal("precondition: the real dispatch derived the lane")
 	}

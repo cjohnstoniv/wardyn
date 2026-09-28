@@ -6,17 +6,14 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -35,27 +32,32 @@ func decodeSetupSSO(t *testing.T, srv *Server, cookie *http.Cookie) (int, SetupS
 	return w.Code, st
 }
 
-// TestSetupStatus_MemberRedactionPreservesLLMReady: a
-// a member's response drops checks/providers/secret-names/runner-detail (item
-// 2's redaction) but LLMReady survives it — computed BEFORE redaction from
-// the SAME signal llmProvenance already folds (here, a stored anthropic-api-key
-// secret), matching exactly what an admin sees for the identical server state.
-// Without this a member's console has no way to answer "is there any LLM
-// access at all" once the redacted detail is gone.
+// TestSetupStatus_MemberRedactionPreservesLLMReady: a member's response drops
+// checks/providers/secret-names/runner-detail (item 2's redaction) but
+// LLMReady survives it — computed BEFORE redaction (here, from an enabled model
+// provider serving an agent), matching exactly what an admin sees for the
+// identical server state. Without this a member's console has no way to answer
+// "is there any LLM access at all" once the redacted detail is gone.
 func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
-	srv := New(Config{
-		Runner:     &fakeRunner{},
-		Secrets:    &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}},
-		AdminToken: adminToken,
-		OIDC:       &oidc.Authenticator{},
-	})
+	h := newHarness(t)
+	st := &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: types.SiteConfig{
+		ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{{
+			ID: "corp-key", UID: "u-corp-key", Kind: types.ModelProviderAnthropicAPIKey,
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code"}},
+		}}},
+	}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
 
 	adminCode, adminSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
 	if adminCode != http.StatusOK {
 		t.Fatalf("admin: code = %d, want 200", adminCode)
 	}
 	if !adminSt.LLMReady {
-		t.Fatalf("admin: llm_ready = false, want true (a stored anthropic-api-key secret is configured)")
+		t.Fatalf("admin: llm_ready = false, want true (an enabled model provider serves claude-code)")
 	}
 	if len(adminSt.Checks) == 0 {
 		t.Fatalf("admin: checks unexpectedly empty — the fixture is not exercising the signal this test needs")
@@ -105,7 +107,7 @@ func TestRedactSetupStatusForUser_KeepsDemoSecretPresence(t *testing.T) {
 	full := SetupStatus{
 		Secrets: SetupSecrets{Present: []string{"wardyn-demo-key", "wardyn-demo-pat", "anthropic-api-key", "corp-proxy-url"}},
 	}
-	got := redactSetupStatusForUser(full, false, false)
+	got := redactSetupStatusForUser(full)
 	want := []string{"wardyn-demo-key", "wardyn-demo-pat"}
 	if !slices.Equal(got.Secrets.Present, want) {
 		t.Errorf("secrets.present = %v, want %v (demo seed secrets kept, every real secret name still dropped)", got.Secrets.Present, want)
@@ -131,100 +133,6 @@ func TestSetupStatus_AnonymousNonLocal401(t *testing.T) {
 	h := newHarness(t) // AdminToken set, not LocalMode
 	if code, _ := decodeSetup(t, h.srv, ""); code != http.StatusUnauthorized {
 		t.Fatalf("anonymous non-local: code = %d, want 401", code)
-	}
-}
-
-// TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd is finding 5 end to
-// end, narrowed by S-01/S-02: GET /setup/status called with the shared admin
-// bearer token, under a per_user row, WITH OIDC CONFIGURED (a real console
-// sign-in exists as the alternative), must report model_access as
-// not_applicable — never not_configured plus a "Sign in to AWS" action the
-// caller cannot take. perUserLoginSrv now works for this (reviewer item 12):
-// integStore's ListRoleMappings returns nil,nil so consoleRoleMappingsPresent
-// no longer panics on the double.
-func TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd(t *testing.T) {
-	srv, _ := perUserLoginSrv(t) // default: claude-code/bedrock_sso/per_user row, OIDC configured
-	code, st := decodeSetup(t, srv, adminToken)
-	if code != http.StatusOK {
-		t.Fatalf("code = %d, want 200", code)
-	}
-	if st.ModelAccess.State != modelAccessNotApplicable {
-		t.Fatalf("model_access.state = %q, want not_applicable", st.ModelAccess.State)
-	}
-	if st.ModelAccess.Action != "" {
-		t.Errorf("model_access.action = %q, want none — there is nothing this caller can do", st.ModelAccess.Action)
-	}
-}
-
-// TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring: after a dispatch
-// marks a captured session's
-// refresh token spent (an earlier renewal saw invalid_grant, say), the NEXT
-// /setup/status read for that principal must flip live -> expiring WITHOUT
-// the access token itself having expired — not stay `live` until the client
-// registration lapses days later, while every dispatch refuses the person's
-// runs in the meantime.
-func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
-	srv, _ := perUserLoginSrv(t) // claude-code/bedrock_sso/per_user row, OIDC configured
-	now := time.Now().UTC()
-	blob := awsSSOBlob{
-		AccessToken: "sso-access-token-1234567890", RefreshToken: "sso-refresh-token-1234567890",
-		ClientID: "sso-client-id", ClientSecret: "sso-client-secret-1234567890",
-		StartURL: perUserPortal, Region: "us-east-1", AccountID: "123456789012", RoleName: "WardynBedrockRole",
-		ExpiresAt: now.Add(2 * time.Hour), RegistrationExpiresAt: now.Add(90 * 24 * time.Hour),
-	}
-	scope := awsSSOScope{perUser: true, owner: "sub-member"}
-	if err := srv.storeAWSSSOBlob(context.Background(), scope, blob); err != nil {
-		t.Fatalf("store per-user aws sso blob: %v", err)
-	}
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
-
-	code, before := decodeSetupSSO(t, srv, member)
-	if code != http.StatusOK {
-		t.Fatalf("before: code = %d, want 200", code)
-	}
-	if before.ModelAccess.State != modelAccessLive {
-		t.Fatalf("before: model_access.state = %q, want live", before.ModelAccess.State)
-	}
-
-	srv.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(blob.RefreshToken), "")
-
-	code, after := decodeSetupSSO(t, srv, member)
-	if code != http.StatusOK {
-		t.Fatalf("after: code = %d, want 200", code)
-	}
-	if after.ModelAccess.State != modelAccessExpiring {
-		t.Fatalf("after: model_access.state = %q, want expiring — a spent refresh token, access token still valid", after.ModelAccess.State)
-	}
-	if blob.expired(now) {
-		t.Fatal("test setup error: the access token must NOT be expired for this regression to mean anything")
-	}
-	wantDeadline := blob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
-	if !strings.Contains(after.ModelAccess.Action, wantDeadline) {
-		t.Errorf("after: model_access.action = %q, want the ExpiresAt-skew deadline %q", after.ModelAccess.Action, wantDeadline)
-	}
-	// 0.7.8: the checklist row moves with model_access (same grading, see
-	// awsSSOCredentialRow) but must never confiscate the console over it — the
-	// grade stays warn, the gate does not. redactSetupStatusForUser zeroes
-	// `after.Checks` entirely for this member session, so the row is read the
-	// same way TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin
-	// does: straight off setupHarnessCreds, not the redacted HTTP body.
-	sc, _ := srv.siteConfigSnapshot(context.Background())
-	harnesses, _, ma := srv.setupHarnessCreds(context.Background(), sc, scope)
-	var awsRow SetupCheck
-	found := false
-	for _, h := range harnesses {
-		if chk, ok := harnessCredentialCheck(h, ma); ok && chk.ID == "harness_credential_aws" {
-			awsRow, found = chk, true
-		}
-	}
-	if !found {
-		t.Fatal("no harness_credential_aws row — the member's own capture lapsed, it must appear")
-	}
-	if awsRow.Status != "warn" {
-		t.Errorf("harness_credential_aws status = %q, want warn", awsRow.Status)
-	}
-	if awsRow.Blocking {
-		t.Error("harness_credential_aws must never be Blocking — graded through the caller's own session, not the install")
 	}
 }
 
@@ -570,144 +478,6 @@ func TestDeploymentHostLike(t *testing.T) {
 	}
 }
 
-// llmProvenance must follow its priority (CLI login > api-key secret) and
-// return the winning detail; a logged-in claude uses the precomputed
-// subscription detail, everything else its own sentence. "" iff there is no
-// signal (the lockstep that keeps readiness and the rendered detail from
-// drifting).
-func TestLLMProvenance_PriorityAndDetail(t *testing.T) {
-	claudeLoggedIn := []SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}}
-
-	// Logged-in claude wins and uses the injected subscription detail verbatim.
-	if got := llmProvenance(claudeLoggedIn, []string{"anthropic-api-key"}, "SUB-DETAIL"); got != "SUB-DETAIL" {
-		t.Errorf("claude winner detail = %q, want SUB-DETAIL (CLI login outranks secret)", got)
-	}
-	// Logged-in claude with no peeked detail falls back to a generic sentence.
-	if got := llmProvenance(claudeLoggedIn, nil, ""); !strings.Contains(got, "claude CLI is logged in") {
-		t.Errorf("generic claude detail = %q, want a 'logged in' sentence", got)
-	}
-	// codex login (non-claude) never consumes the claude detail.
-	codex := []SetupProvider{{Tool: "codex", LoggedIn: true}}
-	if got := llmProvenance(codex, nil, "SUB-DETAIL"); got == "SUB-DETAIL" || !strings.Contains(got, "codex") {
-		t.Errorf("codex detail = %q, want a codex sentence, not the claude subscription detail", got)
-	}
-	// No CLI => a secret wins.
-	if got := llmProvenance(nil, []string{"anthropic-api-key"}, ""); !strings.Contains(got, "anthropic-api-key") {
-		t.Errorf("secret detail = %q, want it to name the secret", got)
-	}
-	// Nothing at all => "" (readiness false).
-	if got := llmProvenance(nil, nil, ""); got != "" {
-		t.Errorf("no-signal detail = %q, want empty", got)
-	}
-}
-
-// subscriptionLLMDetail: fresh vs expired vs no-token, inject on/off, and the
-// off-PATH fallback. Wording is asserted by stable substrings (not verbatim) so
-// copy tweaks don't brittle the test, but the honesty-load-bearing tokens
-// (EXPIRED, injection posture, off-PATH) are pinned.
-func TestSubscriptionLLMDetail(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	fresh := subscription.Token{Value: "t", ExpiresAt: now.Add(time.Hour)}
-	expired := subscription.Token{Value: "t", ExpiresAt: now.Add(-time.Hour)}
-
-	// Fresh + inject ON + on PATH.
-	d := subscriptionLLMDetail(fresh, nil, true, "/home/u/.claude", "/usr/bin/claude", now)
-	if !strings.Contains(d, "Claude subscription") || strings.Contains(d, "EXPIRED") ||
-		!strings.Contains(d, "inject a fresh host token") || strings.Contains(d, "not on PATH") {
-		t.Errorf("fresh/inject-on/on-path detail wrong: %q", d)
-	}
-
-	// Expired + inject OFF.
-	d = subscriptionLLMDetail(expired, nil, false, "/home/u/.claude", "/usr/bin/claude", now)
-	if !strings.Contains(d, "EXPIRED") || !strings.Contains(d, "injection is off") {
-		t.Errorf("expired/inject-off detail wrong: %q", d)
-	}
-
-	// Logged in but the CLI is OFF PATH (binPath == "").
-	d = subscriptionLLMDetail(fresh, nil, true, "/home/u/.claude", "", now)
-	if !strings.Contains(d, "not on PATH") {
-		t.Errorf("off-PATH detail missing the caveat: %q", d)
-	}
-
-	// No readable subscription token (peek error): CLI login still noted, but no
-	// subscription claim; the login path is surfaced.
-	d = subscriptionLLMDetail(subscription.Token{}, errors.New("no creds"), true, "/home/u/.claude", "/usr/bin/claude", now)
-	if strings.Contains(d, "subscription token valid") || !strings.Contains(d, "no readable Claude subscription token") ||
-		!strings.Contains(d, "/home/u/.claude") {
-		t.Errorf("peek-fail detail wrong: %q", d)
-	}
-	// A present provider but empty token value is treated the same as a peek error.
-	d = subscriptionLLMDetail(subscription.Token{Value: ""}, nil, true, "", "/usr/bin/claude", now)
-	if !strings.Contains(d, "no readable Claude subscription token") {
-		t.Errorf("empty-token detail wrong: %q", d)
-	}
-}
-
-// claudeSubscriptionStagingCheck: fires only on a resident Claude login; a
-// login whose DefaultPolicy ceiling doesn't bless the /home/agent/.claude mount
-// is "detected but NOT staged" (the headless-`make setup` skip) => WARN naming
-// `make stage-claude`; a blessed ceiling => ok; the macOS-Keychain login (which
-// staging cannot read) gets the SSH-login remedy instead.
-func TestClaudeSubscriptionStagingCheck(t *testing.T) {
-	// No resident login => no row (llm_provider already covers "add one").
-	if _, ok := claudeSubscriptionStagingCheck(false, false, ""); ok {
-		t.Fatalf("no-login case should produce no claude_subscription_staging row")
-	}
-
-	// Logged in, ceiling does not bless the mount => WARN with the stage-claude fix.
-	chk, ok := claudeSubscriptionStagingCheck(true, false, "~/.claude/.credentials.json")
-	if !ok || chk.Status != "warn" || chk.ID != "claude_subscription_staging" {
-		t.Fatalf("logged-in-not-staged: ok=%v status=%q id=%q, want warn row", ok, chk.Status, chk.ID)
-	}
-	if !strings.Contains(chk.Fix, "make stage-claude") {
-		t.Errorf("warn Fix should name `make stage-claude`; got %q", chk.Fix)
-	}
-
-	// Keychain login: staging can't read it — the Fix must carry the SSH remedy.
-	chk, ok = claudeSubscriptionStagingCheck(true, false, "macOS Keychain (Claude Code-credentials)")
-	if !ok || chk.Status != "warn" || !strings.Contains(chk.Fix, "SSH") || !strings.Contains(chk.Fix, "make stage-claude") {
-		t.Fatalf("keychain login: ok=%v status=%q fix=%q, want warn with SSH + stage-claude remedy", ok, chk.Status, chk.Fix)
-	}
-
-	// Blessed ceiling (staging ran, run-host.sh picked the subscription ceiling) => ok.
-	if chk, ok := claudeSubscriptionStagingCheck(true, true, ""); !ok || chk.Status != "ok" {
-		t.Fatalf("staged: ok=%v status=%q, want ok", ok, chk.Status)
-	}
-}
-
-// TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome is the B4 k8s
-// verify-don't-implement item: claude_subscription_staging is gated on
-// claudeLoginSignal, which is gated on setupProviders -> DetectCLIProviders
-// reading $HOME/.claude/.credentials.json — a k8s pod's home directory is a
-// fresh container filesystem with no such file (nothing resident survives a
-// pod restart), so the row must never appear. End to end through
-// handleSetupStatus (not just the pure claudeSubscriptionStagingCheck unit
-// above), on a k8s-shaped Runner, so a future change to the detection wiring
-// itself would be caught here too.
-//
-// Investigated edge case per the brief (host-mounted ~/.claude into a k8s
-// pod): no Helm value or documented deployment pattern mounts a Claude
-// credential into the wardynd pod (grepped deploy/helm — nothing). If an
-// operator did so anyway, DetectCLIProviders would honestly detect it and
-// this check WOULD fire — its underlying claim ("detected but not staged for
-// the per-run mount") stays true regardless of platform; only its Fix
-// string's host-oriented remedy (`make stage-claude`) would read oddly. That
-// is a copy nit on a deliberately non-standard setup, not a false-positive
-// worth suppression code for — so none was added.
-func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // no .claude, no .codex — a fresh pod's $HOME
-	srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicy: true}})
-	code, st := decodeSetup(t, srv, adminToken)
-	if code != http.StatusOK {
-		t.Fatalf("code = %d, want 200", code)
-	}
-	for _, c := range st.Checks {
-		if c.ID == "claude_subscription_staging" {
-			t.Fatalf("claude_subscription_staging must never fire with no resident ~/.claude; got %+v", c)
-		}
-	}
-}
-
 // agentImageCheck: NEVER a warn. Both arms are info, and the row's whole job is
 // carrying the RIGHT MESSAGE — the convention arm names the toolchain limit and
 // how to lift it; the override arm names the harness and probe images.
@@ -800,18 +570,12 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		// which is exactly why the passthrough went unnoticed this long.
 		Bedrock: SetupBedrock{
 			Region: "us-east-1", Model: "anthropic.claude-3-5-sonnet-v2",
-			CredsPresent: true, AWSMount: true, BearerPresent: true, SSOPresent: true,
+			CredsPresent: true, AWSMount: true, BearerPresent: true,
 			Ready: true,
 		},
-		Harness: []SetupHarness{{
-			Provider: "anthropic", Captured: true, Expired: false,
-			CapturedAt: "2026-01-02T03:04:05Z", Aging: true,
-			SourceRunID: "11111111-2222-3333-4444-555555555555",
-			ExpiresAt:   "2026-02-02T03:04:05Z", Renewable: true,
-		}},
 		Integrations: []SetupIntegration{{}},
 	}
-	got := redactSetupStatusForUser(full, false, false)
+	got := redactSetupStatusForUser(full)
 
 	if got.SCM != (setup.SCMPosture{}) {
 		t.Errorf("scm = %+v, want zero — host git-credential posture is not a member's business", got.SCM)
@@ -831,8 +595,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	// RIDER SetupBedrock rebuilt from an explicit field list, exactly
 	// like Runner two lines up. Region/Model name the AWS transport this
 	// deployment reaches Anthropic through; CredsPresent/AWSMount/
-	// BearerPresent/SSOPresent are which of four AWS credential LANES are
-	// wired — the operator's host posture, same class SCM/HostProxy exist to
+	// BearerPresent are which of the AWS credential LANES are wired — the operator's host posture, same class SCM/HostProxy exist to
 	// withhold. Only Ready survives.
 	if want := (SetupBedrock{Ready: true}); got.Bedrock != want {
 		t.Errorf("bedrock = %+v, want %+v (Ready only — the region/model/credential-lane detail is operator host posture)", got.Bedrock, want)
@@ -854,18 +617,6 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	if got.Runner.Driver != "" {
 		t.Errorf("runner.driver = %q, want empty", got.Runner.Driver)
 	}
-	if len(got.Harness) != 1 {
-		t.Fatalf("harness = %+v, want one reduced row", got.Harness)
-	}
-	// The anthropic managed blob is the OPERATOR's whoever asks, so its
-	// source_run_id goes with the rest of the lifecycle detail. The one row
-	// that keeps it is the caller's own per_user aws capture — pinned in
-	// setup_status_scope_failclosed_test.go, both arms.
-	wantHarness := SetupHarness{Provider: "anthropic", Captured: true}
-	if got.Harness[0] != wantHarness {
-		t.Errorf("harness[0] = %+v, want %+v (presence bits only)", got.Harness[0], wantHarness)
-	}
-
 	// Still there: everything a member's own console needs.
 	for name, ok := range map[string]bool{
 		"ready":                      got.Ready,
@@ -883,7 +634,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	// Redaction must not scribble on the caller's own value — the handler keeps
 	// using the pre-redaction slices nowhere, but a shared backing array is the
 	// kind of aliasing bug that only shows up under a second caller.
-	if full.Harness[0].SourceRunID == "" || full.SCM.CredentialHelper != "store" {
+	if full.SCM.CredentialHelper != "store" {
 		t.Error("redaction mutated its input")
 	}
 }

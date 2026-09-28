@@ -42,9 +42,7 @@ const (
 // in-sandbox helper, never pasted, and has no tokenPrefix, so a paste would
 // overwrite the reserved, structured SSO blob in harness-credential-aws with
 // {"token":…} and add an arbitrary string to the process-global mask corpus —
-// the abuse ssotoken.go's upload path already defends against. Only the paste
-// door is refused: DISCONNECT deletes through the caller's own scope
-// (handleHarnessDisconnect resolves the per_user namespace), which is legitimate.
+// the abuse ssotoken.go's upload path already defends against.
 func harnessPasteRefusal(hl harnessLogin, token string) string {
 	if hl.captureViaHelper {
 		return fmt.Sprintf(harnessPasteViaHelperRefusal, hl.provider)

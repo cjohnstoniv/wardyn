@@ -105,9 +105,8 @@ func memberOwnedWorkspace(st *ownerStore, owner, path string) uuid.UUID {
 // TestMemberMountPosture_DispatchedToDriver is the production wire, end to end:
 // a member's own run against their own workspace must reach the driver carrying
 // (a) that member's roots and (b) a member-authored stamp on their local_dir
-// bind and NOT on the operator's blessed credential mount — which is what makes
-// the run work at all on a subscription deployment, since the staged creds dir
-// lives under no member root.
+// bind — and (c) no operator credential mount at all: a model credential comes
+// only from the run's model provider, never a blessed ~/.claude bind.
 func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	root, project := memberProjectRoot(t)
 	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
@@ -122,8 +121,10 @@ func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	if m := mountFor(t, spec, composerWorkspaceTarget); !m.MemberAuthored {
 		t.Errorf("the member's own local_dir bind %q is not stamped MemberAuthored; the driver would skip the within-root re-check", m.Source)
 	}
-	if m := mountFor(t, spec, claudeCredTarget); m.MemberAuthored {
-		t.Errorf("the operator's blessed creds mount %q is stamped MemberAuthored; it lives under no member root, so the driver would REFUSE it and every model run against a member-owned workspace would fail at CreateSandbox", m.Source)
+	for _, m := range spec.Mounts {
+		if m.Target == claudeCredTarget {
+			t.Errorf("the operator's creds dir %q is bind-mounted at %s; a model credential comes only from the run's model provider", m.Source, m.Target)
+		}
 	}
 }
 

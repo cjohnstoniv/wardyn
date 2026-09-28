@@ -357,7 +357,7 @@ func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	i := slices.IndexFunc(c.Injection, func(in proxy.InjectionConfig) bool { return in.Host == "api.anthropic.com" })
 	f.st.credGrants = []types.CredentialGrant{{ID: c.Injection[i].GrantID, RunID: f.run.ID,
 		Spec: apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key")}}
-	f.st.site.Integrations = []types.Integration{{ID: "anthropic", Name: "Anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+	f.st.site.Integrations = []types.Integration{{ID: "anthropic", Name: "Anthropic", Kind: types.IntegrationKindGitHost,
 		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key"}}}}
 	sec := &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
 	f.srv.cfg.Secrets = sec

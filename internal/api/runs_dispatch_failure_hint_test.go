@@ -63,14 +63,18 @@ func TestDispatchGrantWriteFailure_HintCarriesNoDriverText(t *testing.T) {
 					awsSSOScope{perUser: true, owner: "member@corp.example"}, nil)
 				return ok
 			}},
-		{"subscription", "could not record the subscription credential grant",
+		{"subscription", "could not record the provider credential grant",
 			func(s *Server, run types.AgentRun) bool {
-				_, _, ok := s.authorSubscriptionInjection(ctx, run, llmTransport{}, &types.RunPolicySpec{}, nil)
+				tr := llmTransport{provider: &chosenProvider{owner: "member@corp.example", provider: types.ModelProvider{
+					ID: "claude", UID: "u-claude", Kind: types.ModelProviderAnthropicSubscription}}}
+				_, _, ok := s.authorProviderSubscriptionInjection(ctx, run, tr, &types.RunPolicySpec{}, nil)
 				return ok
 			}},
 		{"bedrock bearer", "could not record the Bedrock bearer credential grant",
 			func(s *Server, run types.AgentRun) bool {
-				tr := llmTransport{bedrock: bedrockAuth{runtimeHost: "bedrock-runtime.us-east-1.amazonaws.com", runtimePort: 443}}
+				tr := llmTransport{bedrock: bedrockAuth{runtimeHost: "bedrock-runtime.us-east-1.amazonaws.com", runtimePort: 443},
+					provider: &chosenProvider{owner: "member@corp.example", provider: types.ModelProvider{
+						ID: "br", UID: "u-br", Kind: types.ModelProviderBedrockBearer}}}
 				_, _, ok := s.authorBedrockBearerInjection(ctx, run, tr, nil)
 				return ok
 			}},

@@ -31,8 +31,7 @@ import (
 
 // DRAFT (M2 canon pending).
 const (
-	mpsNoBlock     = "this install has no model providers yet, so sign in from Setup instead"
-	mpsLegacyDoor  = "this install signs in to each model provider on its own — sign in from Getting started in the console"
+	mpsNoBlock     = "this install has no model providers yet — ask your admin to add one under Settings → Model providers"
 	mpsTyped       = "%q is connected with your own key or token, not by signing in"
 	mpsOff         = "model provider %q is turned off, so there is nothing to sign in to"
 	mpsNotGranted  = "you are not granted model provider %q — ask an admin to grant it before signing in to it"
@@ -102,13 +101,10 @@ func withModelProvider(data map[string]any, id string) map[string]any {
 }
 
 // reauthScopeForRun is the scope whose stored session answers run's AWS
-// sign-in holds: the chosen provider's own name for a provider run, the
-// roster's otherwise. ok=false: the run's provider is gone or no longer an AWS
-// sign-in, so nothing can answer.
+// sign-in holds: the chosen provider's own name. ok=false: the run chose no
+// provider, or its provider is gone or no longer an AWS sign-in, so nothing can
+// answer.
 func reauthScopeForRun(sc types.SiteConfig, run types.AgentRun, owner string) (awsSSOScope, bool) {
-	if run.ModelProviderID == "" {
-		return awsSSOScopeFor(sc, run.Agent, owner), true
-	}
 	p, ok := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
 	if !ok || p.Kind != types.ModelProviderBedrockSSO {
 		return awsSSOScope{}, false
@@ -197,7 +193,7 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 // No body: everything the sandbox is seeded with comes from the provider
 // record (an AWS start URL, region and pin are admin-owned), and the capture
 // is stamped for the caller's own namespace under the provider's UID. Answers
-// with the run id as soon as the run exists, like POST /setup/harness-login.
+// with the run id as soon as the run exists (harnesscred_launch.go).
 func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	owner := s.credentialOwner(w, r)
 	if owner == "" {
@@ -212,8 +208,8 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// After the authorization, as on the legacy door: a capture here would
-	// land on the previewing admin's own namespace.
+	// After the authorization: a capture here would land on the previewing
+	// admin's own namespace.
 	if previewHidesOwnCredential(r.Context()) {
 		writeError(w, http.StatusConflict, mpsPreview)
 		return
@@ -245,11 +241,20 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
+		if errors.Is(err, errSignInBusy) {
+			writeError(w, http.StatusServiceUnavailable, signInBusyRefusal)
+			return
+		}
 		writeServerError(w, r, "launch login sandbox", err)
 		return
 	}
+	// Answer first, then finish the launch. WithoutCancel keeps the request's
+	// values while dropping the deadline that dies with this response;
+	// goBackground, not a bare `go`, so an orderly shutdown waits for it
+	// instead of cutting it off mid-dispatch.
 	writeJSON(w, http.StatusOK, harnessLoginResponse{RunID: run.ID.String(), State: string(run.State)})
-	go s.finishHarnessLoginLaunch(context.WithoutCancel(r.Context()), run, dispatch)
+	ctx := context.WithoutCancel(r.Context())
+	s.goBackground(func() { s.finishHarnessLoginLaunch(ctx, run, dispatch) })
 }
 
 type providerSignInCapture struct {

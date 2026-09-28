@@ -24,17 +24,14 @@ import (
 // have them replaced with the placeholder in every operator's logs for the life
 // of the daemon.
 //
-// The credential loses no coverage: resolveBedrockAuth AddGlobals the STORED
-// blob on every dispatch that actually selects this credential
-// (runs_bedrock.go), so the global registration follows the server's decision
+// The credential loses no coverage: bedrockSSOAuth AddGlobals the STORED
+// blob on every dispatch that actually selects this credential, so the global registration follows the server's decision
 // to use it rather than the sandbox's decision to name a string.
 func TestUploadSSOToken_MaskPatternsAreRunScoped(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
-	st := ssoBindingStore{
-		run:    loginRunFor(runID),
-		events: loginStartedFor(runID),
-	}
+	p := defaultUploadProvider()
+	st := ssoBindingStore{run: loginRunFor(runID), events: uploadStamp(runID, p, uploadOwner), siteCfg: uploadSite(p)}
 	sec := &memSecrets{m: map[string][]byte{}}
 	reg := secretmask.NewRegistry()
 	cfg := baseTestConfig(h, st)

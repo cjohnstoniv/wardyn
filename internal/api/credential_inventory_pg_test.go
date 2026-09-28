@@ -111,7 +111,7 @@ func TestPG_ProviderSubscriptionSinkStampsLastUsed(t *testing.T) {
 func TestPG_AWSSSOSinkStampsLastUsed(t *testing.T) {
 	f := newReauthFixture(t, nil)
 	sec, pool := auditedPGSecrets(t)
-	name := harnessCredSecretName(awsSSOProvider)
+	name := reauthScope("alice@example.com").ssoSecret()
 	raw, _ := json.Marshal(liveSSOBlob())
 	if err := sec.For("alice@example.com").Put(context.Background(), name, raw); err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func newInventoryFixture(t *testing.T) inventoryFixture {
 	sso := paSSOProvider("bedrock")
 	unused := paKeyProvider("openai", types.ModelProviderOpenAIAPIKey)
 	site := types.SiteConfig{ModelProviders: providerBlock(key, sub, sso, unused),
-		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey})}
+		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code"})}
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
 	// a real directory entry for alice (an api_tokens
 	// pairing) and one for bob (workspaces.owned_by, no email — the shape

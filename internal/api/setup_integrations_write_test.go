@@ -138,7 +138,7 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 		// instead of silently storing config nothing reads.
 		{"unknown config key on a closed kind", "acme-anthropic", `{"kind":"anthropic_api_key","config":{"regoin":"us-east-1"}}`},
 		{"bedrock legacy lane key (renamed auth_lane)", "acme-bedrock", `{"kind":"bedrock","config":{"lane":"auto","region":"us-east-1","model":"anthropic.claude-3"}}`},
-		// bug-integrations-2: resolveBedrockAuth reads FOUR FIXED global
+		// bug-integrations-2: the Bedrock lane read FOUR FIXED global
 		// secret names, never this row's own secret_name — a row naming
 		// anything else is decorative (the write succeeds, the stored
 		// secret is silently never read). Reject at write time.
@@ -288,16 +288,15 @@ func TestGenericKindStoredEarlier_StillReadsBack(t *testing.T) {
 	}
 }
 
-// TestHandlePutIntegration_AIKindIsRefused pins #547: model access is a model
-// provider, so an integration write naming any of the four AI kinds is refused,
-// pointing at Settings → Model providers, and nothing is stored.
+// TestHandlePutIntegration_AIKindIsRefused pins #548's clean break: the four
+// AI kinds are gone from the kind set (model access is a model provider), so a
+// write naming one is refused as an unsupported kind and nothing is stored.
 func TestHandlePutIntegration_AIKindIsRefused(t *testing.T) {
-	for _, kind := range []string{types.IntegrationKindAnthropicAPIKey, types.IntegrationKindAnthropicSubscription,
-		types.IntegrationKindBedrock, types.IntegrationKindOpenAIAPIKey} {
+	for _, kind := range []string{"anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key"} {
 		srv, fake, audit := integrationWriteHarness(t, nil)
 		w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-model", adminToken, `{"kind":"`+kind+`"}`)
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Settings → Model providers") {
-			t.Errorf("PUT kind %q: %d %s, want 400 naming Settings → Model providers", kind, w.Code, w.Body.String())
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "not a supported integration kind") {
+			t.Errorf("PUT kind %q: %d %s, want 400 refusing the kind", kind, w.Code, w.Body.String())
 		}
 		if len(fake.cfg.Integrations) != 0 || auditCount(audit, "integration.write") != 0 {
 			t.Errorf("PUT kind %q persisted %+v", kind, fake.cfg.Integrations)
@@ -321,7 +320,7 @@ func TestHandlePutIntegration_DefaultForIsRefused(t *testing.T) {
 }
 
 func TestHandleDeleteIntegration_RemovesStoredRow(t *testing.T) {
-	existing := types.Integration{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey}
+	existing := types.Integration{ID: "acme-anthropic", Kind: types.IntegrationKindGitHost}
 	srv, fake, audit := integrationWriteHarness(t, []types.Integration{existing})
 	w := do(t, srv, http.MethodDelete, "/api/v1/integrations/acme-anthropic", adminToken, "")
 	if w.Code != http.StatusNoContent {

@@ -33,21 +33,13 @@ import (
 // deny-list-validated by runner.ValidateMount at policy-write/inline-validate
 // time (validatePolicySpec); the docker driver re-validates it
 // defense-in-depth at sandbox-create time. runner.ValidateMount is unchanged.
-//
-// Bedrock ~/.aws mount (operator config, not agent-chosen; same trust and the
-// same driver deny-list re-validation as the WorkspaceMounts above). READ-ONLY:
-// the sandbox reads the SSO cache / config but can never write to the operator's
-// host AWS state. Present whenever BedrockAWSConfigDir is set and the dir exists
-// (resolveBedrockAuth) — host mode auto-detects it, the compose stack opts in via
-// the WARDYN_BEDROCK_AWS_DIR bind; it is env-driven with no host/compose branch.
-// A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchRun.
 //
 // member is the run's member-mount posture (userMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
 // driver's bind-time within-roots check keys on. Everything NOT in that set is
 // operator/Wardyn-authored (the blessed credential mounts copied from the
-// ceiling, the Bedrock ~/.aws dir below, an operator-owned workspace's dir) and
+// ceiling, an operator-owned workspace's dir) and
 // lives under no member root by construction, so stamping it would refuse the
 // very credential mounts a member-owned workspace's model run needs. The zero
 // posture (every operator run) stamps nothing.
@@ -113,13 +105,6 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMou
 			// owning workspace by — so a bind is member-authored here exactly when
 			// the run-create gate treated it as member-authored.
 			MemberAuthored: member.Sources[wm.Source],
-		})
-	}
-	if llm.bedrockReady && llm.bedrock.awsMount {
-		mounts = append(mounts, runner.Mount{
-			Source:   llm.bedrock.awsMountSource,
-			Target:   sandboxAWSDir,
-			ReadOnly: true,
 		})
 	}
 	return mounts

@@ -389,9 +389,9 @@ type Config struct {
 	// AWS credentials themselves come from the secret store (aws-access-key-id /
 	// aws-secret-access-key / optional aws-session-token), read directly at
 	// dispatch time because Bedrock's AWS SigV4 request signing can't be
-	// proxy-injected the way a static x-api-key header can (see runs.go
-	// resolveBedrockAuth). Empty BedrockRegion or BedrockModel disables Bedrock
-	// entirely; a subscription-mode run always takes priority over Bedrock.
+	// proxy-injected the way a static x-api-key header can. Since 0.8 no run
+	// is credentialed from these (a run's Bedrock credential is its model
+	// provider's); the setup readiness row still reads them.
 	BedrockRegion string
 	BedrockModel  string
 	// BedrockBaseURL re-points the Bedrock DATA plane (bedrock-runtime) at a

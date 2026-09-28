@@ -43,7 +43,7 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	srv := newSupersedeFixture(t, nil, gr).srv
 	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", mine, `{"provider":"aws"}`)
+	w := doSSO(t, srv, http.MethodPost, awsSSOSignInPath, mine, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("launch: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}

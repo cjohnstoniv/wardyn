@@ -39,21 +39,14 @@ type preflightResponse struct {
 	// resolveRunPolicy's doc comment) so Review tells the member WHY their
 	// inline_policy differs from what they typed, before they launch.
 	Warnings []string `json:"warnings,omitempty"`
-	// ModelCredential is WHERE this run's model credential will land, graded from
-	// the lanes the mechanism gate just resolved (gradeModelCredential). The New
-	// Run rail states it verbatim, replacing the unconditional "never written
-	// into the sandbox" claim.
+	// ModelCredential is WHERE this run's model credential will land and which
+	// provider serves it, graded from the model provider the run chose
+	// (runProviderChoice.modelCredential). The New Run rail states it verbatim,
+	// replacing the unconditional "never written into the sandbox" claim.
 	//
-	// It OVERRIDES the /setup/status harness row's own residency, which is the
-	// default-path answer graded against the deployment default policy: this one
-	// is graded against the body the caller is actually about to launch, and
-	// preflightIsCurrent compares that whole body — so a verdict for a different
-	// agent can never render.
-	//
-	// ABSENT for a run that makes no model call, for a caller whose roster read
-	// failed, and — the case worth naming — on the 422 this handler answers for a
-	// per_user member who has not signed in, where there is no response body to
-	// carry it. That is exactly why the status row exists as the default path.
+	// ABSENT for a run that makes no model call, for one no provider serves,
+	// and on the 422 this handler answers for a person who has not connected
+	// their credential, where there is no response body to carry it.
 	ModelCredential *modelCredentialFacts `json:"model_credential,omitempty"`
 	// Autonomy is what resolveRunAutonomy decided for this run — the same
 	// object launch puts on its `run.create` audit row, from the same call, so
@@ -280,34 +273,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create/Review parity on the declared model-access mechanism: Review answers
-	// the SAME 422 launch would, from the same predicate — a checklist that said
-	// "ready" for a run create refuses is the worse of the two lies. Writes its
-	// own 422; see enforceCreateLLMMechanism.
-	// The caller's own run-identity subject, for the reason named at the create
-	// door (runs.go): a per_user lane resolves against the principal's namespace,
-	// and secretOwnerFromRequest's "" for an operator would preview "sign in
-	// again" for an admin whose own capture is right there.
-	//
-	// The out-param is this handler's ONE resolution of the run's credential
-	// lanes: the gate already resolves them to judge the declared mechanism, and
-	// grading residency from a second resolution would both cost another
-	// secret-store read and let the rail describe a lane the gate did not judge.
-	// The autonomy gate below grades the same resolution, which is why this
-	// sits ahead of it — in launch's order.
-	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	// The model-provider choice, where launch makes it (runs.go). Review has no
-	// run row to freeze the choice onto; it keeps it only for the model-access
-	// row below, which under a provider block is the provider's verdict, and
-	// for the model credential the autonomy gate grades with.
+	// The model-provider choice, where launch makes it (runs.go), answering the
+	// SAME refusal launch would. Review has no run row to freeze the choice
+	// onto; it keeps it only for the model-access row below and for the model
+	// credential the autonomy gate grades with.
 	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
 	if !ok {
 		return
 	}
 	modelCred := mpChoice.modelCredential()
-	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, nil, ssoSubject, &modelCred, false) {
-		return
-	}
 
 	// The SAME autonomy gate launch runs, in the same place in the order
 	// (runs.go) and on the same folded spec + enforced class — called, not
@@ -346,9 +320,8 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
 	// call compose.go runs for the AI Run Composer's Review, on the SAME
 	// resolved spec deriveSetupItems sees below — NOT the llmSpec copy just
-	// below (that copy exists only so reconcileLLMAccess sees a droppable clone
-	// of EligibleGrants; grading it would silently diverge from what the
-	// checklist below is judging). Computed here, after both folds above, so a
+	// below (that copy is a droppable clone of EligibleGrants; grading it would
+	// silently diverge from what the checklist below is judging). Computed here, after both folds above, so a
 	// workspace's requirements contract (egress/mounts) is graded exactly like
 	// launch will enforce it — never before, never off a rosier snapshot.
 	//
@@ -363,11 +336,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	riskItems := composer.Grade(runInput, gspec)
 	overallRisk := composer.OverallLevel(riskItems)
 
-	// LLM-access verdict on the resolved spec — the SAME computation the create path
-	// warns from (resolveRunLLMAccess), so this checklist row and the launch-time
-	// warning can never disagree. The helper clones internally: reconcileLLMAccess
-	// drops orphaned grants in place, but launch persists every grant on the resolved
-	// spec, so the checklist must keep seeing the FULL spec.
+	// LLM-access verdict — the SAME computation the create path warns from
+	// (runLLMAccess), so this checklist row and the launch-time warning can
+	// never disagree.
 	//
 	// Skipped for task_mode=exec, mirroring runNeedsModelWarning's own
 	// exec gate at create time — an exec run runs a plain shell command, invokes
@@ -375,21 +346,20 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, nil, ssoSubject, mpChoice)
+		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
 
 	// credentialConfinementAdvisory (#150): the SAME shared helper the create
 	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
-	// SAME modelCred.Mechanism the gate above just graded — so Review can never
+	// SAME modelCred.Kind the choice above just graded — so Review can never
 	// show a rosier picture than the launch it previews. WARN, never refuse:
 	// nothing above this line changed.
-	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Mechanism)
+	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
 
-	// A zero residency means nothing was graded (no store, an unreadable roster,
-	// a non-model run) — omitted rather than published as a guess, which leaves
-	// the rail on the /setup/status row it already had.
+	// A zero residency means no provider was chosen (none serves the agent, or a
+	// non-model run) — omitted rather than published as a guess.
 	resp := preflightResponse{
 		SetupItems:               items,
 		EnforcedConfinementClass: enforced,

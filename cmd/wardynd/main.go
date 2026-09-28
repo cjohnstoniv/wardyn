@@ -384,9 +384,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// The roster half of the model-identity posture, WARNED at boot beside the
-	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
-	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
 	// The SiteConfig half of warnMissingGatewayHosts above: that call (line
 	// ~305) runs before st exists (SiteConfig lives in Postgres), so its
 	// sibling — no upstream_proxy_no_proxy entry covering a configured

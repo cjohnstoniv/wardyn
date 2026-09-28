@@ -46,17 +46,15 @@ func TestCredentialConfinementAdvisory(t *testing.T) {
 }
 
 // ssoConfinementRosterSrv builds a pg-backed server that can only ever offer
-// CC1, with a "shared" bedrock_sso roster row and a live (not expiring soon)
-// captured AWS SSO credential already stored — the exact shape #150 exists
-// for: a deployment that offers only the weakest confinement class still
-// delivers a stored AWS identity to the sandbox at dispatch.
+// CC1, with a bedrock_sso model provider and the launcher's own live (not
+// expiring soon) captured AWS SSO session already stored — the exact shape
+// #150 exists for: a deployment that offers only the weakest confinement class
+// still delivers a stored AWS identity to the sandbox at dispatch.
 func ssoConfinementRosterSrv(t *testing.T) *Server {
 	t.Helper()
 	fr := &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1}}
 	srv, _ := pgHarnessWithRunner(t, fr)
 	srv.cfg.DefaultPolicy.MinConfinementClass = types.CC1
-	srv.cfg.BedrockRegion = "us-east-1"
-	srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	srv.cfg.MaskRegistry = secretmask.NewRegistry()
 	// A fixed clock, one hour ahead of the stored blob's captured time and one
@@ -64,15 +62,13 @@ func ssoConfinementRosterSrv(t *testing.T) *Server {
 	// so the create-time refresh pass (refresh=true) is a no-op on the wire and
 	// this test needs no fake OIDC endpoint.
 	srv.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
-	putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour))
+	storeSSOBlobFor(t, srv, adminTokenPrincipal, putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour)))
 
 	ctx := context.Background()
 	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
-		AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{
-			{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO},
-		}},
+		ModelProviders: providerBlock(awsSSOTestProvider()),
 	}); err != nil {
-		t.Fatalf("seed agent roster: %v", err)
+		t.Fatalf("seed model provider: %v", err)
 	}
 	// site_config is a store-wide singleton row: restore it so a value seeded
 	// here does not leak into another test sharing WARDYN_TEST_PG.
@@ -128,7 +124,7 @@ func TestCreateRun_CC1OnlyHostStoredSSOBlobConfinementAdvisory(t *testing.T) {
 // #150's own parity requirement: preflight and the real launch must carry the
 // BYTE-IDENTICAL advisory (or both carry none) for the same body, because both
 // call credentialConfinementAdvisory off the same resolved
-// modelCredentialFacts.Mechanism.
+// modelCredentialFacts.Kind.
 func TestPreflightAndCreateAgreeOnCredentialConfinementAdvisory(t *testing.T) {
 	srv := ssoConfinementRosterSrv(t)
 	body := `{"agent":"claude-code","repo":"acme/widgets","task":"ship it"}`

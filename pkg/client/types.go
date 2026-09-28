@@ -85,18 +85,10 @@ type (
 	// ListWorkspaces, GetWorkspace, CreateWorkspace, and UpdateWorkspace.
 	Workspace = types.Workspace
 
-	// WorkspaceLLMCred is the operator-owned model/harness credential binding
-	// carried in WorkspaceRequest.LLMCred: IntegrationRef names a
-	// SiteConfig.Integrations entry this workspace's model/harness access
-	// resolves through. "" (or a nil WorkspaceLLMCred) means no binding.
+	// WorkspaceLLMCred is the operator-owned model binding carried in
+	// WorkspaceRequest.LLMCred: ProviderRef pins the workspace's runs to one
+	// model provider. "" (or a nil WorkspaceLLMCred) means no pin.
 	WorkspaceLLMCred = types.WorkspaceLLMCred
-
-	// WorkspaceBedrockRef is a Bedrock region/model selection. Aliased because
-	// it is a pointer-field shape a caller may need to build (dispatchParams.
-	// BedrockRef server-side); no current WorkspaceLLMCred field carries one —
-	// that binding resolves through an Integration (see WorkspaceLLMCred) —
-	// but the type is kept nameable for that resolution's future wiring.
-	WorkspaceBedrockRef = types.WorkspaceBedrockRef
 
 	// Source is one tier-1 library entry: a repo/dir configured once (its own
 	// contract + scan) and attached to many workspaces.

@@ -59,8 +59,10 @@ var backtickSpan = regexp.MustCompile("`([^`]+)`")
 // EXIST, and the row's action literal (or one of that cell's other cited
 // symbols) must appear SOMEWHERE in it — no symbol scoping, because there is no
 // symbol to scope to. Weaker than the symbol-checked path by construction, and
-// still the difference between "resolved" and "never looked at".
-var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md)$`)
+// still the difference between "resolved" and "never looked at". A migration
+// (.sql) is cited this way only: an action a migration writes has no Go symbol
+// at all, and the migration file is the whole of its emit site.
+var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md|sql)$`)
 
 // constNamesFor inverts the tree's package-level string constants: action value
 // -> the names that hold it. An emit whose action arrives as a named constant
@@ -590,6 +592,12 @@ var auditActionGrammarAllow = map[string]bool{
 	// its exact pre-0.8 name for one minor (OD-18, #617), which is its whole
 	// purpose. Removed in 0.9.
 	"auth.member_mode": true,
+	// The 0.8 upgrade's two one-time rows (#548), written by migration
+	// 0099_model_provider_conversion under the names the issue and its design
+	// record fixed before this grammar saw them. Past tense on purpose: each
+	// records a conversion that already happened, once, at upgrade.
+	"workspace.llm_cred.migrated":  true,
+	"model_provider.not_converted": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

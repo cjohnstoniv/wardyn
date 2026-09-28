@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -30,7 +31,7 @@ import (
 // lives to harnessLoginIdleCap with `aws sso login` still polling, and since the
 // image self-runs the pair it completes UNATTENDED — its late, legitimate PUT
 // then leaves a row stamped with the OLD run's id, which is exactly what
-// serverConfirmsCapture refuses.
+// serverConfirmsProviderCapture refuses.
 //
 // The fix: a new sign-in supersedes the caller's older ones, server-side, before
 // the new run is created. These cases pin it.
@@ -210,7 +211,7 @@ func newSupersedeFixture(t *testing.T, cs *capStore, rnr runner.Runner) supersed
 	audit := &memAudit{}
 	st := &supersedeStore{integStore: &integStore{
 		govEscapeStore: newGovEscapeStore(cs),
-		site:           agentRoster(perUserAWSRow()),
+		site:           awsSSOTestSite(),
 	}}
 	idp := &ctxAwareIdentity{Provider: h.idp}
 	cfg := baseTestConfig(h, st)
@@ -233,9 +234,9 @@ func memberLoginSession(t *testing.T) *http.Cookie {
 // launchLoginRun POSTs one sign-in and returns its run id.
 func launchLoginRun(t *testing.T, srv *Server, sess *http.Cookie) string {
 	t.Helper()
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", sess, `{"provider":"aws"}`)
+	w := doSSO(t, srv, http.MethodPost, awsSSOSignInPath, sess, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("POST /setup/harness-login: code = %d, want 200; body=%s", w.Code, w.Body.String())
+		t.Fatalf("POST sign-in: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	var body struct {
 		RunID string `json:"run_id"`
@@ -291,7 +292,7 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // guards on this route, which nothing else does.
 //
 // GREEN ON THE UNFIXED TREE — a regression pin, not a defect fix. The
-// no-credential preview's 409 sits in handleHarnessLogin, before
+// no-credential preview's 409 sits in handleProviderSignIn, before
 // launchHarnessLoginRun and therefore before the supersede; the existing preview
 // case asserts only "no run row, no harness.login.start" on a fixture with no
 // supersede seam and no live login run, so moving the 409 below the launch (or
@@ -310,13 +311,13 @@ func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 		ID: uuid.New(), CreatedBy: memberPreviewAdminSub, Task: harnessLoginTask, Agent: awsSSOAgent,
 	})
 
-	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/setup/harness-login",
-		memberPreviewSession(t, true, true), `{"provider":"`+awsSSOProvider+`"}`)
+	w := doSSO(t, f.srv, http.MethodPost, awsSSOSignInPath,
+		memberPreviewSession(t, true, true), "")
 	if w.Code != http.StatusConflict {
-		t.Fatalf("harness-login in the preview = %d, want 409: %s", w.Code, w.Body.String())
+		t.Fatalf("sign-in in the preview = %d, want 409: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
-		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
+	if !strings.Contains(w.Body.String(), mpsPreview) {
+		t.Errorf("body = %q, want %q", w.Body.String(), mpsPreview)
 	}
 	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
 		t.Errorf("the admin's own sign-in sandbox is %s, want RUNNING — a refused launch must not "+
@@ -677,6 +678,19 @@ func (s *killOnReadSecrets) Get(ctx context.Context, name string) ([]byte, error
 	return s.memSecrets.Get(ctx, name)
 }
 
+// List fires it too: an owner-namespace read lists before it gets, and a
+// first capture finds nothing to get.
+func (s *killOnReadSecrets) List(ctx context.Context) ([]string, error) {
+	s.runs.kill()
+	return s.memSecrets.List(ctx)
+}
+
+// For keeps the switch on the owner's namespace, the one a provider sign-in's
+// once-only read goes to.
+func (s *killOnReadSecrets) For(owner string) secretstore.Store {
+	return &killOnReadSecrets{memSecrets: s.memSecrets.For(owner).(*memSecrets), runs: s.runs}
+}
+
 // TestUploadSSOToken_KilledInsideTheLockIsRefused is the TOCTOU under the belt.
 //
 // The handler reads the run state ONCE at the top and then does a great deal
@@ -712,7 +726,7 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 		t.Fatalf("code = %d, want 409 — a run killed while this upload was in flight must not store; body=%s",
 			w.Code, w.Body.String())
 	}
-	if _, stored := sec.m[harnessCredSecretName(awsSSOProvider)]; stored {
+	if _, stored := uploadedBlob(sec, uploadOwner); stored {
 		t.Error("the superseded sandbox's capture was stored anyway — it is now the credential the person's " +
 			"NEW sign-in will be told it cannot confirm")
 	}
@@ -969,10 +983,10 @@ func TestHarnessLogin_UnenforceableClassRefusalPrecedesTheSupersede(t *testing.T
 		ID: uuid.New(), CreatedBy: "sub-member", Task: harnessLoginTask, Agent: awsSSOAgent,
 	})
 
-	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/setup/harness-login",
-		memberLoginSession(t), `{"provider":"`+awsSSOProvider+`"}`)
+	w := doSSO(t, f.srv, http.MethodPost, awsSSOSignInPath,
+		memberLoginSession(t), "")
 	if w.Code == http.StatusOK || w.Code == http.StatusCreated {
-		t.Fatalf("harness-login = %d on a CC1-only host under a CC2 floor, want a refusal: %s", w.Code, w.Body.String())
+		t.Fatalf("sign-in = %d on a CC1-only host under a CC2 floor, want a refusal: %s", w.Code, w.Body.String())
 	}
 	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
 		t.Errorf("the caller's own sign-in sandbox is %s, want RUNNING — the refusal ran BELOW the "+
@@ -1039,7 +1053,7 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 	}
 	resultCh := make(chan postResult, 1)
 	go func() {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/setup/harness-login", strings.NewReader(`{"provider":"aws"}`))
+		r := httptest.NewRequest(http.MethodPost, awsSSOSignInPath, nil)
 		r.AddCookie(sess)
 		w := httptest.NewRecorder()
 		panicFails(t, srv.Handler()).ServeHTTP(w, r)
@@ -1050,7 +1064,7 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 	select {
 	case res := <-resultCh:
 		if res.code != http.StatusOK {
-			t.Fatalf("POST /setup/harness-login = %d, want 200: %s", res.code, res.body)
+			t.Fatalf("POST sign-in = %d, want 200: %s", res.code, res.body)
 		}
 		var body struct {
 			RunID string `json:"run_id"`

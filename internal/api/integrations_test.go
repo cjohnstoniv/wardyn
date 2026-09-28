@@ -271,20 +271,14 @@ func findRow(rows []integrationRow, id string) (integrationRow, bool) {
 }
 
 // TestEffectiveIntegrations_NoAIRows pins #547: model access is a model
-// provider, so no AI-kind row is in the effective set — neither one derived from
-// the operator's own model credentials (an anthropic-api-key or openai-api-key
-// secret, a live host subscription, a managed token, Bedrock boot config) nor a
-// STORED one. Every resolver reads this set, so a stored AI row that names egress
-// and is required by a workspace must not inject the operator's key either.
+// provider, so no AI-kind row is derived into the effective set from the
+// operator's own model credentials (an anthropic-api-key or openai-api-key
+// secret, a live host subscription, a managed token, Bedrock boot config).
+// Every resolver reads this set. A STORED AI row cannot exist: migration 0099
+// converted and deleted every one.
 func TestEffectiveIntegrations_NoAIRows(t *testing.T) {
-	stored := []types.Integration{
-		{ID: "corp-anthropic", Kind: types.IntegrationKindAnthropicAPIKey, DefaultFor: []string{"agent_runs"},
-			Egress: []string{"api.anthropic.com"},
-			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
-				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}}},
-		{ID: "corp-bedrock", Kind: types.IntegrationKindBedrock, Config: map[string]any{"region": "us-west-2", "model": "m"}},
-	}
-	cfg := integrationsTestConfig(t, types.SiteConfig{Integrations: stored}, map[string][]byte{
+	retired := map[string]bool{"anthropic_api_key": true, "anthropic_subscription": true, "bedrock": true, "openai_api_key": true}
+	cfg := integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{
 		"anthropic-api-key": []byte("sk-ant-x"), "openai-api-key": []byte("sk-oai-x"),
 	})
 	cfg.SubscriptionToken = fakeSubProvider{tok: subscription.Token{Value: "live-token"}}
@@ -295,22 +289,15 @@ func TestEffectiveIntegrations_NoAIRows(t *testing.T) {
 	ctx := context.Background()
 
 	for _, row := range effectiveIntegrationsFor(srv, ctx) {
-		if types.AIProviderKind(row.Kind) {
+		if retired[row.Kind] {
 			t.Errorf("AI-kind row %q (%s, source %s) is in the effective set", row.ID, row.Kind, row.Source)
 		}
 	}
-	for _, id := range []string{"corp-anthropic", "corp-bedrock", "anthropic_api_key", "openai_api_key", "bedrock",
+	for _, id := range []string{"anthropic_api_key", "openai_api_key", "bedrock",
 		"anthropic_subscription:managed", "anthropic_subscription:resident_host"} {
 		if _, ok := srv.resolveIntegrationRef(ctx, "", id); ok {
 			t.Errorf("resolveIntegrationRef(%q) resolved an AI-kind row", id)
 		}
-	}
-	spec := types.RunPolicySpec{}
-	ws := types.Workspace{Requirements: map[string]types.WorkspaceRequirement{
-		"integration:corp-anthropic": {Level: "required", Provenance: "operator_set"},
-	}}
-	if ev := srv.applyWorkspaceRequirements(ctx, &spec, "claude-code", []types.Workspace{ws}, nil); len(ev) != 0 || len(spec.EligibleGrants) != 0 {
-		t.Errorf("a required AI-kind row folded into the run: events %+v, grants %+v", ev, spec.EligibleGrants)
 	}
 }
 

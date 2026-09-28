@@ -125,29 +125,14 @@ func loginStamp(t *testing.T, audit *memAudit) loginRunStamp {
 
 func TestProviderSignInDoorsNeverBothAnswer(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	t.Run("the legacy door refuses once a provider block exists", func(t *testing.T) {
+	t.Run("the retired operator-wide door does not answer", func(t *testing.T) {
 		srv, _, audit, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", admin, `{"provider":"aws","sso_start_url":"https://acme.awsapps.com/start"}`)
-		var eb errorBody
-		_ = json.Unmarshal(w.Body.Bytes(), &eb)
-		if w.Code != http.StatusConflict || eb.Error != mpsLegacyDoor {
-			t.Fatalf("legacy door = %d %s, want 409 %q", w.Code, w.Body.String(), mpsLegacyDoor)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("retired door = %d %s, want 404", w.Code, w.Body.String())
 		}
 		if n := len(audit.find("harness.login.start")); n != 0 {
-			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
-		}
-	})
-	// One read decides both: a blip on it is a 503, never a read that says "no
-	// block" beside another that authorizes.
-	t.Run("a blipped read never lets the legacy door launch beside a block", func(t *testing.T) {
-		srv, st, audit, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
-		st.blips = 1
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", admin, `{"provider":"aws","sso_start_url":"https://acme.awsapps.com/start"}`)
-		if w.Code != http.StatusServiceUnavailable {
-			t.Fatalf("legacy door on a blip = %d %s, want 503", w.Code, w.Body.String())
-		}
-		if n := len(audit.find("harness.login.start")); n != 0 {
-			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
+			t.Fatalf("the retired door launched %d sign-ins", n)
 		}
 	})
 	t.Run("the provider door refuses while there is no block", func(t *testing.T) {

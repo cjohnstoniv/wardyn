@@ -788,8 +788,7 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	// exact "Needs setup" state where the operator already runs Claude on Bedrock
 	// via their host ~/.aws. Default the read-only mount to ~/.aws so the AWS SDK
 	// resolves their creds (SSO auto-refreshes) with nothing to paste. Host-mode
-	// only + fail-safe: only when ~/.aws actually exists, so resolveBedrockAuth
-	// still falls through cleanly otherwise.
+	// only + fail-safe: only when ~/.aws actually exists.
 	if *f.bedrockRegion != "" && *f.bedrockModel != "" && *f.bedrockAWSDir == "" {
 		if home, herr := os.UserHomeDir(); herr == nil {
 			awsDir := filepath.Join(home, ".aws")

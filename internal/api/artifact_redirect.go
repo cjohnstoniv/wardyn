@@ -255,7 +255,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// host: proxy.buildInjector's byHost map is last-write-wins, so a colliding
 		// row would swap an artifact token onto model traffic. isModelProviderRejectHost,
 		// NOT isModelProviderHost: the Bedrock hosts (and WARDYN_BEDROCK_BASE_URL)
-		// carry proxy-side bearer injection too (resolveBedrockAuth), so they are the
+		// carry proxy-side bearer injection too (authorBedrockBearerInjection), so they are the
 		// SAME collision, as is every model provider row's own host
 		// (modelServingHosts).
 		if s.modelServingHosts(sc)(host) {

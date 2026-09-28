@@ -4,7 +4,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -26,16 +25,14 @@ const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 
 // DRAFT (M2 canon pending)
 
-// ssoTokenUnstampedScopeRefusal answers a login run that carries no launch-time
-// credential-scope stamp on a deployment whose roster now reads `per_user`.
-// Such a run was launched before the stamp existed, so the server cannot prove
-// whose namespace it was authorized to write — and under `per_user` the wrong
-// answer is the operator-wide credential every run inherits. Refused rather
-// than guessed; the person signs in again and the new run carries a stamp.
+// ssoTokenUnstampedScopeRefusal answers a login run whose launch-time stamp
+// names no model provider: a sign-in launched before the model-provider
+// conversion, whose capture no provider could serve. Refused rather than
+// stored; the person signs in again from a provider's own door.
 //
 // DRAFT (M2 canon pending)
-const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded whose model credential it was for, " +
-	"and this deployment now gives each person their own — start the sign-in again"
+const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded which model provider it was for — " +
+	"start the sign-in again from Getting started"
 
 // ssoTokenRunKilledRefusal answers a login run that has been KILLED: its own
 // Cancel, or the person's NEXT sign-in superseding it (one live sign-in sandbox
@@ -127,38 +124,27 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			loggedMsg(r.Context(), "verify sso token against login run", aerr), nil)
 		return
 	}
-	if msg, reason := s.bindSSOBlob(blob, stamp); msg != "" {
-		s.refuseCapture(w, r, claims, http.StatusBadRequest, reason, msg, nil)
-		return
-	}
-
-	// WHOSE credential this is — Decided at launch, read back here, never
-	// recomputed from the live roster. The roster says whether this deployment
-	// keeps ONE model credential for everyone (`shared`, today) or one per person
-	// (`per_user`), and the namespace is the login run's own identity subject
-	// (runIdentitySubject at launch == claims.Sub here, minted from the principal
-	// humanOrAdminAuth injected) — trusted server state, never anything the
-	// sandbox said. Every read and write below goes through it.
-	//
-	// Why the stamp and not a fresh resolution. This handler's other two bindings
-	// (region, start_url) are launch-time state; the scope was not, and a login
-	// run stays alive to harnessLoginIdleCap. An admin flipping the row from
-	// `per_user` to `shared` inside that window turned the member's still-running
-	// sandbox's PUT into a write of the operator-wide reserved harness name — the
-	// one credential every later Bedrock run inherits, with an account_id and
-	// role_name the blob is free to name (repoFieldSafe only). The file's promise
-	// that "a member's capture can never overwrite the operator's" did not hold
-	// across a roster edit; reading the launch-time stamp is what makes it hold.
-	scope, ok := s.loginRunScope(r.Context(), stamp, claims.Sub)
+	// WHOSE credential this is — decided at launch, read back here: the model
+	// provider the sign-in was launched for and the login run's own identity
+	// subject (runIdentitySubject at launch == claims.Sub here, minted from the
+	// principal humanOrAdminAuth injected) — trusted server state, never
+	// anything the sandbox said. Every read and write below goes through it.
+	// Ahead of the binding: a sign-in launched before the conversion carries
+	// none of the provider values the binding compares, so its refusal would
+	// otherwise name a mismatch that is not the reason.
+	scope, ok := loginRunScope(stamp, claims.Sub)
 	if !ok {
-		// No stamp, on a deployment whose row now reads `per_user`: unprovable, so
-		// refused. See ssoTokenUnstampedScopeRefusal. A provider sign-in whose
-		// stamp names no owner, or another one, is refused the same way.
+		// A sign-in that names no provider (launched before the conversion), or
+		// whose stamp names no owner or another one, is refused.
 		msg := ssoTokenUnstampedScopeRefusal
 		if stamp.ModelProviderUID != "" {
 			msg = mpsCaptureNotOwner
 		}
 		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, msg, nil)
+		return
+	}
+	if msg, reason := s.bindSSOBlob(blob, stamp); msg != "" {
+		s.refuseCapture(w, r, claims, http.StatusBadRequest, reason, msg, nil)
 		return
 	}
 
@@ -246,12 +232,8 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.SourceRunID = claims.RunID.String()
 
 	// A provider sign-in lands only while that provider is still the one it
-	// was launched for (storeProviderSignIn); the legacy door as before.
-	store := func() (bool, error) { return false, s.storeAWSSSOBlob(r.Context(), scope, blob) }
-	if scope.provider != "" {
-		store = func() (bool, error) { return s.storeProviderSignIn(r.Context(), stamp, scope, blob) }
-	}
-	if changed, err := store(); changed {
+	// was launched for (storeProviderSignIn).
+	if changed, err := s.storeProviderSignIn(r.Context(), stamp, scope, blob); changed {
 		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonProviderChanged, mpsCaptureChanged, &scope)
 		return
 	} else if err != nil {
@@ -273,9 +255,9 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// per-run entries only. Registering sandbox-chosen bytes there let a process
 	// inside the vendor login image pick strings that redact every operator's
 	// logs — "connection refused", an IP:port — for the life of the daemon.
-	// The credential itself loses NOTHING: resolveBedrockAuth AddGlobals the
-	// stored blob's access/refresh/client-secret on every dispatch that actually
-	// selects this credential (runs_bedrock.go), so the global registration
+	// The credential itself loses NOTHING: bedrockSSOAuth merges the stored
+	// blob's access/refresh/client-secret into the global corpus on every
+	// dispatch that actually selects this credential, so the global registration
 	// follows the SERVER's decision to use the credential rather than the
 	// sandbox's decision to name a string. Add is nil-safe.
 	s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.AccessToken))
@@ -283,16 +265,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.RefreshToken))
 	}
 
+	// owner + credential_source say WHOSE credential landed, and
+	// model_provider for which provider: "who signed in" is the first question
+	// after an incident.
 	captured := map[string]any{
 		"provider": awsSSOProvider, "source": "helper",
-		// owner + credential_source say WHOSE credential landed: "" / "shared" is
-		// the one every run uses, a subject / "per_user" is one person's. Without
-		// the pair a per_user estate's capture rows are indistinguishable from
-		// each other, and "who signed in" is the first question after an incident.
 		"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
-	}
-	if stamp.ModelProvider != "" {
-		captured["model_provider"] = stamp.ModelProvider
+		"model_provider": stamp.ModelProvider,
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
@@ -398,8 +377,7 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 // dependency, or simply a portal that listed somebody else's account first —
 // from PUTting a structurally perfect blob naming an IdP, region, account and
 // role nobody asked for. That blob would land under the reserved harness name
-// and resolveBedrockAuth would select it AHEAD of the host ~/.aws mount and the
-// static-key lanes for every LATER Bedrock run (runs_bedrock.go), baking its
+// and every LATER run on its provider would sign with it (bedrockSSOAuth), baking its
 // start_url/account/role into that run's ~/.aws/config and appending its
 // region's oidc./portal.sso. hosts to the egress allowlist.
 func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason string) {
@@ -431,8 +409,8 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 			return "invalid sso token: " + field + " contains control characters or whitespace", refuseReasonFieldUnsafe
 		}
 	}
-	// Shape, not merely safety. The ROSTER-SAVE door has always held the
-	// admin's pin to `^\d{12}$` and IAM's own role grammar (validateAgentSSOPin);
+	// Shape, not merely safety. The PROVIDER-SAVE door holds the admin's pin
+	// to `^\d{12}$` and IAM's own role grammar (validateProviderBedrock);
 	// this door took anything without a control character. On the unpinned/bare-id
 	// shape nothing else looks at these two at all, so a wrong-shaped identity was
 	// stored and baked into every later run's ~/.aws/config, to be discovered as
@@ -443,18 +421,10 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	if !iamRoleName.MatchString(blob.RoleName) {
 		return ssoTokenRoleShapeRefusal, refuseReasonFieldShape
 	}
-	// The two operator values the server already HOLDS, so the binding
-	// needs no new trust source: the region is the same
-	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
-	// launched with, and the start URL is the operator's own request value read
-	// back off THIS run's harness.login.start row.
-	//
-	// A provider sign-in binds to that provider's region and model as they read
-	// at launch (its stamp), never the boot config; an empty one refuses.
-	region, model := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion), s.cfg.BedrockModel
-	if stamp.ModelProviderUID != "" {
-		region, model = stamp.SSORegion, stamp.Model
-	}
+	// The values the server already HOLDS, so the binding needs no new trust
+	// source: the provider's region, start URL and model as they read at launch,
+	// off THIS run's own harness.login.start row. An empty one refuses.
+	region, model := stamp.SSORegion, stamp.Model
 	if blob.Region != region {
 		return "sso token region does not match the AWS SSO region this login run was launched with", refuseReasonRegionMismatch
 	}
@@ -493,42 +463,13 @@ func (b awsSSOBlob) missingFields() []string {
 }
 
 // loginRunScope turns a login run's launch-time stamp into the scope its upload
-// may write under. ok=false means "refuse": there is no stamp AND the roster
-// now reads `per_user`, so the launch-time answer is unknowable and the only
-// fallback available (the operator namespace) is precisely the wrong one.
-//
-// The unstamped arm is the operator arm. authorizeHarnessLogin lets nobody but
-// an operator launch a login run unless the row is `per_user`, so an unstamped
-// run on a roster that does not read `per_user` today is an operator's — the
-// same For("") this handler has always used, unchanged. If the row DOES read
-// `per_user`, that proof is gone and the run is refused.
-//
-// ponytail: the residual is a run launched under `per_user` BEFORE this commit
-// whose row was flipped to `shared` before it uploaded — unprovable either way,
-// and it needs a pre-upgrade run still alive across the wardynd restart that
-// deployed this code. Every run launched from here on carries a stamp.
-func (s *Server) loginRunScope(ctx context.Context, stamp loginRunStamp, subject string) (awsSSOScope, bool) {
-	if stamp.ModelProviderUID != "" {
-		// A provider's own door: the launcher's own name for that provider, and
-		// only the launcher's — the run token is authority for whose run it is.
-		// The roster never decides it.
-		if stamp.Owner == "" || stamp.Owner != subject {
-			return awsSSOScope{}, false
-		}
-		return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+// may write under: the provider it was launched for, and the launcher's own
+// namespace — only the launcher's, since the run token is authority for whose
+// run it is. ok=false refuses: a stamp that names no provider (a sign-in
+// launched before the conversion), or no owner, or another one.
+func loginRunScope(stamp loginRunStamp, subject string) (awsSSOScope, bool) {
+	if stamp.ModelProviderUID == "" || stamp.Owner == "" || stamp.Owner != subject {
+		return awsSSOScope{}, false
 	}
-	switch stamp.CredentialSource {
-	case string(types.CredentialSourcePerUser):
-		// The launch-time owner, not the live roster's answer. Empty is fail-closed
-		// on its own: storeAWSSSOBlob refuses a per-user blob with no owner.
-		return awsSSOScope{perUser: true, owner: cmp.Or(stamp.Owner, subject)}, true
-	case string(types.CredentialSourceShared):
-		return awsSSOScope{}, true
-	default:
-		// A roster read that FAILED cannot prove the operator arm either, so it
-		// refuses rather than falling through to the unscoped write (ok is the
-		// fail-closed half of awsSSOScopeForAgent).
-		scope, ok := s.awsSSOScopeForAgent(ctx, modelAccessAgent, subject)
-		return awsSSOScope{}, ok && !scope.perUser
-	}
+	return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
 }
