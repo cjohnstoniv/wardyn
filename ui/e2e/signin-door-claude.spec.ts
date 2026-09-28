@@ -185,12 +185,12 @@ test.describe("the Claude sign-in door (#628)", () => {
     await expect(step(page, SIGNIN_PROGRESS.STEP_START)).toHaveAttribute("data-state", "active");
   });
 
-  test("state 8: Cancel stops the sandbox and the card goes back to what it showed", async ({ page }) => {
+  test("state 8: Cancel stops the sandbox and the strip goes back to what it showed", async ({ page }) => {
     const door = await openClaudeDoor(page);
     await page.getByTestId("login-sandbox-starting").getByRole("button", { name: SIGNIN_PROGRESS.CANCEL }).click();
-    await expect(page.getByRole("heading", { name: "Sign in to Claude" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: CLAUDE_DOOR.TITLE })).toHaveCount(0);
     await expect.poll(() => door.kills.length).toBeGreaterThanOrEqual(1);
-    await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE })).toBeVisible();
     expect(door.tabs).toHaveLength(0);
   });
 });
