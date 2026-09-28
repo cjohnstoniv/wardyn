@@ -75,6 +75,13 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
 	}
 
+	// Terminal sandbox sweep ticker (#710): gated the same as the lifecycle
+	// reaper above (nothing to probe with no Runner), independent of
+	// autoStopInterval — see terminal_sandbox_sweeper.go.
+	if run != nil {
+		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepInterval)
+	}
+
 	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
 		// THREE connections are spoken for here: the single-instance boot lock
 		// and the rotator's leader lock each hold one for the whole process

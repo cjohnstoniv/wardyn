@@ -126,13 +126,26 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// TestReconcileOnBoot_SweepsOrphanedTerminalSandbox asserts the teardown
 	// happens EXACTLY ONCE, and adding the sweep here makes it twice.
 	//
-	// So the primitive's value is not a second boot pass; it is an ON-DEMAND
-	// retry surface for the shape a laptop actually produces — suspend for a
-	// week, wake with dead sandboxes, never reboot, so no boot pass ever runs.
-	// That is POST /api/v1/admin/sandboxes/sweep, which MDM can schedule like
-	// `wardyn support-bundle`. A ticker was rejected separately: the primitive
-	// calls ListRuns unpaged and probes every terminal run carrying a ref, so its
-	// cost grows with run history forever and it would need leader election.
+	// So the primitive's value HERE is not a second boot pass; it is an
+	// ON-DEMAND retry surface for the shape a laptop actually produces —
+	// suspend for a week, wake with dead sandboxes, never reboot, so no boot
+	// pass ever runs. That is POST /api/v1/admin/sandboxes/sweep, which MDM can
+	// schedule like `wardyn support-bundle`.
+	//
+	// A periodic ticker DOES exist (cmd/wardynd's runTerminalSandboxSweeper,
+	// started in startBackgroundWorkers next to the lifecycle reaper and the
+	// approval-expiry sweeper) — it is simply not wired HERE, inside the boot
+	// pass, for the same reason as above: adding it to this Join would make
+	// TestReconcileOnBoot_SweepsOrphanedTerminalSandbox's teardown run twice.
+	// Its earlier rejection (unpaged ListRuns, so cost grows with run history
+	// forever; and needing leader election) is answered where it actually
+	// runs: SweepTerminalSandboxesPage bounds each tick to one
+	// store.Pager.ListRunsPage page, so per-tick cost is constant regardless of
+	// run history, and claimSingleInstance (cmd/wardynd/single_instance.go)
+	// already holds db.SingleInstanceLockKey for the WHOLE process
+	// lifetime — before any background worker starts, unlike the lifecycle
+	// reaper's own per-tick reapTickLock — so at most one wardynd ever runs
+	// against a database and the ticker needs no election of its own.
 	//
 	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
 	// reboot stopped is then marked lost (reboot), which says its agent needs

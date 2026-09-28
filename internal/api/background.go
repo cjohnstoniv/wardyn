@@ -24,6 +24,19 @@ func (s *Server) goBackground(fn func()) {
 	}()
 }
 
+// GoBackground is goBackground, exported for cmd/wardynd's own long-lived
+// background loops that must not be abandoned mid-cycle by a SIGTERM the way
+// a bare `go` would be — today the terminal-sandbox sweep ticker
+// (runTerminalSandboxSweeper, #710): fn is expected to run until its ctx is
+// cancelled and then return promptly, so WaitBackground's wait for it
+// resolves near-instantly once rootCtx is already cancelled (which it always
+// is by the time serveAndShutdown calls WaitBackground), never by hitting
+// backgroundShutdownBudget the way a genuinely wedged request-detached
+// teardown would.
+func (s *Server) GoBackground(fn func()) {
+	s.goBackground(fn)
+}
+
 // backgroundShutdownBudget bounds WaitBackground. killCascadeTimeout
 // (runs_lifecycle.go) is the longest bound any ONE goroutine tracked by
 // goBackground gives itself internally (killTeardownTail's own detach+bound,
