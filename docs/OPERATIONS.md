@@ -2683,6 +2683,33 @@ field, and a stored value that no longer passes is dropped from `/healthz`
 rather than published. Like the provider blocks, a body that does not name a
 field carries the stored value forward; name it as `""` to clear it.
 
+### UI apps with more than one user: use host mode
+
+If the UI-sandbox gateway is on and more than one person uses this install, set
+`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` (`uiSandbox.originTemplate` in the chart),
+e.g. `https://run-{run}.ui.example.com`, with wildcard DNS and a wildcard
+certificate. Without it the gateway runs in path mode: every run's relayed app
+is served from ONE browser origin, separated only by a path-scoped cookie. That
+cookie decides which session a request carries, but not what a page may read:
+any relayed page on that origin can script any other page there that is open
+in the same browser. That is the shared-origin residual
+([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18).
+
+Two controls keep another user's app out of that origin in your browser: the
+enter ticket is bound to the browser that minted it, so nobody can push you
+into their app with a link or a form, and a relayed app cannot register a
+service worker outside its own path
+([UI-SANDBOXES.md §3](UI-SANDBOXES.md#3-open-an-app) and
+[Bounds](UI-SANDBOXES.md#bounds)). They leave one boundary to the path cookie alone: your
+own apps can still reach each other. Host mode gives every run its own origin,
+which the browser itself isolates, and it refuses an enter served on any other
+run's host. Path mode is for a single-user or demo install.
+
+Either mode needs the console and the gateway on **the same site** (one
+registrable domain, one scheme): the enter binding is a cookie the console's
+fetch sets on the gateway, and a browser refuses that across sites. Open then
+fails with an error that says so.
+
 ### Every denial that isn't a 404
 
 (This section is the source of record for `authz.denied`'s `reason` values;
@@ -4027,11 +4054,14 @@ To put Wardyn behind a reverse proxy at a sub-path next to another application
   `wardynd` writes the base into the `index.html` it serves (an attribute, not an
   inline script — the CSP is unchanged) and the console builds every API, sign-in,
   terminal and recording URL from it. A refresh on a deep link works.
-- **Cookies** — the session, the sign-in cookies and the Azure DevOps sign-in's —
-  are scoped to `Path=/wardyn`, so the neighbouring application never receives
-  them. A session issued before the console moved under a base path (a
-  same-host migration) carries `Path=/` and stays valid until it expires;
-  signing out clears both.
+- **Cookies** — the session, the sign-in cookies and the Azure DevOps sign-in's.
+  Over plain HTTP they are scoped to `Path=/wardyn`. A session issued before the
+  console moved under a base path (a same-host migration) carries `Path=/` and
+  stays valid until it expires; signing out clears both. Under TLS (see
+  "Console cookies under TLS" below) they are `__Host-` cookies, which the
+  browser only accepts at `Path=/`, so the neighbouring application on the same
+  host receives them too. That gives it nothing new: it shares the console's
+  origin, so its pages can already call the console's API with them attached.
 - **SSO.** Register and set `WARDYN_OIDC_REDIRECT_URL` under the base
   (`https://host.example.com/wardyn/auth/callback`); boot refuses one outside it,
   naming both variables. The Azure DevOps callback is derived from it and carries
@@ -4054,6 +4084,38 @@ To put Wardyn behind a reverse proxy at a sub-path next to another application
   separate hosts and are unchanged.
 - **Not detected.** A proxy that strips the prefix is not refused at boot —
   nothing in a request says it was stripped; it shows up as 404s on every page.
+
+### Console cookies under TLS
+
+The console's cookies are the session (`wardyn_session`), the sign-in's one-time
+cookies (`wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`,
+`wardyn_oidc_widened`) and the Azure DevOps sign-in's (`wardyn_ado_state`,
+`wardyn_ado_nonce`, `wardyn_ado_pkce`). With secure cookies on (TLS served
+directly, or `WARDYN_TLS_TERMINATED`), each one is written as a `__Host-` cookie
+(`__Host-wardyn_session`, and so on): `Secure`, `Path=/` and no `Domain`, also
+under `WARDYN_BASE_PATH`. A browser refuses to store a `__Host-` cookie that
+breaks any of those rules, so no other host under the console's registrable
+domain can plant one. That includes a UI-sandbox app relayed on a sibling host,
+whose page script can set `Domain=` cookies the console receives. In this
+posture the console never reads the unprefixed names, so a planted
+`wardyn_session` is ignored rather than taken as a sign-in.
+
+- **Plain HTTP keeps the plain names.** A browser refuses `__Host-` and `Secure`
+  cookies from a plain-HTTP origin, so with secure cookies off the console uses
+  the unprefixed names, scoped to `WARDYN_BASE_PATH` when it is set. Any host
+  under the same registrable domain can then plant them: its page can sign the
+  browser into the console as another account, or seed the sign-in's state.
+  Keep plain HTTP to a loopback or single-host install with nothing else served
+  under its domain. Anything other people reach belongs behind TLS.
+- **The prefix does not separate a host from itself.** Cookies ignore ports. A
+  path-mode UI-sandbox gateway on the console's own hostname (another port)
+  receives the console's cookies. The relay strips every `wardyn_*` cookie,
+  `__Host-` spellings included, before the app sees the request, and drops any
+  the app tries to set. The relayed page's own script still runs on that
+  hostname and can set a host-only `__Host-wardyn_session` there. Only a gateway
+  on a hostname of its own is out of that reach.
+
+The threat model's residual 18 carries both bounds.
 
 ### Corporate TLS-inspection root
 
@@ -6425,6 +6487,13 @@ upgrade across this release**:
   again with the same key, or restore the pre-upgrade dump (step 0) before you
   run the older version. A wrong key reads differently:
   `age decrypt: no identity matched any of the recipients`.
+
+**Upgrading to 0.8 signs every SSO human out, once, under TLS (#1258).** With
+secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), the session
+cookie is now `__Host-wardyn_session`, and the old `wardyn_session` is never
+read, not even as a fallback, so every human re-authenticates at their next
+request. The old cookie is left to expire. A plain-HTTP install keeps the old
+names and signs nobody out. Admin-token and API-token auth are unaffected.
 
 **Upgrading to 0.7 signs every SSO human out, once.** The session payload gained
 a codec version and `decodeSession` requires an exact match

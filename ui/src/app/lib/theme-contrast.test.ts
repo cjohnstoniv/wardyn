@@ -138,6 +138,15 @@ describe("light-theme WCAG AA contrast", () => {
     expect(ratio(token("success-foreground"), token("success"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // #1197 L3 (design.md §5): --card equals --background in the light theme
+  // (both #ffffff), so this is covered by the WHITE cases above in substance,
+  // but pinned explicitly against the token the Runs row actually sits on
+  // (bg-card) rather than inferred.
+  it("--warning/--danger row text clears AA on --card", () => {
+    expect(ratio(token("warning"), token("card"))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("danger"), token("card"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   // info + cyan joined the guarded set when their 500-family values measured
   // 3.68:1 / 2.43:1 as 12px chip text (Starting badge, egress-domain chip).
   for (const t of ["success", "warning", "danger", "info", "cyan"]) {
@@ -252,6 +261,16 @@ describe("light-theme WCAG AA contrast", () => {
     // would lighten the very field the gate above pins, unseen.
     it("Input and Textarea carry the same dark:bg-input alpha", () => {
       expect(darkFieldAlpha("input")).toBe(darkFieldAlpha("textarea"));
+    });
+
+    // #1197 L3 (design.md §5): the Runs landing page's row status word sits
+    // directly on --card (run-row.tsx's bg-card), not on --background or a
+    // -subtle tint — dark --card (#111111) is close to but not identical to
+    // --background (#0a0a0a), so this is its own pin rather than inferred
+    // from the --background case above.
+    it("dark --warning/--danger row text clears AA on --card", () => {
+      expect(ratio(dtoken("warning"), dtoken("card"))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(dtoken("danger"), dtoken("card"))).toBeGreaterThanOrEqual(4.5);
     });
   });
 

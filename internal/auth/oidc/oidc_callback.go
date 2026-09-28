@@ -64,22 +64,22 @@ import (
 // refusal of the extras be retried without them.
 func (a *Authenticator) consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
 	stateParam := r.URL.Query().Get("state")
-	stateCookie, err := r.Cookie(stateCookieName)
+	stateCookie, err := r.Cookie(a.cookieName(stateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam != stateCookie.Value {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return "", "", false, false
 	}
-	nonceCookie, err := r.Cookie(nonceCookieName)
+	nonceCookie, err := r.Cookie(a.cookieName(nonceCookieName))
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
 		return "", "", false, false
 	}
-	pkceCookie, err := r.Cookie(pkceCookieName)
+	pkceCookie, err := r.Cookie(a.cookieName(pkceCookieName))
 	if err != nil || pkceCookie.Value == "" {
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
 		return "", "", false, false
 	}
-	widenedCookie, werr := r.Cookie(widenedCookieName)
+	widenedCookie, werr := r.Cookie(a.cookieName(widenedCookieName))
 	widened = werr == nil && widenedCookie.Value != ""
 	a.clearCookie(w, stateCookieName)
 	a.clearCookie(w, nonceCookieName)

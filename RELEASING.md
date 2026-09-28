@@ -17,7 +17,7 @@ document is that process, written down.
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`,
+  `license-headers`, `gitleaks`), `dco`, `main-red`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
   was missing from this list entirely. `sbom-stub` used to be named here and is
   **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a

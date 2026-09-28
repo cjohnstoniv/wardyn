@@ -509,7 +509,10 @@ export function NewRunScreen() {
           could not. A prefilled form that looks hand-typed is the failure mode:
           the operator would have no way to know the tool-approval posture came
           across but the credentials deliberately did not. */}
-      {prefill && (
+      {/* Review F4: a composer launch (runs/runs-composer.tsx) has no source
+          run to be "prefilled from" — its own RunPrefill carries
+          source:"composer", which skips this banner entirely. */}
+      {prefill && prefill.source !== "composer" && (
         <div
           role="status"
           className="mb-6 space-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground"

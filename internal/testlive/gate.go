@@ -16,11 +16,17 @@ import (
 // The live suites' environment. Values that are secrets are never read from
 // the environment: the *_FILE names hold a path to a file outside the repo.
 const (
-	EnvEntra      = "WARDYN_LIVE_ENTRA"
-	EnvADO        = "WARDYN_LIVE_ADO"
-	EnvADOWrite   = "WARDYN_LIVE_ADO_WRITE" // LL2b: pushes and deletes one scratch branch
-	EnvBedrock    = "WARDYN_LIVE_BEDROCK"
-	EnvAWSSSO     = "WARDYN_LIVE_AWS_SSO"
+	EnvEntra    = "WARDYN_LIVE_ENTRA"
+	EnvADO      = "WARDYN_LIVE_ADO"
+	EnvADOWrite = "WARDYN_LIVE_ADO_WRITE" // LL2b: pushes and deletes one scratch branch
+	EnvBedrock  = "WARDYN_LIVE_BEDROCK"
+	EnvAWSSSO   = "WARDYN_LIVE_AWS_SSO"
+	// EnvBedrockWardyn (LL3w) is Bedrock reached THROUGH a Wardyn run — a
+	// governed sandbox's own model call — as opposed to EnvBedrock (LL3),
+	// which drives the Bedrock data plane directly from the test process.
+	EnvBedrockWardyn = "WARDYN_LIVE_BEDROCK_WARDYN"
+	// EnvAutonomy (LL5) gates TestLive_AutonomyL0Enforced (#705).
+	EnvAutonomy   = "WARDYN_LIVE_AUTONOMY"
 	EnvBaseURL    = "WARDYN_LIVE_BASE_URL"
 	EnvIdentities = "WARDYN_LIVE_IDENTITIES_FILE"
 
@@ -46,6 +52,24 @@ const (
 	EnvBedrockRegion   = "WARDYN_LIVE_BEDROCK_REGION"
 	EnvBedrockModel    = "WARDYN_LIVE_BEDROCK_MODEL"
 	EnvBedrockMaxCalls = "WARDYN_LIVE_BEDROCK_MAX_CALLS"
+
+	// EnvBedrockWardynIntegrationID names the AI-provider Integration (GET
+	// /integrations) LL3w binds the run to (CreateRunRequest.IntegrationID) —
+	// this install's Amazon Bedrock lane, already bound to the member's
+	// captured per-user AWS SSO session. Install-specific, so it is never
+	// defaulted.
+	EnvBedrockWardynIntegrationID = "WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID"
+	// EnvBedrockWardynDeniedIntegrationID is OPTIONAL: a second Bedrock
+	// Integration this install has pointed at a model the capped account's
+	// service control policy denies, for the forced-AccessDenied half of LL3w.
+	// Unset skips that half by name, never the whole suite.
+	EnvBedrockWardynDeniedIntegrationID = "WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID"
+
+	// EnvAutonomyIntegrationID names a WORKING AI-provider Integration for the
+	// autonomy gate's own member — required so the run's model credential
+	// resolves cleanly and the request reaches the autonomy gate itself,
+	// rather than failing earlier on an unrelated missing-credential refusal.
+	EnvAutonomyIntegrationID = "WARDYN_LIVE_AUTONOMY_INTEGRATION_ID"
 )
 
 // Require skips t unless gate is "1"; that is the only condition a skip may

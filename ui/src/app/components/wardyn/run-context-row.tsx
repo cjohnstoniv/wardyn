@@ -72,10 +72,9 @@ export function RunContextRow({
           {/* F1-F9: a local third copy of the headline chain that ignored
               run.interactive (a nameless non-interactive run read as
               "Interactive session") — the canonical helper board-groups.ts's
-              rowHeadline already gets this right. false = show the title
-              here, this row is not inside a titled group. */}
+              rowHeadline already gets this right. */}
           <span className="min-w-0 max-w-full truncate text-sm font-medium text-foreground">
-            {rowHeadline(run, false)}
+            {rowHeadline(run)}
           </span>
           <span className="font-mono text-xs text-muted-foreground">{run.repo}</span>
           <ConfinementChip value={run.confinement_class} />

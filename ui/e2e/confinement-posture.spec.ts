@@ -28,10 +28,15 @@ async function mockHealthz(page: Page, body: { runner: string; network_policy?: 
   );
 }
 
-// The board's own ConfinementChip (run-card.tsx) — any run works, the case
-// under test never depends on which one. `internal class` is a substring only
-// this chip's title ever carries (primitives.tsx#ConfinementChip).
-function firstConfinementChip(page: Page) {
+// #1197 D2 removed the barrier chip from the Runs landing page entirely
+// (design.md §4: "the barrier stays on the run page and in New run") — any
+// run's own ConfinementChip now lives only on its detail page, so this opens
+// the first run to reach one. Any run works, the case under test never
+// depends on which one. `internal class` is a substring only this chip's
+// title ever carries (primitives.tsx#ConfinementChip).
+async function firstConfinementChip(page: Page) {
+  await page.getByTestId("run-row").first().getByRole("link").first().click();
+  await expect(page.getByTestId("run-summary-header")).toBeVisible();
   return page.locator('[title*="internal class"]').first();
 }
 
@@ -43,7 +48,7 @@ test.describe("confinement posture (#162)", () => {
     await gotoConsole(page, "admin");
     await expect(page.getByRole("status").filter({ hasText: NO_BANNER })).toHaveCount(0);
 
-    const chip = firstConfinementChip(page);
+    const chip = await firstConfinementChip(page);
     await expect(chip).toBeVisible();
     await expect(chip.locator("svg")).toHaveCount(1); // barrier icon only, no warning glyph
     const cls = (await chip.getAttribute("class")) ?? "";
@@ -55,7 +60,7 @@ test.describe("confinement posture (#162)", () => {
     await gotoConsole(page, "admin");
     await expect(page.getByRole("status").filter({ hasText: NO_BANNER })).toHaveCount(0);
 
-    const chip = firstConfinementChip(page);
+    const chip = await firstConfinementChip(page);
     await expect(chip).toBeVisible();
     await expect(chip.locator("svg")).toHaveCount(1);
     const cls = (await chip.getAttribute("class")) ?? "";
@@ -70,7 +75,7 @@ test.describe("confinement posture (#162)", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "How to prove it" })).toBeVisible();
 
-    const chip = firstConfinementChip(page);
+    const chip = await firstConfinementChip(page);
     await expect(chip).toBeVisible();
     // Ring, not a second glyph — ruling 1 named the unenforced chip only.
     await expect(chip.locator("svg")).toHaveCount(1);
@@ -107,7 +112,7 @@ test.describe("confinement posture (#162)", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "What to fix" })).toBeVisible();
 
-    const chip = firstConfinementChip(page);
+    const chip = await firstConfinementChip(page);
     await expect(chip).toBeVisible();
     // Ruling 1: a glyph as well as the ring — colour is never the only signal.
     await expect(chip.locator("svg")).toHaveCount(2);
@@ -132,7 +137,7 @@ test.describe("confinement posture (#162)", () => {
     // Unknown/skew is a shell-level warning only — the mock never gave it a
     // chip treatment (no ring, no glyph), so the chip stays exactly as an
     // enforced/docker one would render.
-    const chip = firstConfinementChip(page);
+    const chip = await firstConfinementChip(page);
     await expect(chip).toBeVisible();
     await expect(chip.locator("svg")).toHaveCount(1);
     const cls = (await chip.getAttribute("class")) ?? "";
@@ -152,7 +157,7 @@ test.describe("confinement posture (#162)", () => {
     await navToRoute(page, "/runs");
     await expect(band).toHaveCount(0);
 
-    const chip = firstConfinementChip(page);
+    const chip = await firstConfinementChip(page);
     await expect(chip).toBeVisible();
     await expect(chip.locator("svg")).toHaveCount(2);
     const cls = (await chip.getAttribute("class")) ?? "";

@@ -1465,3 +1465,40 @@ jobs:
             fi
           fi
 
+  # ── the notification a red push run on main never had ──────────────────────
+  # A PR's red run blocks only that PR — the required-checks gate at the branch
+  # protection layer already tells its author. A push run on main blocks
+  # nothing and, until now, told nobody: same gap nightly.yml's
+  # notify-new-lanes closed for the nightly lanes, reused here for this
+  # workflow's own push trigger. Needs every job so a failure anywhere in the
+  # run trips it; scoped to push-to-main only (`if:`, not the trigger list) so
+  # a red PR or merge-queue run never opens one.
+  main-red:
+    needs: [changes, go, build, diagrams, ui, ui-e2e, helm, helm-install-test, compose, conformance, conformance-k8s, envbuild-integration, test-pg, trivy, notices, gates, dco]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the main-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="ci: a push run failed on main"
+          # Deduplicate by title: a lane that stays broken appends to one
+          # issue, not one per push.
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+          else
+            body=$(printf '%s\n' \
+              "A push run on main failed: ${{ github.sha }}." \
+              "" \
+              "Run: $RUN_URL")
+            gh issue create --title "$title" --body "$body"
+          fi
+
