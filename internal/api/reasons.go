@@ -780,6 +780,24 @@ const (
 	reasonInjectionNoOAuthProvider           = "no_oauth_provider"
 )
 
+// Record Mode (record.go): per-task recording sandboxes and their promotion
+// to durable requirement rows.
+const (
+	reasonRecordSessionNameRequired = "record_session_name_required"
+	reasonRecordLabelCollision      = "record_label_collision"
+	reasonRecordNoRunner            = "record_no_runner"
+	reasonRecordImportStepBusy      = "record_import_step_busy"
+	reasonRecordPromoteNoRecording  = "record_promote_no_recording"
+	// reasonRecordPromoteRejected is promotableRecordHosts' own bucket: several
+	// distinct pre-promotion checks (incomplete/borrowed/plumbing/contradicted/
+	// shapeless evidence) all refuse a promotion for the same reason — the
+	// entry is not durable-policy material yet.
+	reasonRecordPromoteRejected          = "record_promote_rejected"
+	reasonRecordPromoteHostNotPromotable = "record_promote_host_not_promotable"
+	reasonRecordPromoteCapReached        = "record_promote_cap_reached"
+	reasonRecordPromoteConflict          = "record_promote_conflict"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

@@ -39,6 +39,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -279,7 +280,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	key := recordSessionKey(label)
 	if key == "" {
-		writeError(w, http.StatusBadRequest, "record session needs a name (letters/digits) — e.g. \"build & test\"")
+		writeErrorReason(w, http.StatusBadRequest, reasonRecordSessionNameRequired, "record session needs a name (letters/digits) — e.g. \"build & test\"")
 		return
 	}
 	// A verify (confined) run REPLAYS an existing recording under least privilege —
@@ -301,14 +302,14 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// the normal operator loop and still overwrites. And never for the
 		// derived verify: key (the arm above), which is namespaced precisely so
 		// a confined replay cannot collide with the recording it replays.
-		writeError(w, http.StatusConflict, recordLabelCollisionMsg(prev.Label, label))
+		writeErrorReason(w, http.StatusConflict, reasonRecordLabelCollision, recordLabelCollisionMsg(prev.Label, label))
 		return
 	}
 	// Sessions are interactive: the operator drives the real activity in the attach
 	// shell (build, test, run the agent) and stops the run to capture.
 	mode := recordModeInteractive
 	if s.cfg.Runner == nil {
-		writeError(w, http.StatusServiceUnavailable, "record needs a configured runner (this control plane runs with -runner none; scan and configure still work)")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRecordNoRunner, "record needs a configured runner (this control plane runs with -runner none; scan and configure still work)")
 		return
 	}
 	// A stale active_run_id (its run failed to upload, was killed, or idle-reaped)
@@ -327,7 +328,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if ws.ActiveRunID != nil {
 		active, gerr := s.cfg.Store.GetRun(r.Context(), *ws.ActiveRunID)
 		if gerr != nil || !isTerminalRunState(active.State) {
-			writeError(w, http.StatusConflict, "an import step is already running for this workspace")
+			writeErrorReason(w, http.StatusConflict, reasonRecordImportStepBusy, "an import step is already running for this workspace")
 			return
 		}
 	}
@@ -335,7 +336,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	actorType, actor := actorFromRequest(r)
 	run, weakCC, lerr := s.launchRecordRun(r.Context(), actor, ws, key, label, req.Confined)
 	if errors.Is(lerr, errImportStepBusy) {
-		writeError(w, http.StatusConflict, "an import step is already running for this workspace")
+		writeErrorReason(w, http.StatusConflict, reasonRecordImportStepBusy, "an import step is already running for this workspace")
 		return
 	}
 	if lerr != nil {
@@ -353,21 +354,25 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// is what made this hard to diagnose; they agree on the code and on the
 		// wording.
 		if errors.Is(lerr, errWorkspaceSourceTarget) {
-			writeError(w, http.StatusUnprocessableEntity, lerr.Error())
+			// The SAME reason seedRequestWorkspace's own arm uses (#656 slice 1):
+			// the two doors already agree on the code and the wording.
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid, lerr.Error())
 			return
 		}
 		// The agent roster: 422, the SAME status run create answers when
 		// it refuses the identical agent for the identical reason — the two doors
 		// must not disagree about what "this agent is not offered here" costs.
-		// The sentence is the create path's, verbatim (agent_providers.go).
+		// The sentence is the create path's, verbatim (agent_providers.go), and
+		// now the SAME reason too (#656 slice 3).
 		if errors.Is(lerr, errAgentNotEnabled) {
-			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
 		// The model-provider choice: the create door's 422 and sentence, without
-		// its provider/kind/reason fields yet (#797).
+		// its provider/kind/reason fields yet (#797) — the same generic bucket
+		// run_model_provider.go's own non-credential refusals carry.
 		if errors.Is(lerr, errModelProviderRefused) {
-			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errModelProviderRefused.Error()+": "))
+			writeErrorReason(w, http.StatusUnprocessableEntity, string(authz.ReasonModelProviderUnavailable), strings.TrimPrefix(lerr.Error(), errModelProviderRefused.Error()+": "))
 			return
 		}
 		// Provider admission, the roster refusal's sibling and mapped the
@@ -736,7 +741,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	}
 	res, ok := recordResultsMap(ws)[taskKey]
 	if !ok || res.Observations == nil {
-		writeError(w, http.StatusUnprocessableEntity, "task has no captured recording to promote from")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteNoRecording, "task has no captured recording to promote from")
 		return
 	}
 	// ONE pre-promotion filter, in one hop: may this ENTRY be promoted from at
@@ -746,7 +751,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// must not reach the contract.
 	promotable, reject := s.promotableRecordHosts(r, ws, taskKey, res)
 	if reject != "" {
-		writeError(w, http.StatusUnprocessableEntity, reject)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteRejected, reject)
 		return
 	}
 
@@ -760,7 +765,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 				continue
 			}
 			if _, ok := promotable[h]; !ok {
-				writeError(w, http.StatusUnprocessableEntity, "host "+h+" was not observed+allowed in this recording — cannot promote")
+				writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+h+" was not observed+allowed in this recording — cannot promote")
 				return
 			}
 			wantHosts = append(wantHosts, h)
@@ -801,7 +806,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// would leave EgressPromoted set with no rows landed. Merge's own WHERE
 	// guard stays the atomic backstop for the read-then-write race.
 	if len(ws.Requirements)+len(add) > maxWorkspaceRequirements {
-		writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the requirements cap (max 256) — prune the contract first")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteCapReached, "promotion would exceed the requirements cap (max 256) — prune the contract first")
 		return
 	}
 
@@ -828,7 +833,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !applied {
-		writeError(w, http.StatusConflict, "recording changed concurrently (re-record in progress?) — reload and retry")
+		writeErrorReason(w, http.StatusConflict, reasonRecordPromoteConflict, "recording changed concurrently (re-record in progress?) — reload and retry")
 		return
 	}
 
@@ -846,7 +851,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 					slog.String("workspace_id", id.String()), slog.Any("err", cerr))
 			}
 			if errors.Is(serr, store.ErrConflict) {
-				writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the requirements cap (max 256) — prune the contract first")
+				writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteCapReached, "promotion would exceed the requirements cap (max 256) — prune the contract first")
 				return
 			}
 			writeServerError(w, r, "merge requirements", serr)
