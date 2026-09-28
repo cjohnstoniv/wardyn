@@ -100,4 +100,7 @@ func TestListApprovals_InvalidView(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
+	if got := errorReason(w); got != reasonInvalidViewParam {
+		t.Errorf("reason = %q, want %q; body=%s", got, reasonInvalidViewParam, w.Body.String())
+	}
 }

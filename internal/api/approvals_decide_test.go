@@ -141,26 +141,27 @@ func TestDecideScope_BodyValidation(t *testing.T) {
 	tooFar := time.Now().UTC().Add(60 * 24 * time.Hour)
 
 	cases := []struct {
-		name string
-		body string
-		want int
+		name       string
+		body       string
+		want       int
+		wantReason string // #656: "" for a 2xx; the wire reason for a refusal
 	}{
 		// Rule 0: an EMPTY body must still work — three shipped shell clients
 		// POST approve with no -d at all and assert 2xx, so io.EOF is not an error.
-		{"empty body still decides", "", http.StatusOK},
-		{"garbage body is rejected", `{"reason":`, http.StatusBadRequest},
+		{"empty body still decides", "", http.StatusOK, ""},
+		{"garbage body is rejected", `{"reason":`, http.StatusBadRequest, reasonInvalidRequestBody},
 		// Rule 1
-		{"unknown scope is rejected", decideBody(t, "wat", nil), http.StatusBadRequest},
+		{"unknown scope is rejected", decideBody(t, "wat", nil), http.StatusBadRequest, reasonInvalidDecisionScope},
 		// Rule 2
-		{"until without an expiry", decideBody(t, types.ScopeUntil, nil), http.StatusBadRequest},
-		{"until in the past", decideBody(t, types.ScopeUntil, &past), http.StatusBadRequest},
-		{"until beyond the cap", decideBody(t, types.ScopeUntil, &tooFar), http.StatusBadRequest},
-		{"until with a future expiry is accepted", decideBody(t, types.ScopeUntil, &future), http.StatusOK},
+		{"until without an expiry", decideBody(t, types.ScopeUntil, nil), http.StatusBadRequest, reasonDecisionScopeUntilNeedsExpiry},
+		{"until in the past", decideBody(t, types.ScopeUntil, &past), http.StatusBadRequest, reasonDecisionExpiryInPast},
+		{"until beyond the cap", decideBody(t, types.ScopeUntil, &tooFar), http.StatusBadRequest, reasonDecisionExpiryTooFar},
+		{"until with a future expiry is accepted", decideBody(t, types.ScopeUntil, &future), http.StatusOK, ""},
 		// Rule 3: never silently ignore an expiry the scope cannot use.
-		{"expiry without until", decideBody(t, types.ScopeOnce, &future), http.StatusBadRequest},
+		{"expiry without until", decideBody(t, types.ScopeOnce, &future), http.StatusBadRequest, reasonDecisionExpiryWithoutUntil},
 		// The two scopes that need no extra data.
-		{"once is accepted", decideBody(t, types.ScopeOnce, nil), http.StatusOK},
-		{"run is accepted", decideBody(t, types.ScopeRun, nil), http.StatusOK},
+		{"once is accepted", decideBody(t, types.ScopeOnce, nil), http.StatusOK, ""},
+		{"run is accepted", decideBody(t, types.ScopeRun, nil), http.StatusOK, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -168,6 +169,15 @@ func TestDecideScope_BodyValidation(t *testing.T) {
 			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve", admin, tc.body)
 			if w.Code != tc.want {
 				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.want, w.Body.String())
+			}
+			// Only a refusal's errorBody.Reason is checked here: a 2xx's body is
+			// the decided types.ApprovalRequest, whose OWN "reason" field is the
+			// human-supplied decision reason ("test") — a different field that
+			// happens to share the wire key, not the machine class this pins.
+			if tc.want != http.StatusOK {
+				if got := errorReason(w); got != tc.wantReason {
+					t.Errorf("reason = %q, want %q; body=%s", got, tc.wantReason, w.Body.String())
+				}
 			}
 		})
 	}
@@ -201,6 +211,12 @@ func TestDecideScope_MemberGateRunsBeforeScopeRules(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("member sending a scope at a foreign credential approval: status = %d, want 404 "+
 			"(a 400 from the scope rule would confirm the approval exists); body=%s", w.Code, w.Body.String())
+	}
+	// #656: the oracle guard extends to the wire reason too — a
+	// decision_scope_invalid_for_kind reason here would be exactly as much of
+	// a leak as the 400 the status-code check above already rules out.
+	if got := errorReason(w); got != reasonApprovalNotFound {
+		t.Errorf("reason = %q, want %q; body=%s", got, reasonApprovalNotFound, w.Body.String())
 	}
 }
 
