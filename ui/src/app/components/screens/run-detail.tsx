@@ -73,6 +73,8 @@ import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
 import { LoginSandboxNote } from "./run-detail/login-sandbox-note";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
+import { RunLifetimeBanner } from "./run-detail/run-lifetime-banner";
+import { RunEndsRow } from "./run-detail/run-ends-row";
 import { TerminalPane } from "./run-detail/terminal-notice";
 import { RecordingTab } from "./run-detail/recording-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
@@ -433,6 +435,12 @@ export function RunDetailScreen() {
           />
 
           <LaunchWarningsNote />
+          {/* RL-15 (#580, #1197 L5): one lifetime banner (lost/ended/paused/
+              ending-soon — mutually exclusive server facts) plus the
+              persistent Ends/wait row, both self-contained per the
+              LaunchWarningsNote pattern above. */}
+          <RunLifetimeBanner run={run} pending={pending} onChanged={() => load(false)} />
+          <RunEndsRow run={run} onChanged={() => load(false)} />
 
           <RunDetailCommandBar
             tabs={
