@@ -20,25 +20,23 @@ import (
 // doubles that embed store.Store would route these calls to a nil interface.
 // The api layer type-asserts; production is always PG.
 type RunReviver interface {
-	// MarkRunRevived claims run id for a new proxy: while it is RUNNING and
-	// still as the revive read it, live (from "") or lost to an outage or a
-	// reboot (from that reason), it clears the lost mark (and any unresolved
-	// containment error: the old proxy it was about is replaced), stamps the
-	// token as just renewed (the revive mints a fresh one, and the lapsed-token sweep
-	// must not read the old stamp) and refreshes the watcher lease (a stopped
-	// agent is started only after the new proxy, and the watcher sweep must
-	// not probe it before then). A run kept by its own end (from LostEnded) is
-	// claimed only with ended set: its exact mark, its files grace still live
-	// and its end after ended.Now (#1061). It also clears a pause ONLY when
-	// from is a reboot: that revive starts the agent container again (docker
-	// start), so a stale pause mark left on it would 409 the run's
-	// files/resources reads over an agent that is actually running. A live
-	// restart (from "") or an outage revive never touch the agent's own
-	// process, frozen or not, so their pause mark — if any — must survive for
-	// the thaw an eventual resume still needs to actually perform (a lease end
-	// already cleared the pause of a run kept by its own end). false means the
-	// run went terminal, ended, was lost or revived since, or its grace or end
-	// ran out, and it must get no proxy.
+	// MarkRunRevived claims run id for a new proxy: while it is RUNNING and still as the revive read
+	// it, live (from "") or lost to an outage or a reboot (from that reason), it clears the lost
+	// mark (and any unresolved containment error — the old proxy it was about is replaced), stamps
+	// the token as just renewed (the revive mints a fresh one, and the lapsed-token sweep must not
+	// read the old stamp), and refreshes the watcher lease (a stopped agent starts only after the
+	// new proxy, and the watcher sweep must not probe it before then).
+	//
+	// A run kept by its own end (from LostEnded) is claimed only with ended set: its exact mark,
+	// its files grace still live, and its end after ended.Now. It also clears a pause ONLY when
+	// from is a reboot: that revive restarts the agent container (docker start), so a stale pause
+	// mark would 409 the run's files/resources reads over an agent that's actually running. A live
+	// restart (from "") or an outage revive never touch the agent's own process, frozen or not, so
+	// their pause mark, if any, must survive for the thaw an eventual resume still needs to
+	// perform (a lease end already cleared the pause of a run kept by its own end).
+	//
+	// false means the run went terminal, ended, was lost or revived since, or its grace or end ran
+	// out — it gets no proxy.
 	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
 	// proxy, once a revive's new proxy runs.

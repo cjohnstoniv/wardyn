@@ -10,6 +10,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **An operator's stored model key no longer reaches a run through an integration or a workspace
+  requirement (#547).** The four AI integration kinds (`anthropic_api_key`, `anthropic_subscription`,
+  `bedrock`, `openai_api_key`) are no longer a way to give a run model access. A run's
+  `integration_id` is refused (`422`) at create and Review; a workspace's AI-integration pin and a
+  `default_for: agent_runs` site default no longer fold the operator's key into a run; record,
+  verify and build sessions no longer mint an `api_key` grant from the operator's
+  `anthropic-api-key`; a workspace `secret:<name>` requirement no longer grants the named stored
+  secret on the agent's model host, and an integration requirement's credential is never injected
+  on a host that serves a model (a vendor host, a configured gateway, the boot Bedrock pair, or any
+  model provider row's own host) — each is skipped and audited as `run.requirement.skip` (reason
+  `model_host`, replacing `run.requirement.grant`), and under a provider block dispatch strips any
+  such injection its provider did not author; and no AI row is derived from the operator's model
+  secrets, subscription or Bedrock config. A write naming an AI kind, or `default_for`, is
+  refused, and so is `llm_cred.integration_ref` on a workspace write and an integration whose
+  credential would be presented on a host that serves a model; a stored AI row stays in site
+  config for the conversion to model providers but grants nothing. The `integration` capability
+  kind (and its `capability_integration` refusal) and the `run.workspace_cred.resolve` audit action
+  are retired, and `GET /me/capabilities` reports `kinds_version` 4. Model access is a model
+  provider, on the person's own credential. On a deployment with no model providers, a run that
+  relied on one of these paths now launches without model access. **Upgrade note:** until #549
+  retires them, Getting started's "LLM access" row, `llm_ready` and the Settings model card can
+  still read green or "configured" from a stored `anthropic-api-key`/`openai-api-key` secret while
+  no run receives that key; set up a model provider (Settings → Model providers) for model access.
 - **`WARDYN_TLS_KEY` now gets the same secret-file mode rule as every other secret file
   (#1297).** The console's TLS private key was read by `ListenAndServeTLS` with no file-mode
   check, so a group- or world-readable key was accepted silently. Loading it now goes through
@@ -3453,6 +3476,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   discovery); boot warns and requests it unchecked. Configuring `groups` also silences the
   existing boot- and login-time warnings about a `groups`-keyed role-map row on a
   `groups`-scope-gating provider — the scope is now actually being asked for.
+
+## [0.7.13] — 2026-09-28
+
+### Security
+
+- **wardynd refuses to start on a database a newer wardynd migrated (#1002).** Through 0.7.12,
+  wardynd skipped every `schema_migrations` row it did not ship, so a binary pointed back at a
+  database an 0.8 wardynd had migrated booted over a schema whose one-way conversions it cannot
+  read. Boot now stops before anything is written, naming how many migrations it does not ship and
+  the newest of them; the remedy is to restore the pre-upgrade dump or run the newer release.
+  `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` (flag `-allow-unknown-migrations`) is the break-glass:
+  boot logs the unknown files at WARN and continues. It is not a supported way to run, because
+  0.8's migrations rewrite stored values and replace constraints this release does not know. Only
+  a 0.7.13 or later binary refuses, so upgrade to 0.7.13 before moving to 0.8, and a rollback lands
+  on a release that refuses. 0.7.13 adds no migration: its schema is the one 0.7.12 left.
+
+### Added
+
+- `scripts/rollback-drill.sh` runs the downgrade drill against a built `wardynd` and a throwaway
+  `postgres:17`: a fresh install boots, the same database with real 0.8 migrations applied is
+  refused without a write, and restoring the pre-upgrade dump boots clean again. A
+  Postgres-gated test pins the same refusal in the suite (#1002).
+
+### Known gaps
+
+- `docs/OPERATIONS.md`'s upgrade section still says only `install.sh` refuses a downgrade and that
+  an older wardynd boots anyway; the refusal above supersedes both statements (#1050).
 
 ## [0.7.12] — 2026-09-23
 

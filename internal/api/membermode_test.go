@@ -564,7 +564,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		srv, _, h := ownerHarness(t, runner.UserMountPolicy{})
 		on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", on,
-			`{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`)
+			`{"name":"mine","llm_cred":{"provider_ref":"corp-openai"}}`)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member-mode admin create with llm_cred = %d, want 403: %s", w.Code, w.Body.String())
 		}

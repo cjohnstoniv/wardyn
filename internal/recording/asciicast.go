@@ -12,29 +12,28 @@ import (
 	"unicode/utf8"
 )
 
-// asciicast v2 format: a header object on line 1, then one JSON event array
-// per line. An output event is ["<elapsed seconds>", "o", "<data>"].
+// asciicast v2 format: a header object on line 1, then one JSON event array per line. An
+// output event is ["<elapsed seconds>", "o", "<data>"].
 // Reference: https://docs.asciinema.org/manual/asciicast/v2/
 //
-// CastWriter incrementally serializes an asciicast v2 stream to record an
-// interactive attach session: the header is written once by NewCastWriter,
-// then each chunk of PTY OUTPUT is appended as a timed "o" event via Write.
+// CastWriter incrementally serializes an asciicast v2 stream to record an interactive
+// attach session: the header is written once by NewCastWriter, then each chunk of PTY
+// output is appended as a timed "o" event via Write.
 //
-// Safe for concurrent use by a single producer goroutine; a caller writing
-// from one goroutine and reading the buffer from another after Close needs
-// no extra locking beyond the internal mutex here.
+// Safe for concurrent use by a single producer goroutine; a caller writing from one
+// goroutine and reading the buffer from another after Close needs no extra locking beyond
+// the internal mutex here.
 type CastWriter struct {
 	mu    sync.Mutex
 	dst   io.Writer
 	start time.Time
 	now   func() time.Time
-	// hadOutput reports whether at least one output event was written, so the
-	// caller can skip persisting an empty (header-only) cast if it wishes.
+	// hadOutput lets the caller skip persisting an empty (header-only) cast.
 	hadOutput bool
-	// pending holds the trailing bytes of a multi-byte UTF-8 rune split
-	// across two PTY reads, prepended to the next Write so the rune is
-	// emitted whole. There is no Flush/Close, so bytes still pending at
-	// session end are dropped — silent loss of a few bytes beats mojibake.
+	// pending holds the trailing bytes of a multi-byte UTF-8 rune split across two PTY
+	// reads, prepended to the next Write so the rune is emitted whole. There is no
+	// Flush/Close, so bytes still pending at session end are dropped — silent loss of a
+	// few bytes beats mojibake.
 	pending []byte
 }
 
@@ -46,10 +45,10 @@ type CastHeader struct {
 	Timestamp int64 `json:"timestamp,omitempty"`
 }
 
-// NewCastWriter returns a CastWriter that serializes events into dst. width and
-// height are the initial terminal size recorded in the header (0 values fall
-// back to a sane 80x24 so the replay player has a valid geometry). startedAt is
-// the wall-clock session start; event timestamps are elapsed seconds from it.
+// NewCastWriter returns a CastWriter that serializes events into dst. width and height are
+// the initial terminal size recorded in the header (0 values fall back to 80x24 so the
+// replay player has a valid geometry). startedAt is the wall-clock session start; event
+// timestamps are elapsed seconds from it.
 func NewCastWriter(dst io.Writer, width, height int, startedAt time.Time) *CastWriter {
 	if width <= 0 {
 		width = 80
@@ -57,17 +56,16 @@ func NewCastWriter(dst io.Writer, width, height int, startedAt time.Time) *CastW
 	if height <= 0 {
 		height = 24
 	}
-	// A header write error has nowhere to go from a constructor — the caller
-	// learns of a broken dst on the first Write.
+	// A header write error has nowhere to go from a constructor; the caller learns of a
+	// broken dst on the first Write.
 	b, _ := json.Marshal(CastHeader{Version: 2, Width: width, Height: height, Timestamp: startedAt.Unix()})
 	_, _ = dst.Write(append(b, '\n'))
 	return &CastWriter{dst: dst, start: startedAt, now: time.Now}
 }
 
-// Write appends p as a timed asciicast OUTPUT event ["t","o",string(p)]. The
-// elapsed time is computed from the writer's start time. p is the (already
-// masked) terminal output. It satisfies io.Writer so it can sit directly behind
-// a secretmask.MaskingWriter. A zero-length write is a no-op.
+// Write appends p as a timed asciicast output event ["t","o",string(p)]. p is the (already
+// masked) terminal output; Write satisfies io.Writer so it can sit directly behind a
+// secretmask.MaskingWriter. A zero-length write is a no-op.
 func (w *CastWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -81,9 +79,8 @@ func (w *CastWriter) Write(p []byte) (int, error) {
 		w.pending = nil
 	}
 
-	// A multi-byte UTF-8 rune split across two Writes would otherwise be
-	// mangled (json.Marshal replaces each fragment with U+FFFD). If p ends
-	// mid-rune, hold back the incomplete trailing bytes for the next Write.
+	// A multi-byte UTF-8 rune split across two Writes would otherwise be mangled
+	// (json.Marshal replaces each fragment with U+FFFD); hold back an incomplete trailing rune.
 	if r, size := utf8.DecodeLastRune(p); r == utf8.RuneError && size == 1 {
 		if cut := incompleteTailLen(p); cut > 0 {
 			w.pending = append([]byte(nil), p[len(p)-cut:]...)
@@ -114,11 +111,9 @@ func (w *CastWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// incompleteTailLen reports how many trailing bytes of p are an incomplete
-// (truncated) multi-byte UTF-8 rune. Returns 0 if p already ends on a rune
-// boundary (plain ASCII, or trailing bytes invalid rather than truncated).
-// Only called after utf8.DecodeLastRune has flagged p's tail as suspect, so
-// the backward scan (bounded to utf8.UTFMax bytes) is cheap.
+// incompleteTailLen reports how many trailing bytes of p are an incomplete (truncated)
+// multi-byte UTF-8 rune, or 0 if p ends on a rune boundary. Only called after
+// utf8.DecodeLastRune flags p's tail as suspect, so the bounded backward scan is cheap.
 func incompleteTailLen(p []byte) int {
 	for i := 1; i < utf8.UTFMax && i <= len(p); i++ {
 		b := p[len(p)-i]
@@ -139,16 +134,14 @@ func (w *CastWriter) HadOutput() bool {
 	return w.hadOutput
 }
 
-// LastOutputElapsed returns the elapsed-seconds timestamp of the LAST output
-// ("o") event found in data, scanning backwards from the end. It mirrors the
-// console's former client-side probe byte for byte, so a run's
-// server-projected duration and a manually-fetched cast's duration read the
-// same number.
+// LastOutputElapsed returns the elapsed-seconds timestamp of the last output ("o") event in
+// data, scanning backwards from the end. Mirrors the console's former client-side probe
+// byte for byte, so a run's server-projected duration and a manually-fetched cast's
+// duration read the same number.
 //
-// data need not be the whole document — StatAndTail hands this only a TAIL
-// slice, so the loop may run off an incomplete first line, which simply
-// fails to parse like any other malformed line. Returns (0, false) when no
-// output event is found.
+// data need not be the whole document — StatAndTail hands this only a tail slice, so the
+// loop may run off an incomplete first line, which just fails to parse like any other
+// malformed line. Returns (0, false) when no output event is found.
 func LastOutputElapsed(data []byte) (float64, bool) {
 	lines := bytes.Split(data, []byte("\n"))
 	for i := len(lines) - 1; i >= 0; i-- {

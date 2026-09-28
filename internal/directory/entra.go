@@ -69,11 +69,10 @@ type entraDirectory struct {
 
 	// approleDenied latches when Graph refuses the servicePrincipals read
 	// (Application.Read.All not granted): App Roles are best-effort, so this
-	// marks the connector DEGRADED rather than failing the search.
+	// degrades the connector instead of failing the search.
 	//
-	// ponytail: latched until restart. Re-consent in Entra needs a daemon
-	// restart to take effect; the alternative is re-probing a known-403 on every
-	// keystroke.
+	// ponytail: latched until restart — re-consent needs one anyway, and the
+	// alternative is re-probing a known-403 every keystroke.
 	approleDenied atomic.Bool
 }
 
@@ -89,27 +88,24 @@ func newEntra(cfg EntraConfig, tokenURL, graphBase string) (Directory, error) {
 	if strings.TrimSpace(cfg.TenantID) == "" || strings.TrimSpace(cfg.ClientID) == "" || cfg.ClientSecret == "" {
 		return nil, ErrUnconfigured
 	}
-	// The token source runs on a detached context (below), so the Timeout is
-	// the only thing bounding a hung token endpoint.
+	// The token source runs on a detached context (below), so Timeout is the
+	// only thing bounding a hung token endpoint.
 	hc := &http.Client{Timeout: httpTimeout}
 
-	// Built once over a DETACHED context carrying our HTTP client: binding it to
-	// a request context instead would let one cancelled autocomplete keystroke
-	// poison the cached app token for every later search. Trade-off: a token
-	// fetch does not observe the calling request's deadline.
+	// Built over a DETACHED context: binding to a request context instead
+	// would let one cancelled keystroke poison the cached app token for every
+	// later search, at the cost of a token fetch ignoring the caller's deadline.
 	ccfg := &clientcredentials.Config{
 		ClientID:     strings.TrimSpace(cfg.ClientID),
 		ClientSecret: cfg.ClientSecret,
 		TokenURL:     tokenURL,
 		Scopes:       []string{graphScope},
-		// Pinning AuthStyleInParams avoids x/oauth2's AutoDetect probe, which
-		// tries HTTP Basic first and would cost a cold fetch two round trips.
+		// AuthStyleInParams skips x/oauth2's AutoDetect probe (HTTP Basic
+		// first), which would cost a cold fetch two round trips.
 		AuthStyle: oauth2.AuthStyleInParams,
 	}
 	tokenCtx := context.WithValue(context.Background(), oauth2.HTTPClient, hc)
-	// Re-uses the cached token until expiry-tokenRefreshMargin, retuning the
-	// reuse wrapper clientcredentials already returns rather than nesting a
-	// second one.
+	// Reuses clientcredentials' own reuse wrapper rather than nesting a second one.
 	tokens := oauth2.ReuseTokenSourceWithExpiry(nil, ccfg.TokenSource(tokenCtx), tokenRefreshMargin)
 
 	return &entraDirectory{
@@ -121,7 +117,6 @@ func newEntra(cfg EntraConfig, tokenURL, graphBase string) (Directory, error) {
 	}, nil
 }
 
-// Search implements Directory.
 func (d *entraDirectory) Search(ctx context.Context, q string, kind Kind) ([]Entry, error) {
 	q = strings.TrimSpace(q)
 	if len([]rune(q)) < MinQueryLen {
@@ -258,11 +253,10 @@ type graphAppRole struct {
 	IsEnabled   bool   `json:"isEnabled"`
 }
 
-// searchAppRoles reads this app registration's own service principal and
-// filters its appRoles client-side (a handful of authored entries, so no
-// server-side query is worth building). Best-effort by contract: without
-// Application.Read.All the read is refused and the App Role kind is simply
-// ABSENT from results, not an error.
+// searchAppRoles reads this registration's own service principal and filters
+// appRoles client-side (a handful of entries; no server-side query needed).
+// Best-effort: without Application.Read.All the read is refused and App Role
+// results are simply absent, not an error.
 func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry, error) {
 	if d.approleDenied.Load() {
 		return nil, nil
@@ -321,10 +315,9 @@ func (d *entraDirectory) markAppRolesDenied(pe *ProviderError) {
 	}
 }
 
-// graphSearch is the ONLY way this connector issues a $search: Graph rejects
-// $search on directory objects unless BOTH the `ConsistencyLevel: eventual`
-// header AND `$count=true` are present, so setting them in one place makes the
-// pairing structural rather than a rule each call site must remember.
+// graphSearch is the only way this connector issues a $search: Graph rejects
+// $search on directory objects unless both `ConsistencyLevel: eventual` and
+// `$count=true` are present, so the pairing is enforced here, not per call site.
 func (d *entraDirectory) graphSearch(ctx context.Context, op, path string, v url.Values, out any) error {
 	return d.graphGet(ctx, op, path, v, true, out)
 }
@@ -390,12 +383,11 @@ func odataQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
 
 // --- cache ---------------------------------------------------------------
 
-// ttlCache is a bounded cache with a per-entry TTL: an entry is served only
-// while fresh, and the map is flushed wholesale once it is full.
+// ttlCache is a bounded cache with a per-entry TTL; the map is flushed
+// wholesale once full.
 //
-// ponytail: the ceiling is the bound, not the eviction ORDER. At 256 entries /
-// 60 s every entry expires within a minute anyway, so flush-at-bound is
-// indistinguishable from LRU here and costs no bookkeeping.
+// ponytail: flush-at-bound instead of LRU — at 256 entries / 60s everything
+// expires within a minute anyway, so ordering doesn't matter.
 type ttlCache struct {
 	mu  sync.Mutex
 	max int

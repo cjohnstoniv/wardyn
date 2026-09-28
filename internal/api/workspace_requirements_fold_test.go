@@ -6,12 +6,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -158,90 +160,101 @@ func TestApplyWorkspaceRequirements_EgressTrustBoundary(t *testing.T) {
 
 // folding matrix + trust boundary: secret
 
-func TestApplyWorkspaceRequirements_Secret(t *testing.T) {
+// TestApplyWorkspaceRequirements_SecretNeverGrants pins #547: a secret:
+// requirement's grant was always scoped to the run's agent's MODEL host, so it
+// handed a run a stored secret — the operator's, on a member's run — as its
+// model key. Model access is a model provider now: an operator_set secret
+// requirement grants nothing and records an audited skip naming the host it
+// would have landed on.
+func TestApplyWorkspaceRequirements_SecretNeverGrants(t *testing.T) {
 	wsID := uuid.New()
 	wsWith := func(level string) []types.Workspace {
 		return []types.Workspace{{ID: wsID, Requirements: map[string]types.WorkspaceRequirement{
 			"secret:acme-key": {Level: level, Provenance: "operator_set"},
 		}}}
 	}
-	present := func() *memSecrets { return &memSecrets{m: map[string][]byte{"acme-key": []byte("v")}} }
-	absent := func() *memSecrets { return &memSecrets{} }
+	srv := New(Config{Secrets: &memSecrets{m: map[string][]byte{"acme-key": []byte("v")}}})
+	wantSkip := func(t *testing.T, events []requirementAuditEntry) {
+		t.Helper()
+		if len(events) != 1 || events[0].action != "run.requirement.skip" || events[0].outcome != "denied" ||
+			events[0].target != "acme-key" || events[0].data["reason"] != reasonRequirementModelHost ||
+			events[0].data["host"] != "api.anthropic.com" {
+			t.Fatalf("events = %+v, want ONE run.requirement.skip (denied, model_host, api.anthropic.com)", events)
+		}
+	}
 
-	t.Run("required + present mints the coupled grant", func(t *testing.T) {
-		srv := New(Config{Secrets: present()})
+	t.Run("required + present grants nothing, opens nothing, and records the skip", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
 		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil)
-		if len(spec.EligibleGrants) != 1 || spec.EligibleGrants[0].Kind != types.GrantAPIKey {
-			t.Fatalf("EligibleGrants = %+v, want exactly one api_key grant", spec.EligibleGrants)
+		if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
+			t.Fatalf("grants=%+v domains=%v, want neither", spec.EligibleGrants, spec.AllowedDomains)
 		}
-		var scope struct {
-			Host       string `json:"host"`
-			SecretName string `json:"secret_name"`
-		}
-		if err := json.Unmarshal(spec.EligibleGrants[0].Scope, &scope); err != nil {
-			t.Fatal(err)
-		}
-		if scope.Host != "api.anthropic.com" || scope.SecretName != "acme-key" {
-			t.Errorf("grant scope = %+v, want host=api.anthropic.com secret_name=acme-key", scope)
-		}
-		if !slices.Contains(spec.AllowedDomains, "api.anthropic.com") {
-			t.Errorf("AllowedDomains = %v, want the coupled exact host", spec.AllowedDomains)
-		}
-		if len(events) != 1 || events[0].action != "run.requirement.grant" {
-			t.Errorf("events = %+v, want ONE dedicated secret-grant audit entry", events)
-		}
+		wantSkip(t, events)
 	})
-	t.Run("required + absent secret never grants (degrades, does not brick)", func(t *testing.T) {
-		srv := New(Config{Secrets: absent()})
-		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil)
-		if len(spec.EligibleGrants) != 0 || len(events) != 0 {
-			t.Errorf("EligibleGrants=%+v events=%+v, want neither (absent secret must not auto-mint)", spec.EligibleGrants, events)
-		}
-	})
-	t.Run("optional not enabled never grants even when present", func(t *testing.T) {
-		srv := New(Config{Secrets: present()})
-		spec := &types.RunPolicySpec{}
-		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), nil)
-		if len(spec.EligibleGrants) != 0 {
-			t.Errorf("EligibleGrants = %+v, want none (optional not enabled)", spec.EligibleGrants)
-		}
-	})
-	t.Run("optional enabled + present grants", func(t *testing.T) {
-		srv := New(Config{Secrets: present()})
+	t.Run("optional enabled is skipped the same way", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
 		sel := map[string]client.WorkspaceSelection{
 			wsID.String(): {WorkspaceID: wsID.String(), EnabledOptional: []string{"secret:acme-key"}},
 		}
-		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), sel)
-		if len(spec.EligibleGrants) != 1 {
-			t.Errorf("EligibleGrants = %+v, want one (optional enabled)", spec.EligibleGrants)
+		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), sel)
+		if len(spec.EligibleGrants) != 0 {
+			t.Fatalf("grants = %+v, want none", spec.EligibleGrants)
 		}
+		wantSkip(t, events)
 	})
-	t.Run("never double-grants a host an existing grant already covers", func(t *testing.T) {
-		srv := New(Config{Secrets: present()})
-		existing, _ := json.Marshal(map[string]string{"host": "api.anthropic.com", "secret_name": "other-key"})
-		spec := &types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: existing}}}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil)
-		if len(spec.EligibleGrants) != 1 || len(events) != 0 {
-			t.Errorf("EligibleGrants=%+v events=%+v, want the pre-existing grant left alone and untouched", spec.EligibleGrants, events)
-		}
-	})
-	t.Run("non-LLM agent has nothing to bind to", func(t *testing.T) {
-		srv := New(Config{Secrets: present()})
+	t.Run("optional not enabled records nothing", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "some-other-agent", wsWith("required"), nil)
-		if len(spec.EligibleGrants) != 0 || len(events) != 0 {
-			t.Errorf("EligibleGrants=%+v events=%+v, want neither (no LLM provider convention for this agent)", spec.EligibleGrants, events)
+		if events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), nil); len(events) != 0 || len(spec.EligibleGrants) != 0 {
+			t.Errorf("events=%+v grants=%+v, want neither", events, spec.EligibleGrants)
 		}
 	})
+	t.Run("a non-model agent has nothing to bind to and records nothing", func(t *testing.T) {
+		spec := &types.RunPolicySpec{}
+		if events := srv.applyWorkspaceRequirements(context.Background(), spec, "some-other-agent", wsWith("required"), nil); len(events) != 0 || len(spec.EligibleGrants) != 0 {
+			t.Errorf("events=%+v grants=%+v, want neither", events, spec.EligibleGrants)
+		}
+	})
+}
+
+// TestApplyWorkspaceRequirements_IntegrationSkipsModelHosts: an integration
+// requirement's header credential is never injected on a host that serves a
+// model — the host opens, the credential is skipped and audited — while its
+// other hosts are credentialed as before.
+func TestApplyWorkspaceRequirements_IntegrationSkipsModelHosts(t *testing.T) {
+	integ := feedIntegration()
+	integ.Egress = []string{"artifactory.corp.internal", "api.anthropic.com"}
+	srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
+	ws := []types.Workspace{{ID: uuid.New(), Requirements: map[string]types.WorkspaceRequirement{
+		"integration:" + integ.ID: {Level: "required", Provenance: "operator_set"},
+	}}}
+	spec := &types.RunPolicySpec{}
+	events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", ws, nil)
+	if _, ok := apiKeyGrantForHost(spec, "api.anthropic.com"); ok {
+		t.Fatalf("the integration's credential was granted on the model host: %+v", spec.EligibleGrants)
+	}
+	if _, ok := apiKeyGrantForHost(spec, "artifactory.corp.internal"); !ok {
+		t.Errorf("the non-model host lost its grant: %+v", spec.EligibleGrants)
+	}
+	if !slices.Contains(spec.AllowedDomains, "api.anthropic.com") {
+		t.Errorf("AllowedDomains = %v, want the model host still opened", spec.AllowedDomains)
+	}
+	var skipped bool
+	for _, ev := range events {
+		if ev.action == "run.requirement.skip" && ev.data["reason"] == reasonRequirementModelHost &&
+			slices.Equal(ev.data["hosts"].([]string), []string{"api.anthropic.com"}) {
+			skipped = true
+		}
+	}
+	if !skipped {
+		t.Errorf("events = %+v, want a run.requirement.skip naming api.anthropic.com", events)
+	}
 }
 
 // TestApplyWorkspaceRequirements_TrustBoundary is the explicit pin for the
 // security-critical rule: a scan_seeded required secret — derived from
 // UNTRUSTED repo content — must NEVER auto-grant, even when the named secret
-// is present in the store; the identical key as operator_set DOES.
+// is present in the store. Since #547 the identical key as operator_set does
+// not grant either; it is recorded as an audited skip.
 func TestApplyWorkspaceRequirements_TrustBoundary(t *testing.T) {
 	wsID := uuid.New()
 	sec := &memSecrets{m: map[string][]byte{"acme-key": []byte("v")}}
@@ -252,19 +265,19 @@ func TestApplyWorkspaceRequirements_TrustBoundary(t *testing.T) {
 	}
 
 	srv := New(Config{Secrets: sec})
-	t.Run("scan_seeded required secret does NOT auto-grant", func(t *testing.T) {
+	t.Run("scan_seeded required secret records nothing at all", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
 		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("scan_seeded"), nil)
 		if len(spec.EligibleGrants) != 0 || len(events) != 0 {
-			t.Fatalf("scan_seeded must NEVER auto-grant a secret (trust boundary): grants=%+v events=%+v",
+			t.Fatalf("scan_seeded must never auto-grant a secret (trust boundary): grants=%+v events=%+v",
 				spec.EligibleGrants, events)
 		}
 	})
-	t.Run("the SAME key as operator_set DOES auto-grant", func(t *testing.T) {
+	t.Run("the SAME key as operator_set is an audited skip, never a grant", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
 		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("operator_set"), nil)
-		if len(spec.EligibleGrants) != 1 || len(events) != 1 {
-			t.Fatalf("operator_set must auto-grant: grants=%+v events=%+v", spec.EligibleGrants, events)
+		if len(spec.EligibleGrants) != 0 || len(events) != 1 || events[0].action != "run.requirement.skip" {
+			t.Fatalf("operator_set must be skipped, not granted: grants=%+v events=%+v", spec.EligibleGrants, events)
 		}
 	})
 }
@@ -346,14 +359,14 @@ func TestApplyWorkspaceRequirements_WriteNarrowing(t *testing.T) {
 
 // preflight/launch agreement
 
-// TestWorkspaceRequirements_PreflightLaunchAgreement proves preflight cannot
-// predict a rosier (or stricter) outcome than launch: the SAME workspace_id +
-// required+operator_set secret requirement is folded through
-// POST /runs/preflight (the real HTTP handler) and through the identical
-// construction sequence handleCreateRun runs before persistRunGrants
-// (seedRequestWorkspace -> referencedWorkspaces -> resolveWorkspaceSelections
-// -> applyWorkspaceRequirements) — both must agree the secret grant was
-// minted.
+// TestWorkspaceRequirements_PreflightLaunchAgreement: Review and launch must
+// agree about a required operator_set secret requirement — the SAME
+// workspace_id is folded through POST /runs/preflight (the real HTTP handler)
+// and through the construction sequence handleCreateRun runs before
+// persistRunGrants (seedRequestWorkspace -> referencedWorkspaces ->
+// resolveWorkspaceSelections -> applyWorkspaceRequirements). Neither may put
+// the named secret on the model host (#547): preflight reports no grant row
+// for it, and launch mints none and records the skip.
 func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"
 	wsID := uuid.New()
@@ -370,7 +383,6 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	body := `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
 		`"inline_policy":{"min_confinement_class":"CC2"}}`
 
-	// Preflight side: the real HTTP handler.
 	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
@@ -379,13 +391,10 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &pf); err != nil {
 		t.Fatalf("decode preflight: %v", err)
 	}
-	it, ok := findItem(pf.SetupItems, "secret:anthropic-api-key")
-	if !ok || it.Status != "satisfied" {
-		t.Fatalf("preflight secret row = %+v (ok=%v), want satisfied (the fold must have minted the grant)", it, ok)
+	if it, ok := findItem(pf.SetupItems, "llm_access:claude-code"); ok && it.Status == "satisfied" {
+		t.Fatalf("preflight llm_access = %+v, want not satisfied — the requirement no longer grants the model key", it)
 	}
 
-	// Launch side: the identical construction sequence handleCreateRun runs
-	// before persistRunGrants.
 	var req createRunRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
@@ -397,24 +406,22 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	}
 	wsRefs := h.srv.referencedWorkspaces(ctx, spec)
 	events := h.srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
-	if len(events) != 1 || events[0].action != "run.requirement.grant" {
-		t.Fatalf("launch-side fold events = %+v, want ONE secret-grant entry — must AGREE with preflight's satisfied verdict", events)
+	if len(events) != 1 || events[0].action != "run.requirement.skip" {
+		t.Fatalf("launch-side fold events = %+v, want ONE run.requirement.skip", events)
 	}
-	if _, granted := apiKeyGrantForHost(&spec, "api.anthropic.com"); !granted {
-		t.Fatal("launch-side spec must carry the SAME api_key grant preflight's checklist reported satisfied")
+	if _, granted := apiKeyGrantForHost(&spec, "api.anthropic.com"); granted {
+		t.Fatal("launch-side spec carries an api_key grant on the model host from the requirement")
 	}
 }
 
 // Task 4: compose_setup.go checklist escalation
 
-// TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind
-// pins the specific fix: a secret the requirements contract marks Required
-// that is ALSO absent from the store must render with Kind "secret" (the
-// blocking-styled kind compose-review.tsx reserves for llm_access|secret when
-// status=="missing"), not the neutral advisory "workspace_secret" kind — the
-// row's KIND changes, not just its status. Once the secret is present, no
-// escalation is needed (and no duplicate row appears).
-func TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind(t *testing.T) {
+// TestSetupWorkspaceSecretItems_ContractRequiredIsNeverBlocking: a secret the
+// requirements contract marks Required used to escalate to the blocking-styled
+// "secret" kind when absent, because the requirement minted a model-host grant
+// from it at launch. It mints nothing now (#547), so storing it changes nothing
+// about the run: the row stays the neutral workspace_secret kind either way.
+func TestSetupWorkspaceSecretItems_ContractRequiredIsNeverBlocking(t *testing.T) {
 	ws := types.Workspace{
 		ID:   uuid.New(),
 		Name: "acme-app",
@@ -422,60 +429,49 @@ func TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind
 			"secret:acme-stripe-key": {Level: "required", Provenance: "operator_set"},
 		},
 	}
-
-	t.Run("absent escalates to the blocking-styled secret kind", func(t *testing.T) {
-		items := setupWorkspaceSecretItems([]types.Workspace{ws}, map[string]bool{})
-		it, ok := findItem(items, "secret:acme-stripe-key")
-		if !ok {
-			t.Fatalf("want an escalated row at id secret:acme-stripe-key, got %+v", items)
+	for _, present := range []bool{false, true} {
+		items := setupWorkspaceSecretItems([]types.Workspace{ws}, map[string]bool{"acme-stripe-key": present})
+		if _, blocking := findItem(items, "secret:acme-stripe-key"); blocking {
+			t.Errorf("present=%v: a blocking secret row appeared: %+v", present, items)
 		}
-		if it.Kind != "secret" {
-			t.Errorf("Kind = %q, want %q (must match the review panel's destructive llm_access|secret gate)", it.Kind, "secret")
-		}
-		if it.Status != "missing" {
-			t.Errorf("Status = %q, want missing", it.Status)
-		}
-		if it.Fix == nil || it.Fix.Action != "add_secret" || it.Fix.SecretName != "acme-stripe-key" {
-			t.Errorf("Fix = %+v, want add_secret(acme-stripe-key)", it.Fix)
-		}
-		if it.Detail == "" {
-			t.Error("Detail must explain the gap (honest copy: the run still launches; whatever needs the secret fails then)")
-		}
-		if _, dup := findItem(items, "workspace_secret:acme-stripe-key"); dup {
-			t.Error("the escalated row must REPLACE the neutral workspace_secret row for this name, not duplicate it")
-		}
-		// RequiredBy must be a plain noun phrase: compose-review.tsx renders
-		// "Required by " + this value, so a value that ALSO starts with "required
-		// by" doubles up ("Required by required by workspace X's requirements
-		// contract", observed live — see reconcile-workspace-first.md item 3).
-		if want := "workspace acme-app's requirements contract"; it.RequiredBy != want {
-			t.Errorf("RequiredBy = %q, want %q", it.RequiredBy, want)
-		}
-	})
-
-	t.Run("present needs no escalation and no duplicate row", func(t *testing.T) {
-		items := setupWorkspaceSecretItems([]types.Workspace{ws}, map[string]bool{"acme-stripe-key": true})
 		it, ok := findItem(items, "workspace_secret:acme-stripe-key")
-		if !ok || it.Kind != "workspace_secret" || it.Status != "satisfied" {
-			t.Errorf("present contract secret row = %+v (ok=%v), want workspace_secret/satisfied", it, ok)
+		if !ok || it.Kind != "workspace_secret" {
+			t.Fatalf("present=%v: row = %+v (ok=%v), want the neutral workspace_secret row", present, it, ok)
 		}
-		if _, dup := findItem(items, "secret:acme-stripe-key"); dup {
-			t.Error("a PRESENT contract secret must not ALSO render at the escalated secret: id")
-		}
-		// Same non-doubling pin as the absent case above: presence changes
-		// Kind/Status only, never RequiredBy's wording.
 		if want := "workspace acme-app's requirements contract"; it.RequiredBy != want {
 			t.Errorf("RequiredBy = %q, want %q", it.RequiredBy, want)
 		}
-	})
+	}
+}
 
-	t.Run("a scan-only (non-contract) required secret is unaffected", func(t *testing.T) {
-		// A workspace with no requirements contract entry for this name must keep
-		// the neutral, non-blocking behavior exactly.
-		scanOnly := types.Workspace{ID: uuid.New(), Name: "legacy-app"}
-		items := setupWorkspaceSecretItems([]types.Workspace{scanOnly}, map[string]bool{})
-		if len(items) != 0 {
-			t.Errorf("a workspace with no scanned profile and no requirements contract must add no rows, got %+v", items)
+// unreadableSiteStore fails every site-config read.
+type unreadableSiteStore struct{ store.Store }
+
+func (unreadableSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("conn closed by peer")
+}
+
+// TestApplyIntegrationRequirement_UnreadableConfigFailsClosed: with the site
+// config unreadable, which hosts serve a model (the provider rows) is unknown,
+// so the fold grants the integration's credential on NO host and says why —
+// never falling back to the static set, which would miss a provider row's host.
+func TestApplyIntegrationRequirement_UnreadableConfigFailsClosed(t *testing.T) {
+	srv := New(Config{Store: unreadableSiteStore{}})
+	integ := feedIntegration()
+	rows := []integrationRow{{Integration: integ, Source: "stored"}}
+	spec := &types.RunPolicySpec{}
+	events := srv.applyIntegrationRequirement(context.Background(), map[string]bool{"artifactory-token": true}, rows, spec, integ.ID)
+	if len(spec.EligibleGrants) != 0 {
+		t.Fatalf("grants = %+v, want none with the provider rows unknown", spec.EligibleGrants)
+	}
+	var skip *requirementAuditEntry
+	for i := range events {
+		if events[i].action == "run.requirement.skip" {
+			skip = &events[i]
 		}
-	})
+	}
+	if skip == nil || skip.outcome != "denied" || skip.data["reason"] != reasonRequirementModelHostUnknown ||
+		!slices.Equal(skip.data["hosts"].([]string), integ.Egress) {
+		t.Fatalf("events = %+v, want a denied run.requirement.skip (model_host_unknown) naming every host", events)
+	}
 }

@@ -79,7 +79,7 @@ func TestNoModelAccessWarning_Copy(t *testing.T) {
 	claude, _ := agentLLMProvider("claude-code")
 
 	withManaged := noModelAccessWarning("codex-cli", codex, true)
-	for _, want := range []string{"codex-cli", "api.openai.com", "openai-api-key", "claude-code only", "--agent claude-code"} {
+	for _, want := range []string{"codex-cli", "api.openai.com", "Settings → Model providers", "claude-code only", "--agent claude-code"} {
 		if !strings.Contains(withManaged, want) {
 			t.Errorf("codex+managed warning missing %q; got: %s", want, withManaged)
 		}
@@ -91,6 +91,13 @@ func TestNoModelAccessWarning_Copy(t *testing.T) {
 	// A claude-code agent must never be told to "use --agent claude-code" even when a
 	// managed sub is present (it would be nonsensical self-reference).
 	claudeMsg := noModelAccessWarning("claude-code", claude, true)
+	// #547: an integration or a stored convention secret no longer credentials
+	// a run, so the advice must not send anyone to either.
+	for _, gone := range []string{"integration", "anthropic-api-key"} {
+		if strings.Contains(claudeMsg, gone) {
+			t.Errorf("claude-code warning still names %q; got: %s", gone, claudeMsg)
+		}
+	}
 	if strings.Contains(claudeMsg, "--agent claude-code") {
 		t.Errorf("claude-code warning must not steer to itself; got: %s", claudeMsg)
 	}

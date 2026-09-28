@@ -21,14 +21,9 @@ import (
 
 const driverName = "k8s"
 
-// Label vocabulary: THE SAME keys/values the docker driver uses
-// (internal/runner/docker/naming.go's labelRun/labelComponent/labelManaged),
-// re-declared here (build tags keep the two packages from importing one
-// another) so an operator's audit/teardown selector ("wardyn.run-id=<uuid>")
-// finds a run's resources identically on either substrate. All three are
-// already legal k8s label keys (no "/" prefix; the bare name segment allows
-// dots) and every value used (a UUID string, "agent"/"proxy"/"canary", "true")
-// is a legal k8s label value.
+// Label vocabulary: the SAME keys/values the docker driver uses, re-declared here since build tags
+// keep the two packages from importing one another — so an operator's audit/teardown selector finds
+// a run identically on either substrate.
 const (
 	labelRun       = "wardyn.run-id"
 	labelComponent = "wardyn.component" // "agent" | "proxy" | "canary"
@@ -39,40 +34,28 @@ const (
 	componentCanary = "canary"
 )
 
-// In-pod container names (static; distinct from the pod-level names below,
-// which embed the run id and become the sandbox ref).
+// In-pod container names (static; distinct from the pod-level names below, which embed the run id
+// and become the sandbox ref).
 const (
-	// mainContainerName is the agent pod's pre-created placeholder container
-	// (the idle main process CreateSandbox starts). Exec targets it via an
-	// ephemeral container instead of running inside it, but Attach/ExecStream
-	// fall back to it before any Exec has run.
+	// mainContainerName is the agent pod's pre-created placeholder; Exec targets an ephemeral
+	// container instead, but Attach/ExecStream fall back to this one before any Exec has run.
 	mainContainerName = "agent"
-	// execContainerName is the ephemeral container Exec adds — fixed per the
-	// A0 contract ("Exec (agent launch) = ephemeral container named
-	// \"wardyn-agent\"").
+	// execContainerName is the ephemeral container Exec adds, fixed per the A0 contract.
 	execContainerName = "wardyn-agent"
-	// proxyContainerName is the proxy pod's main container (beside its
-	// stage-proxy-config init container).
-	proxyContainerName = "wardyn-proxy"
-	// canaryContainerName is the boot-time egress canary's sole container.
-	canaryContainerName = "canary"
+	// proxyContainerName is the proxy pod's main container (beside its stage-proxy-config init container).
+	proxyContainerName  = "wardyn-proxy"
+	canaryContainerName = "canary" // the boot-time egress canary's sole container
 )
 
-// Pod/Secret/NetworkPolicy names are deterministic per run (mirrors docker's
-// naming.go doc: a crashed control plane can reconstruct every name from the
-// run UUID alone). A raw uuid.String() is lowercase hex+hyphens, which is
-// already a legal (<=63 char) DNS-1123 label, so every name below stays under
-// the k8s length ceiling with room to spare.
+// Pod/Secret/NetworkPolicy names are deterministic per run (a crashed control plane can reconstruct
+// every name from the run UUID alone). A raw uuid.String() is already a legal (<=63 char) DNS-1123 label.
 const agentPodNamePrefix = "wardyn-agent-"
 
 func agentPodName(runID uuid.UUID) string { return agentPodNamePrefix + runID.String() }
 
-// runIDFromAgentPodName recovers the run UUID from a deterministic agent pod
-// name — the mirror of docker/naming.go's runIDFromAgentName, and for the same
-// reason: a sandbox ref IS the agent pod name, so teardown can recover the run
-// id from the ref alone when the pod itself is already gone and there is no
-// label left to read. A name that is not one of ours (or carries no parseable
-// uuid) errors, which is what keeps a ghost ref idempotent.
+// runIDFromAgentPodName recovers the run UUID from a deterministic agent pod name: a sandbox ref IS
+// the agent pod name, so teardown can recover the run id from the ref alone once the pod and its
+// labels are gone. A name that isn't one of ours errors, keeping a ghost ref idempotent.
 func runIDFromAgentPodName(name string) (uuid.UUID, error) {
 	if !strings.HasPrefix(name, agentPodNamePrefix) {
 		return uuid.Nil, fmt.Errorf("%q is not a wardyn agent pod name", name)
@@ -84,19 +67,11 @@ func secretName(runID uuid.UUID) string      { return "wardyn-proxy-cfg-" + runI
 func agentNetPolName(runID uuid.UUID) string { return "wardyn-agent-netpol-" + runID.String() }
 func proxyNetPolName(runID uuid.UUID) string { return "wardyn-proxy-netpol-" + runID.String() }
 
-// wardynLabels stamps every Wardyn-owned object so audit and teardown
-// selectors can find them by run and component. extra is applied FIRST and
-// the three reserved keys are stamped LAST: extra is
-// caller-supplied (ultimately from policy/dispatch, e.g. an operator- or
-// agent-provided label), and applying it last would let an entry silently
-// override wardyn.component — un-selecting the agent from its own
-// NetworkPolicy (whose selector is built from this same map). Every extra
-// VALUE is also sanitized to legal k8s label syntax: a
-// free-form value (e.g. a run's agent name) that fails k8s's
-// `[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?`, <=63-char syntax would 422 the
-// WHOLE object create otherwise — an unsanitizable value is omitted
-// entirely rather than risk that; the reserved keys (never caller-supplied)
-// are always present and authoritative regardless.
+// wardynLabels stamps every Wardyn-owned object so audit and teardown selectors can find them by run
+// and component. extra is applied FIRST and the three reserved keys LAST, so a caller-supplied entry
+// can't silently override wardyn.component (un-selecting the agent from its own NetworkPolicy).
+// Every extra VALUE is sanitized to legal k8s label syntax; an unsanitizable value is omitted
+// entirely rather than risk a 422 on the whole object create.
 func wardynLabels(runID uuid.UUID, component string, extra map[string]string) map[string]string {
 	l := make(map[string]string, len(extra)+3)
 	for k, v := range extra {
@@ -110,13 +85,10 @@ func wardynLabels(runID uuid.UUID, component string, extra map[string]string) ma
 	return l
 }
 
-// sanitizeLabelValue coerces s into a legal k8s label value
-// ([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?, <=63 chars) or reports it
-// cannot be (ok=false, meaning: omit the label rather than send an illegal
-// value to the apiserver). Any character outside the legal alphabet becomes
-// '-'; leading/trailing '-'/'_'/'.' are trimmed (a value must start and end
-// alphanumeric); the result is capped at 63 chars, re-trimmed in case
-// truncation landed on a separator.
+// sanitizeLabelValue coerces s into a legal k8s label value ([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?,
+// <=63 chars) or reports it cannot be (ok=false: omit the label rather than send an illegal value to
+// the apiserver). Any character outside the legal alphabet becomes '-'; leading/trailing '-'/'_'/'.'
+// are trimmed; the result is capped at 63 chars, re-trimmed in case truncation landed on a separator.
 func sanitizeLabelValue(s string) (string, bool) {
 	var b strings.Builder
 	for _, r := range s {
@@ -134,22 +106,15 @@ func sanitizeLabelValue(s string) (string, bool) {
 	return v, v != ""
 }
 
-// baseSecurityContext is the hardening every container on this substrate
-// gets regardless of identity: no privilege escalation, every Linux
-// capability dropped, RuntimeDefault seccomp, runAsNonRoot. THREE hard API
-// facts (see the A0 contract) make container-level (not merely pod-level)
-// the only correct place for this: (1) Pod Security Standards admission
-// checks EPHEMERAL containers' own securityContext, not just the pod's; (2)
-// an ephemeral container's spec must therefore carry this in full, not
-// inherit it; (3) one shared builder means the agent's ephemeral exec is
-// never less hardened than its main container by accident.
+// baseSecurityContext is the hardening every container on this substrate gets regardless of
+// identity: no privilege escalation, every Linux capability dropped, RuntimeDefault seccomp,
+// runAsNonRoot. Container-level (not pod-level) per the A0 contract, since Pod Security Standards
+// admission checks an EPHEMERAL container's own securityContext — one shared builder means the
+// agent's ephemeral exec is never less hardened than its main container.
 //
-// RunAsUser is deliberately NOT set here — see agentSecurityContext and
-// restrictedSecurityContext, which is is the one field that has to split by
-// container identity: RunAsNonRoot:true with a nil RunAsUser
-// only passes kubelet admission when the IMAGE's own USER is already
-// numeric. The wardyn-proxy image (proxy + canary containers) is, so it
-// gets this as-is; the agent images are not (see agentSecurityContext).
+// RunAsUser is deliberately NOT set here — see agentSecurityContext/restrictedSecurityContext, the
+// field that splits by container identity: RunAsNonRoot:true with a nil RunAsUser only passes
+// kubelet admission when the image's own USER is already numeric.
 func baseSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             boolPtr(true),
@@ -159,27 +124,17 @@ func baseSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-// restrictedSecurityContext is baseSecurityContext for containers whose
-// image already runs as a KNOWN NUMERIC non-root user, so the kubelet can
-// verify RunAsNonRoot without an explicit RunAsUser: the proxy and canary
-// containers both run the wardyn-proxy image, built FROM
-// gcr.io/distroless/static-debian12:nonroot (deploy/compose/Dockerfile.proxy)
-// — numeric uid 65532, Google's documented distroless nonroot convention.
+// restrictedSecurityContext is baseSecurityContext for containers whose image already runs as a
+// KNOWN NUMERIC non-root user (proxy/canary run wardyn-proxy, built from
+// gcr.io/distroless/static-debian12:nonroot — uid 65532), so the kubelet can verify RunAsNonRoot
+// without an explicit RunAsUser.
 func restrictedSecurityContext() *corev1.SecurityContext {
 	return baseSecurityContext()
 }
 
-// agentSecurityContext is baseSecurityContext PLUS RunAsUser:1000, for the
-// agent's containers (the main placeholder AND the ephemeral exec
-// container). Every wardyn agent image documents `USER agent` — a NAME, not
-// a number (deploy/images/{claude-code,codex-cli,oracle,aws-sso,full}/Dockerfile
-// all carry the "USER agent (uid 1000), home /home/agent" contract comment,
-// and each creates that user via adduser/useradd -u 1000). RunAsNonRoot:true
-// with a NIL RunAsUser fails Pod Security admission here: the kubelet can
-// only verify non-root against a NUMERIC uid, and a name-form USER is
-// opaque to it at admission time — product-breaking (every
-// agent sandbox would 422 at pod create without this). RunAsUser:1000 is
-// what makes RunAsNonRoot admission-checkable instead of a hard failure.
+// agentSecurityContext is baseSecurityContext PLUS RunAsUser:1000, for the agent's containers. Every
+// wardyn agent image documents `USER agent` — a NAME, not a number — so without RunAsUser:1000 every
+// agent sandbox would 422 at pod create (RunAsNonRoot can't verify a named user).
 func agentSecurityContext() *corev1.SecurityContext {
 	sc := baseSecurityContext()
 	sc.RunAsUser = int64Ptr(1000)
@@ -189,35 +144,22 @@ func agentSecurityContext() *corev1.SecurityContext {
 func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(i int64) *int64 { return &i }
 
-// ephemeralStorageRequestFloorMiB is the ephemeral-storage REQUEST the agent
-// container carries whenever a limit is set. Small, fixed, and NEVER the limit:
-// Kubernetes copies a limit into the request when no request is set for that key,
-// so an ABSENT request would hand the scheduler the org's whole ceiling and leave
-// the pod silently Pending on "Insufficient ephemeral-storage" — a scheduler
-// event statusFromPod's waitingDetail never surfaces. 256Mi fits any node that
-// can pull the agent image at all. A limit SMALLER than the floor uses the limit
-// instead (a request may not exceed its own limit).
+// ephemeralStorageRequestFloorMiB is the ephemeral-storage REQUEST the agent container carries
+// whenever a limit is set. Small, fixed, and NEVER the limit: k8s copies a limit into the request
+// when none is set, so an absent request would hand the scheduler the org's whole ceiling and leave
+// the pod silently Pending. 256Mi fits any node that can pull the agent image; a limit smaller than the floor uses the limit instead.
 const ephemeralStorageRequestFloorMiB int64 = 256
 
-// resourceRequirements maps runner.Resources onto a k8s ResourceRequirements.
+// resourceRequirements maps runner.Resources onto a k8s ResourceRequirements. CPU and memory are
+// requests == limits (a hard cap, matching the docker driver's "every sandbox is capped" posture),
+// with the same conservative platform defaults docker uses for any zero field.
 //
-// CPU and memory are requests == limits (a hard cap, not a burst-friendly range —
-// matches the docker driver's "every sandbox is capped" posture), applying the
-// same conservative platform defaults docker uses for any zero field so a policy
-// that sets nothing still gets a real cap.
+// DiskMiB is limits[ephemeral-storage] plus an explicit small request (ephemeralStorageRequestFloorMiB)
+// — asymmetric on purpose, see that const. It covers the pod's writable layers + logs + local-ephemeral
+// volumes, but not a drive PVC or the ephemeral container's own writable layer (see
+// ephemeralScratchVolumes). Enforcement is eviction, not a quota. DiskMiB==0 leaves both keys absent.
 //
-// DiskMiB is limits[ephemeral-storage] PLUS an explicit small request
-// (ephemeralStorageRequestFloorMiB) — asymmetric on purpose, see that const. What
-// the kubelet counts against it is the pod's container writable layers + logs +
-// its local-ephemeral VOLUMES; a drive PVC is never counted against it. The
-// writable layer of the EPHEMERAL container the agent runs in is counted by
-// neither, which is why ephemeralScratchVolumes exists and what it does and does
-// not reach is stated there. Enforcement is types.StorageEnforcementEviction, not
-// a quota: the kubelet measures periodically and KILLS THE POD — it never refuses
-// the write. DiskMiB == 0 leaves both keys absent (and adds no volumes).
-//
-// PidsLimit still has NO k8s Pod-API equivalent (there is no per-container "max
-// pids" ResourceName), so that one remains a silently-nothing risk and
+// PidsLimit still has no k8s Pod-API equivalent, so it remains a silently-nothing risk and
 // CreateSandbox warns rather than claiming a cap that was dropped.
 func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	cpuMillis := res.CPUMillis
@@ -228,9 +170,7 @@ func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	if memMiB <= 0 {
 		memMiB = runner.DefaultMemoryMiB
 	}
-	// Two lists, not one aliased into both: ephemeral-storage differs between
-	// them, and a shared map would put the limit in the requests too.
-	shared := func() corev1.ResourceList {
+	shared := func() corev1.ResourceList { // two lists, not one aliased into both: a shared map would put the limit in the requests too
 		return corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
 			corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
@@ -245,94 +185,53 @@ func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{Requests: requests, Limits: limits}
 }
 
-// The three scratch volumes and where they are mounted: /tmp (where
-// runner.AgentIdleScript writes the per-run CA files, under /tmp/wardyn), the
-// workdir agent-run cds into (the clone's DEFAULT destination), and
-// /home/agent/.cache — the toolchain cache root runs_dispatch_mounts' env
-// (GOCACHE, GOTMPDIR, GOMODCACHE, npm_config_cache) points into, so a build's
-// Go and npm cache writes land inside disk_mib too instead of on the
-// ephemeral container's unmetered writable layer (the gap issue #164 closes).
+// The three scratch volumes and where they are mounted: /tmp, the workdir agent-run cds into, and
+// /home/agent/.cache — the toolchain cache root runs_dispatch_mounts' env points into, so a build's
+// cache writes land inside disk_mib instead of on the ephemeral container's unmetered writable layer
+// (the gap issue #164 closes). THREE PATHS, NOT "where the agent writes": an authored target may sit
+// anywhere under /home/agent, and GOPATH, ~/.cache/pip and /opt/rust are NOT covered.
 //
-// THREE PATHS, NOT "where the agent writes". An authored target may legally
-// sit at /work, /workspace or anywhere else under /home/agent
-// (runner.ValidateAuthoredTarget's prefixes), and GOPATH itself (so the
-// installed tool binaries under /home/agent/go/bin stay put — only
-// GOMODCACHE, not GOPATH, moves), ~/.cache/pip and /opt/rust are NOT under
-// these three volumes; see this function's doc for what that means for the
-// budget.
-//
-// NOT /home/agent ITSELF, which would cover them all: a volume there would
-// shadow the baked .bashrc every agent image ships (the attach hint), collide
-// with the reserved drive target runner.DriveTarget under the same home, and
-// hide the read-only ~/.claude bind the subscription path mounts. The three
-// leaf paths are what can be mounted safely today; the home is not ours to
-// replace.
+// NOT /home/agent ITSELF, which would cover them all: a volume there would shadow the baked
+// .bashrc, collide with the reserved drive target, and hide the read-only ~/.claude bind the
+// subscription path mounts. The three leaf paths are what can be mounted safely today.
 const (
 	scratchTmpVolumeName   = "wardyn-tmp"
 	scratchWorkVolumeName  = "wardyn-work"
 	scratchCacheVolumeName = "wardyn-cache"
 	scratchTmpPath         = runner.ScratchTmpPath
 	scratchWorkPath        = runner.ScratchWorkPath
-	// scratchCachePath is also the path the full image's
-	// /etc/profile.d/toolchains.sh unconditionally re-exports GOCACHE/GOTMPDIR/
-	// GOMODCACHE under (deploy/images/full/Dockerfile) — a login-shell task
-	// runs `/bin/sh -lc`, which sources that profile AFTER dispatch's env and
-	// would otherwise stomp an env-only relocation back to the old
-	// out-of-budget paths. The profile was updated alongside this volume
-	// (image rebuild required) rather than leaving the emptyDir at a path the
-	// profile doesn't name, so both a plain and a login shell agree on where
-	// the cache lives.
+	// scratchCachePath is also the path the full image's /etc/profile.d/toolchains.sh
+	// unconditionally re-exports GOCACHE/GOTMPDIR/GOMODCACHE under, updated alongside this volume so
+	// a login shell doesn't stomp dispatch's env-only relocation back to the old out-of-budget paths.
 	scratchCachePath = runner.ScratchCachePath
 )
 
-// ephemeralScratchVolumes is what brings the agent's /tmp, workdir and
-// toolchain-cache writes inside disk_mib on this substrate; without it the
-// ephemeral-storage limit binds only the idle main container's writable
-// layer.
+// ephemeralScratchVolumes is what brings the agent's /tmp, workdir and toolchain-cache writes inside
+// disk_mib on this substrate; without it the ephemeral-storage limit binds only the idle main
+// container's writable layer.
 //
-// The gap it NARROWS (0.7.4's known gap (a)): the agent does its
-// work in an EPHEMERAL container that Exec adds, and the kubelet does not meter
-// an ephemeral container's writable layer at all — resourceRequirements' limit
-// bounds a container nothing writes in, so an ordinary `dd` from the agent
-// fills the node without the pod ever being evicted. An emptyDir is metered as the POD's local
-// ephemeral storage no matter which container writes into it, and Exec copies
-// the main container's VolumeMounts verbatim onto the ephemeral container, so
-// mounting here reaches the agent by construction.
+// The gap it NARROWS: the agent works in an EPHEMERAL container Exec adds, and the kubelet does not
+// meter an ephemeral container's writable layer at all, so an ordinary `dd` there fills the node
+// without eviction. An emptyDir is metered as the POD's ephemeral storage regardless of which
+// container writes into it, and Exec copies the main container's VolumeMounts verbatim onto the
+// ephemeral one, so mounting here reaches the agent by construction.
 //
-// WHOLE-VOLUME MOUNTS, NEVER SubPath. corev1.VolumeMount's own contract says
-// subpath mounts are not allowed for ephemeral containers, and Exec copies these
-// mounts VERBATIM: a SubPath here would make UpdateEphemeralContainers fail for
-// every autonomous k8s run with disk_mib set, while a fake-clientset test went
-// on passing. One volume per mount point is the only shape that survives the
-// copy.
+// WHOLE-VOLUME MOUNTS, NEVER SubPath: corev1.VolumeMount forbids subpath mounts on ephemeral
+// containers, and Exec copies these mounts verbatim, so a SubPath here would fail
+// UpdateEphemeralContainers for every autonomous run with disk_mib set.
 //
-// THREE SizeLimits AND the container limit are not a quadruple budget: the
-// kubelet evicts on whichever binds first, and it counts emptyDir usage toward
-// the pod's ephemeral-storage total as well, so the three volumes together
-// still cannot exceed resourceRequirements' limits[ephemeral-storage] =
-// disk_mib. The per-volume SizeLimit is the tighter, earlier stop.
+// THREE SizeLimits and the container limit are not a quadruple budget: the kubelet evicts on
+// whichever binds first, and emptyDir usage also counts toward the pod's ephemeral-storage total, so
+// the three volumes together still can't exceed limits[ephemeral-storage]. Zero disk_mib adds
+// nothing, matching resourceRequirements' "absent means unbounded" shape.
 //
-// Zero disk_mib adds nothing at all — the same "absent means unbounded" shape
-// resourceRequirements uses, so a pod with no disk budget keeps the volume-less
-// shape this substrate has always produced.
+// NARROWED, NOT CLOSED: everything the agent writes outside these three paths stays on the ephemeral
+// container's own unmetered writable layer. readOnlyRootFilesystem would close it and is NOT set,
+// since the agent legitimately writes those paths.
 //
-// NARROWED, NOT CLOSED. Everything the agent writes outside these three paths
-// stays on the ephemeral container's own unmetered writable layer: /home/agent/go
-// (the module cache moved out via GOMODCACHE, but the installed tool binaries
-// under its bin/ have not — moving GOPATH would lose those), ~/.cache/pip,
-// /opt/rust, the dotfiles (~/.wardyn, ~/.ssh, ~/.claude), and any authored
-// workspace_repos or ephemeral-source target outside /home/agent/work.
-// readOnlyRootFilesystem would close it and is NOT set, because the agent
-// legitimately writes those paths.
-//
-// scratchCachePath shadows the full image's pre-created
-// /home/agent/.cache/go-build (deploy/images/full/Dockerfile) with an empty
-// directory, so the Go build cache starts cold. The mount itself is writable
-// without FSGroup: the kubelet creates an emptyDir root-owned but 0777, the
-// same mode the /tmp and /home/agent/work volumes have been written through by
-// the uid-1000 agent since 0.7.5. test/conformance's ephemeralFillTargets (the
-// "Cache" target) writes it against a real cluster, which a fake clientset
-// cannot model.
+// scratchCachePath shadows the full image's pre-created /home/agent/.cache/go-build with an empty
+// directory, so the Go build cache starts cold; the kubelet creates it root-owned but 0777, writable
+// without FSGroup.
 func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMount) {
 	if diskMiB <= 0 {
 		return nil, nil
@@ -345,9 +244,7 @@ func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMou
 	vols := make([]corev1.Volume, 0, len(targets))
 	mounts := make([]corev1.VolumeMount, 0, len(targets))
 	for _, t := range targets {
-		// A fresh Quantity per volume: one shared pointer would alias two
-		// spec fields onto the same object.
-		vols = append(vols, corev1.Volume{
+		vols = append(vols, corev1.Volume{ // a fresh Quantity per volume: one shared pointer would alias two spec fields onto the same object
 			Name: t.name,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
 				SizeLimit: resource.NewQuantity(diskMiB*1024*1024, resource.BinarySI),
@@ -358,10 +255,8 @@ func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMou
 	return vols, mounts
 }
 
-// proxyResourcesMilliCPU/proxyResourcesMemoryMiB are the wardyn-proxy
-// sidecar's fixed cgroup envelope — mirrors docker's proxyResources: the
-// proxy only relays HTTP, so a tight, run-independent footprint leaves ample
-// headroom while still bounding a compromised proxy.
+// proxyResourcesMilliCPU/proxyResourcesMemoryMiB are the wardyn-proxy sidecar's fixed cgroup
+// envelope — mirrors docker's proxyResources: a tight, run-independent footprint bounding a compromised proxy.
 const (
 	proxyResourcesMilliCPU  int64 = 500
 	proxyResourcesMemoryMiB int64 = 256
@@ -375,12 +270,10 @@ func proxyResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{Requests: list, Limits: list}
 }
 
-// envVars converts a NON-SECRET env map (runner.SandboxSpec.Env) to k8s
-// EnvVar form, mirroring docker's envSlice: an inline Value, which is part of
-// the Pod spec and therefore readable by anyone with pods/get in this
-// namespace. Credential material must never reach this function — it rides
-// runner.SandboxSpec.SecretEnv and secretEnvVars below. Sorted by key for a
-// deterministic pod spec (map iteration order is not).
+// envVars converts a NON-SECRET env map (runner.SandboxSpec.Env) to k8s EnvVar form: an inline
+// Value, part of the Pod spec and therefore readable by anyone with pods/get in this namespace.
+// SECURITY: credential material must never reach this function — it rides SecretEnv/secretEnvVars
+// below. Sorted by key for a deterministic pod spec.
 func envVars(env map[string]string) []corev1.EnvVar {
 	if len(env) == 0 {
 		return nil
@@ -393,23 +286,14 @@ func envVars(env map[string]string) []corev1.EnvVar {
 	return out
 }
 
-// secretEnvDataKey is the per-run Secret data key one SecretEnv variable's
-// value is stored under. Prefixed so it can never collide with
-// proxyConfigSecretKey (the proxy config JSON sharing that Secret) whatever a
-// future dispatch lane decides to name a variable. Legal Secret data keys are
-// [-._a-zA-Z0-9]+, a superset of the [A-Z_][A-Z0-9_]* env-var names
-// internal/api's validEnvVarName admits, so a name that reaches here is
-// already a legal key — and one that somehow is not fails the Secret create
-// closed rather than silently dropping a credential.
+// secretEnvDataKey is the per-run Secret data key one SecretEnv variable's value is stored under.
+// Prefixed to avoid colliding with proxyConfigSecretKey; legal Secret data keys are a superset of
+// what internal/api's validEnvVarName admits, so an illegal name fails the Secret create closed.
 func secretEnvDataKey(name string) string { return "env." + name }
 
-// secretEnvVars converts a CREDENTIAL-BEARING env map
-// (runner.SandboxSpec.SecretEnv, which states why the spec splits the two) into
-// EnvVars that carry only a REFERENCE to the per-run Secret. That is the whole
-// difference from envVars above: a secretKeyRef resolves in the kubelet, so the
-// value never enters the Pod spec that pods/get returns. The container still
-// sees an ordinary environment variable under its own name, so nothing in the
-// sandbox changes. Sorted by key for a deterministic pod spec, like envVars.
+// secretEnvVars converts a CREDENTIAL-BEARING env map (SecretEnv) into EnvVars that carry only a
+// REFERENCE to the per-run Secret. SECURITY: a secretKeyRef resolves in the kubelet, so the value
+// never enters the Pod spec that pods/get returns. Sorted by key like envVars.
 func secretEnvVars(runID uuid.UUID, secretEnv map[string]string) []corev1.EnvVar {
 	if len(secretEnv) == 0 {
 		return nil

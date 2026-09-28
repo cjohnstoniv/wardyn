@@ -1,13 +1,11 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// #1197: the reads the attention projection and GET /me/attention need
-// beyond what GET /runs already scoped — every PENDING approval on a batch
-// of runs, in one query, so projecting attention onto a page of runs costs
-// one extra round trip regardless of how many of them are actually held;
-// and the two scoped PENDING *counts* /me/attention's pending_approvals
-// answers, counted in the database rather than by listing every row (the
-// same rule CountApprovalsForRun states, store.go).
+// The reads the attention projection and GET /me/attention need beyond what
+// GET /runs already scoped: every PENDING approval on a batch of runs, in one
+// query, so paging runs costs one extra round trip regardless of how many are
+// held; and the two scoped PENDING counts /me/attention answers, counted in
+// the database rather than by listing every row.
 package store
 
 import (
@@ -20,35 +18,31 @@ import (
 )
 
 // ApprovalsForRunsPager is the attention projection's read surface — kept out
-// of Store for the reason every capability interface in this package is
-// (ApprovalsByRunCreatorPager, RunsFilteredPager, ...): widening Store would
-// silently route a test double's embedded-but-not-overridden method to the
-// unscoped behaviour. An absent implementation fails CLOSED at the api-layer
-// call site (attention projection refuses rather than silently omitting
-// `attention` from every run).
+// of Store like every capability interface in this package, since widening
+// Store would silently route a test double's unoverridden method to the
+// unscoped behaviour. SECURITY: an absent implementation fails CLOSED at the
+// api-layer call site (attention projection refuses rather than silently
+// omitting `attention` from every run).
 type ApprovalsForRunsPager interface {
 	// ListPendingApprovalsForRuns returns every state=PENDING approval whose
-	// run_id is in runIDs — no other state, since only a PENDING row can be
-	// held (approval.Hold's own state gate) or contribute to Pending's count.
+	// run_id is in runIDs — no other state, since only PENDING can be held or
+	// contribute to Pending's count.
 	ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error)
-	// CountPendingApprovals returns how many approvals in the WHOLE
-	// deployment are state=PENDING — GET /me/attention's admin-view
-	// pending_approvals, counted in the database rather than by listing
-	// every row (the cost CountApprovalsForRun's own doc names).
+	// CountPendingApprovals returns how many approvals in the whole deployment
+	// are state=PENDING — GET /me/attention's admin-view pending_approvals,
+	// counted in the database rather than by listing every row.
 	CountPendingApprovals(ctx context.Context) (int, error)
-	// CountPendingApprovalsByRunCreator returns how many PENDING approvals
-	// are raised on runs createdBy owns — GET /me/attention's user-view
-	// pending_approvals, the same scope ListApprovalsPageByRunCreator lists,
-	// counted rather than listed.
+	// CountPendingApprovalsByRunCreator returns how many PENDING approvals are
+	// raised on runs createdBy owns — GET /me/attention's user-view
+	// pending_approvals, counted rather than listed.
 	CountPendingApprovalsByRunCreator(ctx context.Context, createdBy string) (int, error)
 }
 
 var _ ApprovalsForRunsPager = PG{}
 
 // ListPendingApprovalsForRuns — see ApprovalsForRunsPager. Backed by
-// approvals_run_idx (0001_init.sql) and the partial approvals_state_idx
-// (state='PENDING'): this is an index scan over run_id = ANY($1) intersected
-// with the partial index, not a table scan.
+// approvals_run_idx and the partial approvals_state_idx: an index scan over
+// run_id = ANY($1) intersected with the partial index, not a table scan.
 func (s PG) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
 	if len(runIDs) == 0 {
 		return []types.ApprovalRequest{}, nil
@@ -61,8 +55,7 @@ func (s PG) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID)
 }
 
 // CountPendingApprovals — see ApprovalsForRunsPager. Backed by the partial
-// approvals_state_idx (state='PENDING'): an index-only count, not a table
-// scan.
+// approvals_state_idx: an index-only count, not a table scan.
 func (s PG) CountPendingApprovals(ctx context.Context) (int, error) {
 	var n int
 	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE state = 'PENDING'`).Scan(&n)

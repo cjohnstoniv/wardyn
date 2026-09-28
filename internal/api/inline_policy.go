@@ -41,8 +41,8 @@ const (
 //     host) — that stays member-authored, and on its own would be a
 //     secret-exfil primitive. Hence stage 2.
 //  2. filterUserGrants drops any api_key/git_pat/ssh_key grant whose pairing
-//     the operator did not eligible-list. The run's own model-access grant is
-//     re-added at launch by foldRunIntegration (an operator integration) or
+//     the operator did not eligible-list. The run's own model-access grant
+//     comes from its model provider, or is re-added at launch by
 //     applyWorkspaceRequirements (a workspace requirement).
 //  3. narrowUserInlinePolicy bounds what survived to what THIS member
 //     personally holds: stage 1 is the OPERATOR's deployment-wide ceiling,
@@ -208,8 +208,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// nobody assigned one.
 			// Bounded BEFORE validation/resolution — never the fully-resolved
 			// spec, which would strip the LATER admin-authored additions
-			// (workspace integration binding, ensureLLMGrant,
-			// applyRequiredSecretGrant, applyIntegrationRequirement) folded in
+			// (applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
 			var warns []string
 			var bounded bool
@@ -469,8 +468,8 @@ type capDrop struct {
 //
 // It touches only the MEMBER-AUTHORED spec. Everything admin-authored — a
 // stored policy, the workspace's requirements, the scan's seeded hosts, the
-// model provider's own egress, the grant re-added at launch by
-// foldRunIntegration/applyWorkspaceRequirements — is folded in by the callers
+// model provider's own egress, the grants re-added at launch by
+// applyWorkspaceRequirements — is folded in by the callers
 // AFTER this returns, and is deliberately left alone: narrowing what an admin
 // already authorized would brick workspace runs at scale, and a member who
 // cannot be trusted with a workspace should not be granted the workspace.
@@ -670,9 +669,8 @@ func (s *Server) auditUserPolicyDrops(ctx context.Context, r *http.Request, drop
 // a member could pair ANY non-reserved stored secret with ANY allowlisted host
 // (a secret-exfil primitive, amplified by scan-seeded egress). DROPPED, not
 // rejected: a run's legitimate model-access grant is re-added admin-side at
-// launch (handleCreateRun) AFTER this returns — foldRunIntegration folds an
-// operator integration's own key (DefaultFor:agent_runs or a workspace pin),
-// applyWorkspaceRequirements folds a workspace requirement's secret — so a
+// launch (handleCreateRun) AFTER this returns — the run's model provider, or
+// applyWorkspaceRequirements folding a workspace requirement's secret — so a
 // member's own copy of one is redundant, and dropping an unmatched grant
 // removes a genuine exfil pairing while the real grant still arrives. (A member
 // run whose model access relies on a raw operator secret with NO integration

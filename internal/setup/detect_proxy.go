@@ -3,26 +3,26 @@
 
 package setup
 
-// detect_proxy.go — host proxy DETECTION (read-only, best-effort). This is the
-// detection half of the Getting-Started "Host Proxy" step (see the R4 catalog
-// in the setup-readiness plan): find the common host-side proxy mechanisms so
-// the wizard can surface + suggest settings. It does NOT configure anything —
-// the upstream-proxy plumbing (wardyn-proxy dialing a corp proxy) is separate.
+// detect_proxy.go is host proxy DETECTION (read-only, best-effort): the
+// detection half of the Getting-Started "Host Proxy" step (R4 catalog), to
+// find common host-side proxy mechanisms so the wizard can surface + suggest
+// settings. It does NOT configure anything — the upstream-proxy plumbing
+// (wardyn-proxy dialing a corp proxy) is separate.
 //
 // Same leaf-package constraint as detect.go: stdlib only.
 //
-// Precedence (per the R4 catalog): env > shell profile > OS. Git config and
-// per-tool configs (npm/pip/cargo/maven/apt) are surfaced as their OWN fields
-// rather than folded into that merge — git resolves its own proxy independent
-// of env ("git's own wins over env"), and each tool's config is a standalone
-// override for that tool only, not a generic system signal. PAC/WPAD is
-// FLAG-only: it is arbitrary JS, so it is never fetched or evaluated.
+// Precedence: env > shell profile > OS. Git config and per-tool configs
+// (npm/pip/cargo/maven/apt) are surfaced as their OWN fields rather than
+// folded into that merge — git resolves its own proxy independent of env,
+// and each tool's config is a standalone override for that tool only, not a
+// generic system signal. PAC/WPAD is FLAG-only: arbitrary JS, never fetched
+// or evaluated.
 //
-// Credential safety: any detected proxy URL containing userinfo (user[:pass]@)
-// is masked to "user:***@host" (or "user@host" with no password) before it is
-// ever stored in the returned struct — the raw credential is never retained,
-// returned, or logged. HasCredentials flags that a credential WAS present, so
-// the UI can offer to store it as a secret instead of a plain value.
+// SECURITY: any detected proxy URL containing userinfo (user[:pass]@) is
+// masked to "user:***@host" before it's ever stored in the returned struct
+// — the raw credential is never retained, returned, or logged.
+// HasCredentials flags that a credential WAS present, so the UI can offer to
+// store it as a secret instead of a plain value.
 
 import (
 	"bufio"
@@ -43,8 +43,7 @@ import (
 )
 
 // Bounds on file reads for the detectors below — a hostile/huge file must
-// never make detection slow or exhaust memory (best-effort scan, not a full
-// parse).
+// never make detection slow or exhaust memory.
 const (
 	maxShellProfileLines = 2000
 	maxToolConfigLines   = 2000
@@ -55,24 +54,19 @@ const (
 // can point it at a temp dir instead of the real /etc/apt/apt.conf.d.
 var aptConfDir = "/etc/apt/apt.conf.d"
 
-// probeTimeout bounds each interop probe. DetectHostProxy no longer runs on the
-// request goroutine — it is swept in the BACKGROUND behind GET /setup/status
-// (internal/api/hostproxy_cache.go), which is what keeps a wedged WSL
-// powershell.exe / netsh / scutil off the wizard poll. This timeout is still the
-// first line of defence: it stops one wedged probe from holding the sweep (and
-// so the memo's answer) hostage.
+// probeTimeout bounds each interop probe. DetectHostProxy runs in the
+// BACKGROUND behind GET /setup/status (hostproxy_cache.go), keeping a
+// wedged WSL powershell.exe/netsh/scutil off the wizard poll; this is still
+// the first line of defence against one wedged probe holding the sweep hostage.
 const probeTimeout = 3 * time.Second
 
-// probeWaitDelay is how long after probeTimeout expires the probe's PIPES are
-// given before they are closed under it.
-//
-// It is not belt-and-braces: exec.CommandContext's kill reaches only the DIRECT
-// child, while Output() waits for EOF on the stdout pipe — so a grandchild that
-// inherited the pipe (the classic WSL interop wedge) holds the call open long
-// past the context. Measured before this: 30.0s against a 3s context, which is
-// also why the deadline in hostproxy_cache.go exists at all. WaitDelay is the
-// stdlib's own answer (Go 1.20+): after it, the pipes are closed and Wait
-// returns.
+// probeWaitDelay is how long after probeTimeout expires the probe's PIPES get
+// before they're closed under it. Not belt-and-braces: exec.CommandContext's
+// kill reaches only the DIRECT child, while Output() waits for EOF on the
+// stdout pipe, so a grandchild inheriting the pipe (the classic WSL interop
+// wedge) holds the call open long past the context (measured: 30.0s against
+// a 3s context). WaitDelay is the stdlib's own answer (Go 1.20+): after it,
+// the pipes close and Wait returns.
 const probeWaitDelay = time.Second
 
 // execCommandOutput runs an external command and returns its stdout. Used for
@@ -164,14 +158,14 @@ type HostProxyDetection struct {
 }
 
 // LoopbackBound returns the labels of any detected generic proxy setting bound
-// to loopback (127.0.0.0/8, localhost, ::1). Such a proxy is reachable from host
-// processes but from nothing else: a sandbox's own 127.0.0.1 is its own, and on
-// a VM-backed Docker host the runtime VM cannot reach the host's loopback
-// either — so chaining sandbox egress through it cannot work, and the failure
-// otherwise lands late, at the first approved request.
+// to loopback (127.0.0.0/8, localhost, ::1). Such a proxy is reachable from
+// host processes but nothing else: a sandbox's own 127.0.0.1 is its own, and
+// on a VM-backed Docker host the runtime VM can't reach the host's loopback
+// either, so chaining sandbox egress through it can't work — without this
+// check the failure lands late, at the first approved request.
 //
-// Values arrive already credential-masked and a masked value keeps its
-// host:port, so this is a pure string test — it never parses or dials anything.
+// Values arrive already credential-masked, and a masked value keeps its
+// host:port, so this is a pure string test that never parses or dials anything.
 func (d HostProxyDetection) LoopbackBound() []string {
 	var out []string
 	for _, s := range []struct {
@@ -186,13 +180,13 @@ func (d HostProxyDetection) LoopbackBound() []string {
 			continue
 		}
 		v := strings.ToLower(strings.TrimSpace(s.setting.Value))
-		// Authority only: a bare "127.0.0.1:8080" has no "//", and a path or
-		// query that merely mentions localhost must not trip this.
+		// Authority only: a bare "127.0.0.1:8080" has no "//", and a path/query
+		// merely mentioning localhost must not trip this.
 		if i := strings.Index(v, "//"); i >= 0 {
 			v = v[i+2:]
 		}
 		// Drop userinfo — a credentialed proxy arrives masked as
-		// "user:***@127.0.0.1:3128", which would otherwise hide the host.
+		// "user:***@127.0.0.1:3128", which would hide the host otherwise.
 		if i := strings.LastIndex(v, "@"); i >= 0 {
 			v = v[i+1:]
 		}
@@ -205,26 +199,27 @@ func (d HostProxyDetection) LoopbackBound() []string {
 }
 
 // hostProxySeedEnv carries a base64'd HostProxyDetection captured by running
-// this same detector ON THE HOST (`wardyn setup detect-proxy`, seeded into the
-// compose env by scripts/up.sh). A containerized wardynd is structurally blind
-// to every host-side tier — the OS/PAC tier dispatches on the *process's* GOOS,
-// git needs a binary the distroless image lacks, and HOME is unset so no shell
-// profile or tool config is reachable — so the host reading is the only truthful
-// one on the container path. base64 because compose interpolates `$` inside .env
-// values; the payload is already credential-masked by newProxySetting.
+// this same detector ON THE HOST (`wardyn setup detect-proxy`, seeded into
+// the compose env by scripts/up.sh). A containerized wardynd is structurally
+// blind to every host-side tier — OS/PAC dispatches on the *process's* GOOS,
+// git needs a binary the distroless image lacks, and HOME is unset so no
+// shell profile or tool config is reachable — so the host reading is the
+// only truthful one on the container path. base64 because compose
+// interpolates `$` inside .env values; the payload is already
+// credential-masked by newProxySetting.
 const hostProxySeedEnv = "WARDYN_HOST_PROXY_B64"
 
-// HostProxySeeded reports whether a host-side detection was seeded in, so the
-// setup check can tell "ran blind in a container" apart from "ran on the host's
-// behalf and genuinely found nothing".
+// HostProxySeeded reports whether a host-side detection was seeded in, so
+// the setup check can tell "ran blind in a container" apart from "ran on the
+// host's behalf and genuinely found nothing".
 func HostProxySeeded() bool {
 	_, ok := decodeHostProxySeed()
 	return ok
 }
 
 // decodeHostProxySeed parses the seed, tolerating absence and any malformed
-// value (best-effort, exactly like every other detector here: a bad seed
-// degrades to live in-process detection, it never errors the wizard).
+// value: a bad seed degrades to live in-process detection, never errors the
+// wizard, like every other detector here.
 func decodeHostProxySeed() (HostProxyDetection, bool) {
 	raw := strings.TrimSpace(os.Getenv(hostProxySeedEnv))
 	if raw == "" {
@@ -246,9 +241,8 @@ func decodeHostProxySeed() (HostProxyDetection, bool) {
 // (env > shell profile > OS). It never fails: every detector tolerates the
 // absence of its mechanism (missing file, missing binary, non-zero exit).
 //
-// A host-side seed (see hostProxySeedEnv) wins outright: it was produced by this
-// same code running natively, where the tiers this process cannot reach are all
-// live.
+// A host-side seed (hostProxySeedEnv) wins outright: produced by this same
+// code running natively, where every tier this process can't reach is live.
 func DetectHostProxy() HostProxyDetection {
 	if det, ok := decodeHostProxySeed(); ok {
 		return det
@@ -385,14 +379,13 @@ var envProxyKeys = []struct{ category, upper, lower string }{
 }
 
 // detectEnvProxyCandidates reads the env-var mechanism: lowercase preferred
-// (httpoxy hygiene) when both cases are set; mismatches records any pair whose
-// values disagree so the step can warn about it.
+// (httpoxy hygiene) when both cases are set; mismatches records any pair
+// whose values disagree so the step can warn about it.
 //
-// A set-but-EMPTY var does not count as a detected proxy: os.LookupEnv reports
-// ok for `export HTTP_PROXY=`, and every consumer downstream tests presence only
-// (winningSetting -> newProxySetting is never nil; the API check tests != nil),
-// so counting it would render a blank-valued "detected" row. Same filter the git
-// tier already applies in gitConfigGet.
+// A set-but-EMPTY var doesn't count as a detected proxy: os.LookupEnv reports
+// ok for `export HTTP_PROXY=`, and every downstream consumer tests presence
+// only, so counting it would render a blank-valued "detected" row. Same
+// filter the git tier already applies in gitConfigGet.
 func detectEnvProxyCandidates() (candidates []proxyCandidate, mismatches []string) {
 	for _, k := range envProxyKeys {
 		upperVal, upperOK := os.LookupEnv(k.upper)

@@ -3,11 +3,10 @@
 
 package oidc
 
-// The login CALLBACK: the IdP redirect handler and the two helpers it is built
-// from — the single-use state/nonce/PKCE cookie consumption that proves the
-// redirect belongs to the browser that started this login, and the ID-token
-// claim decode. Split from oidc.go by seam (the file-size gate); no behaviour
-// lives here that oidc.go's doc does not describe.
+// The login callback: the IdP redirect handler and its two helpers — the
+// single-use state/nonce/PKCE cookie consumption that proves the redirect
+// belongs to the browser that started this login, and the ID-token claim
+// decode. Split from oidc.go for the file-size gate; no new behaviour.
 
 import (
 	"log/slog"
@@ -27,41 +26,23 @@ import (
 //     DefaultRole is configured.
 //  6. Creates a signed Wardyn session cookie.
 //
-// The USER-actionable denials (5's role-denied, 4's domain/
-// unverified-email) redirect to "/?auth_error=<code>" (302) instead of a
-// bare http.Error text page — a login failure otherwise dead-ended the
-// browser on plain text with no way back to the console, and no chance for
-// the sign-in screen to explain what to do next (ask the operator to map a
-// role, use a corp email, etc). The state/nonce/PKCE branches in (1)-(3) stay
-// http.Error: those are ATTACK-shaped (a forged/replayed/mismatched
-// callback), not a real user hitting a real policy denial, and a redirect
-// there would be a worse UX for a case an operator needs to see failed
-// loudly, not routed back into a retry loop.
-// consumeCallbackCookies is CallbackHandler's PHASE 1: prove this redirect is
-// the one THIS browser started, and spend the single-use cookies that prove it.
+// User-actionable denials (5, 4) redirect to "/?auth_error=<code>" so the
+// sign-in screen can explain what to do next; the state/nonce/PKCE checks in
+// (1)-(3) stay http.Error since those are attack-shaped, not policy denials,
+// and should fail loudly rather than retry.
+// consumeCallbackCookies proves this redirect belongs to the browser that
+// started the login and spends the single-use state/nonce/PKCE cookies.
 //
-// EVERY COOKIE IS READ BEFORE ANY IS CLEARED, and that order is the point. The
-// three are single-use by construction — state guards this redirect, nonce binds
-// this ID token, the verifier proves this exchange — so clearing one before the
-// others are known to be present would spend it on a request that never reaches
-// the token exchange, turning a retryable error into a login the human cannot
-// repeat by pressing back. On the failure paths nothing is cleared at all: the
-// browser keeps the cookies and the flow can be retried.
+// All three cookies are read before any is cleared: clearing one before the
+// others are confirmed present would spend it on a request that never
+// reaches the token exchange, turning a retryable error into one the human
+// can't retry. On failure nothing is cleared, so the flow stays retryable.
+// The state check is the CSRF check and runs first.
 //
-// The state comparison is the CSRF check and stays FIRST: a callback whose state
-// does not match a cookie this server set is not a login this browser began, and
-// nothing else about the request is worth reading until that holds.
-//
-// Returns the nonce the ID token must carry, the PKCE verifier the exchange
-// must present, and whether this browser's authorization request was WIDENED
-// beyond the login's own scopes. ok=false means the response has ALREADY been
-// written — the same (value, ok) shape parseIDParam and the getWorkspace*
-// helpers use, so a caller that forgets to return on !ok is a familiar bug
-// rather than a new one.
-//
-// The widened marker is read with the other three and carries no secret: it is
-// the fact that this redirect asked for more than a login, which is what lets a
-// refusal of the extras be retried without them.
+// ok=false means the response was already written (same (value, ok) shape as
+// parseIDParam/getWorkspace* — a caller that forgets to check ok is a
+// familiar bug). widened reports, without carrying any secret, whether this
+// browser's authorization request asked for more than the login's own scopes.
 func (a *Authenticator) consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(a.cookieName(stateCookieName))
@@ -84,28 +65,23 @@ func (a *Authenticator) consumeCallbackCookies(w http.ResponseWriter, r *http.Re
 	a.clearCookie(w, stateCookieName)
 	a.clearCookie(w, nonceCookieName)
 	a.clearCookie(w, pkceCookieName)
-	// The widened marker is NOT cleared here: the caller expires it only when
-	// one was presented (expireWidenedMarker), so an unwidened login's callback
-	// writes exactly the Set-Cookie headers it always did.
+	// Widened marker is left for the caller to expire only when present, so an
+	// unwidened login's Set-Cookie headers are unchanged.
 	return nonceCookie.Value, pkceCookie.Value, widened, true
 }
 
-// callbackClaims is everything CallbackHandler reads out of a verified
-// id_token, decoded by decodeCallbackClaims. Split out of the handler (round-3
-// lint gate: funlen) with NO behaviour change — the same three tolerant decodes,
-// the same one fatal decode, the same unreadable list.
+// callbackClaims is everything CallbackHandler reads from a verified
+// id_token, decoded by decodeCallbackClaims.
 type callbackClaims struct {
 	email         string
 	emailVerified *bool
-	// name is the IdP's display-name claim, carried on the session for the
-	// console header only (Session.Name) — never gates, never logged.
+	// name: console header display only — never gates, never logged.
 	name       string
 	roles      []string
 	groups     []string
 	claimNames map[string]any
-	// unreadable lists the claims the IdP sent in a shape this build cannot
-	// decode; CallbackHandler stamps the snapshot partial and refuses a
-	// role-widening default on it.
+	// unreadable: claims sent in a shape this build can't decode; stamps the
+	// snapshot partial and blocks a role-widening default.
 	unreadable []string
 }
 
@@ -113,55 +89,36 @@ type callbackClaims struct {
 // standard-claims decode is fatal; the role/group/distributed-claim decodes are
 // tolerant and report their loss through callbackClaims.unreadable.
 func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
-	// Extract standard claims from the ID token — UNCHANGED shape and fatal
-	// error from before role derivation existed: this is the ONE claims
-	// struct whose failure to parse must abort the login.
+	// The one claims struct whose failure to parse must abort the login.
 	var claims struct {
 		Email string `json:"email"`
-		// *bool, not bool: an Entra ID token typically OMITS email_verified
-		// entirely rather than sending it false (see AllowedEmailDomains'
-		// doc), and a plain bool would silently decode that absence as
-		// false — the SAME denial as an IdP that explicitly told us the
-		// email is unverified, when in truth the IdP said nothing at all.
-		// C1: the gate below (4) treats nil and false as distinct denials,
-		// each with its own auth_error code.
+		// *bool, not bool: Entra typically omits email_verified rather than
+		// sending false, and a plain bool would conflate "unset" with
+		// "false". The gate below treats nil and false as distinct denials.
 		EmailVerified *bool `json:"email_verified"`
-		// Display name for the console header (0.7.1). Optional by nature — an
-		// absent key decodes to "" and is not an error; ONLY "name", never
-		// preferred_username/upn, which are email substitutes and would
-		// silently re-base the AllowedEmailDomains gate if routed anywhere.
+		// Console header display only. ONLY "name" — never preferred_username/
+		// upn, which are email substitutes and would re-base the
+		// AllowedEmailDomains gate.
 		Name string `json:"name"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		return callbackClaims{}, err // CallbackHandler answers 401 "id_token claims extraction failed", unchanged
+		return callbackClaims{}, err // CallbackHandler answers 401 here.
 	}
 
-	// Role-derivation claims are decoded SEPARATELY and TOLERANTLY, one
-	// struct per claim. "roles" (Entra App Roles — the priority path) and
-	// "groups" are supposed to be JSON string arrays, but a real IdP
-	// sometimes emits a scalar string (or object) instead — e.g. a single
-	// group as bare "eng-team" rather than ["eng-team"]. Folding these into
-	// the claims struct above turned that into a FATAL unmarshal error for
-	// every such IdP, a 100% login outage even with WARDYN_OIDC_ROLE_MAP
-	// unset. A malformed claim here decodes to nil (contributes nothing to
-	// deriveRole — fail closed on that one claim, not the whole login), and a
-	// malformed roles claim can't discard a valid groups claim or vice versa
-	// since each has its own struct.
+	// roles/groups are decoded separately and tolerantly, one struct per
+	// claim: a real IdP sometimes sends a scalar instead of a JSON array
+	// (e.g. bare "eng-team" instead of ["eng-team"]), which would otherwise
+	// be a fatal unmarshal error for every such IdP. A malformed claim
+	// decodes to nil (fails closed on that claim only) and can't discard
+	// the other claim.
 	//
-	// TOLERATING THE SHAPE AND REPORTING THE LOSS ARE DIFFERENT JOBS, and the
-	// decode error must not be discarded, or the two collapse. A claim the IdP
-	// DID send in a shape this build cannot read then arrived at derivation as
-	// nil — byte-for-byte "asked, there were none". The group the human really
-	// holds vanished from the snapshot with the PF-26 partial bit CLEAR, so
-	// capScan never consulted capUnresolvableGroupDeny and effectiveCeiling
-	// never took ceilingWithUnusableGroups: a group-subject DENY protected
-	// nothing and a group-tier ceiling degraded to the deployment default, with
-	// no refusal, no audit row and nothing to notice. It is the same evaporation
-	// the byte cap and the Entra overage are already closed for, on the one
-	// input neither can see, so unreadableClaims below stamps the same bit and
-	// takes the same role-widening refusal. The claim still contributes NOTHING
-	// to derivation: coercing a scalar into a one-element list would let the raw
-	// string match a role-map row (TestCallbackScalarGroupsClaimMapSetContributesNothing).
+	// Reporting the loss matters as much as tolerating the shape: a claim the
+	// IdP sent in an unreadable shape must not look identical to "the IdP
+	// sent none", or a group-subject deny or group-tier ceiling could
+	// silently stop applying with no refusal and no audit trail. The claim
+	// still contributes nothing to derivation — a coerced scalar could match
+	// a role-map row it shouldn't (see
+	// TestCallbackScalarGroupsClaimMapSetContributesNothing).
 	var unreadableClaims []string
 	var rc struct {
 		Roles []string `json:"roles"`
@@ -175,18 +132,15 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	if err := idToken.Claims(&gc); err != nil {
 		unreadableClaims = append(unreadableClaims, "groups")
 	}
-	// The distributed-claim pointer, decoded just as tolerantly and for the
-	// same fail-closed reason: when `_claim_names` names "groups" (or "roles"),
-	// the claim above is absent because the IdP OMITTED it — an overage — not
-	// because the human is in no groups. sessionGroups turns that into the
-	// truncation bit. map[string]any rather than map[string]string so a value
-	// shape this package does not read cannot fail the decode and hide the
-	// marker.
+	// The distributed-claim pointer is decoded the same tolerant way and for
+	// the same reason: when _claim_names points at "groups" (or "roles"),
+	// the claim above is absent because the IdP omitted it, not because the
+	// human has none. map[string]any (not map[string]string) so an
+	// unexpected value shape can't fail the decode and hide the marker.
 	//
-	// A marker this build cannot read is a question that cannot be answered, so
-	// it joins unreadableClaims too — defense in depth rather than a live arm:
-	// go-oidc parses the distributed-claim block during Verify and refuses such
-	// an id_token outright, one step earlier (TestUnreadableClaimNamesIsRefusedUpstream).
+	// An unreadable marker joins unreadableClaims too, as defense in depth —
+	// go-oidc already refuses an id_token with an unreadable distributed-claim
+	// block during Verify (TestUnreadableClaimNamesIsRefusedUpstream).
 	var dc struct {
 		ClaimNames map[string]any `json:"_claim_names"`
 	}
@@ -208,18 +162,16 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	a.callback(w, r, nil, nil)
 }
 
-// DenialReservedPrincipal is the reason CallbackHandlerWithDenials reports a
-// sign-in refused because reserved said its subject names an identity that
-// is not a person. Not an auth_error code: the browser gets the generic
-// authErrorSignInRefused, since nothing the person does can clear it.
+// DenialReservedPrincipal reports a sign-in refused because a subject names
+// an identity that isn't a person. Not an auth_error code — the browser sees
+// the generic authErrorSignInRefused, since nothing the user can do clears it.
 const DenialReservedPrincipal = "reserved_principal"
 
-// CallbackHandlerWithDenials is CallbackHandler that refuses any subject
-// reserved reports true for (DenialReservedPrincipal), and reports each
-// sign-in refused over that or over a user type (DenialUserTypeAmbiguous,
-// DenialUserTypeUnknown) to onDenied, so internal/api can audit it as
-// auth.fail. This package stays store- and audit-agnostic, as it is for
-// OnLogin: which principals are reserved is internal/api's to say.
+// CallbackHandlerWithDenials is CallbackHandler with a reserved-subject check
+// (DenialReservedPrincipal) and sign-in denials (including
+// DenialUserTypeAmbiguous, DenialUserTypeUnknown) reported to onDenied so
+// internal/api can audit them as auth.fail. This package stays store- and
+// audit-agnostic; internal/api decides which principals are reserved.
 func (a *Authenticator) CallbackHandlerWithDenials(reserved func(sub string) bool, onDenied func(r *http.Request, reason string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, reserved, onDenied) }
 }
@@ -234,20 +186,15 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		a.expireWidenedMarker(w)
 	}
 
-	// A refusal of the EXTRA scopes must not cost this person the console. When
-	// (and only when) this browser's authorization request was widened by an
-	// attached login-grant sink, a consent/interaction refusal restarts the
-	// login with the login's own scopes — once, by construction. Every other
-	// refusal, and every unwidened login, falls through to the behaviour below
-	// exactly as before (login_grant.go).
+	// A refusal of the extra (widened) scopes restarts the login with just the
+	// login's own scopes, once, so it doesn't cost the person the console.
+	// Every other refusal falls through unchanged (login_grant.go).
 	if idpErr := r.URL.Query().Get("error"); idpErr != "" {
 		if a.retryLoginUnwidened(w, r, widened, idpErr) {
 			return
 		}
-		// Not retried: the response below is unchanged, but the cause is no
-		// longer discarded. Without this line an operator whose tenant refuses
-		// with a code outside the retry set saw a bare 400 and nothing in the
-		// log naming why.
+		// Not retried: log the cause so a refusal outside the retry set isn't
+		// a bare 400 with nothing to explain why.
 		a.logUnretriedRefusal(r, widened, idpErr)
 	}
 
@@ -257,19 +204,16 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		http.Error(w, "missing code parameter", http.StatusBadRequest)
 		return
 	}
-	// Inject the stored HTTP client into the exchange context so tests that
-	// use a custom transport (e.g. rewriteTokenRT) also work for token exchange.
+	// Inject the stored HTTP client so tests with a custom transport (e.g.
+	// rewriteTokenRT) work for token exchange.
 	exchangeCtx := r.Context()
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
-	// A transient IdP hiccup on the token endpoint (5xx, timeout) must not
-	// hard-fail the whole login on the FIRST blip — retryExchange gives it
-	// tokenExchangeRetries short-backoff attempts before giving up. A
-	// PERMANENT rejection (bad client secret, expired/replayed code —
-	// invalid_grant is the common case) is never retried: the code is
-	// single-use, so re-sending it after the IdP has already consumed it
-	// would just trade one clear error for a confusing "invalid_grant" one.
+	// A transient IdP hiccup (5xx, timeout) gets tokenExchangeRetries
+	// short-backoff attempts. A permanent rejection (bad secret, expired/
+	// replayed code) is never retried — the code is single-use, so resending
+	// it would just trade a clear error for a confusing invalid_grant one.
 	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
 	if exchangeErr != nil {
 		if isTransientOIDCErr(exchangeErr) {
@@ -304,35 +248,29 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	}
 	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
 	if denied != "" {
-		// L6: a denied login must not leave a PRE-EXISTING session cookie
-		// (from before this re-login attempt) still valid in the browser.
+		// A denied login must not leave a pre-existing session cookie still valid.
 		a.clearCookie(w, sessionCookieName)
 		a.redirectAuthError(w, r, denied)
 		return
 	}
 
-	// OnLogin fires once the login is APPROVED (past every denial branch
-	// above) but before the session cookie is written — a real login, not a
-	// probe. Best-effort: nil is a no-op, and the integrator's own callback is
-	// responsible for not letting a backend hiccup fail the login (see the
-	// Config.OnLogin doc). groups/groupsTruncated are the SAME values the
-	// session below carries, never re-derived.
+	// OnLogin fires once the login is approved but before the session cookie
+	// is written. Best-effort: nil is a no-op; the integrator's callback is
+	// responsible for not letting a backend hiccup fail the login. groups/
+	// groupsTruncated are the same values the session below carries.
 	if a.cfg.OnLogin != nil {
 		a.cfg.OnLogin(r.Context(), sess.Sub, sess.Role, sess.UserType, sess.Groups, sess.GroupsTruncated)
 	}
-	// The login-grant sink, for the same reason and in the same place as
-	// OnLogin: the login is APPROVED here and not before, so a refused login
-	// never yields a downstream credential. It is handed the exchanged grant
-	// and reports nothing — a credential that could not be stored must not
-	// cost this person the session they just earned (login_grant.go).
-	// Session is unchanged by it: no token of any kind rides the cookie.
+	// The login-grant sink runs here for the same reason as OnLogin: a
+	// refused login never yields a downstream credential, and a credential
+	// that fails to store must not cost this person the session they just
+	// earned (login_grant.go). The session itself carries no token.
 	a.captureLoginGrant(r.Context(), idToken.Subject, token)
 
 	// (6) Create a Wardyn session.
 	sess.Expiry = idToken.Expiry
-	sess.IssuedAt = time.Now().UTC() // D16: the cutoff SessionRevocations compares against
+	sess.IssuedAt = time.Now().UTC() // The cutoff SessionRevocations compares against.
 	if sess.Expiry.IsZero() {
-		// Default to 1 hour if the IdP didn't set an expiry.
 		sess.Expiry = time.Now().UTC().Add(time.Hour)
 	}
 	cookie, err := a.encodeSession(sess)
@@ -344,18 +282,15 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
 
-// admit is the sign-in DECISION over a verified token's claims — the reserved
-// subject, the email-domain gate, role and user-type derivation, the overage
-// and unreadable-claim refusals, and the group snapshot — shared by the
-// callback and by a portal's token exchange (VerifySubjectToken) so the two can
-// never admit different people or derive them differently. denied is the
-// auth_error code of a refusal, "" when admitted; the Session carries identity
-// only, and its caller stamps the times.
+// admit is the sign-in decision over a verified token's claims — reserved
+// subject, email-domain gate, role/user-type derivation, overage and
+// unreadable-claim refusals, and the group snapshot — shared by the callback
+// and a portal's token exchange (VerifySubjectToken) so both admit the same
+// way. denied is the auth_error code of a refusal, "" when admitted.
 func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, reserved func(string) bool, onDenied func(*http.Request, string)) (Session, string) {
-	// (3b) A subject that names a non-person identity (the admin token, the
-	// local operator, a device) would be treated as that identity everywhere
-	// a principal is compared — refused before anything derives from it, so
-	// neither OnLogin nor the login-grant sink ever sees it.
+	// A subject naming a non-person identity (admin token, local operator, a
+	// device) is refused before anything derives from it, so OnLogin and the
+	// login-grant sink never see it.
 	if reserved != nil && reserved(sub) {
 		slog.Warn("oidc: login denied — the identity provider's subject is reserved for a non-person Wardyn identity",
 			"sub", sub, "issuer", a.cfg.IssuerURL)
@@ -368,13 +303,12 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		switch {
 		case cc.emailVerified == nil:
-			// C1: distinct from "false" — the IdP said nothing at all about
-			// verification (Entra's normal shape), not that it explicitly
-			// failed. No opt-in flag to relax this: allowlisting a
-			// self-asserted, unverifiable email is exactly the risk
-			// AllowedEmailDomains exists to fail closed on. WARDYN_OIDC_ROLE_MAP
-			// (App Roles) is the documented better answer for an IdP that
-			// never sends this claim.
+			// Distinct from "false": the IdP said nothing about verification
+			// (Entra's normal shape). No opt-in flag relaxes this —
+			// allowlisting a self-asserted, unverifiable email is exactly
+			// the risk AllowedEmailDomains fails closed on.
+			// WARDYN_OIDC_ROLE_MAP (App Roles) is the better answer for an
+			// IdP that never sends this claim.
 			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
 				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", "WARDYN_OIDC_EMAIL_DOMAINS")
 			return Session{}, authErrorEmailVerifiedAbsent
@@ -392,28 +326,22 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 		return Session{}, denied
 	}
 	role, matches := d.Role, d.Matches
-	// The overage half of role derivation. deriveRole is a pure function of the
-	// claims it was HANDED, and on an overage the claim the role map is keyed on
-	// is simply not in the token — so its "nothing matched, take the default"
-	// is an absence of evidence, not a fact. Denying here rather than inside
-	// deriveRole keeps that function pure and puts the refusal beside every
-	// other login denial, and it is the same fail-closed choice
-	// authErrorRoleCheckUnavailable already makes when the role-mapping store
-	// cannot be read: an unanswerable input never widens a session.
+	// On an overage the role-map's key claim is simply absent from the
+	// token, so "nothing matched, take the default" is absence of evidence,
+	// not fact. Denied here (not inside deriveRole, which stays pure) for
+	// the same fail-closed reason as authErrorRoleCheckUnavailable: an
+	// unanswerable input never widens a session.
 	if overageWidensRole(cc.claimNames, role, matches) {
 		slog.Warn("oidc: login denied — the IdP omitted a claim role derivation depends on (overage) and the default role would widen this session",
 			"sub", sub, "default_role", a.cfg.DefaultRole,
 			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(cc.claimNames))
 		return Session{}, authErrorClaimsOverage
 	}
-	// The UNREADABLE half of the same question, kept as its own branch so each
-	// denial logs the cause it actually knows. The IdP sent the claim, so
-	// `_claim_names` says nothing and claimNamesKeys would log an empty list;
-	// what an operator needs here is WHICH claim arrived in a shape this build
-	// could not decode. The auth_error code is shared deliberately: to the human
-	// at the sign-in screen both mean "this console could not read the claim
-	// your access depends on and will not guess", and retrying sends the same
-	// token either way.
+	// The unreadable half of the same question, kept separate so the log
+	// names which claim arrived in an undecodable shape (here _claim_names
+	// is empty, unlike a true overage). Shares the same auth_error code
+	// deliberately: to the user both mean the same thing, and retrying sends
+	// the same token.
 	if unanswerableWidensRole(len(cc.unreadable) > 0, role, matches) {
 		slog.Warn("oidc: login denied — the IdP sent a claim role derivation depends on in a shape this build cannot decode, and the default role would widen this session",
 			"sub", sub, "default_role", a.cfg.DefaultRole,
@@ -424,24 +352,17 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 		slog.Debug("oidc: role derivation matched", "sub", sub, "role", role, "matches", matches)
 	}
 
-	// Groups is stamped from the SAME two tolerantly-decoded claims deriveRole
-	// just consumed — a claim malformed enough to contribute nothing to the
-	// role contributes nothing here either, and never fails the login. The
-	// `_claim_names` pointer rides along so an IdP-side overage stamps the
-	// snapshot partial instead of empty. Computed BEFORE the OnLogin call
-	// below (#152) so OnLogin's stamp and the session's own Groups/
-	// GroupsTruncated are the exact same values, never two derivations of the
-	// same claims that could drift apart.
+	// Groups is stamped from the same tolerantly-decoded claims deriveRole
+	// consumed, so a malformed claim contributes nothing here either and
+	// never fails the login. Computed before OnLogin so both see the same
+	// values rather than two derivations that could drift apart.
 	groups, groupsTruncated := sessionGroups(cc.roles, cc.groups, cc.claimNames)
 	if len(cc.unreadable) > 0 {
-		// PF-26's third cause, stamped here rather than inside sessionGroups
-		// because it is the DECODE that failed, and sessionGroups only ever
-		// sees what survived one. "Contributes nothing to the role" and
-		// "contributes nothing to the snapshot" were both already true; what
-		// was missing is that the snapshot said so. Without this the login
-		// carries a COMPLETE-and-empty group identity for a human whose IdP
-		// just named their groups, and every group-subject DENY and group-tier
-		// ceiling written for them evaporates silently.
+		// Stamped here (not inside sessionGroups, which only sees what
+		// survived a decode) so a login doesn't carry a complete-and-empty
+		// group identity for someone whose IdP did name groups — otherwise
+		// group-subject denies and group-tier ceilings for them evaporate
+		// silently.
 		groupsTruncated = true
 		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
 			"sub", sub, "unreadable_claims", cc.unreadable)
@@ -456,13 +377,11 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 // see Config.RoleMap / deriveRole for precedence. denied is the auth_error
 // code of a refusal, "" when the login may proceed.
 func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClaims, onUserTypeDenied func(*http.Request, string)) (Derivation, string) {
-	// When RoleMappings (the console's Getting Started -> People store) is
-	// wired, its rows are merged with the chart map FIRST (mergeRoleMaps) — a
-	// store read error denies this login (authErrorRoleCheckUnavailable)
-	// rather than silently falling back to the env-only map, which could
-	// WIDEN access under WARDYN_OIDC_DEFAULT_ROLE=admin. Denying on !ok
-	// (rather than issuing a roleless session) is what keeps decodeSession
-	// simple: every cookie this package ever writes has a non-empty Role.
+	// When RoleMappings (console People store) is wired, its rows merge with
+	// the chart map first; a store read error denies the login rather than
+	// silently falling back to the env-only map, which could widen access
+	// under WARDYN_OIDC_DEFAULT_ROLE=admin. Every session cookie this
+	// package writes has a non-empty Role.
 	roleMap := a.cfg.RoleMap
 	if a.cfg.RoleMappings != nil {
 		rows, rerr := a.cfg.RoleMappings.ListRoleMappings(r.Context())
@@ -473,24 +392,18 @@ func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClai
 		var shadowed []string
 		roleMap, shadowed = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
 		if len(shadowed) > 0 {
-			// shadowed now covers two distinct causes mergeRoleMaps folds
-			// into one list: a chart/operator entry that collides with an
-			// already-saved console row (the API layer refuses CREATING a
-			// new collision, so a later helm upgrade is the only way one
-			// reaches here), or a console row that was itself rejected as
-			// non-canonical/invalid (see mergeRoleMaps). Either way the row
-			// contributed nothing to this login's role derivation.
+			// shadowed covers two causes: a chart/operator entry colliding
+			// with an existing console row, or a console row rejected as
+			// invalid (see mergeRoleMaps). Either way it contributed nothing
+			// to this derivation.
 			slog.Warn("oidc: one or more console-managed role mappings were shadowed by chart/operator config or rejected as invalid", "shadowed", shadowed)
 		}
 	}
-	// The MERGED map is the only place the console's group->role rows are
-	// visible, and it exists nowhere but here — so this is where the
-	// groups-scope question gets asked about them. One line per process,
-	// never a denial; see warnMergedMapNeedsGroupsScope.
+	// The merged map is the only place console group->role rows are visible,
+	// so the groups-scope check runs here — one log line, never a denial.
 	a.warnMergedMapNeedsGroupsScope(roleMap, cc.roles, cc.groups)
-	// The user types, read once like the rows above and failing closed the
-	// same way: whether a named type exists, and its priority, decide the
-	// session as much as the rows do.
+	// User types are read once, failing closed the same way — priority
+	// decides the session as much as the role rows do.
 	userTypes, terr := a.loadUserTypes(r.Context())
 	if terr != nil {
 		slog.Error("oidc: user-type store unavailable, denying login (fail closed)", "error", terr)

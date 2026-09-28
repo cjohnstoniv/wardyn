@@ -55,8 +55,6 @@ func TestReasonCanonMatchesMock(t *testing.T) {
 		{"X_SUB_CODEX", reasonXSubCodex, "Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting."},
 		{"X_BEDROCK_CODEX", reasonXBedrockCodex, "Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting."},
 		{"X_OPENAI_CLAUDE", reasonXOpenAIClaude, "Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting."},
-		{"X_SUB_DIRECT", reasonXSubDirect, "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting."},
-		{"BEDROCK_FEATURES", reasonBedrockFeatures, "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses."},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
@@ -78,236 +76,6 @@ func TestCapabilitiesFor(t *testing.T) {
 		env  capEnv
 		want []Capability
 	}{
-		// ---------------- anthropic_api_key ----------------
-		{
-			name: "anthropic_api_key: credential stored",
-			in:   types.Integration{Kind: "anthropic_api_key", Secrets: []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")}},
-			env:  capEnv{SecretPresent: secretSet("anthropic-api-key")},
-			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXKeyCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "anthropic_api_key: credential never configured",
-			in:   types.Integration{Kind: "anthropic_api_key"},
-			env:  capEnv{SecretPresent: secretSet()},
-			want: []Capability{
-				{ID: "model_api", State: CapNeedsSetup, Reason: "no credential configured"},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: "no credential configured"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXKeyCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: "no credential configured"},
-			},
-		},
-		{
-			name: "anthropic_api_key: credential ref configured but dangling",
-			in:   types.Integration{Kind: "anthropic_api_key", Secrets: []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")}},
-			env:  capEnv{SecretPresent: secretSet()},
-			want: []Capability{
-				{ID: "model_api", State: CapNeedsSetup, Reason: `secret "anthropic-api-key" not stored`},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: `secret "anthropic-api-key" not stored`},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXKeyCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: `secret "anthropic-api-key" not stored`},
-			},
-		},
-
-		// ---------------- openai_api_key (mirror of anthropic_api_key) ----------------
-		{
-			name: "openai_api_key: credential stored",
-			in:   types.Integration{Kind: "openai_api_key", Secrets: []types.IntegrationSecret{secretRow("api_key", "openai-api-key")}},
-			env:  capEnv{SecretPresent: secretSet("openai-api-key")},
-			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:claude-code", State: CapImpossible, Reason: reasonXOpenAIClaude},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "openai_api_key: credential absent",
-			in:   types.Integration{Kind: "openai_api_key"},
-			env:  capEnv{SecretPresent: secretSet()},
-			want: []Capability{
-				{ID: "model_api", State: CapNeedsSetup, Reason: "no credential configured"},
-				{ID: "tool:codex-cli", State: CapNeedsSetup, Reason: "no credential configured"},
-				{ID: "tool:claude-code", State: CapImpossible, Reason: reasonXOpenAIClaude},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: "no credential configured"},
-			},
-		},
-
-		// ---------------- anthropic_subscription ----------------
-		{
-			name: "subscription: managed lane, blob present",
-			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
-			env:  capEnv{ManagedBlobPresent: func(p string) bool { return p == "anthropic" }},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			// PLATFORM-API-4: with no managed token connected, wardyn_features
-			// must NOT read "available" — the sibling tool:claude-code cell
-			// right above already reports the identical gap.
-			name: "subscription: managed lane, no blob connected",
-			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
-			env:  capEnv{ManagedBlobPresent: func(string) bool { return false }},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: "no managed Claude subscription connected", Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: "no managed Claude subscription connected", Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "subscription: unset lane defaults to managed",
-			in:   types.Integration{Kind: "anthropic_subscription"},
-			env:  capEnv{ManagedBlobPresent: func(p string) bool { return p == "anthropic" }},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "subscription: resident_host lane, session live",
-			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
-			env:  capEnv{ResidentSubscriptionLive: true, HostLike: true},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_mount"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: "resident_mount"},
-			},
-		},
-		{
-			name: "subscription: resident_host lane, host-like but no live session",
-			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
-			env:  capEnv{ResidentSubscriptionLive: false, HostLike: true},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: "host-only: no live Claude CLI session found on this host", Residency: "resident_mount"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: "resident_mount"},
-			},
-		},
-		{
-			name: "subscription: resident_host lane, sealed container (not host-like)",
-			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
-			env:  capEnv{ResidentSubscriptionLive: false, HostLike: false},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: "host-only: wardynd runs in a container and can only see a ~/.claude mounted into it — the managed lane avoids this", Residency: "resident_mount"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: "resident_mount"},
-			},
-		},
-
-		// ---------------- bedrock ----------------
-		{
-			name: "bedrock: bearer lane, region+model set, credential present",
-			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "bearer"}},
-			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: true},
-			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected", Reason: reasonBedrockFeatures},
-			},
-		},
-		{
-			name: "bedrock: auto lane (resident, not bearer), region+model set, credential present",
-			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "auto"}},
-			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: true},
-			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "resident_env", Reason: reasonBedrockFeatures},
-			},
-		},
-		{
-			// The integration is read first (the wizard-completes-but-needs_setup
-			// bug): resolveBedrockAuth resolves the row's own region/model over
-			// the boot config, so a deployment that never set WARDYN_BEDROCK_*
-			// must NOT report needs_setup for a row that carries both.
-			name: "bedrock: region+model on the INTEGRATION, boot flags unset, credential present",
-			in: types.Integration{Kind: "bedrock", Config: map[string]any{
-				"auth_lane": "bearer", "region": "us-east-1", "model": "us.anthropic.claude-x"}},
-			env: capEnv{BedrockRegionSet: false, BedrockModelSet: false, BedrockCredentialPresent: true},
-			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected", Reason: reasonBedrockFeatures},
-			},
-		},
-		{
-			// The other half of the same precedence: the boot config is the
-			// FALLBACK for whatever the row leaves unset ("a selection wins only
-			// the fields it sets" — runs_bedrock.go).
-			name: "bedrock: region on the integration, model from the boot fallback, credential present",
-			in: types.Integration{Kind: "bedrock", Config: map[string]any{
-				"auth_lane": "auto", "region": "eu-west-1"}},
-			env: capEnv{BedrockRegionSet: false, BedrockModelSet: true, BedrockCredentialPresent: true},
-			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "resident_env", Reason: reasonBedrockFeatures},
-			},
-		},
-		{
-			name: "bedrock: region unset — every cell needs setup (resolveBedrockAuth is unready)",
-			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "sso"}},
-			env:  capEnv{BedrockRegionSet: false, BedrockModelSet: true},
-			want: []Capability{
-				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-			},
-		},
-		{
-			name: "bedrock: model unset — same, either unset takes the whole integration out",
-			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "static"}},
-			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: false},
-			want: []Capability{
-				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-			},
-		},
-		{
-			// Region+model set but no credential anywhere in resolveBedrockAuth's
-			// ladder (bearer / SSO / mount / resident keys): the matrix must not
-			// read "available" off region+model alone — three readiness surfaces
-			// would then believe in a run that silently gets no Bedrock transport at
-			// all.
-			name: "bedrock: region+model set, ZERO credentials — needs setup, not available",
-			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "static"}},
-			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: false},
-			want: []Capability{
-				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
-				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
-			},
-		},
-
-		// azure_openai was the fifth AI kind. Its ONLY capability was
-		// wardyn_features (the AI Run Composer, deleted) — it could never drive
-		// an agent tool and had no sandbox lane at all. With the composer gone
-		// it was a connectable credential wired to nothing, so the kind was
-		// removed; capabilitiesFor now falls through to the generic branch for
-		// it like any other unrecognized kind.
-
 		// ---------------- scm: github_app ----------------
 		{
 			name: "github_app: both credentials stored",
@@ -422,30 +190,26 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- DisabledCaps / Disabled overrides ----------------
 		{
 			name: "DisabledCaps turns off one cell and leaves the rest alone",
-			in: types.Integration{Kind: "anthropic_api_key",
-				Secrets:              []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")},
-				DisabledCapabilities: []string{"wardyn_features"},
+			in: types.Integration{Kind: "github_app",
+				Secrets:              []types.IntegrationSecret{secretRow("app_id", "github-app-id"), secretRow("app_key", "github-app-key")},
+				DisabledCapabilities: []string{"egress_host"},
 			},
-			env: capEnv{SecretPresent: secretSet("anthropic-api-key")},
+			env: capEnv{SecretPresent: secretSet("github-app-id", "github-app-key")},
 			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXKeyCodex},
-				{ID: "wardyn_features", State: CapOff, Reason: "disabled"},
+				{ID: "clone:app", State: CapAvailable, Residency: "brokered"},
+				{ID: "egress_host", State: CapOff, Reason: "disabled"},
 			},
 		},
 		{
-			name: "Disabled integration forces EVERY cell off, including a protocol impossibility",
-			in: types.Integration{Kind: "anthropic_api_key",
-				Secrets:  []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")},
+			name: "Disabled integration forces EVERY cell off",
+			in: types.Integration{Kind: "github_app",
+				Secrets:  []types.IntegrationSecret{secretRow("app_id", "github-app-id"), secretRow("app_key", "github-app-key")},
 				Disabled: true,
 			},
-			env: capEnv{SecretPresent: secretSet("anthropic-api-key")},
+			env: capEnv{SecretPresent: secretSet("github-app-id", "github-app-key")},
 			want: []Capability{
-				{ID: "model_api", State: CapOff, Reason: "integration disabled"},
-				{ID: "tool:claude-code", State: CapOff, Reason: "integration disabled"},
-				{ID: "tool:codex-cli", State: CapOff, Reason: "integration disabled"},
-				{ID: "wardyn_features", State: CapOff, Reason: "integration disabled"},
+				{ID: "clone:app", State: CapOff, Reason: "integration disabled"},
+				{ID: "egress_host", State: CapOff, Reason: "integration disabled"},
 			},
 		},
 
@@ -491,13 +255,10 @@ func integrationsTestConfig(t *testing.T, sc types.SiteConfig, secrets map[strin
 }
 
 // effectiveIntegrationsFor is effectiveIntegrations' test-call convenience:
-// derives present/bedrock the same way the zero-arg production caller
-// (integrationsWithCapabilities) does, so PLATFORM-API-7's threaded signature
-// (present/bedrock as parameters, not recomputed internally) doesn't need
-// touching at every one of this file's call sites.
+// derives present the same way integrationsWithCapabilities' operator callers
+// do, so the threaded signature doesn't need touching at every call site.
 func effectiveIntegrationsFor(s *Server, ctx context.Context) []integrationRow {
-	present := s.presentSecretNames(ctx)
-	return s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, types.SiteConfig{}, awsSSOScope{}))
+	return s.effectiveIntegrations(ctx, s.presentSecretNames(ctx))
 }
 
 func findRow(rows []integrationRow, id string) (integrationRow, bool) {
@@ -509,102 +270,47 @@ func findRow(rows []integrationRow, id string) (integrationRow, bool) {
 	return integrationRow{}, false
 }
 
-func TestEffectiveIntegrations_AnthropicAPIKey(t *testing.T) {
-	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "anthropic_api_key")
-	if !ok {
-		t.Fatal("expected an anthropic_api_key row")
+// TestEffectiveIntegrations_NoAIRows pins #547: model access is a model
+// provider, so no AI-kind row is in the effective set — neither one derived from
+// the operator's own model credentials (an anthropic-api-key or openai-api-key
+// secret, a live host subscription, a managed token, Bedrock boot config) nor a
+// STORED one. Every resolver reads this set, so a stored AI row that names egress
+// and is required by a workspace must not inject the operator's key either.
+func TestEffectiveIntegrations_NoAIRows(t *testing.T) {
+	stored := []types.Integration{
+		{ID: "corp-anthropic", Kind: types.IntegrationKindAnthropicAPIKey, DefaultFor: []string{"agent_runs"},
+			Egress: []string{"api.anthropic.com"},
+			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
+				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}}},
+		{ID: "corp-bedrock", Kind: types.IntegrationKindBedrock, Config: map[string]any{"region": "us-west-2", "model": "m"}},
 	}
-	if row.Source != "legacy" || row.Kind != types.IntegrationKindAnthropicAPIKey {
-		t.Errorf("row = %+v", row)
-	}
-	if row.RoleSecret("api_key") != "anthropic-api-key" {
-		t.Errorf("secrets = %+v, want api_key=anthropic-api-key", row.Secrets)
-	}
-	if d := row.Secrets[0].Delivery; d == nil || d.Mode != types.DeliveryProxyHeader || d.Header != "x-api-key" {
-		t.Errorf("delivery = %+v, want the anthropic proxy-header convention", row.Secrets[0].Delivery)
-	}
-}
-
-func TestEffectiveIntegrations_OpenAIAPIKey(t *testing.T) {
-	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{"openai-api-key": []byte("sk-oai-x")}))
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "openai_api_key")
-	if !ok {
-		t.Fatal("expected an openai_api_key row")
-	}
-	if row.Source != "legacy" || row.Kind != types.IntegrationKindOpenAIAPIKey {
-		t.Errorf("row = %+v", row)
-	}
-	if row.RoleSecret("api_key") != "openai-api-key" {
-		t.Errorf("secrets = %+v, want api_key=openai-api-key", row.Secrets)
-	}
-}
-
-func TestEffectiveIntegrations_ResidentSubscriptionLive(t *testing.T) {
-	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
+	cfg := integrationsTestConfig(t, types.SiteConfig{Integrations: stored}, map[string][]byte{
+		"anthropic-api-key": []byte("sk-ant-x"), "openai-api-key": []byte("sk-oai-x"),
+	})
 	cfg.SubscriptionToken = fakeSubProvider{tok: subscription.Token{Value: "live-token"}}
-	srv := New(cfg)
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "anthropic_subscription:resident_host")
-	if !ok {
-		t.Fatal("expected an anthropic_subscription:resident_host row")
-	}
-	if row.Kind != types.IntegrationKindAnthropicSubscription {
-		t.Errorf("row = %+v", row)
-	}
-	if got := row.Config; got["lane"] != "resident_host" {
-		t.Errorf("config = %+v, want lane=resident_host", got)
-	}
-}
-
-// A wired SubscriptionToken with no LIVE token (Peek errors, or returns an
-// empty value) must not synthesize a row — "wired" alone is not "live".
-func TestEffectiveIntegrations_ResidentSubscriptionNotLive(t *testing.T) {
-	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
-	cfg.SubscriptionToken = fakeSubProvider{tok: subscription.Token{}}
-	srv := New(cfg)
-	if _, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "anthropic_subscription:resident_host"); ok {
-		t.Error("expected no row when the wired provider has no live token")
-	}
-}
-
-func TestEffectiveIntegrations_ManagedSubscription(t *testing.T) {
-	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
 	cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}
-	srv := New(cfg)
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "anthropic_subscription:managed")
-	if !ok {
-		t.Fatal("expected an anthropic_subscription:managed row")
-	}
-	if row.Kind != types.IntegrationKindAnthropicSubscription {
-		t.Errorf("row = %+v", row)
-	}
-	if got := row.Config; got["lane"] != "managed" {
-		t.Errorf("config = %+v, want lane=managed", got)
-	}
-}
-
-func TestEffectiveIntegrations_Bedrock(t *testing.T) {
-	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
 	cfg.BedrockRegion = "us-east-1"
 	cfg.BedrockModel = "us.anthropic.claude-x"
 	srv := New(cfg)
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "bedrock")
-	if !ok {
-		t.Fatal("expected a bedrock row")
-	}
-	if row.Kind != types.IntegrationKindBedrock {
-		t.Errorf("row = %+v", row)
-	}
-	got := row.Config
-	if got["auth_lane"] != "auto" || got["region"] != "us-east-1" || got["model"] != "us.anthropic.claude-x" {
-		t.Errorf("config = %+v", got)
-	}
-}
+	ctx := context.Background()
 
-func TestEffectiveIntegrations_BedrockNotConfigured(t *testing.T) {
-	srv := New(integrationsTestConfig(t, types.SiteConfig{}, nil))
-	if _, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "bedrock"); ok {
-		t.Error("expected no bedrock row when nothing is configured")
+	for _, row := range effectiveIntegrationsFor(srv, ctx) {
+		if types.AIProviderKind(row.Kind) {
+			t.Errorf("AI-kind row %q (%s, source %s) is in the effective set", row.ID, row.Kind, row.Source)
+		}
+	}
+	for _, id := range []string{"corp-anthropic", "corp-bedrock", "anthropic_api_key", "openai_api_key", "bedrock",
+		"anthropic_subscription:managed", "anthropic_subscription:resident_host"} {
+		if _, ok := srv.resolveIntegrationRef(ctx, "", id); ok {
+			t.Errorf("resolveIntegrationRef(%q) resolved an AI-kind row", id)
+		}
+	}
+	spec := types.RunPolicySpec{}
+	ws := types.Workspace{Requirements: map[string]types.WorkspaceRequirement{
+		"integration:corp-anthropic": {Level: "required", Provenance: "operator_set"},
+	}}
+	if ev := srv.applyWorkspaceRequirements(ctx, &spec, "claude-code", []types.Workspace{ws}, nil); len(ev) != 0 || len(spec.EligibleGrants) != 0 {
+		t.Errorf("a required AI-kind row folded into the run: events %+v, grants %+v", ev, spec.EligibleGrants)
 	}
 }
 
@@ -722,26 +428,26 @@ func TestEffectiveIntegrations_ScmHostsHyphenatedHostMergesForward(t *testing.T)
 // coexists alongside the unrelated legacy rows untouched.
 func TestEffectiveIntegrations_StoredRowWinsAndCoexists(t *testing.T) {
 	stored := types.Integration{
-		ID: "anthropic_api_key", Name: "Prod Anthropic key",
-		Kind: types.IntegrationKindAnthropicAPIKey,
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
-			Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
+		ID: "github_app", Name: "Prod GitHub App", Kind: types.IntegrationKindGitHubApp,
+		Secrets: []types.IntegrationSecret{secretRow("app_id", secretGitHubAppID), secretRow("app_key", secretGitHubAppKey)},
 	}
 	sc := types.SiteConfig{Integrations: []types.Integration{stored}, ScmHosts: []string{"ghes.corp.example"}}
-	srv := New(integrationsTestConfig(t, sc, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
+	srv := New(integrationsTestConfig(t, sc, map[string][]byte{
+		secretGitHubAppID: []byte("123"), secretGitHubAppKey: []byte("key"),
+	}))
 	rows := effectiveIntegrationsFor(srv, context.Background())
 
-	var anthropicRows []integrationRow
+	var appRows []integrationRow
 	for _, r := range rows {
-		if r.ID == "anthropic_api_key" {
-			anthropicRows = append(anthropicRows, r)
+		if r.ID == "github_app" {
+			appRows = append(appRows, r)
 		}
 	}
-	if len(anthropicRows) != 1 {
-		t.Fatalf("expected exactly ONE anthropic_api_key row (stored wins over the legacy derivation), got %d: %+v", len(anthropicRows), anthropicRows)
+	if len(appRows) != 1 {
+		t.Fatalf("expected exactly ONE github_app row (stored wins over the legacy derivation), got %d: %+v", len(appRows), appRows)
 	}
-	if anthropicRows[0].Source != "stored" || anthropicRows[0].Name != "Prod Anthropic key" {
-		t.Errorf("row = %+v, want the STORED row to win", anthropicRows[0])
+	if appRows[0].Source != "stored" || appRows[0].Name != "Prod GitHub App" {
+		t.Errorf("row = %+v, want the STORED row to win", appRows[0])
 	}
 
 	if _, ok := findRow(rows, "git_host:ghes.corp.example"); !ok {
@@ -757,8 +463,7 @@ func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
 		ScmHosts:     []string{"github.com"},
 	}
 	srv := New(integrationsTestConfig(t, sc, map[string][]byte{
-		"openai-api-key":    []byte("x"),
-		"anthropic-api-key": []byte("x"),
+		secretGitHubAppID: []byte("x"), secretGitHubAppKey: []byte("x"),
 	}))
 	ctx := context.Background()
 	first := effectiveIntegrationsFor(srv, ctx)
@@ -776,14 +481,14 @@ func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
 			}
 		}
 	}
-	// AI providers, then source control, then the flat Connections set — the
-	// three groups the screen renders, derived from kind alone.
+	// Source control, then the flat Connections set — the groups the screen
+	// renders, derived from kind alone.
 	for i := 1; i < len(first); i++ {
 		if integrationGroup(first[i-1].Kind) > integrationGroup(first[i].Kind) {
 			t.Errorf("not sorted by derived group: %q before %q", first[i-1].Kind, first[i].Kind)
 		}
 	}
-	if integrationGroup(first[len(first)-1].Kind) != 2 {
+	if integrationGroup(first[len(first)-1].Kind) != 1 {
 		t.Errorf("the generic connection must sort last, got %q", first[len(first)-1].Kind)
 	}
 }

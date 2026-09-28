@@ -103,7 +103,7 @@ var _ secretstore.External = (*Store)(nil)
 var prefixRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // New validates cfg and fetches a first token. A store that cannot get one
-// refuses to be built, so boot fails closed (K11).
+// refuses to be built, so boot fails closed.
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	s, err := build(cfg)
 	if err != nil {

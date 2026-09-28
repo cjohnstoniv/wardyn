@@ -47,7 +47,6 @@ type envbuilderListerAPI interface {
 	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
 }
 
-// the real client must implement it.
 var _ envbuilderListerAPI = (*client.Client)(nil)
 
 // SweepOrphanedBuilds force-removes every build container carrying

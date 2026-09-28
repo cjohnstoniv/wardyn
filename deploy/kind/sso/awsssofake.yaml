@@ -58,12 +58,16 @@ spec:
           # missing local image instead of sitting in ImagePullBackOff.
           image: wardyn/awsssofake:local
           imagePullPolicy: Never
-          args: ["-addr", ":8090"]
+          # :8091 is the bedrock-runtime stub's own port, behind its own
+          # Service below: sharing the portal's host and port, a model call
+          # rode the tunnel the proxy terminates for the SSO bearer, never the
+          # SigV4 passthrough real Bedrock gets.
+          args: ["-addr", ":8090", "-bedrock-addr", ":8091"]
           env:
             - name: AWSSSOFAKE_ACCOUNTS
               valueFrom:
                 configMapKeyRef: {name: wardyn-awsssofake, key: accounts}
-          ports: [{containerPort: 8090}]
+          ports: [{containerPort: 8090}, {containerPort: 8091}]
 ---
 apiVersion: v1
 kind: Service
@@ -74,3 +78,13 @@ metadata:
 spec:
   selector: {app: wardyn-awsssofake}
   ports: [{port: 8090, targetPort: 8090}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wardyn-awsssofake-bedrock
+  namespace: wardyn
+  labels: {app: wardyn-awsssofake}
+spec:
+  selector: {app: wardyn-awsssofake}
+  ports: [{port: 8091, targetPort: 8091}]

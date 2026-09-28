@@ -63,16 +63,15 @@ func (s PG) ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, 
 // ListGroupDenyGrants returns the GROUP-subject DENY rows of one capability
 // kind — the only rows internal/api's unresolvable-group-deny check can match.
 //
-// It exists because that check runs on the FAIL-CLOSED path taken by every
-// caller whose group snapshot is unanswerable (every pre-0.7 API token, on
-// every request): answering it with ListCapabilityGrants would let one such
-// token force an unbounded full-table read per checked value — an
-// authorization question whose cost scales with table size is an availability
-// surface, not just a slow page. The predicate is exactly what internal/api
-// applied in Go afterwards, moved into SQL; value-overlap matching stays in Go
-// (TestCapUnresolvableGroupDenyMatchesFullScan pins the two against each
-// other). The (subject_type, subject) index already serves it; no new index
-// needed.
+// It exists because that check runs on the FAIL-CLOSED path every caller with
+// an unanswerable group snapshot takes (every pre-0.7 API token, every
+// request): answering it with ListCapabilityGrants would let one such token
+// force an unbounded full-table read per checked value — an authorization
+// question whose cost scales with table size is an availability surface, not
+// just a slow page. The predicate is what internal/api applied in Go
+// afterwards, moved into SQL; value-overlap matching stays in Go
+// (TestCapUnresolvableGroupDenyMatchesFullScan pins the two together). The
+// (subject_type, subject) index already serves it.
 //
 // ponytail: no EXISTS fast path in front of it. It would be a second round trip
 // to save a query that already returns nothing on the deployments the fast path
@@ -88,8 +87,8 @@ func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types
 // ListCapabilityGrantsFor returns every grant that could apply to one caller:
 // `all` rows, `user` rows naming any of users (the caller's lowercased sub AND
 // email), `group` rows naming any of groups, and `user_type` rows naming the
-// caller's one type. An empty userType matches no row: the write boundary
-// refuses an empty subject.
+// caller's one type. An empty userType matches no row, since the write
+// boundary refuses an empty subject.
 //
 // Deliberately NOT filtered by capability: the resolver needs one kind and
 // GET /me/capabilities needs all four, and one round trip serving both beats

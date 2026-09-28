@@ -37,7 +37,7 @@ const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccou
 // a cluster this process can actually dial), not a flag.
 //
 // Do not conflate that PERMANENT shape with the one canaryIndeterminate DOES
-// have a partial override for (B1): a canary pod that reaches Running and
+// have a partial override for: a canary pod that reaches Running and
 // then exits exactly 1 is NOT "never got a verdict" — the apiserver was
 // reachable, the pod scheduled and ran, only its own connect attempt was
 // refused, which is what an ambient (platform-applied) default-deny

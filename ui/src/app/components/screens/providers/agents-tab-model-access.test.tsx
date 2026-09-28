@@ -3,13 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// #158: not_applicable's own model-access chip, split out of agents-tab.test.tsx
-// (which sits at the 1000-line file-size cap) per the agents-tab-source-gate.test.tsx
-// precedent. The basic "chip + note render, no CTA" case lives in
-// agents-tab.test.tsx's own (rewritten) not_applicable describe block; this file
-// covers the cases that block doesn't: the chip's own text/tone, and that
-// not_applicable never earns the per_user prominent banner even under a saved
-// per_user row (it is excluded from MODEL_ACCESS_ACTIONABLE).
+// #158: not_applicable's own model-access chip, split out of agents-tab.test.tsx.
+// The basic "chip + note render, no CTA" case lives in
+// agents-tab-per-user.test.tsx; this file covers the chip's own text and its
+// claude-code scoping.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
@@ -30,16 +27,17 @@ vi.mock("../../../lib/api/agent-providers", async () => {
     },
   };
 });
+vi.mock("../../../lib/api/model-providers", () => ({
+  modelProviders: {
+    getModelProviders: () => Promise.resolve({ providers: {}, connected: {}, etag: null }),
+  },
+}));
 
 function harness(overrides: Partial<SetupHarnessTool> = {}): SetupHarnessTool {
   return { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, ...overrides };
 }
 
 const HARNESSES: SetupHarnessTool[] = [harness()];
-// U-03: the SERVER's settled row — mechanism/credential_source actually
-// saved as bedrock_sso + per_user (agents-tab.test.tsx's own precedent for
-// this fixture shape).
-const HARNESSES_PER_USER_SAVED: SetupHarnessTool[] = [harness({ mechanism: "bedrock_sso", credential_source: "per_user" })];
 const retryRosterMock = vi.fn();
 const statusRefreshMock = vi.fn();
 
@@ -77,33 +75,6 @@ describe("AgentsTab — not_applicable's own chip text", () => {
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeInTheDocument();
     expect(within(row).queryByText(/^Sign in again before/)).not.toBeInTheDocument();
-  });
-});
-
-// Prominence (finding 4) is gated on MODEL_ACCESS_ACTIONABLE, which excludes
-// not_applicable — a mechanism has nothing actionable to do, so the banner
-// must never promote it, even under a SAVED per_user row that would promote
-// any of the other five.
-describe("AgentsTab — not_applicable never earns the per_user prominent banner", () => {
-  it("a saved per_user row under not_applicable keeps the chip at the bottom, no banner", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
-      etag: '"naprom1"',
-    });
-    const modelAccess: SetupModelAccess = { state: "not_applicable" };
-    render(
-      <AgentsTab
-        harnesses={HARNESSES_PER_USER_SAVED}
-        operator
-        modelAccess={modelAccess}
-        onRetryRoster={retryRosterMock}
-        onStatusRefresh={statusRefreshMock}
-      />,
-    );
-    const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
-    expect(within(row).getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeInTheDocument();
-    expect(within(row).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
   });
 });
 

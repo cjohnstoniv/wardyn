@@ -1,29 +1,25 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package workspacescan deterministically detects a local directory's (or a
-// cloned repo's) development conventions — languages, package managers,
-// implied egress registries, dev-container/Dockerfile presence, tools, and
-// git remotes — so Wardyn can onboard a workspace with a profile grounded in
-// what's ACTUALLY in the tree, not an LLM guess.
+// Package workspacescan deterministically detects a workspace's dev
+// conventions (languages, package managers, egress registries,
+// devcontainer/Dockerfile presence, tools, git remotes) from what's actually
+// in the tree, not an LLM guess.
 //
-// It clones internal/gitremote's conventions: read-only, bounded
-// filepath.WalkDir (depth<=6, see scan.go's maxDepth), a manifest-count cap
-// and a 1 MiB per-file read cap, NO symlink following, a control-char scrub
-// on any string that crosses
-// out of the scan, sorted+deduped output, NO subprocess/exec, and
-// fail-safe-to-empty — Scan and DeriveProfile never return an error; a scan
-// that hits a bound or an unrecognized build system just yields a
-// lower-confidence profile, never a crash or a grant on uncertainty.
+// It follows internal/gitremote's conventions: read-only, bounded
+// filepath.WalkDir (depth<=6), a manifest-count cap, a 1 MiB per-file read
+// cap, no symlink following, control-char scrubbing, sorted+deduped output,
+// no subprocess/exec, and fail-safe-to-empty — Scan and DeriveProfile never
+// return an error; hitting a bound or an unrecognized build system just
+// yields a lower-confidence profile, never a crash or a grant on uncertainty.
 //
-// Two data shapes (A2, isolation-critical split):
-//   - ScanFacts is raw bounded evidence a scan emits. When it comes from a
-//     sandboxed repo scan (governed run, a later wave) it crosses the sandbox
-//     boundary and MUST be treated as untrusted.
+// Two data shapes, isolation-critical:
+//   - ScanFacts is raw bounded evidence a scan emits; once it crosses a
+//     sandbox boundary it MUST be treated as untrusted.
 //   - WorkspaceProfile is the validated authority the control plane derives
-//     (DeriveProfile) and persists. Egress hosts in a WorkspaceProfile ONLY
-//     ever come from the fixed markers.go table, keyed on filenames — NEVER
-//     from file contents — so a hostile manifest body can't inject a host.
+//     (DeriveProfile) and persists. SECURITY: its egress hosts come ONLY from
+//     the fixed markers.go table keyed on filenames — NEVER from file
+//     contents — so a hostile manifest body can't inject a host.
 package workspacescan
 
 import (
@@ -41,18 +37,16 @@ const (
 	ConfidenceLow    = "low"
 )
 
-// Source records how a WorkspaceProfile was derived. Wave 1 only ever
-// produces SourceDeterministic; SourceAIAssisted is reserved for the (later,
-// not-this-wave) AI fallback pass.
+// Source records how a WorkspaceProfile was derived. Only SourceDeterministic
+// ships today; SourceAIAssisted is reserved for a later AI fallback pass.
 const (
 	SourceDeterministic = "deterministic"
 	SourceAIAssisted    = "ai_assisted"
 )
 
-// GitRemotes mirrors internal/gitremote.DetectGitHubRepos's (github,
-// otherHosts) return shape as a named, JSON-friendly struct: the sorted
-// "owner/repo" GitHub remotes found, and the sorted set of non-GitHub remote
-// HOSTS (for an operator warning / git_pat grant grounding).
+// GitRemotes mirrors gitremote.DetectGitHubRepos's return shape: sorted
+// "owner/repo" GitHub remotes and sorted non-GitHub hosts (for an operator
+// warning / git_pat grant grounding).
 type GitRemotes struct {
 	GitHub     []string `json:"github,omitempty"`
 	OtherHosts []string `json:"other_hosts,omitempty"`
@@ -64,29 +58,26 @@ type ManifestHit struct {
 	Marker string `json:"marker"` // canonical marker id, e.g. "package-lock.json"
 }
 
-// SecretNeed is one secret/config key a workspace's committed files REFERENCE
-// BY NAME — never a value. Detectors (detect.go) capture only the identifier
-// left of the '='/':' delimiter or inside a ${...} placeholder; the rest of
-// the line is discarded before anything is stored. Optional means the file
-// declared a safe default (Spring `${VAR:default}`), a commented template
-// line, or a deploy-time key (SealedSecret) — surfaced for information, never
-// a launch blocker. Kind is a coarse env-name-family classification
-// ("postgres", "oidc", "deploy", ... — see classifySecretKind); "generic"
-// when unknown.
+// SecretNeed is one secret/config key a workspace's committed files
+// REFERENCE BY NAME — never a value. Detectors capture only the identifier
+// before '='/':' or inside a ${...} placeholder; the rest of the line is
+// discarded before anything is stored. Optional marks a safe default,
+// commented template line, or deploy-time key — informational, never a
+// launch blocker. Kind is a coarse family classification; "generic" when
+// unknown.
 type SecretNeed struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind,omitempty"`
 	Optional bool   `json:"optional,omitempty"`
 }
 
-// SetupCommand is one conventional environment-setup step a workspace implies:
-// install dependencies, build, test, or lint. SECURITY: the Command string is
-// NEVER copied from a file's content (a hostile package.json `scripts.build`
-// could be `rm -rf`); it is synthesized from a FIXED template keyed on the
-// detected package manager + which conventional script/target KEYS exist —
-// exactly the filename-keyed discipline egress hosts use. Advisory only: a
-// command is surfaced for operator review and only ever executed inside a
-// confinement sandbox after explicit approval (mirrors SuggestedEgress).
+// SetupCommand is one conventional environment-setup step a workspace
+// implies (install/build/test/lint). SECURITY: Command is NEVER copied from
+// file content (a hostile package.json `scripts.build` could be `rm -rf`) —
+// it's synthesized from a FIXED template keyed on the detected package
+// manager and which conventional script/target KEYS exist. Advisory only:
+// surfaced for operator review, executed only inside a confinement sandbox
+// after explicit approval.
 type SetupCommand struct {
 	Stage   string `json:"stage"`   // install | build | test | lint
 	Command string `json:"command"` // fixed-template command, never file content
@@ -94,39 +85,33 @@ type SetupCommand struct {
 }
 
 // LeakFinding is a CONTENT-FREE report of a suspected committed secret VALUE.
-// The leaked-value detector (detect.go) is the ONE lane that reads file values
-// — to recognize a secret-shaped token — but it stores only WHERE and WHAT
-// KIND, never the matched bytes: Kind is a detector id ("aws-access-key",
-// "github-pat", ...), never the value. This mirrors internal/contentscan's
-// content-free Finding discipline.
+// The leaked-value detector is the ONE lane that reads file values (to
+// recognize a secret-shaped token), but it stores only WHERE and WHAT KIND —
+// Kind is a detector id, never the matched bytes.
 type LeakFinding struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
 	Line int    `json:"line,omitempty"`
-	// Source names the attached source this finding came from (the source's
-	// locator) once N sources are merged into one workspace profile; empty for
-	// a single-source profile. Attribution is a SEPARATE field rather than a
-	// prefix on Path because Path is path-CLASSIFIED downstream (the client's
-	// testdata|__tests__|fixtures fixture check): folding the locator into it
-	// makes every leak in a source whose own path contains such a segment
-	// classify as a fixture. Path therefore stays scan-root-relative and
-	// means exactly what it says.
+	// Source names the attached source once multiple sources merge into one
+	// profile; empty otherwise. A separate field rather than a Path prefix,
+	// because Path is path-classified downstream (testdata|__tests__|fixtures)
+	// and folding a locator in would misclassify leaks under a source whose
+	// own path looks like a fixture.
 	Source string `json:"source,omitempty"`
 }
 
 // UnrecognizedSample is a bounded, scrubbed snippet of a file that looked
 // like a build/dependency descriptor but isn't in the fixed marker table —
-// evidence for the (later) AI fallback. Content is truncated and has control
-// characters stripped; it is never large enough, nor selected in a way, to
-// leak a secret value.
+// evidence for a later AI fallback. Content is truncated and control-char
+// stripped, never large enough to leak a secret value.
 type UnrecognizedSample struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 }
 
-// ScanFacts is the raw bounded evidence a scan emits. It is untrusted input
-// to DeriveProfile: a WorkspaceProfile is always re-derived from these facts
-// control-plane-side, never taken on faith from whatever produced them.
+// ScanFacts is the raw bounded evidence a scan emits — untrusted input to
+// DeriveProfile, which always re-derives a WorkspaceProfile from these facts
+// rather than trusting the producer.
 type ScanFacts struct {
 	ManifestsFound      []ManifestHit        `json:"manifests_found,omitempty"`
 	GitRemotes          GitRemotes           `json:"git_remotes,omitempty"`
@@ -135,9 +120,9 @@ type ScanFacts struct {
 	UnrecognizedSamples []UnrecognizedSample `json:"unrecognized_samples,omitempty"`
 	Truncated           bool                 `json:"truncated,omitempty"`
 
-	// Content-lane evidence (detect.go): names/keys/hosts only, extracted via
-	// anchored capture groups — no file value ever lands here. Like every other
-	// fact these are UNTRUSTED until DeriveProfile re-validates and caps them.
+	// Content-lane evidence: names/keys/hosts only, via anchored capture
+	// groups — no file value ever lands here. UNTRUSTED until DeriveProfile
+	// re-validates and caps it.
 	SecretRequirements []SecretNeed  `json:"secret_requirements,omitempty"`
 	ServicesFound      []string      `json:"services_found,omitempty"`
 	SuggestedEgress    []string      `json:"suggested_egress,omitempty"`
@@ -146,61 +131,55 @@ type ScanFacts struct {
 	LeakFindings       []LeakFinding `json:"leak_findings,omitempty"`
 	// Raw setup-command SIGNALS (not commands): which conventional script/target
 	// keys exist. DeriveProfile synthesizes fixed-template SetupCommands from
-	// these + the detected package managers — file content never becomes a command.
+	// these plus detected package managers — file content never becomes a command.
 	ScriptKeys  []string `json:"script_keys,omitempty"`  // package.json scripts: build|test|lint present
 	MakeTargets []string `json:"make_targets,omitempty"` // Makefile targets: build|test|install|lint present
-	// BuildInputHashes maps a build-input file's rel path to a hex sha256 of its
-	// CONTENT (devcontainer.json / Dockerfile). A digest, not content — safe.
+	// BuildInputHashes maps a build-input file's path to a hex sha256 of its
+	// content (devcontainer.json / Dockerfile) — a digest, not content, so safe.
 	BuildInputHashes map[string]string `json:"build_input_hashes,omitempty"`
 }
 
 // WorkspaceProfile is the validated, control-plane-owned authority derived
-// from a scan. Every slice field is sorted + deduped. It is safe to persist
-// and to hand to run-creation for egress/grant/image decisions (A6, a later
-// wave).
+// from a scan. Every slice field is sorted + deduped; safe to persist and
+// hand to run-creation for egress/grant/image decisions.
 type WorkspaceProfile struct {
 	Languages       []string `json:"languages,omitempty"`
 	PackageManagers []string `json:"package_managers,omitempty"`
-	// (ToolchainNeeds below reads these two — the dispatch env derives from
-	// what the scan actually detected, never from a platform-wide guess.)
+	// ToolchainNeeds below reads these two: dispatch env derives from what
+	// the scan actually detected, never a platform-wide guess.
 	EgressDomains   []string   `json:"egress_domains,omitempty"`
 	Tools           []string   `json:"tools,omitempty"`
 	GitRemotes      GitRemotes `json:"git_remotes,omitempty"`
 	HasDevcontainer bool       `json:"has_devcontainer,omitempty"`
 	HasDockerfile   bool       `json:"has_dockerfile,omitempty"`
 
-	// Advisory "needs" fields (content lane, validated by DeriveProfile).
-	// RequiredSecrets/ServicesNeeded/SecretFilesPresent inform the operator
-	// (needs panel, setup checklist) and never gate a launch or create a
-	// grant. SuggestedEgress is content-derived and is NEVER auto-unioned
-	// into a run's allowlist (that privilege is EgressDomains-only, which
-	// stays filename-keyed) — an operator promotes hosts into the
-	// workspace's operator-owned ApprovedEgress list instead.
-	// these advisory fields ride in ProfileHash, so a workspace's
-	// first rescan after this change forces one no-op image rebuild. Ceiling:
-	// harmless one-time churn; upgrade path — hash only the image-affecting
-	// subset (Languages/HasDevcontainer/HasDockerfile) if it ever bites.
+	// Advisory "needs" fields (content lane, validated by DeriveProfile)
+	// inform the operator and never gate a launch or create a grant.
+	// SECURITY: SuggestedEgress is content-derived and is NEVER auto-unioned
+	// into a run's allowlist — only EgressDomains (filename-keyed) grants
+	// that; an operator must promote hosts into ApprovedEgress explicitly.
+	// These fields ride in ProfileHash, so a rescan after this changes
+	// forces one harmless no-op image rebuild; hash only the image-affecting
+	// subset instead if that churn ever bites.
 	RequiredSecrets    []SecretNeed `json:"required_secrets,omitempty"`
 	ServicesNeeded     []string     `json:"services_needed,omitempty"`
 	SuggestedEgress    []string     `json:"suggested_egress,omitempty"`
 	SecretFilesPresent []string     `json:"secret_files_present,omitempty"`
 	// BuildMemoryMiB is the largest build-heap ceiling detected (JVM -Xmx /
-	// Node --max-old-space-size). Advisory: surfaced so an operator can size
-	// the sandbox; never auto-applied to a run's ResourceLimits.
+	// Node --max-old-space-size). Advisory sizing hint only, never
+	// auto-applied to a run's ResourceLimits.
 	BuildMemoryMiB int `json:"build_memory_mib,omitempty"`
 	// LeakFindings are content-free reports of suspected committed secret
 	// values (path + detector kind + line, never the value). Advisory warning.
 	LeakFindings []LeakFinding `json:"leak_findings,omitempty"`
-	// SetupCommands are the conventional install/build/test/lint steps this
-	// workspace implies, synthesized from fixed templates (never file content).
-	// Advisory: operator-approved before they ever run, and only in a sandbox.
+	// SetupCommands are the conventional install/build/test/lint steps
+	// implied, synthesized from fixed templates only. Advisory:
+	// operator-approved, sandbox-only execution.
 	SetupCommands []SetupCommand `json:"setup_commands,omitempty"`
-	// ContextHash is a digest of the BUILD-INPUT files' CONTENT (a repo's own
-	// devcontainer.json / Dockerfile). It rides ProfileHash so the built-image
-	// cache (BuiltProfileHash) busts when a build input changes even if the
-	// detected profile is otherwise identical — the gap a profile-only hash has
-	// for the repo-owns-its-devcontainer build path. Empty when no build-input
-	// files are present (generated-devcontainer path is already profile-derived).
+	// ContextHash digests the build-input files' content (devcontainer.json /
+	// Dockerfile); it rides ProfileHash so the built-image cache busts when a
+	// build input changes even if the detected profile is unchanged. Empty
+	// when no build-input files are present.
 	ContextHash string `json:"context_hash,omitempty"`
 	// Confidence is one of ConfidenceHigh/Medium/Low.
 	Confidence  string `json:"confidence"`
@@ -210,13 +189,11 @@ type WorkspaceProfile struct {
 }
 
 // ProfileHash returns the SHA-256 hex digest of the profile's canonical
-// (sorted-object-keys) JSON form. It cache-keys generated/built
-// images (Workspace.BuiltProfileHash, a later wave): the same detected
-// profile always hashes the same, regardless of Go struct field order.
+// (sorted-key) JSON, so it cache-keys built images (BuiltProfileHash) the
+// same regardless of Go struct field order.
 //
-// encoding/json marshals a map[string]any with its keys sorted, so a
-// marshal → unmarshal-into-map → marshal round trip is a standard-library-only
-// way to get canonical JSON without hand-rolling a key sort.
+// A marshal → unmarshal-into-map → marshal round trip gets canonical JSON via
+// encoding/json's sorted map-key output, without hand-rolling a key sort.
 func (p WorkspaceProfile) ProfileHash() string {
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -234,31 +211,24 @@ func (p WorkspaceProfile) ProfileHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// cacheKeySalt versions CacheKey's preimage. Bump it whenever a change to
-// what the generator BAKES isn't already reflected in WorkspaceProfile's own
-// fields, so a previously-built image never reads as a false cache hit. v2:
-// the standard agent-tool install became unconditional (previously it was
-// folded in via a separate tools param, keyed on named integrations) — a v1
-// image may predate the install entirely and must rebuild, not reuse.
+// cacheKeySalt versions CacheKey's preimage. Bump it when a generator-bake
+// change isn't already reflected in WorkspaceProfile's fields, so an old
+// built image never false-cache-hits. v2: the agent-tool install became
+// unconditional, so a v1 image may predate it and must rebuild.
 const cacheKeySalt = "v2"
 
-// CacheKey returns the SHA-256 hex digest that keys a workspace's BUILT image
-// cache (Workspace.BuiltProfileHash): a salted digest of ProfileHash, not
-// ProfileHash itself, so bumping cacheKeySalt can force a rebuild without
-// colliding with it.
+// CacheKey returns the SHA-256 digest keying a workspace's built-image cache:
+// a salted digest of ProfileHash, not ProfileHash itself, so bumping
+// cacheKeySalt forces a rebuild without colliding with it.
 func (p WorkspaceProfile) CacheKey() string {
 	sum := sha256.Sum256([]byte(p.ProfileHash() + "|" + cacheKeySalt))
 	return hex.EncodeToString(sum[:])
 }
 
 // ToolchainNeeds reports which toolchain-fidelity accommodations a run over
-// these profiles actually needs. The dispatch env (runs_dispatch.go's
-// buildBaseSandboxEnv) is requirements-driven, never platform-wide — the
-// owner's rule: what's in a container follows from the workspace's ACTUAL
-// requirements. Go's tempdir/cache redirect applies only when a scan detected
-// Go; the Maven/Gradle JVM proxy sysprops only when the matching package
-// manager was detected (the same signals gen.go's devcontainer emission and
-// deriveSetupCommands already key on).
+// these profiles needs. Requirements-driven, not platform-wide: Go's
+// tempdir/cache redirect applies only when Go was detected; the Maven/Gradle
+// JVM proxy sysprops only when that package manager was detected.
 func ToolchainNeeds(profiles ...WorkspaceProfile) (goNeeded, jvmNeeded bool) {
 	for _, p := range profiles {
 		if slices.Contains(p.Languages, "Go") {

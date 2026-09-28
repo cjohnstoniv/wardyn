@@ -2,18 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package hoptls is the TLS on the hop between wardynd and each run's
-// wardyn-proxy: the hop the proxy resolves credential VALUES over
-// (GET /api/v1/internal/injection/{grant}), and every other internal call it
-// makes (mints, token renewal, decisions, approvals, uploads).
+// wardyn-proxy: the hop the proxy resolves credential VALUES over, plus every
+// other internal call it makes (mints, token renewal, decisions, approvals,
+// uploads).
 //
-// wardynd mints ONE internal CA on first boot and keeps it in its secret store
-// beside its other boot keys, so it survives restarts and upgrades on every
-// install shape. At each boot it signs a serving certificate for the host of
-// WARDYN_CONTROL_PLANE_URL — the exact name every proxy dials, so the name and
-// the certificate cannot disagree. Dispatch hands the CA's public certificate to
-// each proxy in its sealed config, and the proxy trusts that certificate and
-// nothing else for control-plane calls: never the system roots, never the
-// operator's corporate CA bundle (which stays on the egress side).
+// SECURITY: wardynd mints ONE internal CA on first boot, keeps it in its
+// secret store so it survives restarts/upgrades, and signs a serving cert
+// each boot for the exact WARDYN_CONTROL_PLANE_URL host every proxy dials.
+// Dispatch hands each proxy the CA's public certificate in its sealed config,
+// and the proxy trusts ONLY that certificate for control-plane calls — never
+// the system roots, never the operator's corporate CA bundle (egress side only).
 package hoptls
 
 import (

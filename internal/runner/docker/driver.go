@@ -52,34 +52,26 @@ type Config struct {
 	// delivery only; multi-node delivery (upload via proxy) lands in v0.5.
 	RecordingMount string
 	// ConfinementRuntimes optionally pins, per Confinement Class, the exact
-	// Docker runtime family that must back it — the operator knob that makes CC3
-	// substrate-pluggable across OCI runtimes (e.g. {CC3: "kata-qemu"} to force
-	// QEMU Kata over a Cloud-Hypervisor one, or {CC2: "runsc"}). An empty/absent
-	// entry uses the built-in default mapping (CC2->runsc, CC3->kata*); a pinned
-	// runtime is still probed against `docker info` and FAILS CLOSED when absent
-	// (never downgrades). Non-OCI VMM substrates (SmolVM/Firecracker) are a future
-	// Runner driver, not a runtime name here.
+	// Docker runtime family that must back it — the operator knob that makes
+	// CC3 substrate-pluggable across OCI runtimes. An empty/absent entry uses
+	// the built-in default mapping (CC2->runsc, CC3->kata*); a pinned runtime
+	// is still probed against `docker info` and FAILS CLOSED when absent
+	// (never downgrades). Non-OCI VMM substrates are a future Runner driver.
 	ConfinementRuntimes map[types.ConfinementClass]string
-	// AllowUnenforceableCaps downgrades the fail-closed resource-cap probe to a
-	// warning: when the Docker daemon reports it cannot enforce CPU/memory/pids
-	// limits (cgroup controller missing / not delegated), CreateSandbox proceeds
-	// instead of refusing. OFF by default — an untrusted sandbox must not run
-	// uncapped. Set only on a trusted host (WARDYN_ALLOW_UNENFORCEABLE_CAPS=1).
+	// AllowUnenforceableCaps downgrades the fail-closed resource-cap probe to
+	// a warning when the daemon can't enforce CPU/memory/pids limits (cgroup
+	// controller missing/not delegated). OFF by default — an untrusted
+	// sandbox must not run uncapped. Set only on a trusted host.
 	AllowUnenforceableCaps bool
 	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
-	// ceiling over host_path USER DRIVES, parsed once at boot
-	// (runner.ParseUserDriveHostRoots) and handed to the substrate constructor,
-	// so the driver's bind-time re-check and the API's authoring-time check are
-	// the same operator-set list.
+	// ceiling over host_path USER DRIVES, parsed once at boot and handed to
+	// the substrate constructor, so the driver's bind-time re-check and the
+	// API's authoring-time check are the same operator-set list.
 	//
-	// It is DRIVER CONFIG rather than a SandboxSpec field — the opposite of
-	// UserMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
-	// (a `_MAP` entry replaces the shared list for one member), so only the
-	// control plane knows which roots bound a given run. A drive's ceiling is
-	// per DEPLOYMENT: it says where this daemon's operator has mounted shares,
-	// which is a fact about the host wardynd runs on, not about whose run this
-	// is. Empty — the zero value, and the default — refuses every host_path
-	// drive, which is the whole posture (see runner.UserDriveHostRootCheck).
+	// DRIVER CONFIG rather than a SandboxSpec field, deliberately the opposite
+	// of UserMountRoots: a drive's ceiling is per DEPLOYMENT (where this
+	// daemon's operator mounted shares), not per-run like member roots. Empty
+	// (the default) refuses every host_path drive — the whole posture.
 	UserDriveHostRoots []string
 	// DriveProbeImage is the OCI image ProbeDrive runs its short-lived
 	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
@@ -102,11 +94,11 @@ const (
 // CONSECUTIVE transient probe errors it tolerates before giving up (~1 min,
 // matching the control plane's reconcileMaxProbeErrors budget).
 //
-// A transient daemon/API blip is NOT "the agent exited": Wait's error is terminal
-// for its caller — the completion watcher stops watching and the run is stranded
-// RUNNING with a live sandbox — so a blip must not surface as an error at all. A
-// not-found is authoritative (the exec/container really is gone) and is never
-// retried, so a kill/teardown still unblocks Wait immediately.
+// A transient daemon/API blip is NOT "the agent exited": Wait's error is
+// terminal for its caller, stranding the run RUNNING with a live sandbox, so
+// a blip must not surface as an error at all. A not-found is authoritative
+// (the exec/container really is gone) and is never retried, so a
+// kill/teardown still unblocks Wait immediately.
 const (
 	pollInterval       = 200 * time.Millisecond
 	waitMaxProbeErrors = 300
@@ -123,44 +115,40 @@ type Driver struct {
 	cli dockerAPI
 	cfg Config
 
-	// proxySettle is how long startProxy's exit-watch (driver_proxy_revive.go)
-	// requires a proxy's Running state to have HELD before trusting it. New()
-	// sets this to proxyStartSettle for a real daemon; newWithClient's own
-	// zero value (0) is the deliberate default for every fake-backed test
-	// driver, so the unit suite does not pay a real wall-clock tax on every
-	// CreateSandbox — the handful of tests that deliberately exercise the
-	// settle window override it back to proxyStartSettle themselves.
+	// proxySettle is how long startProxy's exit-watch requires a proxy's
+	// Running state to have HELD before trusting it. New() sets this to
+	// proxyStartSettle for a real daemon; newWithClient's zero value (0) is
+	// the deliberate default for fake-backed test drivers, so the unit suite
+	// doesn't pay a real wall-clock tax on every CreateSandbox.
 	proxySettle time.Duration
 
-	// mu guards agentExecs, pending, mainProc, and creating. The driver is safe
-	// for concurrent use; these maps are the only mutable state.
+	// mu guards agentExecs, pending, mainProc, and creating — the driver's
+	// only mutable state.
 	mu sync.Mutex
-	// agentExecs maps a sandbox ref (agent container id) to the exec id of the
-	// agent process started by Exec. Wait inspects this exec id to observe the
-	// agent's completion + exit code. One entry per ref (the latest Exec wins).
+	// agentExecs maps a sandbox ref to the exec id of the agent process Exec
+	// started; Wait inspects it to observe completion + exit code. One entry
+	// per ref (latest Exec wins).
 	agentExecs map[string]string
 	// pending holds the deferred agent-container config for EXEC-LESS runtimes
-	// (krun microVMs): CreateSandbox cannot pre-create a keep-alive container to
-	// exec into, so it stashes the built config here (keyed by ref == agent NAME)
-	// and Exec creates the container with the workload as its MAIN process.
+	// (krun microVMs): CreateSandbox can't pre-create a keep-alive container
+	// to exec into, so it stashes the built config here and Exec creates the
+	// container with the workload as its MAIN process.
 	pending map[string]*pendingAgent
-	// mainProc marks refs whose workload runs as the container main process (the
-	// exec-less path), so Wait blocks on container exit instead of an exec.
+	// mainProc marks refs whose workload runs as the container main process
+	// (exec-less path), so Wait blocks on container exit instead of an exec.
 	mainProc map[string]bool
-	// creating marks exec-less refs whose agent container is being created RIGHT
-	// NOW by runAsMainProcess (Exec claimed the pending entry, the ContainerCreate
-	// has not returned yet). It is the tombstone that makes the pending->created
-	// transition atomic w.r.t. teardown: teardown finds no container to remove in
-	// that window, so it deletes the mark instead, and runAsMainProcess — seeing
-	// its mark gone — removes the container it just made rather than leaving a
-	// killed run's agent alive. Fail closed: the entry only ever means "this ref
-	// is still live".
+	// creating marks exec-less refs whose agent container is being created
+	// RIGHT NOW by runAsMainProcess. The tombstone making the
+	// pending->created transition atomic w.r.t. teardown: teardown finds no
+	// container to remove in that window and deletes the mark instead, and
+	// runAsMainProcess — seeing its mark gone — removes the container it just
+	// made rather than leaving a killed run's agent alive.
 	creating map[string]bool
 }
 
-// pendingAgent is the fully-built agent-container config CreateSandbox defers for
-// an exec-less runtime; Exec sets its Cmd to the (recorder-wrapped) workload and
-// creates the container.
+// pendingAgent is the fully-built agent-container config CreateSandbox defers
+// for an exec-less runtime; Exec sets its Cmd to the (recorder-wrapped)
+// workload and creates the container.
 type pendingAgent struct {
 	cfg     *container.Config
 	host    *container.HostConfig
@@ -168,10 +156,10 @@ type pendingAgent struct {
 	managed []runner.ManagedFile // delivered by runAsMainProcess, between ITS create and start
 }
 
-// agentImageHome is the home directory of the Wardyn agent-image user (USER
-// agent). It is set as HOME on the exec-less (krun) path because libkrun runs the
-// guest as root with HOME=/, so ~-relative paths in the agent contract (~/work,
-// ~/.claude) would otherwise resolve under / and fail for a non-writable root.
+// agentImageHome is the Wardyn agent-image user's home directory, set as HOME
+// on the exec-less (krun) path because libkrun runs the guest as root with
+// HOME=/, so ~-relative paths (~/work, ~/.claude) would otherwise resolve
+// under / and fail for a non-writable root.
 const agentImageHome = "/home/agent"
 
 // ensureEnv appends key=val to env unless key is already present (an explicit
@@ -187,9 +175,8 @@ func ensureEnv(env *[]string, key, val string) {
 }
 
 // mainProcCastDir is the agent-writable (tmpfs) cast directory used on the
-// exec-less path: the agent runs as a non-root user with no root exec to
-// pre-create the (root-owned) default cast dir, so wardyn-rec stages the cast
-// here and delivers it via the proxy upload route.
+// exec-less path: no root exec exists to pre-create the root-owned default
+// cast dir, so wardyn-rec stages here and delivers via the proxy upload route.
 const mainProcCastDir = "/tmp/wardyn-rec"
 
 // Driver is the OCI/Docker confinement substrate; the orchestrator wraps it to
@@ -199,8 +186,8 @@ var _ runner.SandboxEnder = (*Driver)(nil)
 var _ runner.ProxyStopper = (*Driver)(nil)
 var _ runner.Freezer = (*Driver)(nil)
 
-// New constructs a Driver against the host Docker daemon. API-version negotiation
-// with the server is on by default in the moby v29 client (forward/backward compat).
+// New constructs a Driver against the host Docker daemon. API-version
+// negotiation with the server is on by default in the moby v29 client.
 func New(cfg Config) (*Driver, error) {
 	cli, err := client.New(
 		client.FromEnv,
@@ -226,7 +213,7 @@ func newWithClient(cli dockerAPI, cfg Config) *Driver {
 	}
 }
 
-// PrewarmImages is defined in prewarm.go (SF-14).
+// PrewarmImages is defined in prewarm.go.
 
 func (d *Driver) Name() string { return driverName }
 
@@ -244,33 +231,29 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		StructuralEgress: c.StructuralEgress,
 		NetworkPolicy:    c.NetworkPolicy,
 		SessionRecording: c.SessionRecording,
-		// This substrate binds a member's drive — driveMount
-		// (driver_mounts.go) resolves it and ensureDriveVolume
-		// (driver_volumes.go) creates or adopts the named volume. The control
-		// plane reads this to admit a drive-carrying run at create and at
-		// preflight, so it is true only while that path exists: declaring it
-		// without the mount is a run that previews green and fails at dispatch,
-		// and TestCreateSandbox_MountsAUserDrive pins the two together.
+		// This substrate binds a member's drive — driveMount resolves it and
+		// ensureDriveVolume creates or adopts the named volume. True only
+		// while that path exists: declaring it without the mount previews
+		// green and fails at dispatch, and TestCreateSandbox_MountsAUserDrive
+		// pins the two together.
 		UserDrives:   true,
 		ManagedFiles: true, // deliverManagedFiles, between create and start (managed_files.go)
-		// What a run's disk_mib actually binds on this daemon: `filesystem` when
-		// the storage driver can enforce a per-container size quota, `none` when
-		// it cannot — which is EITHER warn-and-run-uncapped (vfs, fuse-overlayfs)
-		// OR create-refused (overlay2 over non-xfs); see capabilitiesForWith.
+		// What a run's disk_mib actually binds on this daemon: `filesystem`
+		// when the storage driver can enforce a per-container quota, `none`
+		// when it can't (warn-and-run-uncapped, or create-refused); see capabilitiesForWith.
 		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
-		// Per-class Freeze/Thaw support (RL-6) — see capabilitiesForWith.
+		// Per-class Freeze/Thaw support — see capabilitiesForWith.
 		Freeze: c.Freeze,
 	}, nil
 }
 
 // ensureImage pulls ref if it is not already present locally. Pull output is
-// drained and discarded; failures to pull surface as errors (fail closed —
-// never run a sandbox we could not provision).
+// drained and discarded; failures surface as errors (fail closed — never run
+// a sandbox we couldn't provision).
 //
-// onPulling (nil-safe) fires immediately BEFORE the pull that blocks, and only
-// there: imagePresent has just said this host does not have the image, so this
-// is the one place in the tree where a first download can be ASSERTED rather
-// than hedged. After the pull it would arrive when the wait is already over.
+// onPulling (nil-safe) fires immediately BEFORE the pull that blocks, and
+// only there: imagePresent has just said the image is absent, so this is the
+// one place a first download can be ASSERTED rather than hedged.
 func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) error {
 	present, err := d.imagePresent(ctx, ref)
 	if err != nil {
@@ -283,25 +266,23 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 		onPulling()
 	}
 	// imagePresent said false, so a pull failure means the image is genuinely
-	// absent locally (not a stale tag) — see pullFailure for what that error says.
+	// absent (not a stale tag) — see pullFailure for what that error says.
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
 		return pullFailure(ref, err)
 	}
 	return nil
 }
 
-// ImagePresent implements runner.ImageChecker: the
-// exported form of imagePresent, so a caller holding only a runner.Runner can
-// verify a cached image ref is still real before trusting it.
+// ImagePresent implements runner.ImageChecker: exported imagePresent, so a
+// caller holding only a runner.Runner can verify a cached image ref before trusting it.
 func (d *Driver) ImagePresent(ctx context.Context, ref string) (bool, error) {
 	return d.imagePresent(ctx, ref)
 }
 
 func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
-	// A digest-pinned ref (repo@sha256:...) is not a tag, so the "reference" list
-	// filter (which is tag-shaped) never matches it — check by inspect instead, so
-	// a pre-pulled digest-pinned BYOI/private image reads present and short-circuits
-	// the pull (which would otherwise re-hit a registry we may have no auth for).
+	// A digest-pinned ref (repo@sha256:...) isn't a tag, so the tag-shaped
+	// "reference" filter never matches it — check by inspect instead, so a
+	// pre-pulled digest-pinned private image short-circuits the pull.
 	if strings.Contains(ref, "@sha256:") {
 		if _, err := d.cli.ImageInspect(ctx, ref); err != nil {
 			if isNotFound(err) {
@@ -311,8 +292,6 @@ func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
 		}
 		return true, nil
 	}
-	// v29: the filter set is client.Filters (was filters.Args); .Add returns the
-	// populated map. Same "reference"=<ref> tag-shaped filter as before.
 	res, err := d.cli.ImageList(ctx, client.ImageListOptions{Filters: client.Filters{}.Add("reference", ref)})
 	if err != nil {
 		return false, fmt.Errorf("docker: image list: %w", err)
@@ -320,13 +299,11 @@ func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
 	return len(res.Items) > 0, nil
 }
 
-// ImageRemove implements runner.ImageRemover (bug-workspace-1): reclaims a
-// workspace-built image tag superseded by a rescan/edit/delete. A ref already
-// absent is not an error — idempotent, same contract as StopSandbox — and a
-// ref still referenced by another tag/container (still in USE, e.g. a
-// concurrently-running sandbox launched off it) fails soft rather than
-// yanking an image out from under a live run: the caller logs and moves on,
-// the same best-effort posture as every other cache-bust here.
+// ImageRemove implements runner.ImageRemover: reclaims a workspace-built
+// image tag superseded by a rescan/edit/delete. A ref already absent is not
+// an error — idempotent, same contract as StopSandbox — and a ref still in
+// USE (e.g. a concurrently-running sandbox) fails soft rather than yanking an
+// image out from under a live run: the caller logs and moves on.
 func (d *Driver) ImageRemove(ctx context.Context, ref string) error {
 	if _, err := d.cli.ImageRemove(ctx, ref, client.ImageRemoveOptions{}); err != nil {
 		if isNotFound(err) {

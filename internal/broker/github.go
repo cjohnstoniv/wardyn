@@ -30,9 +30,9 @@ type GitHubMinterConfig struct {
 }
 
 // githubMinter is the production GitHubMinter. It reads the App credentials
-// LAZILY — on the FIRST mint, not at construction — then caches the
-// app-authenticated go-github client, so adding App secrets after wardynd
-// started needs no restart. The App private key never leaves this process.
+// lazily on the first mint, then caches the app-authenticated go-github
+// client, so adding App secrets after wardynd started needs no restart. The
+// App private key never leaves this process.
 type githubMinter struct {
 	// store is always the operator namespace: the GitHub App credential is
 	// operator-provisioned, not per-member.
@@ -51,13 +51,10 @@ type githubMinter struct {
 }
 
 // githubClientTimeout bounds the WHOLE mint, not each hop: MintInstallationToken
-// runs inside mint()'s transaction, which holds the grant row lock and a
-// pooled Postgres connection, so a blackholed api.github.com would otherwise
-// pin both for as long as the caller's own ctx allows. It is applied TWICE —
-// as the http.Client Timeout (per round trip; a cold installByOrg makes up to
-// two) and as the ctx MintInstallationToken derives from the caller's (per
-// mint) — so a tighter caller deadline still wins (WithTimeout takes the
-// earlier of the two).
+// runs inside mint()'s transaction, holding the grant row lock and a pooled
+// Postgres connection, so a blackholed api.github.com would otherwise pin
+// both. Applied twice — as the http.Client Timeout (per round trip) and as
+// the derived ctx (per mint) — so a tighter caller deadline still wins.
 const githubClientTimeout = 15 * time.Second
 
 // timeout returns this minter's HTTP client budget: the test seam when set,
@@ -83,11 +80,10 @@ func NewGitHubMinter(store secretstore.Store, cfg GitHubMinterConfig) (GitHubMin
 	}, nil
 }
 
-// client returns the app-authenticated go-github client, reading the App
-// credentials from the secret store on EVERY mint and rebuilding only when
-// their content hash has changed since the cached client was built — this is
-// what picks up an operator rotating github-app-id/key without a restart. A
-// read failure (secrets absent/invalid) fails closed and retries next mint.
+// client returns the app-authenticated go-github client, re-reading the App
+// credentials on EVERY mint and rebuilding only when their content hash
+// changed — this is what picks up a rotated github-app-id/key without a
+// restart. A read failure fails closed and retries next mint.
 func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
 	rctx := secretstore.WithPurpose(ctx, secretstore.PurposeBrokerMint)
 	idRaw, err := m.store.Get(rctx, m.cfg.AppIDSecret)
@@ -137,9 +133,8 @@ func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
 
 // MintInstallationToken mints a short-lived installation token scoped to the
 // given repositories with the given (already-clamped) permissions. All repos
-// must belong to the same installation (owner). ttl is informational: GitHub
-// fixes installation token TTL at ~1h and ignores client-supplied lifetimes,
-// so we record GitHub's returned expiry as authoritative.
+// must share one owner (installation). ttl is informational only: GitHub
+// fixes token TTL at ~1h, so its returned expiry is authoritative.
 func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string, permissions map[string]string, ttl time.Duration) (string, time.Time, error) {
 	if len(repos) == 0 {
 		return "", time.Time{}, errors.New("broker: github token requires at least one repo")
@@ -148,9 +143,8 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	// ONE ceiling for the WHOLE mint, not one per hop (see githubClientTimeout),
-	// so VerifyRefRuleset's probe mint, run inside the same transaction, is
-	// bounded by it too. A tighter caller deadline still wins.
+	// One ceiling for the whole mint (see githubClientTimeout), so
+	// VerifyRefRuleset's probe mint is bounded too. Tighter caller deadline still wins.
 	ctx, cancel := context.WithTimeout(ctx, m.timeout())
 	defer cancel()
 	client, err := m.client(ctx)
@@ -189,14 +183,12 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 	return tok.GetToken(), exp, nil
 }
 
-// Revoke hands token back to GitHub — DELETE /installation/token, authenticated
-// AS THE TOKEN ITSELF, which is why this builds its own client rather than
-// reusing the app-authenticated one.
+// Revoke hands token back to GitHub, authenticated AS THE TOKEN ITSELF —
+// hence its own client rather than the app-authenticated one.
 //
-// WithoutCancel is load-bearing: every caller reaches this after something
-// already went wrong, and on the timeout arm the caller's ctx is ALREADY
-// expired — exactly when a live token would otherwise linger for GitHub's
-// full ~1h. An empty token is a no-op.
+// WithoutCancel is load-bearing: callers reach this after something already
+// went wrong, often with an already-expired ctx — exactly when a live token
+// would otherwise linger for GitHub's full ~1h. Empty token is a no-op.
 func (m *githubMinter) Revoke(ctx context.Context, token string) error {
 	if token == "" {
 		return nil
@@ -256,13 +248,11 @@ func isStaleInstallation(err error) bool {
 	}
 }
 
-// splitRepos validates "owner/name" form, requires a single owner across all
-// repos, and returns the owner plus bare repo names for the token request.
-// EXACTLY two segments (a GitHub repo name cannot contain "/"): this predicate
-// gates both policy-write validation (ValidateGitHubScopeShape) and minting,
-// and must agree with githubScopeRepos (api package, builds the per-run
-// git-broker allowlist) or a bad shape could pass write and dispatch a run
-// that gets neither the broker route nor the injected host deny.
+// splitRepos validates "owner/name" form (exactly two segments; a GitHub repo
+// name cannot contain "/"), requires a single shared owner, and returns owner
+// plus bare names. Gates both policy-write validation and minting, and must
+// agree with githubScopeRepos (api package) or a bad shape could dispatch a
+// run with neither the broker route nor the injected host deny.
 func splitRepos(repos []string) (owner string, names []string, err error) {
 	for _, r := range repos {
 		parts := strings.Split(r, "/")
@@ -280,13 +270,12 @@ func splitRepos(repos []string) (owner string, names []string, err error) {
 }
 
 // ValidateGitHubScopeShape rejects a github_token grant scope that mintGitHub
-// would refuse at MINT time — shape only (repos in owner/name form, sharing
-// one owner; permission keys go-github recognizes) via the same two
-// predicates minting uses, so policy-write validation and the mint gate can
-// never drift apart. The permissions CEILING is a separate concern enforced
+// would refuse at mint time — shape only (owner/name repos sharing one owner;
+// recognized permission keys), using the same predicates minting uses so the
+// two can never drift apart. The permissions ceiling is separately enforced
 // by clampGitHubPermissions before minting.
 //
-// An EMPTY scope is valid: eligible_grants are TEMPLATES and the run supplies
+// An empty scope is valid: eligible_grants are templates and the run supplies
 // the concrete repos.
 func ValidateGitHubScopeShape(scope json.RawMessage) error {
 	if len(scope) == 0 {
@@ -304,9 +293,8 @@ func ValidateGitHubScopeShape(scope json.RawMessage) error {
 }
 
 // toInstallationPermissions maps a string->string permission map onto the
-// typed go-github InstallationPermissions struct via a JSON round-trip, so
-// permission names track go-github's json tags rather than a hand-written
-// switch over ~100 fields.
+// typed go-github struct via a JSON round-trip, so permission names track
+// go-github's json tags rather than a hand-written switch over ~100 fields.
 func toInstallationPermissions(perms map[string]string) (*gh.InstallationPermissions, error) {
 	if len(perms) == 0 {
 		return nil, nil

@@ -1,11 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// THE HOME-SEGMENT RULES: what a single home name may look like, per
-// substrate, and how each substrate's rule is said to an admin and to a
-// member. Split out of user_drive.go: everything here is about ONE string
-// (the per-person directory segment) and the two alphabets it must satisfy —
-// a Docker volume-name component, and a Kubernetes DNS-1123 subdomain.
+// Home-segment rules: what a per-person home name may look like per substrate (a Docker
+// volume-name component; a Kubernetes DNS-1123 subdomain), and how each is worded to users.
 package types
 
 import (
@@ -13,48 +10,24 @@ import (
 	"regexp"
 )
 
-// driveHomeSegmentRe is the shape a home name may take on a DOCKER backend: a
-// single path segment that is also a legal Docker volume-name component, so
-// one string can be both a subdirectory of a share and the suffix of a named
-// volume.
-//
-// NOT a DNS-1123 name (`_` and a trailing `-`/`.` are legal here but not
-// there) — driveHomeSegmentK8sRe below exists for that case, since a k8s
-// drive validated by this rule would be rejected by the apiserver at bind
-// time. The leading [a-z0-9] excludes a leading dot (the credential deny
-// class member mount rules already refuse) and the ".." traversal.
+// driveHomeSegmentRe is a home name's shape on Docker: one path segment that's also a
+// legal volume-name component; the leading [a-z0-9] excludes a leading dot and "..".
 var driveHomeSegmentRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
-// driveHomeSegmentK8sRe is the same segment on a KUBERNETES backend, where it
-// is concatenated into a PVC NAME (DriveObjectName) and must be a DNS-1123
-// subdomain. ANCHORED PER LABEL — a single anchored expression pinning only
-// the first/last characters (e.g. `^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$`)
-// let `.`/`-` sit in any order between them, so strings like `a.-b` matched
-// here and were then refused by the apiserver mid-run. Each dot-separated
-// label is now independently anchored to match
-// k8s.io/apimachinery/pkg/util/validation's own rule exactly; an empty label
-// is impossible by construction, which also rules out "..".
-//
-// The 63-char length is a SEPARATE clause (driveHomeSegmentOK): a per-label
-// regex can't also carry a whole-string length, and RE2 has no lookahead to
-// add one.
-//
-// Motivating case: an Entra `sub` is base64url and routinely carries `_`, so
-// a `k8s_pvc` drive templated on `sub` passed the Docker rule and then
-// failed at bind time for every member it allocated. This rule turns that
-// into a resolve-time REFUSED_HOME_INVALID an admin sees when previewing the
-// allocation, instead of a cluster error inside somebody's run.
+// driveHomeSegmentK8sRe is the same segment on Kubernetes, concatenated into a PVC name so
+// it must be a DNS-1123 subdomain, each label independently anchored — a single
+// first/last-char anchor once let strings like "a.-b" through, later refused by the
+// apiserver mid-run. Length is separate (driveHomeSegmentOK) since RE2 can't add it to a
+// per-label regex. Motivating case: an Entra sub is base64url with "_", so this catches at
+// resolve time what the Docker rule missed until bind time.
 var driveHomeSegmentK8sRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 
-// maxDriveHomeLen is the 63 both home rules carry (Docker inline via
-// `{0,62}`, k8s via this constant, since its regex can't spell a length).
-// 63 is the DNS-1123 label limit; DriveObjectName concatenates the home into
-// a name whose own labels must each fit.
+// maxDriveHomeLen is the 63-char DNS-1123 label limit both home rules carry (Docker inline
+// via `{0,62}`, k8s via this constant, since its regex can't spell a length).
 const maxDriveHomeLen = 63
 
-// driveHomeSegmentOK reports whether seg is a legal home name for backend b,
-// picking the rule from the substrate that has to hold the name. The length
-// clause is the one thing the per-label k8s regex above can't say.
+// driveHomeSegmentOK reports whether seg is legal for backend b; length is the one thing
+// the per-label k8s regex above can't say on its own.
 func driveHomeSegmentOK(b DriveBackend, seg string) bool {
 	if b.RunnerTarget() != "k8s" {
 		return driveHomeSegmentRe.MatchString(seg)
@@ -62,9 +35,8 @@ func driveHomeSegmentOK(b DriveBackend, seg string) bool {
 	return len(seg) <= maxDriveHomeLen && driveHomeSegmentK8sRe.MatchString(seg)
 }
 
-// driveHomeSegmentRule renders b's rule for the error message that refuses a
-// name — the pattern itself, so an admin reading a refusal sees the shape they
-// have to satisfy rather than a prose paraphrase of it that can drift.
+// driveHomeSegmentRule renders b's rule as the pattern itself, so a refusal shows the
+// exact shape, not a paraphrase that can drift.
 func driveHomeSegmentRule(b DriveBackend) string {
 	if b.RunnerTarget() != "k8s" {
 		return driveHomeSegmentRe.String()
@@ -73,15 +45,9 @@ func driveHomeSegmentRule(b DriveBackend) string {
 		driveHomeSegmentK8sRe, maxDriveHomeLen)
 }
 
-// DriveHomeStricterRuleClause is the same difference said to a MEMBER: the
-// extra sentence a backend's home rule needs beyond the frozen refusal
-// (DRIVE_MEMBER.REFUSED_HOME_INVALID, which describes the DOCKER rule), or ""
-// when the frozen sentence is already the whole rule. On k8s the rule is
-// strictly narrower, and the gap is the same motivating case as above: a
-// member told `_` was allowed then hit a refusal with nothing to fix.
-//
-// A server-composed SUFFIX, not a reworded canon: the frozen sentence still
-// ships byte-for-byte, with this clause appended after it.
+// DriveHomeStricterRuleClause is the extra sentence a backend's home rule needs beyond the
+// frozen DOCKER-rule refusal, said to a MEMBER (or "" when that already covers it) — a
+// server-composed SUFFIX appended after the frozen sentence, never a reworded canon.
 func DriveHomeStricterRuleClause(b DriveBackend) string {
 	if b.RunnerTarget() != "k8s" {
 		return ""

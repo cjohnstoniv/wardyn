@@ -20,9 +20,8 @@ import (
 // Bounds keep detection fast and safe on large/hostile trees (mirrors
 // internal/gitremote's maxDepth/maxConfigBytes).
 const (
-	// maxDepth allows deep monorepo layouts (e.g. apps/<x>/overlays/prod/*
-	// SealedSecrets sit ~5 levels down). The real DoS guard is maxManifestHits
-	// + the skipDirNames vendor-tree exclusions, not depth.
+	// maxDepth allows deep monorepo layouts; the real DoS guard is
+	// maxManifestHits + skipDirNames, not depth.
 	maxDepth               = 6
 	maxManifestHits        = 200 // generous for a real monorepo, bounds a hostile tree
 	maxUnrecognizedSamples = 20
@@ -30,11 +29,9 @@ const (
 	maxFileBytes           = 1 << 20
 )
 
-// skipDirNames are dependency/vendor directories we never descend into.
-// Unlike gitremote (which only ever looks for a `.git` entry), this package
-// walks every file for marker matching, so without this a single node_modules
-// tree would bury the real manifests under thousands of nested
-// dependency-internal package.json files.
+// skipDirNames are vendor/dependency directories never descended into — this
+// package walks every file for marker matching, so without this a single
+// node_modules tree would bury real manifests under nested dependency files.
 var skipDirNames = map[string]struct{}{
 	"node_modules":     {},
 	"vendor":           {},
@@ -58,11 +55,10 @@ func Scan(root string) WorkspaceProfile {
 	return DeriveProfile(CollectFacts(root))
 }
 
-// DeriveProfile is the control-plane re-derivation of a WorkspaceProfile from
-// previously-emitted ScanFacts — the SAME logic Scan uses internally, so a
-// local Scan(root) and a facts round trip (Scan → marshal → unmarshal →
-// DeriveProfile) always agree. Untrusted-input safe: an unknown Marker id
-// (e.g. from a future scanner version) is silently ignored, never trusted.
+// DeriveProfile re-derives a WorkspaceProfile from previously-emitted
+// ScanFacts using the same logic Scan uses internally, so a local Scan and a
+// marshal/unmarshal round trip always agree. Untrusted-input safe: an unknown
+// Marker id is silently ignored, never trusted.
 func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	langs := map[string]struct{}{}
 	pkgMgrs := map[string]struct{}{}
@@ -112,8 +108,7 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	}
 
 	// Content-lane facts are untrusted (a sandboxed repo scan controls them):
-	// validate charset/caps, coerce unknown kinds, and subtract suggested
-	// hosts already allowed by the filename-keyed table. See detect.go.
+	// validate charset/caps, coerce unknown kinds, subtract already-allowed hosts.
 	p.RequiredSecrets = validateSecretNeeds(facts.SecretRequirements)
 	p.ServicesNeeded = validateServices(facts.ServicesFound, p.RequiredSecrets)
 	p.SuggestedEgress = validateSuggestedHosts(facts.SuggestedEgress, egress)
@@ -121,14 +116,13 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	p.BuildMemoryMiB = validateBuildMemoryMiB(facts.BuildMemoryMiB)
 	leaks, leaksTruncated := validateLeakFindings(facts.LeakFindings)
 	p.LeakFindings = leaks
-	// Setup commands are synthesized from FIXED templates keyed on the (trusted,
-	// marker-derived) package managers + which conventional script/target keys
-	// exist — never copied from file content, so a hostile scripts.build can't
-	// become a command. Advisory: operator-approved before they ever run.
+	// SECURITY: setup commands are synthesized from fixed templates keyed on
+	// trusted marker-derived data, never copied from file content, so a
+	// hostile scripts.build can't become a command; operator-approved before running.
 	p.SetupCommands = deriveSetupCommands(pkgMgrs, tools, facts.ScriptKeys, facts.MakeTargets,
 		has(tools, "maven-wrapper"), has(tools, "gradle-wrapper"))
-	// Build-input content digest → busts the image cache on a devcontainer/
-	// Dockerfile change even when the detected profile is otherwise identical.
+	// Busts the image cache on a devcontainer/Dockerfile content change even
+	// when the detected profile is otherwise identical.
 	p.ContextHash = contextHashOf(facts.BuildInputHashes)
 
 	lowConfidence := facts.Truncated || len(facts.UnrecognizedSamples) > 0
@@ -150,18 +144,16 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	return p
 }
 
-// CollectFacts walks root and collects the raw, bounded ScanFacts. This is the
-// entry point the in-sandbox wardyn-scan binary calls: it emits the untrusted
-// facts a governed repo scan ships back over the brokered scan-result route,
-// which the control plane re-derives into a WorkspaceProfile (never trusting
-// the facts on faith — see DeriveProfile).
+// CollectFacts walks root and collects the raw, bounded ScanFacts. This is
+// the entry point the in-sandbox wardyn-scan binary calls: the control plane
+// re-derives the untrusted facts into a WorkspaceProfile, never trusting them
+// on faith (see DeriveProfile).
 func CollectFacts(root string) ScanFacts {
 	var facts ScanFacts
-	st := &collectState{facts: &facts} // carries per-scan content-lane budgets
-	// Canonicalise BEFORE the walk: WalkDir lstats the root like any other
-	// entry, so a locator that is itself a symlink (~/work -> /mnt/d/work, a
-	// WSL drive shortcut) would take the "never follow a symlink" arm on the
-	// first callback and return a false-confident empty profile.
+	st := &collectState{facts: &facts} // per-scan content-lane budgets
+	// Canonicalise before the walk: WalkDir lstats the root like any other
+	// entry, so a locator that is itself a symlink (e.g. a WSL drive shortcut)
+	// would hit the "never follow a symlink" arm and return an empty profile.
 	root = gitremote.ResolveRoot(root)
 	seen := map[string]struct{}{} // dedup guard for ManifestsFound
 
@@ -169,9 +161,8 @@ func CollectFacts(root string) ScanFacts {
 		if err != nil || d == nil {
 			return nil // skip unreadable entries; keep walking siblings
 		}
-		// Never descend or follow symlinks — except the root itself, which
-		// ResolveRoot has already canonicalised (this arm is what still holds
-		// when that resolution failed).
+		// Never descend or follow symlinks, except the already-canonicalised
+		// root (this arm still holds if that resolution failed).
 		if p != root && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
@@ -195,15 +186,14 @@ func CollectFacts(root string) ScanFacts {
 		}
 		name := d.Name()
 
-		// Content lane (detect.go): names-only extraction from a fixed set of
-		// well-known files. Runs BEFORE the marker lookup because compose and
-		// Dockerfile are both marker rows AND detector targets — the marker
-		// lane's `return nil` below must not starve the detector.
+		// Content lane (detect.go): names-only extraction from well-known
+		// files. Runs before the marker lookup because compose and Dockerfile
+		// are both marker rows and detector targets — the marker lane's
+		// `return nil` below must not starve the detector.
 		detectContent(rel, name, p, st)
 
-		// Build-input content hash (cache-key hardening): hash the CONTENT of a
-		// repo's own devcontainer.json / Dockerfile so a build-input change busts
-		// the image cache even when the detected profile is unchanged.
+		// Hash devcontainer.json/Dockerfile content so a build-input change
+		// busts the image cache even when the detected profile is unchanged.
 		if isBuildInputFile(rel, name) {
 			if h := hashFileContent(p); h != "" {
 				if facts.BuildInputHashes == nil {
@@ -258,10 +248,9 @@ func CollectFacts(root string) ScanFacts {
 	return facts
 }
 
-// lookupMarker resolves a walked file (rel: slash-separated path relative to
-// the scan root; name: base filename) to its marker row, if any. Path/suffix
-// patterns are checked first since they're more specific than a bare
-// filename; a plain markersByID[name] lookup handles every other row.
+// lookupMarker resolves a walked file (rel: slash-separated path from the
+// scan root; name: base filename) to its marker row, if any. Path/suffix
+// patterns are checked first since they're more specific than a bare filename.
 func lookupMarker(rel, name string) (marker, bool) {
 	if name == "devcontainer.json" && strings.Contains(rel, ".devcontainer/") {
 		return markersByID[idDevcontainerNested], true
@@ -348,10 +337,9 @@ func contextHashOf(m map[string]string) string {
 
 // readCapped reads at most maxFileBytes from p, failing safe to nil.
 //
-// gitremote.OpenRegular, not os.Open: this walk runs on an HTTP handler
-// goroutine with no ctx over an untrusted tree, so a FIFO named after any file
-// read would block open(2) forever. io.ReadFull, not a single Read, since Read
-// may return fewer bytes than the buffer holds.
+// Uses gitremote.OpenRegular, not os.Open: this walk runs on an HTTP handler
+// goroutine with no ctx over an untrusted tree, so a FIFO would block open(2)
+// forever otherwise.
 func readCapped(p string) []byte {
 	f, err := gitremote.OpenRegular(p)
 	if err != nil {
@@ -369,9 +357,8 @@ func readCapped(p string) []byte {
 	return buf[:n]
 }
 
-// pathSafe rejects control characters (mirrors gitremote.safe(), but — unlike
-// a single-line remote URL — a real filesystem path may legitimately contain
-// a space, so only true control/DEL bytes are rejected, not whitespace).
+// pathSafe rejects control characters (mirrors gitremote.safe(), but a real
+// path may legitimately contain a space, so only control/DEL bytes are rejected).
 func pathSafe(s string) bool {
 	for _, r := range s {
 		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {

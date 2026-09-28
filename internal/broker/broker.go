@@ -284,7 +284,7 @@ type Broker struct {
 	maskReg *secretmask.Registry
 	// siem, when non-nil, receives the credential.mint SUCCESS event AFTER its
 	// commit so it still fans out to SIEM sinks. The DURABLE record is written
-	// INSIDE the mint tx (D29), so the primary store must NOT be double-written
+	// INSIDE the mint tx, so the primary store must NOT be double-written
 	// here — siem is the fanout ALONE (cmd/wardynd passes the sinks.Fanout).
 	// The mint event's Data is grant id + scope (names) + jti — no secret values —
 	// so bypassing the masking wrapper this path skips is safe. Nil is a no-op.
@@ -342,7 +342,7 @@ func (b *Broker) WithMaskRegistry(reg *secretmask.Registry) *Broker {
 }
 
 // WithSIEM attaches the SIEM fanout sink the broker emits the credential.mint
-// SUCCESS event to AFTER commit (D29): the durable record is written in-tx, and
+// SUCCESS event to AFTER commit: the durable record is written in-tx, and
 // this fans the same event to file/webhook/syslog sinks WITHOUT re-writing the
 // primary store. A nil sink is accepted (no-op). Call before the Broker is used.
 func (b *Broker) WithSIEM(sink audit.Sink) *Broker {
@@ -520,7 +520,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	minted.GrantID = grantID
 	minted.ApprovalID = row.approvalID
 
-	// B11a-F1. From here on a REAL credential exists, and it only becomes the
+	// From here on a REAL credential exists, and it only becomes the
 	// caller's on commit. Every arm below that returns an error instead is a
 	// DISCARD door — the lost single-use race, a failed minted_jti write, a
 	// failed audit insert, a failed commit — and a discarded github_token is a
@@ -576,7 +576,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		}
 	}
 
-	// D29: write the credential.mint SUCCESS row on the SAME tx as the minted_jti
+	// Write the credential.mint SUCCESS row on the SAME tx as the minted_jti
 	// burn, so the audit event and the single-use burn commit atomically. A
 	// post-commit write on a SEPARATE connection would open a crash window:
 	// minted_jti committed, then a crash before the audit write burns the approval
@@ -900,7 +900,7 @@ type sshKeyScope struct {
 // mintEvent builds a credential.mint audit event with full attribution
 // (actor_type=agent, actor=run SPIFFE id). Shared by the DENIED/FAILURE paths
 // (auditMint, via the Recorder chain) and the SUCCESS path (written in-tx, then
-// fanned to SIEM — D29), so both carry the identical shape.
+// fanned to SIEM), so both carry the identical shape.
 func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) types.AuditEvent {
 	d := map[string]any{
 		"grant_id": grantID.String(),
@@ -936,7 +936,7 @@ func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti strin
 // tx has ALREADY rolled back — so they cannot ride the tx, and the Recorder's own
 // spooling fallback is the durability they get. The SUCCESS outcome does NOT go
 // through here: it rides the mint tx (insertAuditEventTx) so the audit row and the
-// minted_jti burn commit atomically (D29).
+// minted_jti burn commit atomically.
 func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) {
 	ev := mintEvent(caller, grantID, approvalID, jti, scope, outcome)
 	if err := b.audit.Record(ctx, ev); err != nil {
@@ -945,7 +945,7 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 }
 
 // insertAuditEventTx writes ev into audit_events on the broker's OWN mint tx, so
-// a credential.mint row commits atomically with the minted_jti burn (D29). It
+// a credential.mint row commits atomically with the minted_jti burn. It
 // mirrors store.InsertAuditEvent's statement exactly — the broker cannot import
 // that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
 // on), the same reason the grant/approval SQL is inlined here.

@@ -161,10 +161,10 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         //
         // The keyless demos' cards promise "no allowed
         // destinations / no key" — without task_mode="exec" the server still
-        // folds the operator's site-wide model integration onto ANY run
-        // (foldRunIntegration only skips it for task_mode=exec; see
-        // internal/api/llmcred.go), silently widening egress to
-        // api.anthropic.com and injecting a live key proxy-side. Only the
+        // resolves the deployment's model credential lanes for a harness run
+        // (resolveLLMTransport skips them only for task_mode=exec; see
+        // internal/api/runs_dispatch_llm.go), silently widening egress to
+        // the model host and injecting a live credential proxy-side. Only the
         // harness demo (needsModel) actually wants a model call.
         const run = await api.createRun({
           agent: "claude-code",

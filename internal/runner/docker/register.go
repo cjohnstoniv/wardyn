@@ -13,32 +13,24 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
-// Self-register the OCI/Docker substrate so a blank import (cmd/wardynd under
-// `-tags docker`) makes "docker" selectable via -runner/WARDYN_RUNNER. Compiled
-// ONLY under the docker tag, so a tagless wardynd fails `-runner docker` closed
-// at registry resolve ("not registered") and carries no target-specific code.
+// Self-registers the OCI/Docker substrate so a blank import makes "docker"
+// selectable via -runner/WARDYN_RUNNER. Compiled ONLY under the docker tag, so
+// a tagless wardynd fails `-runner docker` closed at registry resolve.
 //
-// Record follows the boot recording-store selection (Deps.Record, see
-// buildConfig below): on, Exec wraps the agent argv with wardyn-rec (PTY
-// session recording); off, no wrap and no upload attempt. WARDYN_RECORDING_MOUNT
-// names a Docker volume (or absolute host path) shared between agent containers
-// and wardynd's -recording-dir, where wardyn-rec delivers finished casts
-// (single-host delivery only) when Record is on.
+// Record follows the boot recording-store selection (Deps.Record): on, Exec
+// wraps the agent argv with wardyn-rec for PTY recording, delivered to
+// wardynd's -recording-dir via WARDYN_RECORDING_MOUNT (single-host only).
 //
-// Security (HIGH-finding): that shared mount is the REDUCED-ISOLATION fallback
-// delivery path — casts written to it are UNMASKED (secret masking lives
-// control-plane-side, on the brokered upload path) and it has NO cross-run
-// isolation (all agent containers share one uid). The driver prefers the masked
-// brokered upload whenever a run token exists; the startup warning below is how
-// an operator who sets it anyway learns the tradeoff.
+// SECURITY: that shared mount is the REDUCED-ISOLATION fallback delivery path
+// — casts written to it are UNMASKED (masking happens control-plane-side, on
+// the brokered upload path) and have NO cross-run isolation (all agent
+// containers share one uid). The driver prefers the masked brokered upload
+// whenever a run token exists; the startup warning below is how an operator
+// who sets the mount anyway learns the tradeoff.
 // buildConfig maps registration Deps and the resolved WARDYN_RECORDING_MOUNT
-// to the docker driver's Config. Extracted to a pure function so its Record
-// wiring is testable without a daemon (register_test.go's
-// TestBuildConfig_RecordFollowsDeps pins it): Deps.Record — itself derived
-// from the boot recording-store selection, see substrate.RecordEnabled and
-// cmd/wardynd's buildRunnerFromFlags — must reach Config.Record verbatim,
-// never a hardcoded default (the #1113 k8s regression this driver shares the
-// same register.go shape with).
+// to the docker driver's Config, kept pure so Record wiring is testable
+// without a daemon: Deps.Record must reach Config.Record verbatim, never a
+// hardcoded default.
 func buildConfig(d substrate.Deps, recordingMount string) Config {
 	return Config{
 		ProxyImage:      d.ProxyImage,
@@ -46,15 +38,13 @@ func buildConfig(d substrate.Deps, recordingMount string) Config {
 		Record:          d.Record,
 		RecordingMount:  recordingMount,
 		InternalNetwork: os.Getenv("WARDYN_INTERNAL_NETWORK"),
-		// Fail closed by default when the host can't enforce resource caps;
-		// WARDYN_ALLOW_UNENFORCEABLE_CAPS=true (trusted host) downgrades to a
-		// warn. cliutil.EnvBool, not a literal "1" compare (#202): the shared
-		// 1/true/yes/on token set, and a garbage value exits 2 at boot
-		// instead of silently staying off.
+		// SECURITY: fails closed by default when the host can't enforce resource
+		// caps; WARDYN_ALLOW_UNENFORCEABLE_CAPS=true (trusted host) downgrades to
+		// a warn. cliutil.EnvBool so a garbage value exits 2 at boot instead of
+		// silently staying off.
 		AllowUnenforceableCaps: cliutil.EnvBool("WARDYN_ALLOW_UNENFORCEABLE_CAPS", false),
 		ConfinementRuntimes:    d.ConfinementRuntimes,
-		// The deployment's host_path user-drive ceiling, parsed once at
-		// boot and passed down rather than re-read here (see Deps).
+		// The deployment's host_path user-drive ceiling, parsed once at boot.
 		UserDriveHostRoots: d.UserDriveHostRoots,
 	}
 }
@@ -68,16 +58,15 @@ func init() {
 			)
 		}
 		// WARDYN_INTERNAL_NETWORK names the control-plane bridge the proxy sidecar
-		// joins. Empty => withDefaults() keeps "wardyn-internal" (single-tenant
-		// default, unchanged). A shared multi-job host sets a per-project name so
-		// concurrent stacks don't share one network — it MUST match the compose
-		// network's name (deploy/compose: both derive from WARDYN_NS).
+		// joins; empty keeps "wardyn-internal". A shared multi-job host sets a
+		// per-project name so concurrent stacks don't share one network — it MUST
+		// match the compose network's name (both derive from WARDYN_NS).
 		s, err := New(buildConfig(d, recordingMount))
 		if err != nil {
 			return nil, err
 		}
-		// SF-14: pull the proxy and drive-probe images now, in the
-		// background, rather than let a live request pay for the first pull.
+		// Pull images now, in the background, rather than make a live request pay
+		// for the first pull.
 		s.PrewarmImages()
 		return s, nil // avoid the typed-nil interface trap
 	})

@@ -16,14 +16,12 @@ import (
 	"time"
 )
 
-// tokenSource holds the per-run token. The renew loop rotates it IN PLACE, so
-// every control-plane caller reads the CURRENT token instead of one captured
-// at startup.
+// tokenSource holds the per-run token; the renew loop rotates it IN PLACE so every caller reads the
+// CURRENT token, not one captured at startup.
 //
-// Deliberately an explicit holder rather than an Authorization-injecting
-// http.RoundTripper: the run token must NEVER reach a forward-egress or
-// upstream-corp-proxy dial, and a transport that adds the header for us
-// would make that leak one accidental client reuse away.
+// SECURITY: deliberately an explicit holder rather than an Authorization-injecting http.RoundTripper —
+// the run token must NEVER reach a forward-egress or upstream-corp-proxy dial, and an auto-adding
+// transport would make that leak one accidental client reuse away.
 type tokenSource struct {
 	mu  sync.RWMutex
 	tok string
@@ -31,8 +29,7 @@ type tokenSource struct {
 
 func newTokenSource(tok string) *tokenSource { return &tokenSource{tok: tok} }
 
-// Get returns the current token. A nil source yields "" (safe for tests and for
-// paths where no token was configured).
+// Get returns the current token; a nil source yields "" (safe when no token is configured).
 func (t *tokenSource) Get() string {
 	if t == nil {
 		return ""
@@ -42,7 +39,7 @@ func (t *tokenSource) Get() string {
 	return t.tok
 }
 
-// Set installs a freshly renewed token. Subsequent Get calls see it.
+// Set installs a freshly renewed token, visible to subsequent Get calls.
 func (t *tokenSource) Set(tok string) {
 	if t == nil {
 		return
@@ -53,33 +50,18 @@ func (t *tokenSource) Set(tok string) {
 }
 
 const (
-	// renewRetry is the FIRST gap after a failed renew, and the floor on
-	// every gap.
-	renewRetry = time.Minute
-	// renewMaxInterval caps the gap between renews (revocation and terminal
-	// state are only re-evaluated at renew) and is also the failure-backoff
-	// ceiling.
-	renewMaxInterval = 30 * time.Minute
-	// renewTimeout bounds one renew request.
-	renewTimeout = 10 * time.Second
-	// renewGiveUpAfter is how long the loop keeps retrying a refused renew:
-	// the lifetime of the last token it successfully held, mirroring the
-	// embedded identity provider's tokenTTL (1h). Spelled here rather than
-	// imported because this sidecar never parses the JWT and holds no `exp`
-	// of its own; past it, the token being renewed is dead regardless of
-	// what the refusal meant.
+	renewRetry       = time.Minute      // first gap after a failed renew, and the floor on every gap
+	renewMaxInterval = 30 * time.Minute // caps the gap between renews and the failure-backoff ceiling
+	renewTimeout     = 10 * time.Second // bounds one renew request
+	// renewGiveUpAfter mirrors the identity provider's tokenTTL (1h), spelled here rather than imported
+	// since this sidecar never parses the JWT; past it the token being renewed is dead regardless of cause.
 	renewGiveUpAfter = time.Hour
 )
 
-// renewStatusError is renewToken's typed refusal, carrying the control
-// plane's status so the loop can tell three failures apart:
-//
-//   - 403: a post-auth refusal — the run is gone or terminal. Permanent:
-//     give up at once.
-//   - 401: the presented token was refused. NOT proof of revocation — a
-//     Postgres blip answers exactly like a real revocation. Back off and
-//     keep trying until the last good token's lifetime has passed.
-//   - 5xx / transport: a blip. Same backoff.
+// renewStatusError is renewToken's typed refusal, carrying the control plane's status so the loop can
+// tell apart: 403 (post-auth, run gone/terminal — PERMANENT, give up at once), 401 (refused but NOT proof
+// of revocation — a Postgres blip looks identical, so back off and keep trying), and 5xx/transport (blip,
+// same backoff).
 type renewStatusError struct {
 	Status int
 	Body   string
@@ -89,12 +71,11 @@ func (e *renewStatusError) Error() string {
 	return fmt.Sprintf("renew status %d: %s", e.Status, e.Body)
 }
 
-// permanent reports whether the control plane has ANSWERED, post-auth, that
-// this run may never renew again. A 401 is deliberately NOT permanent.
+// permanent reports whether the control plane has ANSWERED, post-auth, that this run may never renew
+// again. A 401 is deliberately NOT permanent.
 func (e *renewStatusError) permanent() bool { return e.Status == http.StatusForbidden }
 
-// renewerTuning is the loop's timing, held in one struct so tests can drive
-// the real loop at millisecond scale. Production uses defaultRenewerTuning.
+// renewerTuning is the loop's timing, held in one struct so tests can drive it at millisecond scale.
 type renewerTuning struct {
 	firstRetry  time.Duration
 	maxInterval time.Duration
@@ -111,37 +92,26 @@ func defaultRenewerTuning() renewerTuning {
 	}
 }
 
-// runTokenRenewer keeps ts populated with a FRESH run token for as long as
-// ctx lives: renew, then sleep half the new token's remaining life (clamped
-// to [renewRetry, renewMaxInterval]).
+// runTokenRenewer keeps ts populated with a FRESH run token for as long as ctx lives: renew, then sleep
+// half the new token's remaining life (clamped to [renewRetry, renewMaxInterval]).
 //
-// The control plane decides whether renewal is still allowed; the loop
-// decides how long to keep ASKING, since retrying forever on any failure
-// would flood the audit log with auth.fail rows from a run that will never
-// renew again:
+// The control plane decides whether renewal is still allowed; the loop decides how long to keep ASKING,
+// since retrying forever on any failure would flood the audit log with auth.fail rows from a run that will
+// never renew again: a post-auth 403 is PERMANENT (stop at once); a 401 or 5xx/transport failure backs off
+// exponentially (a revoked token and a store blip are indistinguishable here, and giving up on the first
+// 401 would brick every healthy long run's /internal/* calls on a Postgres flicker); past giveUpAfter since
+// the last token actually held, it stops — one log line, since the sidecar has no audit writer, and it
+// keeps running on a dead identity until the control plane's lapsed-token sweep removes it.
 //
-//   - a post-auth 403 is PERMANENT: stop at once;
-//   - a 401 or a 5xx/transport failure backs off exponentially from
-//     firstRetry to maxInterval, since a revoked token and a store blip are
-//     indistinguishable here, and giving up on the first 401 would brick
-//     every healthy long run's /internal/* calls on a Postgres flicker;
-//   - past giveUpAfter since the last token it actually held, it stops.
-//
-// Giving up is ONE log line and nothing else: the sidecar has no audit
-// writer, so it keeps running on a dead identity, visibly, until the control
-// plane's lapsed-token sweep removes it.
-//
-// Renews once immediately at startup rather than decoding the token's exp,
-// trading one extra mint per run for no JWT parsing here.
+// Renews once immediately at startup rather than decoding the token's exp, trading one extra mint per run
+// for no JWT parsing here.
 func runTokenRenewer(ctx context.Context, ts *tokenSource, base string, client *http.Client) {
 	runTokenRenewerTuned(ctx, ts, base, client, defaultRenewerTuning())
 }
 
-// runTokenRenewerTuned is runTokenRenewer with its timing injected; see
-// renewerTuning.
+// runTokenRenewerTuned is runTokenRenewer with its timing injected; see renewerTuning.
 func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning) {
-	// The startup token is the first "last good token".
-	lastGood := tune.now()
+	lastGood := tune.now() // the startup token is the first "last good token"
 	backoff := tune.firstRetry
 	for {
 		rctx, cancel := context.WithTimeout(ctx, renewTimeout)
@@ -161,7 +131,7 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 				return
 			}
 			next = backoff
-			// Do not log the token; the error carries status + body only.
+			// SECURITY: do not log the token; the error carries status + body only.
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off",
 				slog.Duration("retry_in", next), slog.Any("err", err))
 			if backoff = backoff * 2; backoff > tune.maxInterval {
@@ -186,9 +156,8 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 	}
 }
 
-// renewToken POSTs /api/v1/internal/token/renew with the CURRENT run token
-// and returns the fresh token plus its expiry. Any non-200 is an error
-// carrying its status as a *renewStatusError, so the caller can tell a
+// renewToken POSTs /api/v1/internal/token/renew with the CURRENT run token and returns the fresh token
+// plus its expiry. Any non-200 becomes a *renewStatusError carrying status, so the caller can tell a
 // permanent refusal from a blip.
 func renewToken(ctx context.Context, base, token string, client *http.Client) (string, time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,

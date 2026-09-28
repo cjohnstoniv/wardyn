@@ -22,17 +22,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// recordingChmodDirs returns the directories prepareRecordingDirs makes agent-
-// writable (chmod 0777). CastDir is ALWAYS included: it is container-local scratch
-// created fresh under a root-owned prefix, so loosening it only touches the
-// container fs. The RecordingMount target is included ONLY for a NAMED VOLUME (a
-// fresh volume is root-owned 0755, so the non-root agent otherwise cannot deliver
-// its cast, and the volume is Docker-managed — the relax is contained to it). A
-// HOST-BIND RecordingMount is deliberately EXCLUDED: chmod 0777 on it would make
-// the operator's HOST directory world-writable. A host-bind mount must be
-// provisioned agent-writable by the operator; otherwise the shared-mount fallback
-// EPERMs and delivery uses the masked proxy-upload path. (The "/"-prefix split is
-// the same one that decides bind vs volume when the mount is attached.)
+// recordingChmodDirs returns the directories prepareRecordingDirs makes
+// agent-writable (chmod 0777). CastDir is ALWAYS included: container-local
+// scratch created fresh under a root-owned prefix, so loosening it only
+// touches the container fs. RecordingMount target is included ONLY for a
+// NAMED VOLUME (fresh volume is root-owned 0755, so the non-root agent
+// otherwise can't deliver its cast; Docker-managed, so the relax is
+// contained). SECURITY: a HOST-BIND RecordingMount is deliberately EXCLUDED
+// — chmod 0777 on it would make the operator's HOST directory
+// world-writable. A host-bind mount must be provisioned agent-writable by
+// the operator; otherwise the shared-mount fallback EPERMs and delivery
+// uses the masked proxy-upload path. (The "/"-prefix split is the same one
+// that decides bind vs volume when the mount is attached.)
 func recordingChmodDirs(cfg Config) []string {
 	dirs := []string{defaultCastDir}
 	if cfg.RecordingMount != "" && !strings.HasPrefix(cfg.RecordingMount, "/") {
@@ -42,12 +43,12 @@ func recordingChmodDirs(cfg Config) []string {
 }
 
 // prepareRecordingDirs creates+chmods the cast dir and (for a named-volume
-// RecordingMount) the recording-mount target to 0777 via a one-shot root exec, so
-// a non-root agent process can both write its in-progress cast and deliver it to
-// the shared mount. Best-effort: any failure is swallowed.
+// RecordingMount) the recording-mount target to 0777 via a one-shot root
+// exec, so a non-root agent process can both write its in-progress cast and
+// deliver it to the shared mount. Best-effort: any failure is swallowed.
 func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 	dirs := recordingChmodDirs(d.cfg)
-	// `mkdir -p <each> && chmod 0777 <each>` — idempotent; the mount already
+	// `mkdir -p <each> && chmod 0777 <each>`, idempotent: the mount already
 	// exists (chmod still applies), the cast dir is created fresh.
 	args := append([]string{"-p"}, dirs...)
 	created, err := d.cli.ExecCreate(ctx, ref, client.ExecCreateOptions{
@@ -77,7 +78,7 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 
 // waitExec briefly polls a one-shot exec to completion so a subsequent Exec
 // (which races right after) observes the prepared directories. Bounded so a
-// stuck exec cannot stall sandbox bring-up.
+// stuck exec can't stall sandbox bring-up.
 func (d *Driver) waitExec(ctx context.Context, execID string) {
 	for i := 0; i < 50; i++ {
 		insp, ierr := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
@@ -91,15 +92,15 @@ func (d *Driver) waitExec(ctx context.Context, execID string) {
 // recordCmd wraps argv with the recorder for a Record-mode launch, shared by
 // the exec (Exec) and exec-less (runAsMainProcess) launch paths. Default
 // delivery is upload through the proxy's brokered recording route (run-token
-// injected proxy-side; cross-run uploads 403 at the control plane), which is
-// MASKED control-plane-side before the cast is persisted. HIGH-finding: only
-// fall back to the UNMASKED, cross-run-writable shared mount (-out-dir) when
-// there is NO masked upload path — runner.RecorderArgv enforces the same
-// mutual exclusion as defense in depth, so an unmasked cast can never land in the
-// API-served replay store when uploads work. castDir differs per caller (the
-// root exec path's default cast dir vs the exec-less path's agent-writable
-// tmpfs dir); runID recovery also differs per caller's label source, so it is
-// passed in already resolved (uuid.Nil if it could not be recovered).
+// injected proxy-side; cross-run uploads 403 at the control plane), MASKED
+// control-plane-side before the cast is persisted. SECURITY: only fall back
+// to the UNMASKED, cross-run-writable shared mount (-out-dir) when there's
+// NO masked upload path — runner.RecorderArgv enforces the same mutual
+// exclusion as defense in depth, so an unmasked cast can never land in the
+// API-served replay store when uploads work. castDir differs per caller (root
+// exec path's default cast dir vs the exec-less path's agent-writable tmpfs
+// dir); runID recovery also differs per caller, passed in already resolved
+// (uuid.Nil if unrecoverable).
 func (d *Driver) recordCmd(runID uuid.UUID, castDir string, argv []string) []string {
 	uploadURL := ""
 	if runID != uuid.Nil {
@@ -267,19 +268,18 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 }
 
 // Wait blocks until the agent process started by Exec for ref has exited and
-// returns its exit code. It is only valid after a successful Exec on the same
-// ref: it inspects the agent exec id Exec recorded. Unlike waitExec (a bounded
-// best-effort poll used for one-shot setup execs), Wait is unbounded and bound
-// only by ctx — the agent process may run for as long as the run is alive.
-// Returns an error if no agent exec is tracked for ref, or if ctx is cancelled
-// before the process exits.
+// returns its exit code. Only valid after a successful Exec on the same ref:
+// it inspects the agent exec id Exec recorded. Unlike waitExec (a bounded
+// best-effort poll for one-shot setup execs), Wait is unbounded, bound only
+// by ctx — the agent process may run as long as the run is alive. Errors if
+// no agent exec is tracked for ref, or ctx is cancelled first.
 func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	d.mu.Lock()
 	isMain := d.mainProc[ref]
 	execID, ok := d.agentExecs[ref]
 	d.mu.Unlock()
-	// EXEC-LESS path: the workload IS the container's main process, so its exit is
-	// the container's exit.
+	// EXEC-LESS path: the workload IS the container's main process, so its
+	// exit is the container's exit.
 	if isMain {
 		return d.waitMainProcess(ctx, ref)
 	}
@@ -290,13 +290,11 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 }
 
 // pollExecExit polls execID via ExecInspect until it stops running and
-// returns its exit code. ExecInspect.Running flips to false once the process
-// exits; ExitCode is then authoritative. The poll cadence matches waitExec;
-// this loop is unbounded (bound only by ctx), which is what distinguishes it
-// from waitExec's bounded best-effort poll. Factored out of Wait so
-// ExecStream's returned ExecSession.Wait closure can observe a DIFFERENT
-// exec's completion (a streamed exec, not the tracked agent exec) via the
-// exact same, already-proven polling contract.
+// returns its exit code (Running flips false once the process exits,
+// ExitCode then authoritative). Poll cadence matches waitExec, but this loop
+// is unbounded (bound only by ctx). Factored out of Wait so ExecStream's
+// returned ExecSession.Wait closure can observe a DIFFERENT exec's
+// completion via the same, already-proven polling contract.
 func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 	errs := 0
 	for {
@@ -369,32 +367,29 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 	return statusFromInspect(res.Container), nil
 }
 
-// mainProcessExecID is the sentinel internal/api/runs_dispatch.go persists for
-// an EXEC-LESS launch (krun runtime: Exec returns "" with a nil error because
-// the workload runs as the container's own main process, not a separate
-// exec — see runAsMainProcess). Duplicated here (same literal) rather than
+// mainProcessExecID is the sentinel internal/api/runs_dispatch.go persists
+// for an EXEC-LESS launch (krun runtime: Exec returns "" with a nil error
+// since the workload runs as the container's own main process, not a
+// separate exec — see runAsMainProcess). Duplicated here rather than
 // imported: internal/api sits above this concrete substrate and must stay
-// target-agnostic, so it cannot import internal/runner/docker. MUST match the
-// literal in runs_dispatch.go — see that constant's doc comment for
-// why a bare "" can no longer double for this case.
+// target-agnostic. MUST match the literal in runs_dispatch.go.
 const mainProcessExecID = "main-process"
 
 // AgentStatus reports the agent's liveness in a restart-safe way. For an
-// exec-based ref (agentExecID != "" and not the mainProcessExecID sentinel) it
-// inspects that exec: Running => alive (RUNNING); exited => terminal with the
-// real exit code, EVEN while the idle sandbox container is still up — the case
-// container Status cannot detect after a restart dropped the in-memory exec
-// map. When agentExecID is "" OR the mainProcessExecID sentinel (exec-less/
-// main-process, or Exec never ran) the container IS the agent, so fall back to
-// Status — "main-process" was never actually passed to ExecCreate, so probing
-// it as a real exec id would only ever produce the ambiguous-404 error below.
+// exec-based ref (agentExecID != "" and not the mainProcessExecID sentinel)
+// it inspects that exec: Running => alive; exited => terminal with the real
+// exit code, EVEN while the idle sandbox container is still up (a case
+// container Status can't detect after a restart dropped the in-memory exec
+// map). When agentExecID is "" or the sentinel, the container IS the agent,
+// so fall back to Status — "main-process" was never passed to ExecCreate,
+// so probing it as a real exec id would only produce the ambiguous-404 below.
 //
-// AMBIGUOUS exec-404 (GAP-RECONCILE-1): docker keeps exec records in daemon
-// MEMORY only, so a daemon restart under live-restore erases them while the
-// container and its exec'd process keep running. An exec-404 is therefore only
-// DEFINITIVE when the container is ITSELF gone/stopped; while the container is
-// still RUNNING it is ambiguous (the agent may be alive), so return an ERROR to
-// route the caller into its bounded-retry/backoff path rather than finalizing a
+// AMBIGUOUS exec-404: docker keeps exec records in daemon MEMORY only, so a
+// restart under live-restore erases them while the container and its
+// exec'd process keep running. An exec-404 is therefore only DEFINITIVE
+// when the container is ITSELF gone/stopped; while still RUNNING it's
+// ambiguous (the agent may be alive), so return an ERROR to route the
+// caller into its bounded-retry/backoff path rather than finalizing a
 // healthy live-restore run.
 func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
 	if agentExecID == "" || agentExecID == mainProcessExecID {

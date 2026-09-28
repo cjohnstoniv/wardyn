@@ -80,9 +80,11 @@ func jsonTagNames(t *testing.T, typ reflect.Type) map[string]bool {
 func TestPutIntegrationRequest_MirrorsSettableIntegrationFields(t *testing.T) {
 	// The fields the SERVER owns on a stored Integration: the id comes from the
 	// URL (path-is-authoritative, like handleDeleteSecret) and the timestamps
-	// are stamped by handlePutIntegration from s.cfg.Now(). Everything else on
-	// types.Integration is operator-settable and must be on the PUT body.
-	serverOwned := map[string]bool{"id": true, "created_at": true, "updated_at": true}
+	// are stamped by handlePutIntegration from s.cfg.Now(). default_for is not
+	// settable at all: it marked an AI-kind row, and no writable kind takes it.
+	// Everything else on types.Integration is operator-settable and must be on
+	// the PUT body.
+	serverOwned := map[string]bool{"id": true, "created_at": true, "updated_at": true, "default_for": true}
 
 	stored := jsonTagNames(t, reflect.TypeOf(types.Integration{}))
 	settable := jsonTagNames(t, reflect.TypeOf(putIntegrationRequest{}))

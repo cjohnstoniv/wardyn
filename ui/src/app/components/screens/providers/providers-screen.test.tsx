@@ -47,6 +47,13 @@ vi.mock("../../../lib/api/agent-providers", async () => {
   };
 });
 
+// The Agents tab also reads GET /model-providers (its rows' defaults).
+vi.mock("../../../lib/api/model-providers", () => ({
+  modelProviders: {
+    getModelProviders: () => Promise.resolve({ providers: {}, connected: {}, etag: null }),
+  },
+}));
+
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
@@ -515,9 +522,10 @@ describe("ProvidersScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
 
-    // The retry's result (the saved per_user row) lands, proving the second
-    // /setup/status call was made and applied despite the first rejecting.
-    expect(await screen.findByTestId("per-user-sign-in-banner")).toBeInTheDocument();
+    // The retry's result (the admin's own model access, absent before) lands,
+    // proving the second /setup/status call was made and applied despite the
+    // first rejecting.
+    expect(await screen.findByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED)).toBeInTheDocument();
     expect(getSetupStatusMock.mock.calls.length).toBe(3);
   });
 });

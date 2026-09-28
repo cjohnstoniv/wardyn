@@ -58,7 +58,7 @@ function agentCapableRows(rows: IntegrationRow[]): IntegrationRow[] {
 // there is none.
 //
 // The server's llm_ready is NOT a safe blanket substitute, though: it is a
-// DEPLOYMENT-wide fact (internal/api/setup.go's computeLLMReady/
+// DEPLOYMENT-wide fact (internal/api/setup.go's handleSetupStatus/
 // llmProvenance) that can be true for reasons this caller cannot act on —
 // so this fallback:
 //   - applies ONLY to the redacted view (status.checks_redacted) — an admin

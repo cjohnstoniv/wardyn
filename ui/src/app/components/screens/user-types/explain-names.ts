@@ -21,14 +21,13 @@ type Names = Record<string, Record<string, string>>;
 
 // G-3: the `*` row on every kind names itself now, not just the three packet A
 // drew ("All org workspaces", "Images", the feature pair) — "All {family}" on
-// the other seven.
+// the other six.
 const FIXED: Names = {
   egress_host: { "*": EXPLAIN.ALL_EGRESS_HOSTS },
   secret: { "*": EXPLAIN.ALL_SECRETS },
   workspace: { "*": EXPLAIN.ALL_WORKSPACES },
   image: { "*": EXPLAIN.ALL_IMAGES },
   agent: { "*": EXPLAIN.ALL_AGENTS },
-  integration: { "*": EXPLAIN.ALL_INTEGRATIONS },
   workspace_provider: { "*": EXPLAIN.ALL_GIT_PROVIDERS },
   model_provider: { "*": EXPLAIN.ALL_MODEL_PROVIDERS },
   feature: { "*": EXPLAIN.SSH_AND_TOKENS, ssh_key: EXPLAIN.SSH_KEYS, api_token: EXPLAIN.API_TOKENS },

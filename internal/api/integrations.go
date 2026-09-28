@@ -25,35 +25,10 @@ import (
 // the row's own secret rows carry their delivery, and Egress says where the
 // system lives. The pre-base-component shim view is gone.
 
-// capEnv carries the external readiness signals capabilitiesFor cannot derive
-// from the stored row alone: secret-store presence, host detection, and
-// managed/resident subscription liveness.
-//
-// ponytail: the original sketch for this struct also carried a
-// ComposerConfigEnvSet field. Dropped — no cell in the approved matrix below
-// reads it, and "(adjust as needed)" explicitly licensed trimming it. Add it
-// back the day a matrix cell actually needs it.
+// capEnv carries the one external readiness signal capabilitiesFor cannot
+// derive from the stored row alone: secret-store presence.
 type capEnv struct {
-	SecretPresent            func(string) bool
-	HostLike                 bool
-	BedrockRegionSet         bool
-	BedrockModelSet          bool
-	ManagedBlobPresent       func(provider string) bool
-	ResidentSubscriptionLive bool
-	// BedrockCredentialPresent mirrors SetupBedrock's four-lane credential OR
-	// (bearer, captured AWS SSO, ~/.aws mount, resident SigV4 keys) — the
-	// precondition resolveBedrockAuth ALSO requires beyond region+model. Without
-	// this, bedrockCaps read "available" off region+model alone, so a
-	// wizard-completed Bedrock integration with zero credentials of any kind
-	// still showed model_api/tool:claude-code/wardyn_features as available —
-	// both surfaces (GET /integrations, SetupStatus.Integrations) believing a
-	// run that would silently get no Bedrock transport at all.
-	BedrockCredentialPresent bool
-	// BedrockCredentialExpired distinguishes "the captured session is dead" from
-	// "nothing is configured" — same cell state, different instruction. Only
-	// meaningful when BedrockCredentialPresent is false (a live lane of any kind
-	// makes it moot).
-	BedrockCredentialExpired bool
+	SecretPresent func(string) bool
 }
 
 // CapState is one capability's current state.
@@ -77,38 +52,6 @@ type Capability struct {
 	Residency string   `json:"residency,omitempty"`
 }
 
-// model_api / wardyn_features copy canon not already owned by the harness
-// catalog's tool-compatibility facts (harness.go) — verbatim from the
-// Integrations screen mock (scratchpad mockup/wardyn-integrations.js, the T
-// object). Do not paraphrase; keep in sync with that file.
-const (
-	reasonXSubDirect      = "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting."
-	reasonBedrockFeatures = "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses."
-	// reasonBedrockUnset states the real dispatch behavior: without both a
-	// region and a model id, resolveBedrockAuth never reports ready and the run
-	// falls through to whatever other lane it has (usually none).
-	reasonBedrockUnset = "Region and model id are unset — a run can't reach Bedrock until both are set."
-	// reasonBedrockNoCreds: region+model are set but resolveBedrockAuth's
-	// credential ladder (bearer, captured AWS SSO, ~/.aws mount, resident SigV4
-	// keys) has nothing to offer — a run still gets no Bedrock transport.
-	reasonBedrockNoCreds = "Region and model are set, but no AWS credential is configured — add a bearer key, resident access keys, an AWS SSO login, or a ~/.aws mount."
-	// reasonBedrockCredExpired: there IS a captured AWS SSO session and nothing
-	// can renew it. Its own row because "no credential is configured" is the
-	// wrong instruction for it — the operator does not add a credential, they
-	// sign the existing one back in — and because a green cell over a dead
-	// session is the exact drift this matrix exists to catch: `configured()` is
-	// true on a region alone, which made a `bedrock` AI row, which made
-	// llm_ready true, which painted a member's chip green.
-	reasonBedrockCredExpired = "An AWS SSO session is captured but expired and cannot be renewed — sign in again; until then Bedrock runs have no credential."
-	// reasonHostCLIOptIn is the canon note for the host-CLI lane's Wardyn-features
-	// cell — kept in sync with ui/src/app/lib/integrations.ts's CAPS.sub hostCli
-	// note, not the (stale) mock: nothing in the console switches this lane on,
-	// and nothing at the server flips it either — the resident_host cell is
-	// unconditionally CapOff (the WARDYN_COMPOSER_CONFIG switch went with the
-	// composer).
-	reasonHostCLIOptIn = "Off for this lane — no switch in this console turns it on."
-)
-
 // capabilitiesFor computes the full capability matrix for one integration.
 // Pure: no storage, no HTTP, no wiring — env carries every external fact it
 // needs. Routing is on KIND alone: any slug outside the closed set is a
@@ -130,14 +73,6 @@ func capabilitiesFor(in types.Integration, env capEnv) []Capability {
 	}
 	var caps []Capability
 	switch in.Kind {
-	case types.IntegrationKindAnthropicAPIKey:
-		caps = directKeyCaps(in, env, "claude-code", "codex-cli")
-	case types.IntegrationKindAnthropicSubscription:
-		caps = subscriptionCaps(in, env)
-	case types.IntegrationKindBedrock:
-		caps = bedrockCaps(in, env)
-	case types.IntegrationKindOpenAIAPIKey:
-		caps = directKeyCaps(in, env, "codex-cli", "claude-code")
 	case types.IntegrationKindGitHubApp:
 		caps = githubAppCaps(in, env)
 	case types.IntegrationKindGitHost:
@@ -190,134 +125,6 @@ func genericCaps(in types.Integration, env capEnv) []Capability {
 	return []Capability{reach, cred}
 }
 
-// directKeyCaps builds the shared 4-cell matrix for the two direct-api-key ai
-// types (anthropic_api_key, openai_api_key): model_api, the driven tool, and
-// wardyn_features all gate on the SAME api_key secret and share one reason
-// when it's missing; the OTHER tool is an unconditional protocol-fact
-// impossibility sourced from the harness catalog (harness.go) — it speaks a
-// different API, no setup state changes that.
-func directKeyCaps(in types.Integration, env capEnv, drivenHarness, otherHarness string) []Capability {
-	ref := in.RoleSecret("api_key")
-	const residency = "proxy_injected"
-	return []Capability{
-		gatedCap("model_api", ref, env, residency),
-		gatedCap("tool:"+drivenHarness, ref, env, residency),
-		{ID: "tool:" + otherHarness, State: CapImpossible, Reason: harnessProviderReason(otherHarness, in.Kind)},
-		gatedCap("wardyn_features", ref, env, residency),
-	}
-}
-
-// subscriptionCaps builds the anthropic_subscription matrix. Config["lane"]
-// selects "managed" (container login; the recommended default — also what an
-// unset/unrecognized lane value falls back to) or "resident_host" (host CLI
-// login). model_api is an unconditional protocol fact (a subscription token
-// is only accepted for Claude-Code-shaped requests); wardyn_features is
-// unconditionally available regardless of lane — an operator opts it off
-// per-integration via DisabledCaps; capabilitiesFor doesn't need to know why.
-func subscriptionCaps(in types.Integration, env capEnv) []Capability {
-	lane, _ := in.Config["lane"].(string)
-	claudeState, claudeReason, residency := CapAvailable, "", "proxy_injected"
-	if lane == "resident_host" {
-		residency = "resident_mount"
-		if !env.ResidentSubscriptionLive {
-			claudeState, claudeReason = CapNeedsSetup, residentHostReason(env)
-		}
-	} else if !envManagedBlobPresent(env, "anthropic") {
-		claudeState, claudeReason = CapNeedsSetup, "no managed Claude subscription connected"
-	}
-	// Wardyn's own features ride the HOST-CLI lane only when the operator opts
-	// in: that wire shells out to the resident `claude` login on the control
-	// plane, which is subscription-ToS-sensitive, so the composer backend that
-	// implements it ships disabled by default (backends.factory). Reporting it
-	// "available" here would promise Composer a session it will not use — and
-	// would default Wardyn's own calls onto the operator's personal login. The
-	// managed lane has no such caveat: it sends Claude-Code-shaped requests
-	// through the sandbox wire — but ONLY once a managed token is actually
-	// connected: without this gate the cell read "available"
-	// for a lane that is not — the exact drift bedrockCaps below refuses to
-	// tell — because tool:claude-code (right below) already needs the SAME
-	// managed-blob signal to leave needs_setup.
-	features := Capability{ID: "wardyn_features", State: CapAvailable, Residency: residency}
-	switch {
-	case lane == "resident_host":
-		features = Capability{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: residency}
-	case !envManagedBlobPresent(env, "anthropic"):
-		features = Capability{ID: "wardyn_features", State: CapNeedsSetup, Reason: "no managed Claude subscription connected", Residency: residency}
-	}
-	return []Capability{
-		{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
-		{ID: "tool:claude-code", State: claudeState, Reason: claudeReason, Residency: residency},
-		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
-		features,
-	}
-}
-
-// residentHostReason explains why the resident_host subscription lane isn't
-// live yet, distinguishing a genuinely sealed control plane (no host to see)
-// from a host-mode wardynd that simply has no active Claude CLI session.
-func residentHostReason(env capEnv) string {
-	if !env.HostLike {
-		return "host-only: wardynd runs in a container and can only see a ~/.claude mounted into it — the managed lane avoids this"
-	}
-	return "host-only: no live Claude CLI session found on this host"
-}
-
-// bedrockCaps builds the bedrock matrix — ONE integration carrying the lane
-// choice (auto|bearer|sso|aws_dir|static), because that is what
-// resolveBedrockAuth resolves: one account, one region, one model, an ordered
-// credential fallback. Residency follows the lane (bearer is injected on the
-// wire; every other lane puts AWS credentials inside the sandbox).
-//
-// Region/model are read from the integration first, with the boot flags
-// (env.Bedrock*Set) as the fallback — the same precedence resolveBedrockAuth
-// applies at dispatch; reading the boot flags alone reports a wizard-completed
-// integration as needs_setup forever on a deployment without WARDYN_BEDROCK_*.
-func bedrockCaps(in types.Integration, env capEnv) []Capability {
-	lane, _ := in.Config["auth_lane"].(string)
-	residency := "resident_env"
-	if lane == "bearer" {
-		residency = "proxy_injected"
-	}
-	region, _ := in.Config["region"].(string)
-	model, _ := in.Config["model"].(string)
-	regionSet := strings.TrimSpace(region) != "" || env.BedrockRegionSet
-	modelSet := strings.TrimSpace(model) != "" || env.BedrockModelSet
-	// Region+model gate EVERY Bedrock cell, not just Wardyn's own features:
-	// resolveBedrockAuth (runs_bedrock.go) returns an unready bedrockAuth when
-	// either is empty, and dispatch then falls silently to the api-key lane. A
-	// cell that reads "available" while the run it describes cannot reach
-	// Bedrock at all is exactly the drift this matrix exists to prevent.
-	if !regionSet || !modelSet {
-		return []Capability{
-			{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
-			{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-		}
-	}
-	// A configured region+model with NO credential anywhere in
-	// resolveBedrockAuth's ladder is exactly as unreachable as an unset
-	// region/model — same drift this matrix exists to prevent.
-	if !env.BedrockCredentialPresent {
-		why := reasonBedrockNoCreds
-		if env.BedrockCredentialExpired {
-			why = reasonBedrockCredExpired
-		}
-		return []Capability{
-			{ID: "model_api", State: CapNeedsSetup, Reason: why},
-			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: why},
-			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
-			{ID: "wardyn_features", State: CapNeedsSetup, Reason: why},
-		}
-	}
-	return []Capability{
-		{ID: "model_api", State: CapAvailable, Residency: residency},
-		{ID: "tool:claude-code", State: CapAvailable, Residency: residency},
-		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
-		{ID: "wardyn_features", State: CapAvailable, Residency: residency, Reason: reasonBedrockFeatures},
-	}
-}
-
 // githubAppCaps builds the github_app matrix: clone:app is a single brokered
 // capability that needs BOTH credentials (an installation token minted from
 // only one half is not a thing GitHub offers); egress_host is unconditional
@@ -365,11 +172,6 @@ func applyDisabled(caps []Capability, in types.Integration) {
 // as "nothing is stored", not a panic).
 func envSecretPresent(env capEnv, ref string) bool {
 	return ref != "" && env.SecretPresent != nil && env.SecretPresent(ref)
-}
-
-// envManagedBlobPresent is the nil-safe form of env.ManagedBlobPresent.
-func envManagedBlobPresent(env capEnv, provider string) bool {
-	return env.ManagedBlobPresent != nil && env.ManagedBlobPresent(provider)
 }
 
 // secretGate reports whether ref names a credential that is actually stored.
@@ -439,11 +241,16 @@ func (r *integrationRow) UnmarshalJSON(b []byte) error {
 // nil/erroring Store degrades to "no stored rows, no SiteConfig-derived legacy
 // rows" rather than failing — this is a read surface, never a gate.
 //
-// present/bedrock are legacyIntegrations' two live signals, taken as
-// parameters so a caller resolving several refs in one request
-// (resolveIntegrationRef, launchRecordRun) computes each ONCE instead of paying
-// a secret listing + Bedrock age-decrypt probe per call.
-func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]bool, bedrock SetupBedrock) []integrationRow {
+// A stored AI-kind row (anthropic_api_key, anthropic_subscription, bedrock,
+// openai_api_key) is left out: model access comes from a model provider, and
+// every resolver of an integration reads this set, so such a row can no longer
+// grant anything — a workspace requirement, a redirect token or a run. It stays
+// in site config for the conversion to model providers to read.
+//
+// present is legacyIntegrations' live signal, taken as a parameter so a caller
+// resolving several refs in one request (resolveIntegrationRef,
+// launchRecordRun) computes it ONCE instead of paying a secret listing per call.
+func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]bool) []integrationRow {
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
@@ -453,10 +260,13 @@ func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]b
 	stored := make(map[string]bool, len(sc.Integrations))
 	rows := make([]integrationRow, 0, len(sc.Integrations))
 	for _, in := range sc.Integrations {
+		if types.AIProviderKind(in.Kind) {
+			continue
+		}
 		stored[in.ID] = true
 		rows = append(rows, integrationRow{Integration: in, Source: "stored"})
 	}
-	rows = append(rows, s.legacyIntegrations(ctx, sc, stored, present, bedrock)...)
+	rows = append(rows, legacyIntegrations(sc, stored, present)...)
 	slices.SortFunc(rows, func(a, b integrationRow) int {
 		if c := cmp.Compare(integrationGroup(a.Kind), integrationGroup(b.Kind)); c != 0 {
 			return c
@@ -467,19 +277,15 @@ func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]b
 }
 
 // integrationGroup is the surface's own grouping, DERIVED from kind (the
-// stored category is gone by design): the AI provider flavors first, then
-// source control, then everything else as one flat "Connections" set. The
-// returned rank doubles as the sort key above, so the API response and the
-// three groups the screen renders can never disagree about what goes where.
+// stored category is gone by design): source control first, then everything
+// else as one flat "Connections" set. The returned rank doubles as the sort key
+// above, so the API response and the groups the screen renders can never
+// disagree about what goes where.
 func integrationGroup(kind string) int {
-	switch {
-	case types.AIProviderKind(kind):
+	if kind == types.IntegrationKindGitHubApp || kind == types.IntegrationKindGitHost {
 		return 0
-	case kind == types.IntegrationKindGitHubApp || kind == types.IntegrationKindGitHost:
-		return 1
-	default:
-		return 2
 	}
+	return 1
 }
 
 // legacyIntegrations derives one row per pre-existing source of truth a
@@ -490,10 +296,12 @@ func integrationGroup(kind string) int {
 // integration under one of these ids takes over that slot and stops seeing
 // the synthesized duplicate; a stored row under any OTHER id coexists
 // alongside these untouched. present is the ONE present-secret map every
-// other verdict is computed from (secrets.go); bedrock is setupBedrock's own
-// "is Bedrock touched at all" verdict — both taken as parameters, not
+// other verdict is computed from (secrets.go), taken as a parameter, not
 // recomputed (see effectiveIntegrations' doc).
-func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, stored map[string]bool, present map[string]bool, bedrock SetupBedrock) []integrationRow {
+//
+// Source control only: a model credential is never derived into a row here.
+// It is each person's own, on a model provider.
+func legacyIntegrations(sc types.SiteConfig, stored map[string]bool, present map[string]bool) []integrationRow {
 	var rows []integrationRow
 	add := func(id string, in types.Integration) {
 		if stored[id] {
@@ -501,53 +309,6 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 		}
 		in.ID = id
 		rows = append(rows, integrationRow{Integration: in, Source: "legacy"})
-	}
-
-	// AI providers: direct API keys. The api_key secret rides the provider's
-	// proxy-header injection convention (types.AIKeyDelivery — the same facts
-	// the harness catalog's Gateway rows encode), stated on the row so the
-	// derived shape says what actually happens.
-	if present["anthropic-api-key"] {
-		add("anthropic_api_key", types.Integration{
-			Name: "Anthropic API key", Kind: types.IntegrationKindAnthropicAPIKey,
-			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
-				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
-		})
-	}
-	if present["openai-api-key"] {
-		add("openai_api_key", types.Integration{
-			Name: "OpenAI API key", Kind: types.IntegrationKindOpenAIAPIKey,
-			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "openai-api-key",
-				Delivery: types.AIKeyDelivery(types.IntegrationKindOpenAIAPIKey)}},
-		})
-	}
-
-	// The two Claude-subscription lanes. These can coexist (a host-mode
-	// wardynd may also have a managed blob captured), so they get distinct ids
-	// rather than sharing "anthropic_subscription".
-	if s.cfg.SubscriptionToken != nil {
-		if tok, err := s.cfg.SubscriptionToken.Peek(); err == nil && tok.Value != "" {
-			add("anthropic_subscription:resident_host", types.Integration{
-				Name: "Claude subscription (resident host)", Kind: types.IntegrationKindAnthropicSubscription,
-				Config: map[string]any{"lane": "resident_host"},
-			})
-		}
-	}
-	if s.managedInjectReady("claude-code") {
-		add("anthropic_subscription:managed", types.Integration{
-			Name: "Claude subscription (managed)", Kind: types.IntegrationKindAnthropicSubscription,
-			Config: map[string]any{"lane": "managed"},
-		})
-	}
-
-	// Bedrock — ONE row. Reuses setupBedrock's own "is Bedrock touched at all"
-	// predicate (region/model/AWS profile/any bedrock secret) rather than
-	// re-deriving it a second way.
-	if bedrock.configured() {
-		add("bedrock", types.Integration{
-			Name: "AWS Bedrock", Kind: types.IntegrationKindBedrock,
-			Config: map[string]any{"auth_lane": "auto", "region": bedrock.Region, "model": bedrock.Model},
-		})
 	}
 
 	// Source control: the GitHub App. Both halves ride the broker's own
@@ -702,10 +463,8 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 	return rows
 }
 
-// Integration WRITES (validation) + the run resolution ladder built ON TOP of
+// Integration WRITES (validation) + ref resolution built ON TOP of
 // effectiveIntegrations/capabilitiesFor above live in integrations_write.go
 // (split out once this file crossed the 1000-line gate):
-// knownIntegrationTypes, genericIntegrationCategories, validateIntegrationWrite
-// (setup_integrations.go's write endpoints),
-// resolveIntegrationRef/defaultAgentRunsIntegration (llmcred.go's run-time
-// resolution ladder).
+// knownIntegrationConfigKeys, validateIntegrationWrite (setup_integrations.go's
+// write endpoints), resolveIntegrationRef.

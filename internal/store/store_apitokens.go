@@ -1,12 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-user API tokens (migration 0045). Kept out of store.go on purpose (it
-// sits at a lint size boundary), mirroring store_sshkeys.go's split.
+// Per-user API tokens. Kept out of store.go on purpose (lint size boundary),
+// mirroring store_sshkeys.go's split.
 //
-// The raw token never reaches SQL: every method here takes either an id or the
-// raw string and hashes it with hashToken (store_ephemeral.go) before touching
-// the table, so api_tokens.token_sha256 is the only form that exists at rest.
+// SECURITY: the raw token never reaches SQL — every method here hashes it
+// with hashToken before touching the table, so token_sha256 is the only form
+// that exists at rest.
 package store
 
 import (
@@ -25,21 +25,18 @@ import (
 )
 
 // CreateAPIToken inserts one token row. raw is the PLAINTEXT credential; only
-// its hash is stored, and the caller is responsible for returning the plaintext
-// to its creator exactly once (it is unrecoverable afterwards). t.Token is
-// ignored — passing the secret twice would be the one way to accidentally
-// persist it.
+// its hash is stored, and the caller must return the plaintext to its
+// creator exactly once (unrecoverable afterwards). t.Token is ignored —
+// passing the secret twice would be the one way to accidentally persist it.
 //
-// A unique_violation (23505) on token_sha256 is ErrConflict: that is a raw
-// collision in a 256-bit random space, so in practice it means the caller
-// reused a token value rather than minting a fresh one.
+// A unique_violation (23505) on token_sha256 is ErrConflict: a raw collision
+// in a 256-bit space means the caller reused a token value rather than
+// minting a fresh one.
 //
-// groups_truncated (migration 0052) rides in as a *bool and binds as SQL NULL
-// when nil — the same nil-is-its-own-state discipline marshalGroups keeps for
-// the snapshot itself. NULL means "minted before anything recorded this", and
-// its consumers read that as TRUNCATED, not as false. A plain bool here (or a
-// DEFAULT FALSE on the column) would assert "complete" for every legacy row:
-// fail OPEN, the exact thing the marker exists to prevent.
+// SECURITY: groups_truncated binds as SQL NULL when nil. NULL means "minted
+// before anything recorded this", and consumers read that as TRUNCATED, not
+// false. A plain bool or DEFAULT FALSE would assert "complete" for every
+// legacy row — fail OPEN, the exact thing the marker exists to prevent.
 func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error) {
 	groups, err := marshalGroups(t.Groups)
 	if err != nil {
@@ -47,33 +44,26 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	}
 	// created_at is written on the database's clock, back-dated by the request's
 	// own age, rather than binding t.CreatedAt straight through: the row's
-	// timestamp must not come from wardynd's clock while the value it is compared
-	// against — oidc_session_revocations.revoked_at — comes from Postgres. Two
-	// clocks, one inequality, and the failing direction is the security one: with
-	// wardynd ahead of the database, a token minted BEFORE a revoke would carry a
-	// created_at AFTER the cutoff and survive it, so "revoke every session for
-	// this human" would silently not.
+	// timestamp must not come from wardynd's clock while what it's compared
+	// against (oidc_session_revocations.revoked_at) comes from Postgres.
+	// SECURITY: with wardynd ahead of the database, a token minted BEFORE a
+	// revoke could carry a created_at AFTER the cutoff and survive it —
+	// "revoke every session for this human" would silently not.
 	//
-	// The age, not now(), because plain now() would break admission-time stamping: the API stamps
-	// t.CreatedAt at request ADMISSION, before it reads the body, precisely so a
-	// caller who holds a mint request open across POST /sessions/revoke cannot
-	// land a created_at after the cutoff. now() - age keeps that and adds the
-	// clock — the duration is measured entirely on the app's own clock, so no
-	// skew rides in on it.
+	// The age, not now(): the API stamps t.CreatedAt at request ADMISSION,
+	// before reading the body, so a caller holding a mint open across
+	// POST /sessions/revoke can't land a created_at after the cutoff; now()-age
+	// keeps that while measuring skew-free on the app's own clock.
 	//
-	// A ZERO CreatedAt means the caller stamped no admission time, so there is
-	// none to preserve: it becomes the database's now(), which is what binding
-	// the zero value could never have meant. Fail closed is NOT the answer here
-	// — an age of two millennia would mint a token already revoked by any cutoff
-	// on record.
+	// A ZERO CreatedAt means no admission time to preserve, so it becomes the
+	// database's now(). Fail closed is NOT the answer here — an age of two
+	// millennia would mint a token already revoked by any cutoff on record.
 	age := int64(0)
 	if !t.CreatedAt.IsZero() {
 		age = db.AppClockAgeMicros(t.CreatedAt, time.Now())
 	}
-	// q is built rather than const: the created_at expression has ONE definition
-	// (db.AppClockAgeSQL), shared with the session-revocation comparison that
-	// reads these rows, and a const cannot call it. A string concatenation per
-	// mint, on a path that already does a network round trip.
+	// q is built, not const: the created_at expression (db.AppClockAgeSQL) is
+	// shared with the session-revocation read and a const can't call it.
 	q := `
 		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, minted_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `, NULLIF($11, ''))
@@ -90,15 +80,14 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	return out, nil
 }
 
-// GetAPITokenByRaw is the auth-time lookup: given the bearer string a caller
-// presented, resolve the LIVE token row it stands for. Deliberately UNSCOPED by
-// principal — the caller has not authenticated yet; this call is what
-// authenticates them.
+// GetAPITokenByRaw is the auth-time lookup: given a bearer string, resolve
+// the LIVE token it stands for. Deliberately UNSCOPED by principal — this
+// call is what authenticates the caller.
 //
-// `revoked_at IS NULL` is in the WHERE, not checked by the caller, and that is
-// the security shape: a revoked token, an unknown token and a token whose hash
-// does not match all fail IDENTICALLY with ErrNotFound, so the boundary is not
-// an oracle for "this token once existed".
+// SECURITY: `revoked_at IS NULL` is in the WHERE, not checked separately — a
+// revoked, unknown, or non-matching token all fail IDENTICALLY with
+// ErrNotFound, so the boundary is never an oracle for "this token once
+// existed".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
@@ -106,14 +95,12 @@ func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, e
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
 
-// TouchAPIToken records that id was just used. BEST EFFORT by contract: the auth
-// branch ignores the error, because failing to record a touch must never fail an
+// TouchAPIToken records that id was just used. BEST EFFORT: the auth branch
+// ignores the error, since failing to record a touch must never fail an
 // otherwise-valid request.
 //
-// ponytail: one UPDATE per authenticated token request. API tokens serve scripts
-// and CI, not a browser's request storm, so the write volume is the caller's own
-// call rate — add a coarse `AND last_used_at < now() - interval` throttle only if
-// a hot token ever makes that false.
+// ponytail: one UPDATE per authenticated request; add a throttle only if a
+// hot token ever makes that write volume a problem.
 func (s PG) TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = $2 WHERE id = $1`, id, now)
 	if err != nil {
@@ -122,10 +109,10 @@ func (s PG) TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) erro
 	return nil
 }
 
-// ListAPITokensByPrincipal returns principal's own tokens, newest first — the
-// self-service GET /me/tokens list. Revoked rows are INCLUDED: a human needs to
-// see that the token they retired is in fact retired, and the row carries no
-// usable credential either way.
+// ListAPITokensByPrincipal returns principal's own tokens, newest first
+// (self-service GET /me/tokens). Revoked rows are INCLUDED so a human can
+// confirm a retired token is retired; the row carries no usable credential
+// either way.
 func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
@@ -133,9 +120,8 @@ func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]t
 	return queryAPITokens(ctx, s, q, principal)
 }
 
-// ListAPITokens returns every token in the deployment, newest first — the admin
-// inventory (GET /tokens). Revoked rows included, same reason as the
-// self-service list.
+// ListAPITokens returns every token in the deployment, newest first (admin
+// GET /tokens); revoked rows included, same reason as the self-service list.
 func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
@@ -143,44 +129,33 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	return queryAPITokens(ctx, s, q)
 }
 
-// RefreshAPITokenIdentity re-stamps role, user type AND the group snapshot
-// (with its completeness bit) on EVERY token principal holds, and it is the api-token
-// twin of RefreshSSHKeyRoles: the OIDC callback's OnLogin hook fires both, so
-// one login bounds both frozen credentials at once.
+// RefreshAPITokenIdentity re-stamps role, user type, and the group snapshot
+// (with its completeness bit) on EVERY token principal holds — the api-token
+// twin of RefreshSSHKeyRoles; OnLogin fires both so one login bounds both
+// frozen credentials.
 //
-// It exists because a token's identity is frozen at mint, with nothing else
-// able to refresh it: demoting a human from admin otherwise leaves every
-// outstanding wdn_ token of theirs authenticating AS AN ADMIN until it is
-// explicitly revoked (DELETE /api/v1/tokens/{id}), and a human whose group
-// memberships moved on keeps authorizing against the groups they held at mint
-// time until they mint a fresh token. The role half was bound this way in
-// migration 0046; this widens the token lane's counterpart to cover groups
-// too, and migration 0082 the user type.
+// SECURITY: a token's identity is frozen at mint with nothing else to refresh
+// it — without this, demoting an admin leaves their wdn_ tokens authenticating
+// AS AN ADMIN until explicitly revoked, and a token keeps authorizing against
+// stale group memberships until a fresh mint.
 //
-// truncated is bound EXACTLY as the caller passes it, never defaulted or
-// inferred here: it must come straight from the login's own session-
-// completeness signal (sessionGroups in internal/auth/oidc/derive.go), the
-// same bit a fresh mint stamps. A NULL groups_truncated already reads as
-// TRUNCATED downstream (fail closed) — silently defaulting this parameter to
-// false for a caller that does not know would do the opposite, asserting
-// "these are all their groups" for a snapshot that is not, which is the wrong
-// direction for an authorization decision.
+// truncated is bound EXACTLY as passed, never defaulted or inferred: it must
+// come from the login's own session-completeness signal, the same bit a fresh
+// mint stamps. A NULL groups_truncated already reads as TRUNCATED downstream
+// (fail closed); silently defaulting this to false would assert "these are
+// all their groups" for a snapshot that isn't — the wrong direction for an
+// authorization decision.
 //
-// It is still bounded-stale, not live, and the ceiling is the owner's next login —
-// exactly what docs/SSH.md §Bounds already documents for the key lane. A human
-// who never signs in again keeps the stamp; narrowing THAT needs the other half
-// of 0046 (a role_checked_at column plus a TTL the auth path enforces), which
-// is a migration this does not take.
+// Still bounded-stale, not live: the ceiling is the owner's next login (see
+// docs/SSH.md §Bounds for the key lane's equivalent). No error when the
+// principal holds no tokens — a zero-row UPDATE is the ordinary case.
 //
-// No error when the principal holds no tokens: an UPDATE matching zero rows is
-// the ordinary case for most humans, not a failure.
-//
-// A token an admin minted FOR this principal (minted_by set) is revoked
-// instead when the login's role differs from its stamp. Its role was derived
-// before the person's own groups were known, and the minter saw its plaintext:
-// re-stamping it upward would hand whoever minted it the tier the mint-time
-// guard refused them (a security admin holding an admin's credential).
-// SET reads the row's OLD role, so the comparison is against the stamp.
+// SECURITY: a token an admin minted FOR this principal (minted_by set) is
+// revoked instead of re-stamped when the login's role differs from its
+// stamp — its role was derived before the person's own groups were known and
+// the minter saw its plaintext, so re-stamping upward would hand the minter's
+// tier to whoever holds that credential. SET reads the row's OLD role, so the
+// comparison is against the stamp.
 func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userType string, groups []string, truncated bool) error {
 	g, err := marshalGroups(groups)
 	if err != nil {
@@ -198,14 +173,14 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 }
 
 // RevokeAPIToken marks id revoked. principal scopes the UPDATE when non-empty
-// (the self-service path, where a human may only ever revoke their OWN token and
-// someone else's id is ErrNotFound rather than a distinguishable 403 — no
-// existence leak across principals); an EMPTY principal is the ADMIN path and
-// revokes anyone's.
+// (self-service: a human may only revoke their OWN token). SECURITY:
+// someone else's id is ErrNotFound, not a distinguishable 403 — no existence
+// leak across principals. An EMPTY principal is the ADMIN path and revokes
+// anyone's.
 //
-// Already-revoked is ErrNotFound too (`revoked_at IS NULL` in the WHERE): revoke
-// is idempotent in effect, and a second call must not emit a second
-// `token.revoke` audit row for an act that did not happen.
+// Already-revoked is ErrNotFound too (`revoked_at IS NULL` in the WHERE):
+// revoke is idempotent, so a second call must not emit a second token.revoke
+// audit row for an act that didn't happen.
 func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error) {
 	const q = `
 		UPDATE api_tokens SET revoked_at = $2
@@ -214,19 +189,17 @@ func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, 
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, id, now, principal))
 }
 
-// queryAPITokens is the two token lists' shared read. collect (pagination.go)
-// already generalises the rows loop, INCLUDING the "empty, never nil" contract
-// this hand-rolled version re-derived with its own `out := []types.APIToken{}`
-// — the API renders these as `[]`, never `null`.
+// queryAPITokens is the two token lists' shared read, via collect's rows
+// loop — including the "empty, never nil" contract (the API renders these
+// as `[]`, never `null`).
 func queryAPITokens(ctx context.Context, s PG, q string, args ...any) ([]types.APIToken, error) {
 	return collect(ctx, s.Pool, "list", "api tokens", q, args, scanAPIToken)
 }
 
-// marshalGroups encodes the session's group snapshot for the nullable JSONB
-// column. nil marshals to a SQL NULL, not to 'null' and not to '[]': nil and
-// empty mean different things to the capability resolver (see oidcGroupsCtxKey
-// in internal/api/http.go), and the round trip has to preserve which one was
-// stamped.
+// marshalGroups encodes the group snapshot for the nullable JSONB column.
+// nil marshals to SQL NULL, not 'null' or '[]': nil and empty mean different
+// things to the capability resolver, and the round trip must preserve which
+// was stamped.
 func marshalGroups(groups []string) (any, error) {
 	if groups == nil {
 		return nil, nil
@@ -238,11 +211,10 @@ func marshalGroups(groups []string) (any, error) {
 	return b, nil
 }
 
-// apiTokenCols is THE api_tokens READ column list, in scanAPIToken's order
-// (five pasted sites). The INSERT list stays spelled out on purpose: it names
-// token_sha256, which no read ever selects (the hash never leaves the row),
-// and omits last_used_at / revoked_at, which no insert sets. Those lists
-// differ in BOTH directions, so deriving one from the other would hide that.
+// apiTokenCols is THE api_tokens READ column list, in scanAPIToken's order.
+// The INSERT list stays spelled out separately: it names token_sha256 (never
+// read back) and omits last_used_at/revoked_at (never inserted) — deriving
+// one list from the other would hide that difference.
 const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, COALESCE(minted_by, '')`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {

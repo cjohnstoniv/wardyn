@@ -32,6 +32,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.10** | **Per-person Azure DevOps access on Entra ID**: a run reaches Azure DevOps as the person who started it, with their own sign-in captured at console login and never placed in the sandbox; every REST call and git push is checked against a plain-language capability the run was granted, and a request beyond it is held for approval once or for the run. Also: an SSO-only console posture, Bedrock policy-deny and throttle refusals named on the failed run | **Shipped (pre-alpha)** — `v0.7.10`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.11** | Patch: Azure DevOps projects and repositories whose names carry spaces or other permitted characters (`Payments Platform`, `Card Auth (v2).Service`) import, launch, clone, fetch and push; every door stores one spelling of the address, and approvals name the repository the same way on the REST and git paths | **Shipped (pre-alpha)** — `v0.7.11`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.12** | Patch: stored credentials are sealed with AES-256-GCM per row, bound to their owner and name (envelope v1, a one-way conversion on first boot); the control-plane → proxy hop that carries credential values is TLS 1.3, pinned to a CA wardynd mints; every secret-carrying boot setting accepts a `_FILE` path (Vault Agent / CSI), with an opt-in chart mode; an Azure DevOps address's host now ends at `?` or `#` | **Shipped (pre-alpha)** — `v0.7.12`, 2026-09-23 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.13** | Patch: wardynd refuses to start on a database a newer wardynd migrated, naming the newest migration it does not ship, with `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` as the break-glass; a rollback drill proves the refusal writes nothing and that restoring the pre-upgrade dump boots clean. Upgrade to 0.7.13 before 0.8 | **Shipped (pre-alpha)** — `v0.7.13`, 2026-09-28 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
@@ -205,11 +206,11 @@ shipped behavior; none is scheduled.
   is dropped unless the operator eligible-listed that exact pairing
   (`filterUserGrants`, `internal/api/inline_policy.go` — the secret-exfil
   guard: a member must not pair an arbitrary stored secret with an allowlisted
-  host). A run's real model-access grant is re-added at launch by
-  `foldRunIntegration` (an operator integration) or `applyWorkspaceRequirements`
-  (a workspace requirement), so the supported multi-user flow is unaffected. The
+  host). A run's real model-access grant comes from its model provider, or is
+  re-added at launch by `applyWorkspaceRequirements` (a workspace requirement),
+  so the supported multi-user flow is unaffected. The
   ceiling: a member whose model access relies ONLY on a raw operator secret + a
-  wildcard `api_key` ceiling with NO integration and NO workspace requirement
+  wildcard `api_key` ceiling with NO provider and NO workspace requirement
   gets nothing re-added — the run launches without model access (fail-closed, no
   exfil). The drop used to be invisible to an operator — a clamp *warning* in
   preflight/Review and nothing else — so a deliberate member exfil *attempt*

@@ -166,7 +166,7 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 // and Review, so Review answers the refusal launch would. With no provider
 // block it changes nothing unless the request named a provider, which it
 // refuses rather than ignores. wsRefs[0] is the primary workspace, the one
-// whose pin a run inherits (foldRunIntegration reads the same one).
+// whose pin a run inherits.
 //
 // A chosen provider is checked live at both doors, as dispatch will check it
 // again (providerLiveness, one check per kind): the caller's own credential for
@@ -224,12 +224,6 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			return runProviderChoice{}, false
 		}
 		return runProviderChoice{}, true
-	}
-	// An AI integration no longer credentials a run here (foldRunIntegration
-	// folds none under a block), so naming one is refused, not ignored.
-	if req.IntegrationID != "" {
-		writeError(w, http.StatusUnprocessableEntity, mpRunNoIntegration)
-		return runProviderChoice{}, false
 	}
 	var pin string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {

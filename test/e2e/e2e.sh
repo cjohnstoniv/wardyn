@@ -241,9 +241,15 @@ CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${IN_BASE}" -e WARDYN_ADMIN_TOK
 echo "${CREATE}"
 RUN_ID="$(printf '%s\n' "${CREATE}" | awk '/^created run/{print $3; exit}')"
 [[ -n "${RUN_ID}" ]] || die "could not parse created run id"
-sleep 1
-STATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
+# Polled, like the claude-code run's check below: POST /runs dispatches
+# asynchronously, so a read a second after create sees STARTING while the
+# sandbox is still coming up. A terminal state ends the wait early.
+STATE=""
+for _ in $(seq 1 30); do
+  STATE="$(run_state "${RUN_ID}")"
+  case "${STATE}" in RUNNING|COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) break ;; esac
+  sleep 2
+done
 if [[ "${STATE}" == "RUNNING" ]]; then ok "run dispatched to RUNNING (live sandbox created)"; else
   bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"
   # Name the cause HERE: the run row's own reason, the run's failure audit rows
@@ -400,14 +406,18 @@ log "(g) OIDC login flow against Dex -> session cookie authenticates GET /runs"
 cat > "${WORKDIR}/oidc.sh" <<'SH'
 set -u
 JAR=/tmp/cj.txt; rm -f "$JAR"
-BASE="http://wardynd:8080"; DEX="http://dex:5556"
-# Dex's own discovery advertises authorization_endpoint as
-# http://localhost:5556/auth (dex.yaml's public issuer, read by wardynd's
-# oidc.go) — nothing inside this throwaway curl container listens on ITS OWN
-# localhost:5556, so a follow of that URL would otherwise fail outright.
-# --connect-to routes the TCP connection to the real dex service while
-# leaving the URL (and Host header) exactly as Dex handed it back.
-C="curl -sS --connect-to localhost:5556:dex:5556 -c $JAR -b $JAR"
+BASE="http://localhost:8080"; DEX="http://dex:5556"
+# The flow runs on the browser's own origins: Dex's discovery advertises
+# http://localhost:5556 (dex.yaml's public issuer) and the callback is
+# WARDYN_OIDC_REDIRECT_URL, http://localhost:<port>. Nothing inside this curl
+# container listens on ITS OWN localhost, so --connect-to routes each TCP
+# connection to the real service while the URL and Host header stay what a
+# browser would send. The console is addressed as localhost, never by its bare
+# service name: curl stores a cookie set by a dotless host like `wardynd` but
+# never sends it back, so the callback arrived without its state cookie and
+# answered "invalid state parameter".
+R="--connect-to localhost:5556:dex:5556 --connect-to localhost:8080:wardynd:8080"
+C="curl -sS $R -c $JAR -b $JAR"
 AU=$($C -D - -o /dev/null "$BASE/auth/login" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
 if [ -z "$AU" ]; then
   echo "login_redirect_pkce_s256=0 reason=no-location"
@@ -417,11 +427,14 @@ echo "login_redirect_pkce_s256=$(echo "$AU" | grep -c 'code_challenge_method=S25
 PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')
 LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$DEX$ACT" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
-CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://wardynd:8080#')
-$C -D /tmp/cb.txt -o /dev/null "$CB"
+CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://localhost:8080#')
+$C -D /tmp/cb.txt -o /tmp/cb-body.txt "$CB"
+# The callback's own answer names the cause of a failed sign-in: a 302 to
+# the console on success, a 302 carrying ?error=<code> or a 4xx text on refusal.
+echo "callback_status=$(head -1 /tmp/cb.txt | tr -d '\r' | cut -d' ' -f2) callback_location=$(tr -d '\r' </tmp/cb.txt | sed -n 's/^[Ll]ocation: //p') callback_body=$(head -c 200 /tmp/cb-body.txt | tr '\n' ' ')"
 echo "session_cookie_set=$(grep -c wardyn_session $JAR)"
 echo "runs_with_session=$($C -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
-echo "runs_no_auth=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
+echo "runs_no_auth=$(curl -sS $R -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
 SH
 OIDC_OUT="$(ncis "${WORKDIR}/oidc.sh")"
 echo "${OIDC_OUT}"
@@ -433,6 +446,7 @@ if [[ "${G_PKCE}" == "1" && "${G_COOKIE}" -ge 1 && "${G_RUNS}" == "200" && "${G_
   ok "(g) OIDC login completes; session cookie authenticates /runs (200), no-auth 401, PKCE S256"
 else
   bad "(g) OIDC flow failed (pkce=${G_PKCE} cookie=${G_COOKIE} runs=${G_RUNS} noauth=${G_NOAUTH})"
+  "${COMPOSE[@]}" logs --tail 300 wardynd 2>/dev/null | grep -Ei 'oidc|auth/callback|sign-?in|login' | tail -15 || true
 fi
 
 # ── 6b. REAL-AGENT run: full governed agent end-to-end ──────────────────────--

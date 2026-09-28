@@ -21,20 +21,18 @@ import (
 // approval + audit invariants and dispatch here by GrantKind.
 
 // ownerOf is the secretstore.Store.For namespace a mint resolves its secret
-// from: the caller run's own identity Sub, or "" when caller is nil.
-// An approval-path mint synthesizes run-scoped claims carrying the run's
-// CreatedBy as Sub, so an approval-gated git_pat/ssh_key mint reached that way
-// resolves the same namespace the auto-mint path (MintForGrant's
-// fully-populated caller) does.
-// An operator-created run's own Sub never collides with a member's stamped
-// row (secretOwnerFromRequest's own doc comment).
+// from: the caller run's own identity Sub, or "" when caller is nil. An
+// approval-path mint synthesizes run-scoped claims carrying the run's
+// CreatedBy as Sub, so it resolves the same namespace MintForGrant's
+// fully-populated auto-mint path does; an operator-created run's own Sub
+// never collides with a member's stamped row (see secretOwnerFromRequest).
 //
-// That holds only because the Sub is NOT caller-chosen: an arbitrary LocalMode
-// X-Wardyn-Principal header value picked to EQUAL a member's OIDC sub would
-// steer this very namespace, since pg.Store.Get's `ORDER BY (owned_by = $1)
-// DESC` makes the named owner's row win over the operator's. api.runIdentitySubject
-// (internal/api/runs_policy.go) mints the subject from the INJECTED local
-// principal, not the raw header, which carries attribution only.
+// SECURITY: this holds only because Sub is NOT caller-chosen — an arbitrary
+// LocalMode X-Wardyn-Principal value picked to equal a member's OIDC sub
+// would steer this very namespace, since pg.Store.Get's `ORDER BY
+// (owned_by = $1) DESC` makes the named owner's row win over the operator's.
+// api.runIdentitySubject mints the subject from the injected local principal,
+// never the raw header, which carries attribution only.
 func ownerOf(caller *identity.Claims) string {
 	if caller == nil {
 		return ""
@@ -92,18 +90,18 @@ func (b *Broker) mintAPIKey(spec types.GrantSpec) (Minted, error) {
 // mintGitPAT resolves a stored Personal Access Token and returns its VALUE to
 // the git credential helper as username/password for a matched non-GitHub host.
 //
-// This is the OPPOSITE of mintAPIKey (whose secret value never leaves the
-// broker; the proxy injects it header-side): git-over-HTTPS to ADO/GitLab is an
-// opaque CONNECT tunnel the proxy cannot inject Basic-auth into without MITM, so
-// the PAT MUST reach git through the helper — exactly like the minted
-// github_token. Fails closed on missing host/secret_name, a reserved secret
-// name (defense-in-depth at the sink), or an unresolvable secret.
+// This is the OPPOSITE of mintAPIKey (whose value never leaves the broker; the
+// proxy injects it header-side): git-over-HTTPS to ADO/GitLab is an opaque
+// CONNECT tunnel the proxy cannot inject Basic-auth into without MITM, so the
+// PAT must reach git through the helper — like the minted github_token. Fails
+// closed on missing host/secret_name, a reserved secret name (defense-in-depth
+// at the sink), or an unresolvable secret.
 //
-// ExpiresAt is only an emission/freshness window (ttlFor) — the PAT
-// itself is a long-lived, operator-managed secret that Wardyn CANNOT expire or
-// down-scope; per-use revocation/scoping would need the host's token API
-// (ADO/GitLab), out of scope. This is the honesty ceiling for this grant kind.
-// The returned Token is masked from PTY/asciicast by the maskReg.Add in mint().
+// HONESTY CEILING: ExpiresAt is only an emission/freshness window (ttlFor) —
+// the PAT itself is a long-lived, operator-managed secret Wardyn cannot expire
+// or down-scope; per-use revocation would need the host's own token API
+// (ADO/GitLab), out of scope. The returned Token is masked from PTY/asciicast
+// by mint()'s maskReg.Add.
 func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	var sc gitPATScope
 	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
@@ -118,8 +116,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
 	}
-	// The run's own owner's row wins, falling back to the operator's (ownerOf)
-	// unless the grant is owner_only.
+	// Own owner's row wins, falling back to the operator's unless owner_only.
 	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
 	value, err := b.secrets.For(grantOwner(caller, spec)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
 	if err != nil {
@@ -138,22 +135,23 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 // mintSSHKey resolves a stored SSH PRIVATE KEY and returns its VALUE (plus, when
 // named, the known_hosts material) to agent-run for a git-over-SSH clone.
 //
-// Security exception (mirrors mintGitPAT's honesty ceiling):
-// git's SSH transport has NO credential-helper seam (git credential.helper is
-// HTTP-only), so — unlike git_pat (returned to the helper, never on disk) or
-// api_key (never leaves the broker; the proxy injects it) — an SSH key CANNOT be
-// brokered without becoming resident: the ssh client reads it from a file. So the
-// key material is returned here and agent-run writes it 0400, agent-owned, then
-// WIPES it right after the clone (deploy/images/*/agent-run). The readable window
-// is the clone only, but within it code running AS the agent uid can read the key
-// — the same residual as WARDYN_GIT_HELPER_SECRET. This is the accepted
-// exception the owner chose when enabling the SSH SCM lane; there is no way to
-// down-scope or expire an SSH private key from Wardyn's side (out of scope, host
-// SSH-key API). The returned Token is mask-registered by mint()'s maskReg.Add.
+// SECURITY EXCEPTION (mirrors mintGitPAT's honesty ceiling): git's SSH
+// transport has no credential-helper seam (git credential.helper is
+// HTTP-only), so — unlike git_pat (goes to the helper, never on disk) or
+// api_key (never leaves the broker) — an SSH key cannot be brokered without
+// becoming resident: the ssh client reads it from a file. The key material is
+// returned here and agent-run writes it 0400, agent-owned, then wipes it right
+// after the clone (deploy/images/*/agent-run). The readable window is the
+// clone only, but within it code running as the agent uid can read the key —
+// the same residual as WARDYN_GIT_HELPER_SECRET. This is the accepted
+// exception the owner chose enabling the SSH SCM lane; there is no way to
+// down-scope or expire an SSH private key from Wardyn's side (out of scope,
+// host SSH-key API). The returned Token is mask-registered by mint()'s
+// maskReg.Add.
 //
-// Fails closed on missing host/key_secret_ref, a reserved secret name (defense-
-// in-depth at the sink), an unresolvable key secret, or an unresolvable
-// known_hosts secret when one was named.
+// Fails closed on missing host/key_secret_ref, a reserved secret name
+// (defense-in-depth at the sink), an unresolvable key secret, or an
+// unresolvable known_hosts secret when one was named.
 func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	var sc sshKeyScope
 	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
@@ -168,8 +166,8 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: ssh_key grant but no secret store configured (fail closed)")
 	}
-	// Same owner-then-operator-fallback rule as mintGitPAT (owner_only
-	// included), for both the key and its optional known_hosts material below.
+	// Same owner-then-operator-fallback rule as mintGitPAT, for both the key
+	// and its optional known_hosts material below.
 	owned := b.secrets.For(grantOwner(caller, spec))
 	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
 	rctx := secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint)
@@ -178,9 +176,8 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 		return Minted{}, grantReadError("ssh_key", sc.KeySecretRef, spec.OwnerOnly, err)
 	}
 	keyScope := row.Scope()
-	// Optional operator-supplied known_hosts (for a custom host the image-baked
-	// /etc/ssh/ssh_known_hosts does not cover). For github.com / ADO the baked file
-	// is authoritative and this ref is normally unset.
+	// Optional operator-supplied known_hosts for a custom host the image-baked
+	// /etc/ssh/ssh_known_hosts does not cover; normally unset for github.com/ADO.
 	var knownHosts string
 	if sc.KnownHostsSecretRef != "" {
 		kh, kerr := owned.Get(rctx, sc.KnownHostsSecretRef)
@@ -205,8 +202,8 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 }
 
 // grantReadError names why a grant's stored secret could not be read. An
-// owner_only grant whose owner has no row of their own gets its own sentence:
-// the operator's row of that name, if any, was deliberately not consulted.
+// owner_only grant with no row of its owner's own gets its own sentence: the
+// operator's row of that name, if any, was deliberately not consulted.
 func grantReadError(kind, name string, ownerOnly bool, err error) error {
 	if ownerOnly && errors.Is(err, secretstore.ErrNotFound) {
 		return fmt.Errorf("broker: %s grant is owner_only and the run's owner has no secret %q of their own "+

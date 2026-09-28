@@ -134,14 +134,14 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 	if !llmAccess.Provisioned {
 		if p, ok := s.llmProviderFor(agent); ok {
 			// Name the run's ACTUAL resolved
-			// grant secret, not the provider convention name — an
-			// integration-bound run's api_key grant carries the
-			// INTEGRATION's own secret (applyIntegrationCreds), which may
-			// differ from the convention default. Fixing the wrong (unused)
-			// secret would end in a false green: the checklist reads
-			// "satisfied" once the convention secret exists, even though
-			// the run still authenticates through the integration's secret,
-			// unaffected by what the operator just added.
+			// grant secret, not the provider convention name — a run's
+			// api_key grant may carry its own secret (a policy grant, or a
+			// workspace's required secret), which may differ from the
+			// convention default. Fixing the wrong (unused) secret would end
+			// in a false green: the checklist reads "satisfied" once the
+			// convention secret exists, even though the run still
+			// authenticates through the grant's own secret, unaffected by
+			// what the operator just added.
 			secretName := p.secret
 			if g, ok := apiKeyGrantForHost(&spec, p.host); ok {
 				if s := apiKeyGrantScopeSecret(g.Scope); s != "" {
@@ -270,10 +270,10 @@ const maxWorkspaceSecretRows = 5
 // needs: its scanned profile's REQUIRED needs (RequiredSecrets, Optional=false)
 // unioned with every required "secret:<NAME>" requirements-contract entry, merged
 // by sanitized name so a secret never duplicates a row.
-// Kind is "workspace_secret" (neutral: a scanner-derived row never blocks launch),
-// except that a contract-Required name ABSENT from the store escalates to Kind
-// "secret": applyWorkspaceRequirements never auto-grants it, so it will not be
-// there at launch. A granted one is already setupSecretItems' satisfied row.
+// Kind is "workspace_secret": neutral, never blocking. A contract-Required name
+// used to escalate when absent, because the requirement minted a model-host
+// grant from it at launch; it mints nothing now (skipRequiredSecret), so storing
+// it changes nothing about the run's model access.
 // Names go through sanitizeSecretName (compose_ground.go's secretNameRE fold) so
 // the add-secret fix can't dead-end on secretNameRE; contract names are already
 // secretNameRE-shaped. Scanner names are UNTRUSTED workspace content
@@ -349,10 +349,6 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 			it.Status = "missing"
 			it.Detail = "the workspace's config expects this; store it as " + sane + " if the task needs it"
 			it.Fix = &SetupFix{Action: "add_secret", SecretName: sane}
-			if row.required {
-				// Escalate to the blocking-styled kind — see the doc comment above.
-				kind, id = "secret", "secret:"+sane
-			}
 		}
 		it.Kind, it.ID = kind, id
 		items = append(items, it)

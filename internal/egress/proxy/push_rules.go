@@ -4,83 +4,58 @@
 package proxy
 
 // Push CONTENT rules: what a brokered git push may contain, as opposed to
-// where it may land. The counterpart to confinePush, which is the WHERE.
+// where it may land (confinePush is the WHERE).
 //
-// Three outcomes, and they are the whole feature:
+// Three outcomes:
+//   - the buffered request or an inspectable pack exceeds an inspection/
+//     gitpack ceiling, so it's refused rather than waved through unread
+//     (brokered:git:push-too-large) — fix: push fewer commits at a time;
+//   - the inspector can't answer from the request's own bytes (thin pack,
+//     unreadable content-coding, malformed pack) (brokered:git:push-uninspectable);
+//   - an introduced path matches a deny rule (brokered:git:push-rules).
 //
-//   - the buffered request is bigger than the run's inspection ceiling, or an
-//     otherwise-inspectable pack costs more than one of internal/gitpack's own
-//     ceilings allow, so it is refused rather than waved through unread —
-//     both with the same fix, push fewer commits at a time
-//     (brokered:git:push-too-large);
-//   - the inspector cannot answer from the request's own bytes at all — a
-//     thin pack whose delta bases stayed on the forge, a body in a
-//     content-coding this proxy cannot read past, a pack that is malformed
-//     (brokered:git:push-uninspectable);
-//   - a path the push introduces matches a deny rule (brokered:git:push-rules).
+// A push none of those refuses, but that introduces a path matching
+// require_review_paths, is HELD for an admin's decision (push_hold.go) —
+// matched the same way as a deny rule, and only once no deny rule matched.
 //
-// A push none of those refuses, but which introduces a path a
-// require_review_paths rule matches, is HELD for an admin's decision
-// (push_hold.go) — matched exactly as a deny rule is, forge comparison
-// included, and only once no deny rule matched: deny beats review.
+// Entered independently of branch-namespace confinement: both brokered lanes
+// call this step outside the block that decides whether confinePush runs.
+// git_push_any_branch is a WHERE opt-out and must never switch off this WHAT
+// control — wiring it inside that block would let a policy with deny_paths
+// and git_push_any_branch: true read as governed while enforcing nothing.
 //
-// Otherwise the buffered bytes go onward unchanged.
+// SECURITY: a refused push is never forwarded, even though its credential may
+// already exist (both lanes run this ahead of their token lookup, so a push
+// refused by its own bytes never mints one). Discovery (GET info/refs before
+// every push) already minted or reused the credential, so the forge read
+// these rules need normally reuses it too — these rules decide what reaches
+// the forge, not whether a credential is issued.
 //
-// ENTERED INDEPENDENTLY OF BRANCH-NAMESPACE CONFINEMENT. Both brokered lanes
-// call this step outside the block that decides whether confinePush runs, and
-// that placement is the control: git_push_any_branch is an opt-out of WHERE a
-// push may go, and a WHERE opt-out must never switch off a WHAT control. Wired
-// inside that block instead, a policy carrying deny_paths and
-// git_push_any_branch: true would read as governed and enforce nothing.
+// Offending paths never ride the decision log's free-text fields (reserved
+// for dial-shaped refusals); they go to the structured log and, capped at
+// ten, to the refusal body — git drops a receive-pack 403's body, so the
+// person reads paths from the run's decision stream and this log, not their
+// terminal. A sideband report-status would render but is refused for
+// confinePush's reason: it would claim "unpack ok" for a pack never forwarded.
 //
-// A REFUSED PUSH IS NEVER FORWARDED; ITS CREDENTIAL MAY ALREADY EXIST. Both
-// call sites run this ahead of their token lookup, so a push passed by its own
-// bytes mints nothing itself. One its pack alone would refuse asks the lane for
-// the credential first, to read the forge (push_forge.go). Neither is a push's
-// first request: git sends GET
-// info/refs?service=git-receive-pack before every push, the forge will not
-// advertise refs to it without the credential, and that discovery mints (or
-// reuses) it — so the forge read normally reuses it too. These rules decide
-// what reaches the forge, not whether a credential is issued: an
-// approval-gated single-use grant is spent at discovery, and its cached
-// credential serves the corrected retry.
-//
-// OFFENDING PATHS DO NOT RIDE THE DECISION LOG. They go to the structured log
-// and, at most ten of them, to the refusal body. The decision log's free-text
-// fields (egress.DecisionLog's Cause and Via) are reserved for dial-shaped
-// refusals and stay empty here.
-//
-// git renders a receive-pack 403 as "error: RPC failed; HTTP 403" and drops
-// the body, so the person reads the paths from the run's decision stream and
-// this log rather than from their terminal. A sideband report-status would
-// render, and is refused here for confinePush's reason: it would claim
-// "unpack ok" for a pack that was never forwarded.
-//
-// WHAT THE RULES SEE (internal/gitpack's package comment, docs/POLICIES.md
-// and threatmodel/THREAT-MODEL.md carry this in full). A pack leaves out every
-// object the forge already stores, wherever the new tree puts it, and a
-// governed push lands on the run's own branch, so its parent stays on the
-// forge and the new tree is enumerated: every file at the repository ROOT is
-// reported whether the push touched it or not, and every directory the pack
-// does not carry is reported as one OPAQUE entry — nothing in the pack
-// distinguishes a directory left alone from one moved, copied or restored onto
-// that path. Symlinks and submodules are opaque the same way: a checkout
-// resolves paths beneath them to content no tree entry here names. An opaque
-// entry is matched when a pattern could match anything beneath it
+// What the rules see (full detail in internal/gitpack's package comment,
+// docs/POLICIES.md, threatmodel/THREAT-MODEL.md): a pack omits every object
+// the forge already stores, and a governed push lands on the run's own
+// branch, so the new tree is enumerated fully — every root file is reported
+// whether touched or not, and every directory the pack doesn't carry is one
+// OPAQUE entry (symlinks and submodules are opaque the same way, since a
+// checkout resolves paths beneath them to content no tree entry here names).
+// An opaque entry matches a pattern that could match anything beneath it
 // (matchesBeneath).
 //
-// Before any entry refuses the push, the history the pack re-sends — commits
-// the forge already holds in the history it vouches for — is taken out of the
-// answer (push_forge.go). A matched entry the rest of the pack CARRIES is then
-// refused from the pack alone. One it does not carry is compared with the same
-// path in a commit the push builds on, read from the forge: the same mode and
-// object id there means the push left it unchanged, and it is dropped. Every
-// other outcome — a different or absent entry, no commit the repository's own
-// history vouches for, a forge that cannot be read — refuses, and says which.
+// History the pack re-sends is cleared against the forge first (push_forge.go).
+// A matched entry the pack carries is refused from the pack alone; one it
+// doesn't carry is compared against the forge's copy at the same path in a
+// commit the push builds on — unchanged means dropped. Every other outcome
+// (different/absent entry, no vouching commit, unreadable forge) refuses.
 //
-// Phase one has no size rule. Whoever adds max_file_size_mib decides with
-// gitpack.Change.Within, which refuses a size the pack does not carry, or reads
-// gitpack.Change.Size, whose pair cannot be compared until unknown is decided.
+// Phase one has no size rule; a future max_file_size_mib would use
+// gitpack.Change.Within/Size once "unknown" is resolved.
 
 import (
 	"bytes"
@@ -105,58 +80,47 @@ const (
 	// ruleSourceGitRules marks a brokered push refused because a path it
 	// introduces matched push_rules.deny_paths.
 	ruleSourceGitRules = "brokered:git:push-rules"
-	// ruleSourceGitPackBig marks a brokered push refused because its body is
-	// larger than push_rules.max_inspect_pack_mib, or because an honest,
-	// fully-inspectable pack still costs more objects, bytes, tree entries or
-	// changed paths than internal/gitpack's own ceilings allow
-	// (gitpack.ErrTooLarge). Refused rather than held: holding would ask a
-	// person to approve a push nobody inspected. Both cases have the same fix
-	// on the sender's side — push fewer commits at a time.
+	// ruleSourceGitPackBig marks a push refused because its body exceeds
+	// push_rules.max_inspect_pack_mib, or an inspectable pack costs more than
+	// gitpack's own ceilings (gitpack.ErrTooLarge). Refused rather than held —
+	// holding would ask someone to approve a push nobody inspected. Fix: push
+	// fewer commits at a time.
 	ruleSourceGitPackBig = "brokered:git:push-too-large"
-	// ruleSourceGitPackBlind marks a brokered push refused because the
-	// inspector could not answer from the request's own bytes at all — a thin
-	// pack's delta bases, a ref whose commit is not in the pack, or a shape git
-	// would read differently (gitpack.ErrUninspectable) — or because a control
-	// error (an unreadable rule, an unsupported encoding, a busy scan slot)
-	// left the rules unable to run.
+	// ruleSourceGitPackBlind marks a push refused because the inspector
+	// couldn't answer from the request's own bytes (thin pack, unreadable
+	// shape, gitpack.ErrUninspectable) or a control error left the rules
+	// unable to run.
 	ruleSourceGitPackBlind = "brokered:git:push-uninspectable"
-	// ruleSourceGitForgeRead marks the broker's OWN credentialed reads of
-	// api.github.com on a push's behalf: one ALLOW row per push that read the
-	// forge at all, so an egress review of the run sees them.
+	// ruleSourceGitForgeRead marks the broker's own credentialed reads of
+	// api.github.com on a push's behalf — one ALLOW row per push that read
+	// the forge, so an egress review sees them.
 	ruleSourceGitForgeRead = "brokered:git:forge-read"
-	// defaultInspectPackMiB is the ceiling a run that sets push_rules without
-	// naming max_inspect_pack_mib gets. It sits BELOW the 0..64 range
-	// validatePushRules admits on purpose: raising the ceiling is the stated
-	// remedy for a too-large refusal, and a default at the maximum would leave
-	// an operator nothing to raise.
+	// defaultInspectPackMiB is the default ceiling for push_rules that don't
+	// set max_inspect_pack_mib. Kept below the 0..64 range validatePushRules
+	// admits, since raising the ceiling is the remedy for a too-large refusal.
 	defaultInspectPackMiB = 32
 	// maxDeniedPathsInBody caps the offending paths the sandbox is told about.
 	maxDeniedPathsInBody = 10
-	// maxDeniedPathsLogged caps the offending paths the structured log carries.
-	// The COUNT is always exact; the list is a sample, because a first push to
-	// a new branch is enumerated whole and can match six figures of paths.
+	// maxDeniedPathsLogged caps the offending paths the structured log
+	// carries. The count is always exact; the list is a sample (a first push
+	// to a new branch can match six figures of paths).
 	maxDeniedPathsLogged = 100
 	// maxGlobOps bounds the pattern-against-segment comparisons one push may
-	// cost. deny_paths carries no count cap (#265: a clamp's union can legally
-	// be longer than either side authored), so the list is bounded only by the
-	// 1 MiB control-plane body — around 131,000 entries — while a push may
-	// carry gitpack's 200,000 changed paths. That product is reachable from
-	// inside a sandbox, so the matcher bounds its own work and refuses over the
-	// ceiling instead of grinding, the same shape internal/gitpack's own tree
-	// walk uses.
+	// cost. deny_paths has no count cap (a clamp's union can be longer than
+	// either side authored), so up to ~131,000 patterns can meet 200,000
+	// changed paths inside a sandbox — the matcher bounds its own work and
+	// refuses over the ceiling rather than grinding, like gitpack's own tree
+	// walk.
 	maxGlobOps = 8 << 20
 )
 
-// errGlobBudget is the too-much-work refusal, reported to the caller as the
-// same uninspectable outcome a pack over one of gitpack's ceilings gets: in
-// both cases the rules could not be evaluated, and an unevaluated rule must
-// never read as a pass.
+// errGlobBudget is the too-much-work refusal, reported like a pack over one
+// of gitpack's ceilings: an unevaluated rule must never read as a pass.
 var errGlobBudget = errors.New("the push_rules pattern list is too large to evaluate against this push")
 
-// pushRuleSet is a run's push_rules compiled once, at policy-compile time, for
-// per-request matching: the patterns are pre-split on "/" so a push carrying
-// six figures of paths does not re-split the policy for every one of them.
-// Nil means the run has no content rules (types.PushRulesSpec.IsSet).
+// pushRuleSet is a run's push_rules compiled once, at policy-compile time, so
+// per-request matching doesn't re-split the policy for every path a push
+// carries. Nil means no content rules (types.PushRulesSpec.IsSet).
 type pushRuleSet struct {
 	// deny holds each deny_paths entry split into segments.
 	deny [][]string
@@ -164,12 +128,10 @@ type pushRuleSet struct {
 	review [][]string
 	// hold is how long a push a review rule matches waits for its decision.
 	hold time.Duration
-	// unreadable is the first deny_paths or require_review_paths entry
-	// types.DenyPathSegments refused.
-	// Write-time validation refuses the same entries, so this is reached only
-	// by a policy that bypassed it — and then every push is refused, because
-	// compiling the entry to a pattern that matches nothing is the silent
-	// non-enforcement the check exists to prevent.
+	// unreadable is the first deny_paths/require_review_paths entry
+	// types.DenyPathSegments refused. Write-time validation should already
+	// catch this; if a policy bypassed it, every push is refused rather than
+	// silently compiling to a pattern that matches nothing.
 	unreadable string
 	// inspectMax is how many bytes of the request are buffered before the push
 	// is refused as too large.
@@ -211,19 +173,17 @@ func (rs *pushRuleSet) compile(pats []string) [][]string {
 	return out
 }
 
-// match reports the entries one of pats claims. Those the pack carries come
-// back in hits, named as shownPath names them. Those it does not carry come
-// back whole in unknown, for the forge to clear or not (push_forge.go). It
-// stops at the first pattern that claims an entry — the answer is per path,
-// not per rule.
+// match reports the entries one of pats claims: those the pack carries come
+// back in hits (named as shownPath names them), those it doesn't carry come
+// back whole in unknown for the forge to clear or not (push_forge.go). Stops
+// at the first pattern that claims an entry — the answer is per path.
 //
-// An opaque entry (gitpack.Change.Opaque: a directory the pack does not carry,
-// a symlink, a submodule) is claimed when a pattern could match anything
-// beneath it, not only the entry itself: what is beneath it is unknown, and a
-// rule has to treat unknown as matched.
+// An opaque entry (gitpack.Change.Opaque: uncarried directory, symlink,
+// submodule) is claimed when a pattern could match anything beneath it, since
+// what's beneath is unknown and must be treated as matched.
 //
-// hits is every claimed path, not a sample: the held-push dedup key covers
-// them all. It holds references to the Change paths, not copies.
+// hits holds references to the Change paths, not copies, and is every
+// claimed path (the held-push dedup key needs them all).
 func match(pats [][]string, changes []gitpack.Change) (hits []string, unknown []gitpack.Change, err error) {
 	budget := maxGlobOps
 	for _, c := range changes {
@@ -269,13 +229,13 @@ func shownPath(c gitpack.Change) string {
 }
 
 // matchesBeneath reports whether pat could match some path strictly beneath
-// name: whether the pattern can consume every segment of name and still have a
-// segment left for what lies under it. at[i] is true when pat[:i] can match
-// the segments read so far; "**" may stand for none of them, and stays in
-// place to consume another.
+// name — whether the pattern can consume every segment of name and still
+// have a segment left for what lies under it. at[i] is true when pat[:i]
+// matches the segments read so far; "**" may match none of them and stays
+// in place to consume another.
 //
-// A remaining segment is assumed to match some name — the conservative answer
-// for a deny rule, and the true one for every pattern an operator would write.
+// A remaining segment is assumed to match — the conservative answer for a
+// deny rule.
 func matchesBeneath(pat, name []string, budget *int) (bool, error) {
 	at := make([]bool, len(pat)+1)
 	at[0] = true
@@ -312,11 +272,9 @@ func spreadStars(pat []string, at []bool) {
 }
 
 // matchSegments matches a pre-split deny pattern against a pre-split path.
-//
-// "**" matches zero or more whole segments; inside one segment the wildcards
-// are path.Match's, which never cross a separator. The walk is the ordinary
-// backtracking one, so its worst case is the product of the two lengths, and
-// every segment comparison is charged against budget.
+// "**" matches zero or more whole segments; wildcards inside one segment are
+// path.Match's and never cross a separator. Ordinary backtracking walk —
+// worst case the product of the two lengths — charged against budget.
 func matchSegments(pat, name []string, budget *int) (bool, error) {
 	star, retry := -1, 0
 	i, j := 0, 0
@@ -349,15 +307,13 @@ func matchSegments(pat, name []string, budget *int) (bool, error) {
 	return i == len(pat), nil
 }
 
-// matchSegment compares one pattern segment against one path segment, charging
-// the comparison against budget.
+// matchSegment compares one pattern segment against one path segment,
+// charging the comparison against budget.
 //
-// path.Match is the matcher rather than a hand-rolled one, so "*", "?" and
-// character classes mean here exactly what they mean everywhere else in Go. An
-// unterminated "[" is not a Go pattern at all; rather than let the rule
-// silently match nothing — a deny rule that quietly does nothing is the worst
-// outcome available — the segment is compared literally, which is what someone
-// who put a bracket in a filename meant.
+// path.Match is used so "*", "?" and character classes mean what they mean
+// everywhere else in Go. An unterminated "[" isn't a valid Go pattern; rather
+// than let the rule silently match nothing, the segment is compared
+// literally, matching what someone who put a bracket in a filename meant.
 func matchSegment(pat []string, i int, seg string, budget *int) (bool, error) {
 	if i >= len(pat) {
 		return false, nil
@@ -373,11 +329,10 @@ func matchSegment(pat []string, i int, seg string, budget *int) (bool, error) {
 	return ok, nil
 }
 
-// nonIdentityEncoding reports a Content-Encoding this proxy cannot read past,
-// and the value to name in the refusal. git does not compress receive-pack
-// bodies (remote-curl sets gzip_request for fetch only), but an encoded body
-// must never be waved through unparsed: that is a silent bypass of every rule
-// that reads the body.
+// nonIdentityEncoding reports a Content-Encoding this proxy can't read past,
+// and the value to name in the refusal. git doesn't compress receive-pack
+// bodies, but an encoded body must never be waved through unparsed — that
+// would silently bypass every rule that reads the body.
 func nonIdentityEncoding(h http.Header) (string, bool) {
 	encs := h.Values("Content-Encoding")
 	if len(encs) > 1 {
@@ -390,29 +345,26 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 }
 
 // applyPushRules is the push CONTENT-rules step, shared by both brokered git
-// lanes exactly as confinePush is: it buffers the request to the run's
-// inspection ceiling, reads what the push would change, refuses a push that is
-// too large, unreadable, or carries a denied path, and holds one that carries
-// a path needing review until an admin decides (push_hold.go).
+// lanes exactly as confinePush is: buffers the request to the run's
+// inspection ceiling, reads what the push would change, refuses a push that
+// is too large, unreadable, or carries a denied path, and holds one that
+// needs review until an admin decides (push_hold.go).
 //
-// body is what the previous step left to forward — r.Body, or confinePush's
-// command section followed by the still-streaming pack — and the reader
-// returned on success replays those same bytes. On a refusal it writes the
-// response itself, through deny so each lane records the decision against ITS
-// OWN host, and returns ok=false. The refusal text lives here for confinePush's
-// reason: two lanes only say the same thing forever if one place says it.
+// body is what the previous step left to forward; the returned reader
+// replays the same bytes on success. On refusal it writes the response
+// itself (through deny, so each lane records against its own host) and
+// returns ok=false — text lives here so both lanes say the same thing.
 //
-// A run whose policy carries no content rules is returned its body untouched
-// and nothing is buffered, so a nil push_rules behaves exactly as it does
-// today.
+// A run with no content rules gets its body back untouched, unbuffered.
 //
-// forge reads what the pack does not carry from the lane's own forge; nil
-// when the lane cannot, which keeps the strict reading (push_forge.go). target
-// is what a held push's approval names as its repository and identity.
+// forge reads what the pack doesn't carry from the lane's own forge; nil
+// when the lane can't (keeps the strict reading, push_forge.go). target is
+// what a held push's approval names as repository and identity.
 //
-// The returned release MUST be deferred by the caller, as scanBufferedBody's
-// is: the buffer stays charged to scanRetained until the forwarded request is
-// done with it. It is always non-nil and safe to call more than once.
+// The returned release MUST be deferred by the caller (like
+// scanBufferedBody's): the buffer stays charged to scanRetained until the
+// forwarded request is done with it. Always non-nil, safe to call more than
+// once.
 func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.Reader,
 	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo, target pushTarget) (io.Reader, func(), bool) {
 	noRelease := func() {}
@@ -424,9 +376,8 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	if !ok {
 		return nil, noRelease, false
 	}
-	// Held OUTSIDE the inspection slot, which inspectPush has given back: a
-	// hold lasts minutes, and the slot is the whole sidecar's. The buffer stays
-	// charged to scanRetained while it waits.
+	// Held outside the inspection slot (already released by inspectPush): a
+	// hold lasts minutes and the slot belongs to the whole sidecar.
 	if len(review.paths) > 0 && !p.holdPush(w, r, rules, review, target, subject, deny) {
 		release()
 		return nil, noRelease, false
@@ -450,15 +401,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 			"wardyn: cannot enforce push content rules on a "+enc+"-encoded push body")
 		return nil, pushReview{}, noRelease, false
 	}
-	// The same slot and byte budget the LLM inspection path takes
-	// (scanBufferedBody), for the same reason: the sidecar runs under a hard
-	// 256 MiB cgroup cap, and a push is a small body the agent chooses that
-	// inflates to what gitpack's ceilings allow — four compressed 31 MiB blobs
-	// are a 34 KB request and 124 MiB of heap, and three at once OOM-kill the
-	// run's only network path. Sharing scanSlots rather than keeping a slot of
-	// its own is the point: the cap belongs to the process, so a push inflating
-	// beside an LLM extraction is the same overrun as two of either. A wait
-	// that expires fails CLOSED: the push is refused, never forwarded unread.
+	// Shares the LLM inspection path's slot and byte budget (scanBufferedBody):
+	// the sidecar runs under a hard 256 MiB cgroup cap, and a push is a small
+	// body that can inflate to what gitpack's ceilings allow (four compressed
+	// 31 MiB blobs is a 34 KB request and 124 MiB of heap; three at once
+	// OOM-kill the run's only network path). A wait that expires fails closed
+	// — the push is refused, never forwarded unread.
 	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
 	defer cancel()
 	busy := func() {
@@ -526,9 +474,8 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				"\nask an operator to shorten push_rules.require_review_paths")
 		return nil, pushReview{}, noRelease, false
 	}
-	// The buffer outlives the slot: it is forwarded (or held) from here.
-	// Charged while the slot is still held, so scanRetained keeps its single
-	// acquirer.
+	// Buffer outlives the slot, forwarded or held from here; charged while
+	// the slot is still held so scanRetained keeps one acquirer.
 	release, ok := retainScanBuffer(ctx, len(buf))
 	if !ok {
 		busy()
@@ -537,12 +484,11 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	return buf, review, release, true
 }
 
-// matchedPaths is the verdict of one pattern list on one inspected push: every
-// path it claims, and why when the forge was asked. A push the pack alone
-// passes is never asked about. Otherwise, inside forgeReadWait, the history
-// the pack re-sends is taken out first (forgeRepo.settle); an entry the rest
-// of the pack carries is then claimed outright, and only when none is does the
-// forge get to clear the entries the pack does not carry.
+// matchedPaths is the verdict of one pattern list on one inspected push:
+// every path it claims, and why when the forge was asked (a push the pack
+// alone passes is never asked). History the pack re-sends is cleared first
+// (forgeRepo.settle); an entry the pack still carries is claimed outright,
+// and only then does the forge get to clear entries the pack doesn't carry.
 func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo,
 	subject slog.Attr) (paths []string, why string, err error) {
 	if len(pats) == 0 {

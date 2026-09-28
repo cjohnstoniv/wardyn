@@ -3,28 +3,20 @@
 
 package workspacescan
 
-// detect.go — the bounded, names-only CONTENT lane of the scanner.
+// detect.go is the bounded, names-only CONTENT lane of the scanner, layered
+// on markers.go's filename-only egress rule. Three invariants:
+//   - NAMES ONLY: every regex captures an identifier via an anchored group;
+//     everything right of '='/':' is discarded before storage. Real .env
+//     files are never opened — only presence is recorded.
+//   - ADVISORY ONLY: extracted facts feed RequiredSecrets/ServicesNeeded/
+//     SuggestedEgress/SecretFilesPresent for operator display, never grants,
+//     injection, or the egress auto-union.
+//   - UNTRUSTED UNTIL VALIDATED: detectContent runs in-sandbox for repo
+//     scans, so DeriveProfile re-validates every field (charsets + caps, see
+//     validateSecretNeeds & friends below) before anything is persisted.
 //
-// markers.go's invariant stands: egress hosts that auto-union into a run's
-// allowlist (WorkspaceProfile.EgressDomains) attach by FILENAME only. This
-// file adds a second, clearly-separated lane that DOES read a fixed set of
-// well-known files — but under a strict discipline:
-//
-//   - NAMES ONLY. Every regex captures an identifier (env key, secret key,
-//     service id, registry host) via an anchored capture group; everything
-//     right of the '='/':' delimiter — where values live — is discarded
-//     before anything is stored. Real .env-style files are never opened at
-//     all: presence is the only fact recorded.
-//   - ADVISORY ONLY. The extracted facts feed RequiredSecrets /
-//     ServicesNeeded / SuggestedEgress / SecretFilesPresent — surfaced to the
-//     operator, never wired into grants, injection, or the egress auto-union.
-//   - UNTRUSTED UNTIL VALIDATED. detectContent runs wherever CollectFacts
-//     runs (in-sandbox for repo scans), so DeriveProfile re-validates every
-//     field against fixed charsets and hard caps (validateSecretNeeds &
-//     friends, bottom of file) before anything is persisted.
-//   - Detector-target files are all either marker-matched or outside the
-//     unmappedBuildFiles set, so none of them can land in
-//     UnrecognizedSamples and reach the AI advisory fallback.
+// Detector-target files are marker-matched or outside unmappedBuildFiles, so
+// none reach UnrecognizedSamples / the AI advisory fallback.
 
 import (
 	"bufio"
@@ -54,65 +46,53 @@ const (
 	maxLeakFindings = 64
 	maxBuildMemMiB  = 262144 // 256 GiB sanity ceiling for a detected build heap
 
-	// Global per-scan budgets for the two lanes that read MANY files rather
-	// than a fixed few (source-code env greps, k8s YAML secretKeyRef, and the
-	// leaked-value pass). These bound total work on a hostile/huge tree.
+	// Per-scan budgets for the lanes that read many files (env greps, k8s
+	// YAML, leaked-value pass) rather than a fixed few, bounding total work
+	// on a hostile/huge tree.
 	maxSourceFilesScanned = 600
 	maxYAMLFilesScanned   = 300
 	maxLeakFilesScanned   = 800
 )
 
 var (
-	// needNameRE is the post-validation charset for a secret/config key name.
-	// Broader than a shell env key (dots/dashes) so SealedSecret data keys
-	// like "credentials.json" survive, but still rejects whitespace, ANSI,
-	// unicode tricks, and anything value-shaped enough to matter.
+	// needNameRE: post-validation charset for a secret/config key name.
+	// Broader than a shell env key (dots/dashes) for SealedSecret data keys
+	// like "credentials.json", but rejects whitespace/ANSI/unicode tricks.
 	needNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9._-]{0,63}$`)
-	// dotenvKeyRE captures a dotenv-template key: optional comment marker,
-	// optional `export`, then the key up to '='. Group 1 = comment marker
-	// (commented ⇒ optional integration), group 2 = the key. Nothing past
-	// '=' is ever captured.
+	// dotenvKeyRE: dotenv-template key. Group 1 = comment marker (commented
+	// ⇒ optional integration), group 2 = key. Nothing past '=' is captured.
 	dotenvKeyRE = regexp.MustCompile(`^\s*(#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,63})\s*=`)
-	// placeholderRE captures Spring/Quarkus `${VAR}` / `${VAR:default}` env
-	// placeholders. Uppercase-first so config-property references like
-	// `${server.port}` don't match. Group 2 non-empty ⇒ a default exists ⇒
-	// the key is optional.
+	// placeholderRE: Spring/Quarkus `${VAR}`/`${VAR:default}`. Uppercase-first
+	// so `${server.port}`-style property refs don't match; group 2 non-empty
+	// ⇒ a default exists ⇒ optional.
 	placeholderRE = regexp.MustCompile(`\$\{([A-Z][A-Z0-9_]{0,63})(:[^}]*)?}`)
-	// composeVarRE captures compose interpolation `${VAR}` / `${VAR:-def}` /
-	// `${VAR?err}` / `${VAR:?err}`. Group 2 starting with '?' or ':?' ⇒
-	// hard-required ("Variable not set" style).
-	composeVarRE = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]{0,63})((?::?[-?])[^}]*)?}`)
-	// composeImageRE captures a compose `image:` reference.
+	// composeVarRE: compose interpolation `${VAR}`/`${VAR:-def}`/`${VAR?err}`/
+	// `${VAR:?err}`. Group 2 starting with '?' or ':?' ⇒ hard-required.
+	composeVarRE   = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]{0,63})((?::?[-?])[^}]*)?}`)
 	composeImageRE = regexp.MustCompile(`^\s*image:\s*["']?([A-Za-z0-9._/:@-]+)`)
-	// sealedKeyRE captures one key of a YAML mapping line (used only inside a
-	// spec.encryptedData block; values are ciphertext and never captured).
-	sealedKeyRE = regexp.MustCompile(`^(\s+)([A-Za-z0-9._-]{1,64}):`)
-	// dockerFromRE captures the image reference of a Dockerfile FROM line.
+	// sealedKeyRE: one key of a YAML mapping line inside spec.encryptedData
+	// only; values are ciphertext and never captured.
+	sealedKeyRE  = regexp.MustCompile(`^(\s+)([A-Za-z0-9._-]{1,64}):`)
 	dockerFromRE = regexp.MustCompile(`(?i)^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)`)
 	dockerAsRE   = regexp.MustCompile(`(?i)\sAS\s+(\S+)\s*$`)
 
-	// envAccessRE captures an env-var NAME read from source code:
-	// System.getenv("X"), os.getenv("X"), os.environ["X"], process.env.X,
-	// import.meta.env.VITE_X, ENV["X"], Deno.env.get("X"). The NAME is always
-	// group 1 or 2 (quoted or dotted); nothing else is captured.
+	// envAccessRE: env-var NAME read from source (getenv/os.environ/
+	// process.env/import.meta.env/ENV[]/Deno.env.get). NAME is always group
+	// 1 or 2; nothing else is captured.
 	envAccessRE = regexp.MustCompile(`(?:getenv|environ\.get|environ|ENV|env\.get)\s*[\[(]\s*["']([A-Za-z_][A-Za-z0-9_]{0,63})["']|(?:process\.env|import\.meta\.env)\.([A-Za-z_][A-Za-z0-9_]{0,63})`)
-	// secretRefNameRE captures a k8s secretKeyRef/secretRef data KEY. Handles
-	// both block YAML (`key: X` on its own line inside a secretKeyRef) and
-	// inline flow (`secretKeyRef: { name: n, key: X }`). The `key:` value is a
-	// secret data key = a need name; the Secret's `name:` is not captured.
+	// secretRefKeyRE: k8s secretKeyRef/secretRef data KEY, block or inline
+	// flow YAML. Captures `key:`'s value (the need name), never `name:`.
 	secretRefKeyRE = regexp.MustCompile(`\bkey:\s*["']?([A-Za-z_][A-Za-z0-9._-]{0,63})`)
 	secretRefRE    = regexp.MustCompile(`secretKeyRef|secretRef`)
-	// ciSecretRE captures a GitHub Actions `secrets.NAME` reference.
-	ciSecretRE = regexp.MustCompile(`secrets\.([A-Za-z_][A-Za-z0-9_]{0,63})`)
-	// mavenRepoURLRE / gradleRepoURLRE capture a declared artifact-repository
-	// URL — SUGGESTED egress only. mavenRepoURLRE is applied ONLY inside a
-	// <repository>/<pluginRepository> element (detectMavenRepos tracks that),
-	// so pom license/SCM/project <url>s never match.
+	ciSecretRE     = regexp.MustCompile(`secrets\.([A-Za-z_][A-Za-z0-9_]{0,63})`)
+	// mavenRepoURLRE / gradleRepoURLRE: declared artifact-repository URL,
+	// SUGGESTED egress only. mavenRepoURLRE applies only inside a
+	// <repository>/<pluginRepository> element so pom license/SCM/project
+	// <url>s never match.
 	mavenRepoURLRE  = regexp.MustCompile(`<url>\s*(https?://[^<\s]+)`)
 	gradleRepoURLRE = regexp.MustCompile(`\burl\s*[=(]?\s*(?:uri\()?["'](https?://[^"']+)`)
-	// heapRE captures a build-heap ceiling: JVM -Xmx<N><unit> or Node
-	// --max-old-space-size=<N> (MiB). Group 1/2 = JVM number+unit, group 3 =
-	// Node MiB.
+	// heapXmxRE/heapNodeRE: build-heap ceiling, JVM -Xmx<N><unit> or Node
+	// --max-old-space-size=<N> (MiB).
 	heapXmxRE  = regexp.MustCompile(`-Xmx(\d+)([kKmMgG])`)
 	heapNodeRE = regexp.MustCompile(`max-old-space-size=(\d+)`)
 )
@@ -125,8 +105,8 @@ var sourceExts = map[string]struct{}{
 	".py": {}, ".rb": {}, ".go": {}, ".php": {}, ".rs": {}, ".ex": {}, ".exs": {},
 }
 
-// serviceByImagePrefix maps a compose image's base name to a service id. The
-// map's values are also the ONLY service ids DeriveProfile will accept.
+// serviceByImagePrefix maps a compose image's base name to a service id; its
+// values are the only service ids DeriveProfile accepts.
 var serviceByImagePrefix = map[string]string{
 	"postgres":      "postgres",
 	"postgis":       "postgres",
@@ -148,9 +128,9 @@ var serviceByImagePrefix = map[string]string{
 	"coturn":        "turn",
 }
 
-// secretKindByPrefix classifies a key name into a coarse family — badge +
-// (for unambiguous DB/store families) an implied service. First match wins;
-// order longest/most-specific first. Deliberately small: unknown ⇒ "generic".
+// secretKindByPrefix classifies a key name into a coarse family (+ implied
+// service for unambiguous DB/store families). First match wins, ordered
+// most-specific first; deliberately small, unknown ⇒ "generic".
 var secretKindByPrefix = []struct{ prefix, kind string }{
 	{"DATABASE_URL", "database"},
 	{"POSTGRES", "postgres"},
@@ -177,8 +157,7 @@ var secretKindByPrefix = []struct{ prefix, kind string }{
 }
 
 // serviceForKind maps a secret-kind to the backing service it unambiguously
-// implies (a POSTGRES_* key means a postgres somewhere). Generic "database"
-// deliberately implies nothing — the engine is unknown.
+// implies. Generic "database" implies nothing — the engine is unknown.
 var serviceForKind = map[string]string{
 	"postgres": "postgres",
 	"mysql":    "mysql",
@@ -190,9 +169,9 @@ var serviceForKind = map[string]string{
 }
 
 // knownSecretKinds is the closed set DeriveProfile accepts from untrusted
-// facts; anything else is coerced to "generic". "deploy" = k8s SealedSecret /
-// secretKeyRef data key; "ci" = referenced only in a CI workflow (not
-// dev-required); "code" = read only from source (lower-confidence).
+// facts; anything else coerces to "generic". "deploy" = k8s SealedSecret/
+// secretKeyRef key; "ci" = CI-workflow-only (not dev-required); "code" =
+// source-read only (lower-confidence).
 var knownSecretKinds = func() map[string]struct{} {
 	m := map[string]struct{}{"generic": {}, "deploy": {}, "database": {}, "ci": {}, "code": {}}
 	for _, e := range secretKindByPrefix {
@@ -207,15 +186,10 @@ var weakKinds = map[string]struct{}{"ci": {}, "code": {}, "generic": {}}
 
 // platformEnvNames is the closed set of environment-variable NAMES that are
 // platform/runtime plumbing, never an application secret. detectEnvAccess
-// records the NAME of every os.getenv/process.env/ENV[] read in source code
-// with no way to tell getenv("HOME") from getenv("STRIPE_SECRET_KEY") at the
-// read site — real repos read dozens of these, and unfiltered they were the
-// majority of the operator-facing checklist (40+ rows for a typical repo,
-// HOME/MODE/USERPROFILE/NODE_ENV chief among them).
-// ponytail: a fixed enum, not a rule engine. Under-covering is harmless (an
-// unlisted platform var just surfaces as one more low-priority optional
-// checklist row); add names here as they're reported rather than trying to
-// be exhaustive up front.
+// can't tell getenv("HOME") from getenv("STRIPE_SECRET_KEY") at the read
+// site, and unfiltered these dominated the operator checklist (40+ rows/repo).
+// ponytail: a fixed enum, not a rule engine — under-covering just surfaces one
+// more low-priority row; add names as reported rather than chasing exhaustive.
 var platformEnvNames = map[string]struct{}{
 	// shell / POSIX
 	"HOME": {}, "PATH": {}, "PWD": {}, "OLDPWD": {}, "SHELL": {}, "TERM": {},
@@ -248,12 +222,9 @@ var platformEnvNames = map[string]struct{}{
 }
 
 // isPlatformEnvName reports whether name is platform/runtime plumbing rather
-// than an application secret: an exact hit in platformEnvNames (uppercased
-// before compare — this table is written in shell convention, but
-// process.env reads are case-sensitive in JS), or a locale (LC_*) / XDG
-// base-directory (XDG_*) variable — both open-ended families (LC_TIME,
-// LC_MONETARY, XDG_CONFIG_HOME, XDG_CACHE_HOME, …) a fixed enum can't cover
-// member-by-member.
+// than an application secret: an exact (case-insensitive) hit in
+// platformEnvNames, or a locale (LC_*) / XDG (XDG_*) variable — open-ended
+// families a fixed enum can't cover member-by-member.
 func isPlatformEnvName(name string) bool {
 	upper := strings.ToUpper(name)
 	if _, ok := platformEnvNames[upper]; ok {
@@ -262,14 +233,12 @@ func isPlatformEnvName(name string) bool {
 	return strings.HasPrefix(upper, "LC_") || strings.HasPrefix(upper, "XDG_")
 }
 
-// leakRule matches a well-known secret VALUE format. High-precision only —
-// this mirrors internal/contentscan/patterns.go's secretRules catalog (kept
-// local rather than reshaping that package's Span/Finding streaming API). Only
-// the rule NAME and location are ever recorded, never the matched bytes.
-// 10 anchored formats cover the accidental-commit cases; entropy
-// scanning is deliberately omitted (too many false positives on a file tree),
-// and ADO PATs have no raw-value rule (opaque base64, no distinctive prefix —
-// a regex would be low-precision; they're caught in credential-URL form).
+// leakRule matches a well-known secret VALUE format; high-precision only, and
+// only the rule NAME and location are ever recorded, never the matched bytes.
+// Mirrors internal/contentscan/patterns.go's secretRules (kept local rather
+// than reshaping that package's Span/Finding streaming API). Entropy scanning
+// is deliberately omitted (too many false positives); ADO PATs have no
+// raw-value rule (opaque base64 — low-precision; caught in credential-URL form).
 type leakRule struct {
 	kind string
 	re   *regexp.Regexp
@@ -285,25 +254,20 @@ var leakRules = []leakRule{
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`)},
 	{"gcp-service-account", regexp.MustCompile(`"type"\s*:\s*"service_account"`)},
 	{"gitlab-pat", regexp.MustCompile(`\bglpat-[0-9A-Za-z_-]{20,}\b`)},
-	// A credential embedded in a URL (the ~/.git-credentials / remote-URL shape).
-	// Password ≥8 chars so doc placeholders like https://user:pass@host don't flag.
+	// Credential embedded in a URL (~/.git-credentials / remote-URL shape).
+	// Password >=8 chars so doc placeholders like https://user:pass@host don't flag.
 	{"git-credentials-url", regexp.MustCompile(`https?://[^/\s:@]+:[^/\s@]{8,}@[^/\s]+`)},
 }
 
-// leakSeverity ranks a leak kind by what an attacker can do with the value
-// behind it, highest first. It exists because BOTH leak doors cap their list
-// and something has to survive the cap: before B11b-F9 the survivors were
-// whichever findings happened to come first, so a committed private key in the
-// ninth attached source was dropped in favour of the first source's sixty-fourth
-// JWT. A cap is unavoidable (the list rides a profile into the console); which
-// findings it keeps is a choice, and keeping the reusable long-lived
-// credentials is the only defensible one.
+// leakSeverity ranks a leak kind by what an attacker can do with the value,
+// highest first, since the findings list is capped and something must survive
+// the cut — previously that was arrival order, so a committed private key
+// could be dropped in favor of an early JWT. Keeping reusable long-lived
+// credentials is the only defensible priority.
 //
-// 3 = a long-lived credential that is usable as-is, from anywhere.
-// 2 = a credential that is usable as-is but is scoped, short-lived, or both.
-// 1 = secret-SHAPED, commonly a test fixture or an expired artifact.
-// Unknown kinds rank 0: they were already dropped by leakKinds, and anything
-// that reaches here unranked should sort last rather than displace a known one.
+// 3 = long-lived, usable as-is, from anywhere. 2 = usable as-is but scoped
+// and/or short-lived. 1 = secret-SHAPED, often a fixture or expired artifact.
+// Unknown kinds rank 0 (already dropped by leakKinds; sorts last if reached).
 var leakSeverity = map[string]int{
 	"private-key-block":   3,
 	"aws-access-key":      3,
@@ -317,15 +281,10 @@ var leakSeverity = map[string]int{
 	"jwt":                 1, // usually expired, often a fixture
 }
 
-// capLeakFindings sorts leak findings riskiest-first and applies the cap,
-// reporting whether anything was dropped. Ties fall back to the stable
-// path/kind/line/source ordering the two callers already produced, so equal
-// input still yields byte-identical output.
-//
-// truncated flags the drop instead of leaving it SILENT, on a
-// package whose documented promise is never to drop a suspected secret. The
-// callers stamp NeedsReview with it, so a profile missing findings stops
-// reading as the whole picture.
+// capLeakFindings sorts leak findings riskiest-first, applies the cap, and
+// reports whether anything was dropped (stable sort keeps ties deterministic).
+// truncated must never be silent: this package promises never to drop a
+// suspected secret quietly, so callers stamp NeedsReview with it.
 func capLeakFindings(in []LeakFinding) (out []LeakFinding, truncated bool) {
 	slices.SortStableFunc(in, func(a, b LeakFinding) int {
 		if sa, sb := leakSeverity[a.Kind], leakSeverity[b.Kind]; sa != sb {
@@ -356,9 +315,9 @@ var leakKinds = func() map[string]struct{} {
 	return m
 }()
 
-// collectState carries the facts pointer plus per-scan budgets for the lanes
-// that read MANY files (env-access greps, k8s YAML, leaked-value scan), so a
-// hostile/huge tree can't turn the content lane into an unbounded read.
+// collectState carries the facts pointer plus per-scan budgets for the
+// many-file lanes, so a hostile/huge tree can't make the content lane an
+// unbounded read.
 type collectState struct {
 	facts       *ScanFacts
 	sourceFiles int
@@ -376,17 +335,17 @@ func classifySecretKind(name string) string {
 	return "generic"
 }
 
-// detectContent dispatches a walked file to its content detector(s). Called
-// for every file in the walk (before marker lookup); non-target files cost a
-// few string checks. rel is slash-separated and pathSafe-checked.
+// detectContent dispatches a walked file to its content detector(s); a
+// non-target file just costs a few string checks. rel is slash-separated and
+// pathSafe-checked.
 func detectContent(rel, name, path string, st *collectState) {
 	facts := st.facts
 	switch {
 	case isDotenvTemplate(name):
 		detectDotenvTemplate(path, facts)
 	case isDotenvReal(name):
-		// PRESENCE ONLY — a real secrets file is never opened (not even for
-		// leak scanning; the .env-present warning covers it).
+		// PRESENCE ONLY: a real secrets file is never opened, not even for
+		// leak scanning — the .env-present warning covers it.
 		if len(facts.SecretFilesPresent) < maxSecretFiles*collectSlack {
 			facts.SecretFilesPresent = append(facts.SecretFilesPresent, rel)
 		}
@@ -417,14 +376,13 @@ func detectContent(rel, name, path string, st *collectState) {
 			st.yamlFiles++
 			detectSecretRef(path, facts)
 		} else {
-			// Past the per-scan YAML budget, this file is silently
-			// skipped — confidence must reflect that the scan is incomplete,
-			// not report "high" over a tree it never fully walked.
+			// Past budget: mark Truncated so confidence reflects the scan is
+			// incomplete rather than "high" over a tree never fully walked.
 			facts.Truncated = true
 		}
 	}
 
-	// Source-code env-access grep (bounded by a per-scan file budget).
+	// Source-code env-access grep, bounded by a per-scan file budget.
 	if _, ok := sourceExts[ext(name)]; ok {
 		if st.sourceFiles < maxSourceFilesScanned {
 			st.sourceFiles++
@@ -434,8 +392,8 @@ func detectContent(rel, name, path string, st *collectState) {
 		}
 	}
 
-	// Leaked-value scan over readable text files (source/config), never over a
-	// real .env (returned above). Bounded by a per-scan file budget.
+	// Leaked-value scan over text config/source, never a real .env, bounded
+	// by a per-scan file budget.
 	if leakScannable(name) {
 		if st.leakFiles < maxLeakFilesScanned {
 			st.leakFiles++
@@ -460,9 +418,9 @@ func isCIWorkflow(rel string) bool {
 		(strings.HasSuffix(rel, ".yml") || strings.HasSuffix(rel, ".yaml"))
 }
 
-// isKubeYAML matches a plausible k8s manifest by extension. detectSecretRef
-// only extracts when a secretKeyRef/secretRef token is actually present, so a
-// non-k8s YAML costs one bounded read and yields nothing.
+// isKubeYAML matches a plausible k8s manifest by extension; a non-k8s YAML
+// just costs one bounded read since detectSecretRef only extracts when a
+// secretKeyRef/secretRef token is present.
 func isKubeYAML(name string) bool {
 	if isComposeFile(name) || isSealedSecret(name) {
 		return false // already handled with more specific detectors
@@ -471,8 +429,8 @@ func isKubeYAML(name string) bool {
 	return e == ".yaml" || e == ".yml"
 }
 
-// leakScannable reports whether a file's contents should be run past the
-// leaked-value catalog. Text config + source; never a real .env (never opened).
+// leakScannable reports whether a file should be run past the leaked-value
+// catalog: text config + source, never a real .env.
 func leakScannable(name string) bool {
 	if isDotenvReal(name) {
 		return false
@@ -550,11 +508,9 @@ func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
 			return
 		}
 	}
-	// A line over Buffer's 64 KiB cap makes Scan() stop with
-	// bufio.ErrTooLong — silently, same as a normal EOF, unless the caller
-	// checks Err(). Stamp Truncated so a file with one absurd line (a
-	// minified bundle, a base64 blob) doesn't scan as complete when a
-	// secret-shaped token past the cutoff was never seen.
+	// A line over the 64 KiB buffer cap stops Scan() silently (bufio.ErrTooLong
+	// looks like EOF). Stamp Truncated so a file with one absurd line doesn't
+	// scan as complete when a token past the cutoff was never seen.
 	if sc.Err() != nil {
 		facts.Truncated = true
 	}
@@ -594,12 +550,10 @@ func detectDotenvTemplate(path string, facts *ScanFacts) {
 		}
 		commented := idx[2] >= 0 // group 1 (the '#') matched
 		key := line[idx[4]:idx[5]]
-		// RHS-emptiness is the required/optional signal (calibrated on real
-		// templates): a commented line is an optional integration example; an
-		// uncommented KEY= with NO value is a must-supply secret; an
-		// uncommented KEY=<value> ships a working default, so it is optional
-		// config. Only the EMPTINESS of the RHS is inspected — the value bytes
-		// are never captured or stored.
+		// RHS emptiness is the required/optional signal: commented = optional
+		// example; uncommented KEY= with no value = must-supply; uncommented
+		// KEY=<value> = a working default, so optional. Value bytes are never
+		// captured.
 		optional := commented
 		if !commented {
 			optional = strings.TrimSpace(line[idx[1]:]) != ""
@@ -682,8 +636,7 @@ func detectSealedSecret(path string, facts *ScanFacts) {
 			return true
 		}
 		if indent <= blockIndent {
-			// Dedented — block over. Keep scanning: a multi-doc file can hold
-			// several SealedSecrets.
+			// Dedented: block over. Keep scanning — a multi-doc file can hold several.
 			inBlock = false
 			if trimmed == "encryptedData:" {
 				inBlock, blockIndent = true, indent
@@ -701,8 +654,8 @@ func detectSealedSecret(path string, facts *ScanFacts) {
 }
 
 // detectDockerfileFrom records base-image registry hosts as SUGGESTED egress
-// (advisory — a content-derived host must never auto-widen an allowlist).
-// Multi-stage `FROM <alias>` lines are skipped via the stage-alias set.
+// only — a content-derived host must never auto-widen an allowlist. Skips
+// multi-stage `FROM <alias>` lines via the stage-alias set.
 func detectDockerfileFrom(path string, facts *ScanFacts) {
 	stages := map[string]struct{}{}
 	eachLine(path, facts, func(line string) bool {
@@ -722,7 +675,7 @@ func detectDockerfileFrom(path string, facts *ScanFacts) {
 			if first := ref[:i]; strings.ContainsAny(first, ".:") || first == "localhost" {
 				host = first
 				if j := strings.Index(host, ":"); j > 0 {
-					host = host[:j] // suggested egress is host-only; drop the port
+					host = host[:j] // host-only; drop the port
 				}
 			}
 		}
@@ -737,11 +690,10 @@ func addSuggestedHost(facts *ScanFacts, host string) {
 	}
 }
 
-// detectEnvAccess extracts env-var NAMES read from source code
-// (System.getenv/os.getenv/os.environ/process.env/import.meta.env/ENV[]).
-// Code refs are lower-confidence than a declared config key — a fallback may
-// exist — so they are recorded as advisory (kind "code", optional): they
-// enrich the needs panel but never a required-secret checklist row.
+// detectEnvAccess extracts env-var NAMES read from source code. Code refs are
+// lower-confidence than a declared config key (a fallback may exist), so they
+// are advisory (kind "code", optional): they enrich the needs panel but never
+// a required-secret row.
 func detectEnvAccess(path string, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
@@ -765,17 +717,14 @@ func detectEnvAccess(path string, facts *ScanFacts) {
 }
 
 // detectSecretRef extracts k8s Secret DATA KEYS from secretKeyRef/secretRef
-// blocks (both multi-line and inline flow YAML). The `key:` value is the data
-// key a workload needs; the Secret's `name:` is deliberately not captured.
-// Deploy-time, optional (like SealedSecret keys). Only files actually
-// containing a secretKeyRef/secretRef token contribute anything.
+// blocks (multi-line or inline flow YAML): the `key:` value is the need name;
+// the Secret's `name:` is deliberately not captured. Deploy-time, optional.
 func detectSecretRef(path string, facts *ScanFacts) {
-	armed := false // saw a secretKeyRef/secretRef token; the next key: is a data key
+	armed := false // saw a secretKeyRef/secretRef token; next key: is a data key
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		if !secretRefRE.MatchString(line) {
-			// A block-form key: on its own line, one or two lines after the
-			// secretKeyRef line, is still a data key while armed.
+			// A block-form key a line or two after secretKeyRef is still a data key while armed.
 			if armed {
 				if m := secretRefKeyRE.FindStringSubmatch(line); m != nil {
 					if kb.hit() {
@@ -784,15 +733,15 @@ func detectSecretRef(path string, facts *ScanFacts) {
 					armed = false
 					return addNeed(facts, m[1], "deploy", true)
 				}
-				// Give up arming after a non-key content line.
+				// Give up once past a non-key content line.
 				if strings.TrimSpace(line) != "" && !strings.Contains(line, "name:") {
 					armed = false
 				}
 			}
 			return true
 		}
-		// This line mentions secretKeyRef/secretRef. Capture an inline `key:`
-		// on the same line (flow form); otherwise arm for the next lines.
+		// Line mentions secretKeyRef/secretRef: capture inline `key:` (flow form)
+		// or arm for the next lines.
 		if m := secretRefKeyRE.FindStringSubmatch(line); m != nil {
 			if kb.hit() {
 				return false
@@ -804,11 +753,9 @@ func detectSecretRef(path string, facts *ScanFacts) {
 	})
 }
 
-// detectCISecrets extracts `secrets.NAME` refs from a GitHub Actions workflow.
-// CI/release-only by construction: recorded kind "ci", optional — so they
-// never surface as a dev-required checklist row (the required checklist filters
-// to Optional=false). If the same name is ALSO declared by a real config
-// detector, dedupe keeps that stronger classification.
+// detectCISecrets extracts `secrets.NAME` refs from a GitHub Actions workflow,
+// kind "ci", optional — never a dev-required row. Dedupe keeps a real config
+// detector's stronger classification if the same name appears there too.
 func detectCISecrets(path string, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
@@ -828,8 +775,8 @@ func detectCISecrets(path string, facts *ScanFacts) {
 }
 
 // detectMavenRepos extracts artifact-repository URLs from a pom.xml — SUGGESTED
-// egress only. Scoped to <repository>/<pluginRepository> elements so pom
-// license/SCM/project/organization <url>s (all over a real pom) never leak in.
+// egress only, scoped to <repository>/<pluginRepository> elements so pom
+// license/SCM/project/organization <url>s never leak in.
 func detectMavenRepos(path string, facts *ScanFacts) {
 	depth := 0 // >0 while inside a <repository>/<pluginRepository> element
 	eachLine(path, facts, func(line string) bool {
@@ -854,9 +801,8 @@ func detectMavenRepos(path string, facts *ScanFacts) {
 }
 
 // detectGradleRepos extracts maven { url '...' } repository hosts from a Gradle
-// build/settings file — SUGGESTED egress only. Gradle repo blocks have no
-// license-URL noise, so a plain `url "http..."` match is safe enough for an
-// advisory host.
+// build/settings file, SUGGESTED egress only. Gradle repo blocks have no
+// license-URL noise, so a plain `url "http..."` match is safe enough.
 func detectGradleRepos(path string, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range gradleRepoURLRE.FindAllStringSubmatch(line, -1) {
@@ -868,8 +814,8 @@ func detectGradleRepos(path string, facts *ScanFacts) {
 	})
 }
 
-// detectHeap records the largest build-heap ceiling seen (JVM -Xmx / Node
-// --max-old-space-size), normalized to MiB. Advisory only.
+// detectHeap records the largest build-heap ceiling seen, normalized to MiB.
+// Advisory only.
 func detectHeap(path string, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range heapXmxRE.FindAllStringSubmatch(line, -1) {
@@ -879,16 +825,16 @@ func detectHeap(path string, facts *ScanFacts) {
 		}
 		for _, m := range heapNodeRE.FindAllStringSubmatch(line, -1) {
 			if mib := atoiBounded(m[1]); mib > facts.BuildMemoryMiB {
-				facts.BuildMemoryMiB = mib // --max-old-space-size is already MiB
+				facts.BuildMemoryMiB = mib // already MiB
 			}
 		}
 		return true
 	})
 }
 
-// detectLeaks runs the high-precision leaked-value catalog over a file's
-// content. It reads VALUES to recognize a secret-shaped token but records only
-// the path, the rule KIND, and the line number — never the matched bytes.
+// detectLeaks runs the leaked-value catalog over a file's content: it reads
+// VALUES to recognize a secret-shaped token but records only path/kind/line,
+// never the matched bytes.
 func detectLeaks(rel, path string, facts *ScanFacts) {
 	line := 0
 	eachLine(path, facts, func(text string) bool {
@@ -905,19 +851,17 @@ func detectLeaks(rel, path string, facts *ScanFacts) {
 	})
 }
 
-// conventionalScriptKeys are the only package.json script names we care about
-// for setup-command synthesis (build/test/lint). makeTargets likewise. We
-// capture only KEY PRESENCE, never the script body (a hostile scripts.build
-// must never become a command).
+// conventionalScriptKeys/conventionalMakeTargets are the only names setup-command
+// synthesis cares about; only KEY PRESENCE is captured, never a script body
+// (a hostile scripts.build must never become a command).
 var conventionalScriptKeys = map[string]struct{}{"build": {}, "test": {}, "lint": {}}
 var conventionalMakeTargets = map[string]struct{}{"build": {}, "test": {}, "install": {}, "lint": {}}
 
 // makeTargetRE captures a Makefile target name at the start of a rule line.
 var makeTargetRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)\s*:`)
 
-// detectPackageJSON records which conventional script KEYS (build/test/lint)
-// a package.json declares — never the script bodies. Parse failure is safe (no
-// keys recorded).
+// detectPackageJSON records which conventional script KEYS a package.json
+// declares, never the bodies. Parse failure is safe (no keys recorded).
 func detectPackageJSON(path string, facts *ScanFacts) {
 	f, err := gitremote.OpenRegular(path)
 	if err != nil {
@@ -941,8 +885,8 @@ func detectPackageJSON(path string, facts *ScanFacts) {
 	}
 }
 
-// detectMakefile records which conventional TARGETS (build/test/install/lint) a
-// Makefile defines — target names only, never recipe bodies.
+// detectMakefile records which conventional TARGETS a Makefile defines —
+// names only, never recipe bodies.
 func detectMakefile(path string, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		if m := makeTargetRE.FindStringSubmatch(line); m != nil {
@@ -980,10 +924,9 @@ func jsRunPrefix(pkgMgrs map[string]struct{}) string {
 
 func has(m map[string]struct{}, k string) bool { _, ok := m[k]; return ok }
 
-// deriveSetupCommands synthesizes the ordered install/build/test/lint commands
-// from FIXED templates keyed on the detected package managers + tools + which
-// conventional script/target keys exist. Commands are never taken from file
-// content. Ordered install → build → test → lint; deduped by (stage, command).
+// deriveSetupCommands synthesizes ordered install/build/test/lint commands from
+// FIXED templates keyed on detected package managers/tools/script keys —
+// never taken from file content. Deduped by (stage, command).
 func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTargets []string, hasMvnw, hasGradlew bool) []SetupCommand {
 	var out []SetupCommand
 	seen := map[string]struct{}{}
@@ -1032,12 +975,10 @@ func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTar
 		add("install", "pipenv install --dev", "convention:pipenv")
 		add("test", "pipenv run pytest", "convention:pipenv")
 	} else if has(pkgMgrs, "pip") {
-		// A venv, because: (1) Debian's system Python is PEP-668
-		// externally-managed (`pip install` into it errors), and the sandbox
-		// agent is non-root so it can't write system site-packages anyway;
-		// (2) prefer an editable install of the project (pyproject/setup.py) and
-		// fall back to requirements.txt; (3) SETUPTOOLS_SCM_PRETEND_VERSION lets
-		// setuptools-scm/hatch-vcs builds succeed on the shallow clone (no tags).
+		// venv because: Debian's system Python is PEP-668 externally-managed and
+		// the sandbox agent is non-root; prefer an editable install, falling back
+		// to requirements.txt; SETUPTOOLS_SCM_PRETEND_VERSION lets scm-versioned
+		// builds succeed on the shallow (tagless) clone.
 		add("install",
 			"python3 -m venv .venv && SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 .venv/bin/pip install -e . "+
 				"|| SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 .venv/bin/pip install -r requirements.txt",
@@ -1080,10 +1021,8 @@ func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTar
 	if has(pkgMgrs, "composer") {
 		add("install", "composer install --no-interaction", "convention:composer")
 	}
-	// Docs generators (marker-derived tool hints → fixed templates; the build
-	// stage so a docs workspace gets a recordable/verifiable build task).
-	// Docusaurus intentionally has no template — its package.json build script
-	// already rides the JS branch above.
+	// Docs generators: marker-derived tool hints → fixed build-stage templates.
+	// Docusaurus has none — its package.json build script rides the JS branch above.
 	if has(tools, "mkdocs") {
 		add("build", "mkdocs build", "convention:mkdocs")
 	}
@@ -1094,8 +1033,8 @@ func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTar
 		add("build", "hugo --minify", "convention:hugo")
 	}
 
-	// Makefile targets corroborate but never override a language convention;
-	// add a make command only for a target with no convention-provided stage yet.
+	// Makefile targets corroborate but never override a language convention:
+	// add one only for a stage with no convention-provided command yet.
 	stageHas := map[string]bool{}
 	for _, c := range out {
 		stageHas[c.Stage] = true
@@ -1124,8 +1063,8 @@ func xmxToMiB(numStr, unit string) int {
 	}
 }
 
-// atoiBounded parses a non-negative int, capping at maxBuildMemMiB and failing
-// safe to 0 on overflow/garbage (input is untrusted).
+// atoiBounded parses a non-negative int (untrusted input), capping at
+// maxBuildMemMiB and failing safe to 0 on overflow/garbage.
 func atoiBounded(s string) int {
 	n := 0
 	for _, c := range s {
@@ -1144,7 +1083,7 @@ func atoiBounded(s string) int {
 
 // validateSecretNeeds drops non-conforming names, coerces unknown kinds to
 // "generic", dedupes by name (required beats optional; a real config kind
-// beats a weak ci/code/generic sighting), and caps + sorts for determinism.
+// beats a weak ci/code/generic sighting), caps and sorts for determinism.
 func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 	byName := make(map[string]SecretNeed, len(raw))
 	for _, n := range raw {
@@ -1152,12 +1091,10 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 		if !needNameRE.MatchString(name) {
 			continue
 		}
-		// Platform/runtime names (HOME, NODE_ENV, PATH, …) are filtered HERE —
-		// not in addNeed at collection time — because validateSecretNeeds is
-		// the one boundary BOTH scan lanes cross: the host-side Scan call below
-		// AND the repo-lane's re-derivation of untrusted uploaded facts via
-		// DeriveProfile. A collection-site filter would cover the former but
-		// miss the latter.
+		// Filtered here, not at collection time, since this is the one boundary
+		// both scan lanes cross: host-side Scan and the repo-lane's re-derivation
+		// of untrusted uploaded facts via DeriveProfile. A collection-site filter
+		// would miss the latter.
 		if isPlatformEnvName(name) {
 			continue
 		}
@@ -1170,8 +1107,7 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 				prev.Optional = false
 			}
 			// A concrete config classification supersedes a weak ci/code/generic
-			// one (e.g. a name seen in both CI and a real .env keeps the .env
-			// kind), so the badge reflects the strongest evidence.
+			// one, so the badge reflects the strongest evidence.
 			if _, prevWeak := weakKinds[prev.Kind]; prevWeak {
 				if _, newWeak := weakKinds[kind]; !newWeak {
 					prev.Kind = kind
@@ -1185,11 +1121,9 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 	if len(byName) == 0 {
 		return nil
 	}
-	// Priority cap: keep credential-DECLARING secrets (from .env keys, ${}
-	// placeholders, SealedSecrets, secretKeyRef, compose env) ahead of advisory
-	// code/CI-only references, so source-grep noise (ports, flags) can never
-	// evict a real declared credential from the capped set. Alphabetical within
-	// each tier; output re-sorted alpha for a stable ProfileHash.
+	// Priority cap: credential-DECLARING secrets rank ahead of advisory code/CI
+	// references, so source-grep noise can never evict a real credential.
+	// Output re-sorted alpha for a stable ProfileHash.
 	var strong, weak []SecretNeed
 	for _, name := range slices.Sorted(maps.Keys(byName)) {
 		if s := byName[name]; s.Kind == "code" || s.Kind == "ci" {
@@ -1211,8 +1145,8 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 	return out
 }
 
-// validateServices keeps only ids from the fixed service map (plus those
-// implied by validated secret kinds), deduped/sorted/capped.
+// validateServices keeps only ids from the fixed service map, plus those
+// implied by validated secret kinds; deduped/sorted/capped.
 func validateServices(raw []string, needs []SecretNeed) []string {
 	allowed := map[string]struct{}{}
 	for _, v := range serviceByImagePrefix {
@@ -1225,9 +1159,8 @@ func validateServices(raw []string, needs []SecretNeed) []string {
 		}
 	}
 	for _, n := range needs {
-		// Derive the service family from the NAME, not the stored kind: a
-		// deploy/code/ci-sourced key like MINIO_ROOT_PASSWORD still implies its
-		// backing service even though its kind carries provenance instead.
+		// Derive from the NAME, not the stored kind (which carries provenance,
+		// e.g. deploy/code/ci) so MINIO_ROOT_PASSWORD still implies its service.
 		if svc, ok := serviceForKind[classifySecretKind(n.Name)]; ok {
 			set[svc] = struct{}{}
 		}
@@ -1239,13 +1172,12 @@ func validateServices(raw []string, needs []SecretNeed) []string {
 	return out
 }
 
-// validateSuggestedHosts normalizes (lowercase, strip scheme/port/path),
-// validates the charset, requires a dot, subtracts hosts already in the
-// filename-keyed allowed set, and caps + sorts.
+// validateSuggestedHosts normalizes/validates hosts, drops ones already in
+// the filename-keyed allowed set, and caps + sorts.
 func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []string {
 	set := map[string]struct{}{}
 	for _, h := range raw {
-		host := hostrules.HostOf(h) // trim/strip-scheme/strip-port/lowercase + validity, or "" if invalid
+		host := hostrules.HostOf(h) // normalize + validate; "" if invalid
 		if host == "" {
 			continue
 		}
@@ -1277,8 +1209,8 @@ func validateSecretFilePaths(raw []string) []string {
 	return out
 }
 
-// validateBuildMemoryMiB bounds an untrusted detected build heap to a sane
-// ceiling (0 when unset/garbage).
+// validateBuildMemoryMiB bounds an untrusted build heap to a sane ceiling
+// (0 when unset/garbage).
 func validateBuildMemoryMiB(v int) int {
 	if v < 0 {
 		return 0
@@ -1289,11 +1221,10 @@ func validateBuildMemoryMiB(v int) int {
 	return v
 }
 
-// validateLeakFindings keeps only findings with a known rule kind and a safe
-// relative path, dedupes by (path, kind, line), then sorts riskiest-first and
-// caps (capLeakFindings). Never carries a value (LeakFinding has no value field
-// by construction). truncated reports that the cap DROPPED findings, which the
-// caller turns into NeedsReview instead of a silent drop.
+// validateLeakFindings keeps only known-kind findings with a safe relative
+// path, dedupes, then sorts riskiest-first and caps (capLeakFindings). Never
+// carries a value. truncated reports a cap drop, which the caller turns into
+// NeedsReview rather than a silent drop.
 func validateLeakFindings(raw []LeakFinding) (out []LeakFinding, truncated bool) {
 	type key struct {
 		path, kind string

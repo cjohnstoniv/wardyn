@@ -60,19 +60,15 @@ type RiskItem struct {
 }
 
 // safeBaselineDomains are egress hosts a coding agent commonly needs; allowlisting
-// only these is not, by itself, escalated. Anything BEYOND this set is graded
-// medium so the operator notices custom egress.
+// only these is not, by itself, escalated. Anything beyond this set grades medium.
 var safeBaselineDomains = map[string]bool{
-	// LLM provider endpoints a coding agent commonly needs for its OWN model
-	// access (the proposed run's provider) — not over-flagged as custom egress.
+	// LLM provider endpoints for the run's own model access — not flagged as custom egress.
 	"api.anthropic.com":                 true,
 	"api.openai.com":                    true,
 	"generativelanguage.googleapis.com": true,
-	// VCS + package registries, kept in sync with the workspace scanner's
-	// marker table so a scan-derived egress addition never reads as "custom".
-	// GitHub is reached via the git-broker, never in allowed_domains, so these
-	// entries are effectively dead for scoring but retained as a defensive
-	// baseline.
+	// VCS + package registries, synced with the workspace scanner's marker
+	// table. GitHub goes via the git-broker, never allowed_domains, so these
+	// entries are dead for scoring but kept as a defensive baseline.
 	"github.com":                    true,
 	"api.github.com":                true,
 	"codeload.github.com":           true,
@@ -99,11 +95,11 @@ var safeBaselineDomains = map[string]bool{
 	"pub.dev":               true,
 }
 
-// Grade computes the deterministic risk assessment of a proposed run setup PURELY
-// from its fields. It NEVER consults any LLM self-assessment — a prompt-injected
-// attachment cannot lower the grade because the grade is a function of the spec,
-// not of anything the model claims about it. It emits one item per notable choice
-// (including LOW ones) so the human sees the full picture, sorted riskiest-first.
+// Grade computes the deterministic risk assessment of a proposed run setup
+// purely from its fields. SECURITY: it never consults any LLM self-assessment
+// — a prompt-injected attachment cannot lower the grade, since the grade is a
+// function of the spec, not of anything the model claims about it. Emits one
+// item per notable choice (including LOW ones), sorted riskiest-first.
 func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 	var items []RiskItem
 	add := func(field, value string, lvl RiskLevel, rationale, inv string) {
@@ -174,9 +170,8 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
-	// Branch-namespace confinement (ON by default) is why an agent cannot
-	// rewrite main; turning it off is a privilege Clamp already forces false
-	// by default, so it must be graded here too.
+	// Branch-namespace confinement (on by default) is why an agent can't
+	// rewrite main; Clamp forces it false by default, so grade it too.
 	if spec.GitPushAnyBranch {
 		add("git_push_any_branch", "true", RiskHigh,
 			"Branch-namespace confinement is OFF: this run's brokered pushes may update ANY branch the granted "+
@@ -184,20 +179,19 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 				"The grant's own GitHub ruleset is what still bounds which repos it can touch.", "2")
 	}
 
-	// push_rules needs the git BROKER to read the pushed pack; the SSH
-	// transport has no broker seam, so push_rules set while ssh_key is the
-	// only git-capable grant is legal but unenforceable — a warning, not a
-	// launch refusal. IsSet(), not a bare != nil: Clamp can hand back an
-	// all-zero "push_rules":{} that carries no actual rule.
+	// push_rules needs the git broker to read the pushed pack; SSH has no
+	// broker seam, so push_rules with ssh_key as the only git-capable grant is
+	// legal but unenforceable — a warning, not a refusal. IsSet(), not != nil,
+	// since Clamp can hand back an all-zero push_rules with no actual rule.
 	if spec.PushRules.IsSet() && pushRulesUnenforceable(spec.EligibleGrants) {
 		add("push_rules", "set", RiskMedium,
 			"push_rules is set, but this run's only git-capable grant is ssh_key — the SSH transport has no broker seam, so these content rules cannot be enforced.", "2")
 	}
 
-	// On a git_pat forge other than github.com the broker cannot read what a
-	// push left unchanged (forge reader is GitHub-only), so a deny_paths entry
-	// reaching a path the repo already holds refuses EVERY push. Legal and
-	// fail-closed, so a warning before the first push rather than from it.
+	// On a git_pat forge other than github.com the broker's forge reader
+	// (GitHub-only) can't see what a push left unchanged, so a deny_paths
+	// entry reaching an already-held path refuses every push. Legal and
+	// fail-closed, hence a warning up front.
 	if spec.PushRules != nil && len(spec.PushRules.DenyPaths) > 0 {
 		for _, h := range nonGitHubPATHosts(spec.EligibleGrants) {
 			add("push_rules", "deny_paths on "+h, RiskMedium,
@@ -207,9 +201,9 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
-	// Idle reaping. The reaper skips on <= 0 (internal/lifecycle: "0 DISABLED"),
-	// so an omitted field — which the store COALESCEs to 0 — is just as unbounded
-	// as an explicit -1 and must grade the same. Only the rationale differs.
+	// Idle reaping: the reaper skips on <= 0, so an omitted field (store
+	// coalesces to 0) is as unbounded as an explicit -1 and grades the same;
+	// only the rationale differs.
 	if spec.AutoStopAfterSec <= 0 {
 		val := fmt.Sprintf("%d", spec.AutoStopAfterSec)
 		switch {
@@ -275,10 +269,10 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 	}
 }
 
-// pushRulesUnenforceable reports whether ssh_key is the ONLY git-capable grant
-// among the ones eligible — its transport bypasses the broker entirely. A run
-// with neither git_pat nor github_token eligible grades no warning here: that
-// is "no git grant at all", a different situation.
+// pushRulesUnenforceable reports whether ssh_key is the only git-capable grant
+// eligible — its transport bypasses the broker entirely. A run with neither
+// git_pat nor github_token eligible grades no warning here: that's "no git
+// grant at all", a different situation.
 func pushRulesUnenforceable(grants []types.GrantSpec) bool {
 	sawSSH, sawBrokered := false, false
 	for _, g := range grants {
@@ -353,12 +347,12 @@ func grantIsWriteCapable(g types.GrantSpec) bool {
 	}
 }
 
-// RequiredConfinementFloor returns the DETERMINISTIC minimum confinement class
-// a run's BLAST RADIUS requires, independent of what the model or operator
-// picked: a run holding a write-capable grant or an api_key to a non-baseline
-// host is a high-value compromise target and must run in CC3 so an escape is
-// contained. Returns "" when no floor applies. Enforced both in the composer
-// proposal and (defense-in-depth) at run.create.
+// RequiredConfinementFloor returns the deterministic minimum confinement class
+// a run's blast radius requires, independent of model/operator choice:
+// SECURITY: a run holding a write-capable grant or an api_key to a
+// non-baseline host is a high-value target and must run in CC3 so an escape
+// is contained. "" means no floor. Enforced both at composer proposal and
+// (defense-in-depth) at run.create.
 func RequiredConfinementFloor(spec types.RunPolicySpec) types.ConfinementClass {
 	for _, g := range spec.EligibleGrants {
 		if grantIsWriteCapable(g) || apiKeyToNonBaselineHost(g) {

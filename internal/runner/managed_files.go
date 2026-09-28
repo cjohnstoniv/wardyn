@@ -10,13 +10,12 @@ import (
 	"sort"
 )
 
-// ManagedFile is one operator-authored file placed inside the sandbox that the
-// AGENT CANNOT MODIFY: a driver delivers it root-owned, in a directory the
-// agent can neither write nor replace, before the agent's main process can
-// run — never materialised from inside the image (agent runs as uid 1000) or
-// via a post-start root exec (races the main process). Content is never
-// serialised anywhere; on Kubernetes it travels in the per-run Secret like
-// SecretEnv.
+// ManagedFile is one operator-authored file placed inside the sandbox that
+// the AGENT CANNOT MODIFY. SECURITY: a driver delivers it root-owned, in a
+// directory the agent can neither write nor replace, before the agent's main
+// process can run — never materialised from inside the image (agent runs as
+// uid 1000) or via a post-start root exec (races the main process). On
+// Kubernetes it travels in the per-run Secret like SecretEnv.
 type ManagedFile struct {
 	// Path is the absolute in-sandbox path, already cleaned. See
 	// ValidateManagedFiles for the shape both substrates can honour.
@@ -34,13 +33,12 @@ type ManagedFile struct {
 // with: readable by the agent, writable only by root.
 const DefaultManagedFileMode fs.FileMode = 0o644
 
-// ManagedFileDir is the one directory a managed file may be delivered into
-// (every managed file sits directly in it) — where Claude Code reads its
-// managed settings on Linux, the only consumer. It is an allowlist rather than
-// a path-shape rule because the ceiling depends on where the file is: /etc is
-// root-owned and unwritable by the agent, nothing covers or loosens it after
-// delivery, and no Wardyn image ships it. A second location joins only once
-// it has been checked against each of those.
+// ManagedFileDir is the one directory a managed file may be delivered into —
+// where Claude Code reads its managed settings on Linux, the only consumer.
+// It is an allowlist, not a path-shape rule, because the ceiling depends on
+// where the file is: /etc is root-owned and unwritable by the agent, nothing
+// loosens it after delivery, and no Wardyn image ships it. A second location
+// joins only once checked against each of those.
 const ManagedFileDir = "/etc/claude-code"
 
 // ManagedFilesMaxBytes caps the total content one spec may carry. The binding

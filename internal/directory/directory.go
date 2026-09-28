@@ -4,14 +4,14 @@
 // Package directory turns what an admin TYPES into what Wardyn STORES.
 //
 // Every "who" field in the product is a claim value, rarely the thing a
-// human knows (an Entra group's `groups` claim carries its OBJECT GUID, not
+// human knows (an Entra group's `groups` claim carries its object GUID, not
 // its name). Hand-typing those is a silent-mismatch landmine: a
 // plausible-looking wrong string binds nothing and fails open.
 //
 // So: Entry.ClaimValue IS the contract — the exact string the claim will
-// carry, and what a UI inserts on selection. Entry.DisplayName is what a UI
-// RENDERS. The two are deliberately different fields, since for groups they
-// are deliberately different strings.
+// carry, and what a UI inserts on selection; Entry.DisplayName is what a UI
+// renders. Deliberately different fields, since for groups they are
+// deliberately different strings.
 //
 // Provider-abstracted on purpose: one interface, Entra ships first,
 // Okta/Google are later connectors behind the same contract. The whole
@@ -46,16 +46,16 @@ func (k Kind) Valid() bool {
 }
 
 const (
-	// MaxResults is ONE GLOBAL cap across every kind in a single search, not a
-	// per-kind quota: in KindAny the three per-kind result sets are
-	// concatenated in anyKindOrder and the first MaxResults survive, so the
-	// outcome is deterministic ("App Roles first, then groups, then users").
-	// Every search re-trims to this cap on the way out: $top is a request to
+	// MaxResults is ONE GLOBAL cap across every kind in a search, not a
+	// per-kind quota: in KindAny the three per-kind result sets concatenate in
+	// anyKindOrder and the first MaxResults survive, so the outcome is
+	// deterministic ("App Roles first, then groups, then users"). Every
+	// search re-trims to this cap on the way out, since $top is a request to
 	// the upstream, not a guarantee from it.
 	MaxResults = 20
 
-	// MinQueryLen is the shortest query a connector will send upstream. Below
-	// it a search returns empty WITHOUT a round trip, since one or two
+	// MinQueryLen is the shortest query a connector will send upstream: below
+	// it a search returns empty without a round trip, since one or two
 	// characters match most of a directory. The connector-side backstop for
 	// the same floor the HTTP layer enforces.
 	MinQueryLen = 2
@@ -71,8 +71,7 @@ type Entry struct {
 	ClaimValue string `json:"claim_value"`
 	// Kind is which of the three sources produced this entry.
 	Kind Kind `json:"kind"`
-	// Detail is a secondary disambiguator for the row. Presentation only —
-	// never the stored value.
+	// Detail is a secondary, presentation-only disambiguator, never stored.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -115,12 +114,12 @@ func (e *ProviderError) Unwrap() error { return e.Err }
 // are the largest and would otherwise crowd out the other two under the cap.
 var anyKindOrder = [...]Kind{KindAppRole, KindGroup, KindUser}
 
-// searchAny implements the KindAny merge ONCE, here, so every connector gets
-// the same order and the same single cap. per is the connector's
-// single-kind query. An error from any per-kind query aborts the whole
-// search (a partial result silently missing a whole class of subjects is
-// worse than an honest failure) — except Entra's App Role lookup, which
-// degrades to (nil, nil) when the tenant lacks the permission for it.
+// searchAny implements the KindAny merge once, here, so every connector gets
+// the same order and the same single cap. per is the connector's single-kind
+// query. An error from any per-kind query aborts the whole search — a
+// partial result silently missing a whole class of subjects is worse than an
+// honest failure — except Entra's App Role lookup, which degrades to
+// (nil, nil) when the tenant lacks the permission for it.
 func searchAny(ctx context.Context, q string, per func(context.Context, string, Kind) ([]Entry, error)) ([]Entry, error) {
 	out := make([]Entry, 0, MaxResults)
 	for _, k := range anyKindOrder {

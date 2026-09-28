@@ -15,11 +15,11 @@ import (
 // outside this repo too. See db.AuditChainLockKey.
 const lockAuditChainSQL = `SELECT pg_advisory_xact_lock($1)`
 
-// AuditChainPageSize is how many rows one page of the verify sweep reads. It
-// bounds the sweep's memory: a page, never the table. Large enough that the
-// per-page round trip is noise against re-hashing a thousand rows, small enough
-// that the page itself is a few hundred kilobytes. A var only so the parity test
-// can shrink it and actually cross page boundaries.
+// AuditChainPageSize is how many rows one page of the verify sweep reads —
+// bounds memory to a page, never the table. Large enough that the per-page
+// round trip is noise against re-hashing a thousand rows, small enough to
+// stay a few hundred kilobytes. A var only so the parity test can shrink it
+// and cross page boundaries.
 var AuditChainPageSize int32 = 1000
 
 // AuditChainStatus is one verification sweep's verdict (migration 0047). OK is
@@ -33,8 +33,8 @@ type AuditChainStatus struct {
 	// Checked is how many chained rows the sweep walked.
 	Checked int64 `json:"checked"`
 	// Legacy is how many rows carry NO hash and sit BELOW the first chained
-	// row (the pre-migration-0047 prefix) — expected, never a failure. A
-	// hashless row ABOVE that prefix is a break instead (auditChainWalk.step).
+	// row (pre-migration-0047) — expected, not a failure. A hashless row
+	// ABOVE that prefix is a break instead (auditChainWalk.step).
 	Legacy int64 `json:"legacy"`
 	// FirstSeq/HeadSeq bound the chained range (both 0 when Checked is 0).
 	FirstSeq int64 `json:"first_seq"`
@@ -52,9 +52,9 @@ type AuditChainStatus struct {
 // chain, and the handler answers 501 rather than reporting a chain it never
 // wrote as clean.
 //
-// Operator-invoked, never run at boot (it's O(whole audit log)). Not a
-// substitute for comparing HeadHash against an off-box copy: an actor who can
-// rewrite one row can usually rewrite and re-chain the tail, which then
+// Operator-invoked, never run at boot (O(whole audit log)). Not a
+// substitute for comparing HeadHash against an off-box copy: an actor who
+// can rewrite one row can usually rewrite and re-chain the tail, which then
 // verifies clean. See docs/OPERATIONS.md.
 type AuditChainVerifier interface {
 	VerifyAuditChain(ctx context.Context) (AuditChainStatus, error)
@@ -137,22 +137,23 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 	w.st.OK, w.st.BrokenSeq, w.st.Reason = false, seq, reason
 }
 
-// VerifyAuditChain walks the audit_events hash chain oldest-first, re-hashing
-// every row with migration 0047's audit_row_hash — the SAME function the
-// insert trigger uses, so there is no second implementation to drift.
+// VerifyAuditChain walks the audit_events hash chain oldest-first,
+// re-hashing every row with migration 0047's audit_row_hash — the SAME
+// function the insert trigger uses, so there's no second implementation to
+// drift.
 //
 // The sweep is paged as a correctness property, not just a cost one: an
-// unbounded `ORDER BY seq` can plan as Seq Scan -> Sort, which buffers the
-// entire table before returning row one, making the tamper-investigation
-// endpoint the one that gets slowest over time. Keyset paging (`seq > $1
-// ORDER BY seq LIMIT n`) is an index scan with a bound instead, so memory is
-// one page and the early break genuinely stops the work.
+// unbounded `ORDER BY seq` can plan as Seq Scan -> Sort, buffering the whole
+// table before returning row one — the tamper-investigation endpoint would
+// get slowest over time. Keyset paging (`seq > $1 ORDER BY seq LIMIT n`) is
+// an index scan with a bound instead, so memory is one page and an early
+// break genuinely stops the work.
 //
-// Paging does not verify less: since migration 0056 the trigger allocates seq
-// while holding the chain lock and releases it at commit, so seq order IS
-// commit order, and a row can never appear below a cursor the walk already
-// passed. The walk state is carried across pages by one auditChainWalk, so a
-// chain longer than a page is one continuous chain.
+// Paging does not verify less: since migration 0056 the trigger allocates
+// seq while holding the chain lock and releases it at commit, so seq order
+// IS commit order, and a row can never appear below a cursor the walk
+// already passed. Walk state is carried across pages by one auditChainWalk,
+// so a chain longer than a page is one continuous chain.
 func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	// Every row, hashless ones included, is read in seq order — rule 3 is a
 	// statement about where the hashless rows SIT, so the walk must see them

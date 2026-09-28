@@ -26,7 +26,7 @@ import (
 // product is a quiet wrong answer. Keep the two in step; they are deliberately
 // adjacent.
 //
-// Actor IS filterable (D6): for a HUMAN event it is the operator/member principal
+// Actor IS filterable: for a HUMAN event it is the operator/member principal
 // (e.g. "alice@corp.example"), so ?actor= answers "everything developer X did" —
 // the per-principal evidence a vendor/compliance question needs and that no wider
 // window yields. (An earlier note dismissed actor as filterable because for an
