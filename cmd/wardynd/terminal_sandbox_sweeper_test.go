@@ -265,7 +265,7 @@ func (l *countingLock) counts() (taken, released int) {
 }
 
 // TestTerminalSandboxSweepLockedTick_ReleasesExactlyOnceOnANormalTick is
-// R2-1's control case: a tick that completes normally takes the lock once and
+// the control case for the release pins: a tick that completes normally takes the lock once and
 // releases it exactly once.
 func TestTerminalSandboxSweepLockedTick_ReleasesExactlyOnceOnANormalTick(t *testing.T) {
 	lock := &countingLock{}
@@ -288,8 +288,8 @@ func (panicPager) SweepTerminalSandboxesPage(context.Context, store.Page) (int, 
 	panic("boom")
 }
 
-// TestTerminalSandboxSweepLockedTick_ReleasesEvenWhenThePagerPanics is R2-1's
-// pin: a panic unwinding out of the sweep must still release the lock,
+// TestTerminalSandboxSweepLockedTick_ReleasesEvenWhenThePagerPanics pins that
+// a panic unwinding out of the sweep must still release the lock,
 // because release is deferred immediately after the lock is taken, not
 // called inline after the sweep returns — the shape production's outer
 // goSafe (main.go) also recovers from, reproduced here with a plain recover
@@ -319,7 +319,7 @@ func (slowPager) SweepTerminalSandboxesPage(ctx context.Context, _ store.Page) (
 }
 
 // TestTerminalSandboxSweepLockedTick_ReturnsAndReleasesWhenTheDeadlineIsExceeded
-// is R2-2's pin: a tick whose sweep call wedges past
+// pins that a tick whose sweep call wedges past
 // terminalSandboxSweepTickTimeout still returns (bounded by that timeout, not
 // by the wedged call) and still releases the lock.
 func TestTerminalSandboxSweepLockedTick_ReturnsAndReleasesWhenTheDeadlineIsExceeded(t *testing.T) {
