@@ -839,6 +839,26 @@ const (
 	reasonModelProviderCredentialStoreUnavailable = "model_provider_credential_store_unavailable" // the secret store did not answer (transient)
 )
 
+// POST /api/v1/setup/harness-login (harnesscred_launch.go): the managed
+// container sign-in launch door.
+const (
+	reasonHarnessLoginNoSecretStore       = "harness_login_no_secret_store"      // this deployment configures no secret store
+	reasonHarnessLoginProviderUnsupported = "harness_login_provider_unsupported" // this provider does not support container login
+	reasonHarnessLoginPreviewBlocked      = "harness_login_preview_blocked"      // a previewing admin cannot capture into the previewed identity
+	reasonHarnessLoginNoStartURL          = "harness_login_no_start_url"         // AWS SSO needs an access-portal URL Wardyn has no stored copy of
+	reasonHarnessLoginBadStartURL         = "harness_login_bad_start_url"        // the supplied start URL fails validation
+	reasonHarnessLoginNoRegion            = "harness_login_no_region"            // no AWS SSO region is configured
+	// reasonHarnessLoginRosterUnavailable is authorizeHarnessLogin's own
+	// no-roster-read arm (harnesscred.go), shared with
+	// handleHarnessDisconnect's identical roster-read failure.
+	reasonHarnessLoginRosterUnavailable = "harness_login_roster_unavailable"
+	reasonHarnessLoginLegacyDoorClosed  = "harness_login_legacy_door_closed" // a model-providers block exists; sign in through its own door instead
+	// PUT /api/v1/setup/harness-credential/{provider}: the operator-pasted
+	// setup-token door.
+	reasonHarnessCredentialNoSecretStore   = "harness_credential_no_secret_store"
+	reasonHarnessCredentialUnknownProvider = "harness_credential_unknown_provider"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

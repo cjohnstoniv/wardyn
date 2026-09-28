@@ -80,12 +80,12 @@ const harnessLoginInternalError = "This sign-in sandbox hit an internal error wh
 // access at all.
 func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Secrets == nil {
-		writeError(w, http.StatusServiceUnavailable, "no secret store configured; managed harness login unavailable")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessLoginNoSecretStore, "no secret store configured; managed harness login unavailable")
 		return
 	}
 	var req harnessLoginRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
 		return
 	}
 	provider := strings.TrimSpace(req.Provider)
@@ -94,7 +94,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	hl, ok := harnessLoginByProvider(provider)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "provider does not support container login in this version: "+provider)
+		writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginProviderUnsupported, "provider does not support container login in this version: "+provider)
 		return
 	}
 	row, scope, allowed := s.authorizeHarnessLogin(w, r, provider)
@@ -111,7 +111,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	// hides their credential, it does not hand them a second identity — so this
 	// is the one door the preview has to close rather than let fail closed.
 	if previewHidesOwnCredential(r.Context()) {
-		writeError(w, http.StatusConflict, userViewPreviewSignInRefusal)
+		writeErrorReason(w, http.StatusConflict, reasonHarnessLoginPreviewBlocked, userViewPreviewSignInRefusal)
 		return
 	}
 	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
@@ -133,16 +133,16 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if hl.regionalSSOEgress {
 		if startURL == "" {
-			writeError(w, http.StatusBadRequest,
+			writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginNoStartURL,
 				"aws sso login needs your organization's AWS access portal URL (e.g. https://my-org.awsapps.com/start); Wardyn has no stored copy of it")
 			return
 		}
 		if verr := validateSSOStartURL(startURL); verr != nil {
-			writeError(w, http.StatusBadRequest, verr.Error())
+			writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginBadStartURL, verr.Error())
 			return
 		}
 		if cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) == "" {
-			writeError(w, http.StatusBadRequest,
+			writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginNoRegion,
 				"no AWS SSO region is configured; set -bedrock-aws-sso-region (WARDYN_BEDROCK_AWS_SSO_REGION) or -bedrock-region and restart wardynd")
 			return
 		}
@@ -166,7 +166,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, errSignInBusy) {
-			writeError(w, http.StatusServiceUnavailable, signInBusyRefusal)
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal)
 			return
 		}
 		writeServerError(w, r, "launch login sandbox", err)
