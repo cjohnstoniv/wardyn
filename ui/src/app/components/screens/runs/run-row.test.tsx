@@ -20,7 +20,10 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { reviveRun: (...a: unknown[]) => reviveRunMock(...a) },
 }));
 const toastErrorMock = vi.fn();
-vi.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(...a) } }));
+const toastInfoMock = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { error: (...a: unknown[]) => toastErrorMock(...a), info: (...a: unknown[]) => toastInfoMock(...a) },
+}));
 
 function renderRow(run: AgentRun) {
   return render(
@@ -58,6 +61,27 @@ describe("RunRow — Revive (F1)", () => {
 
   it("by=owner (not you): no action button at all", () => {
     const run = makeRun({ attention: { kind: "lost", by: "owner", pending: 0 } });
+    renderRow(run);
+    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+  });
+
+  // F12 (PR #1317 round-2 review): the run page's own Revive already reports
+  // newly-blocked hosts — the row's Revive is the identical call and owed
+  // the same toast, not a silent success.
+  it("F12: reports newly-blocked hosts on a successful revive", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: ["evil.example"], proxy_release: "r1" });
+    const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
+    renderRow(run);
+    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 1 host now blocked."));
+  });
+
+  // F18 (PR #1317 round-2 review): no k8s revive in 0.8 — the run page's own
+  // lifetime banner already treats a k8s lost run as not revivable, so the
+  // row must not dangle a button the run page itself won't honour.
+  it("F18: a k8s lost row I own offers no Revive at all", () => {
+    const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 }, runner_target: "k8s" });
     renderRow(run);
     expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
   });

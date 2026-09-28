@@ -109,18 +109,23 @@ export const ENDED_TITLE = "This run ended at its end time";
 export function endedBody(dateText: string): string {
   return `It has no network. Its files are kept until ${dateText}. Extend to revive it.`;
 }
-// F4 (PR #1317 review): the grace deadline is lost_at + Config.EndedRunGrace,
-// and EndedRunGrace is server-only config, never on the wire (filed as
-// #1320). Rendering endedBody(lost_at) would print the moment the run
-// ENDED, not the moment its files go away — a wrong, not just a missing,
-// date. This is the interim wording until #1320 adds the real one.
-export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it before its files are cleaned up.";
+// F4/R2-1 (PR #1317 review, rounds 1-2): the grace deadline is lost_at +
+// Config.EndedRunGrace, and EndedRunGrace is server-only config, never on the
+// wire (filed as #1320). Rendering endedBody(lost_at) would print the moment
+// the run ENDED, not the moment its files go away — a wrong, not just a
+// missing, date. R2-1 rejected the first interim wording ("...before its
+// files are cleaned up") as unapproved copy nobody drew — this renders only
+// the two approved sentences that need no date at all, until #1320 lands.
+export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it.";
+// R2-2 (PR #1317 round-2 review, F9 rejected): a task run's own agent ran
+// once, at dispatch — reviveEligible always refuses one ("task run's agent
+// cannot be started again", run_revive.go), and run_end_wait.go is explicit
+// that extending an ended run changes nothing observable (no network, no
+// revive, no extra file time — the grace counts from lost_at, never from a
+// later PATCH). "Extend to revive it" would be false for this run, so this
+// sentence stops at the one fact that's actually true.
+export const ENDED_BODY_TASK = "It has no network.";
 export const ENDED_EXTEND_AND_REVIVE = "Extend and revive";
-// F9 (PR #1317 review): a task run's own agent ran once, at dispatch — the
-// server always refuses reviveEligible's "task run's agent cannot be started
-// again" for an ended, non-interactive run (run_revive.go). Only Extend
-// (never revive) is offered for one.
-export const ENDED_EXTEND_ONLY = "Extend";
 export const END_RUN = "End run";
 
 // ---- Lost and revive (design.md §4.1, mock "Paused, and lost then revived") ----

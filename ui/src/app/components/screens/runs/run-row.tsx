@@ -27,7 +27,7 @@ import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation } from "./runs-model";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
-import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
+import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
 
 function formatDuration(startIso: string, endIso: string): string {
   const mins = Math.max(0, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000));
@@ -72,7 +72,11 @@ export function RunRow({ run }: { run: AgentRun }) {
     e.stopPropagation();
     setReviving(true);
     try {
-      await runsApi.reviveRun(run.id);
+      // F12 (PR #1317 round-2 review): the run page's own revive already
+      // reports newly-blocked hosts (RL.revivePolicy) — the row's revive is
+      // the same call and owes the same toast, not a silent success.
+      const res = await runsApi.reviveRun(run.id);
+      if (res.denied_added.length > 0) toast.info(revivePolicy(res.denied_added.length));
     } catch (err) {
       toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
     } finally {

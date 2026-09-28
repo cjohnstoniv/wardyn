@@ -106,6 +106,19 @@ describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () =
     const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
     expect(rowPresentation(r, true).needsYou).toBe(false);
   });
+
+  // F18 (PR #1317 round-2 review): no k8s revive in 0.8 (L6) — the run
+  // page's own lifetime banner already treats a k8s lost run as not
+  // revivable, so the row must not offer a button the run page won't honour.
+  it("by=you on a k8s run: still Needs you, but no action — needsYou survives without a button", () => {
+    const r = run({ attention: { kind: "lost", by: "you", pending: 0 }, runner_target: "k8s" });
+    expect(rowPresentation(r, false)).toMatchObject({
+      hue: "amber",
+      word: "Sandbox stopped",
+      action: null,
+      needsYou: true,
+    });
+  });
 });
 
 describe("rowPresentation — a lease-ended run", () => {

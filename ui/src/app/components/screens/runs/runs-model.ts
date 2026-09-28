@@ -102,7 +102,16 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
         // owner or a super admin), matching the server's ownsRunOrSuperAdmin
         // gate on POST /runs/{id}/revive; `by=owner` still lands in Needs you
         // with no action, since nobody else can act on it.
-        return { hue: "amber", word: RUNS_ROW_WORD.SANDBOX_STOPPED, action: you ? "revive" : null, needsYou: you };
+        // F18 (PR #1317 round-2 review): no k8s revive in 0.8 (L6) — the run
+        // page's own lifetime banner already treats a k8s lost run as not
+        // revivable, so the row must not offer a button the run page itself
+        // won't honour.
+        return {
+          hue: "amber",
+          word: RUNS_ROW_WORD.SANDBOX_STOPPED,
+          action: you && run.runner_target !== "k8s" ? "revive" : null,
+          needsYou: you,
+        };
     }
   }
   switch (run.state) {

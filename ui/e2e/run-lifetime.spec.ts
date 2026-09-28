@@ -175,7 +175,11 @@ test.describe("Run lifetime — ended (the lease ran out)", () => {
     expect(Date.parse(patchedEndsAt)).toBeGreaterThan(Date.now());
   });
 
-  test("F9: a task (non-interactive) run offers Extend alone, and never calls revive", async ({ page }) => {
+  // R2-2 (PR #1317 round-2 review, F9 REJECTED): extending an ended task run
+  // changes nothing a person can observe (run_revive.go, run_end_wait.go) —
+  // End run is the only real action, and the body drops the "Extend to
+  // revive it" claim, which is false for a run that can never be revived.
+  test("R2-2: a task (non-interactive) run offers End run ONLY — no Extend, no revive sentence", async ({ page }) => {
     await gotoConsole(page);
     const id = await seedRun(page, "run-lifetime e2e ended-task " + randomUUID().slice(0, 8));
     await stubRunDetail(page, id, {
@@ -183,28 +187,14 @@ test.describe("Run lifetime — ended (the lease ran out)", () => {
       lost_at: new Date(Date.now() - 3600_000).toISOString(),
       interactive: false,
     });
-    let revived = false;
-    await page.route(`**/api/v1/runs/${id}/revive`, async (route) => {
-      revived = true;
-      await route.fulfill({ json: { run_id: id, denied_added: [], proxy_release: "r1" } });
-    });
-    // stubRunDetail's own GET intercept also catches page-context fetches
-    // (Playwright routes every request from the page, including
-    // consoleAPI's), so the PATCH itself — not a GET read afterwards — is
-    // what proves the real request.
-    let patchedEndsAt = "";
-    await page.route(`**/api/v1/runs/${id}`, async (route) => {
-      if (route.request().method() !== "PATCH") return route.fallback();
-      patchedEndsAt = JSON.parse(route.request().postData() ?? "{}").ends_at;
-      await route.fulfill({ json: { id, ends_at: patchedEndsAt, wait_budget_sec: 0, capped: [] } });
-    });
 
     await navToRoute(page, `/runs/${id}`);
     const banner = page.getByTestId("run-lifetime-ended");
+    await expect(banner.getByText("It has no network.")).toBeVisible();
+    await expect(banner.getByText(/Extend to revive it/)).toHaveCount(0);
     await expect(banner.getByRole("button", { name: "Extend and revive" })).toHaveCount(0);
-    await banner.getByRole("button", { name: "Extend", exact: true }).click();
-    await expect.poll(() => Date.parse(patchedEndsAt || "")).toBeGreaterThan(Date.now());
-    expect(revived).toBe(false);
+    await expect(banner.getByRole("button", { name: "Extend" })).toHaveCount(0);
+    await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
   });
 });
 

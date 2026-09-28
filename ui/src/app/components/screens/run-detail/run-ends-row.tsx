@@ -142,9 +142,15 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
               <DropdownMenuContent align="start">
                 <DropdownMenuItem onSelect={() => extendBy(DAY_MS)}>{RL.ENDS_EXTEND_1_DAY}</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => extendBy(WEEK_MS)}>{RL.ENDS_EXTEND_1_WEEK}</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => extendBy(FAR_FUTURE_MS)}>
-                  {maxDays ? RL.endsExtendAsFarAsAllowed(maxDays) : RL.ENDS_EXTEND}
-                </DropdownMenuItem>
+                {/* F12 (PR #1317 round-2 review): with no captured cap, "as
+                    far as allowed" has no ceiling to name and duplicated the
+                    trigger's own "Extend" label — 1 day/1 week already cover
+                    the uncapped case, and Change… reaches any further date. */}
+                {maxDays && (
+                  <DropdownMenuItem onSelect={() => extendBy(FAR_FUTURE_MS)}>
+                    {RL.endsExtendAsFarAsAllowed(maxDays)}
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )

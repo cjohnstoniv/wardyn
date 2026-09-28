@@ -120,6 +120,20 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
   });
 });
 
+// F18 (PR #1317 round-2 review): no k8s revive in 0.8 (L6) — Revive/Extend
+// stay Docker-only, but End run must still work regardless of substrate.
+describe("RunLifetimeBanner — lost on k8s (F18)", () => {
+  it("shows the k8s line and End run, but never Revive or Extend", () => {
+    const run = detail({ lost_reason: "reboot", runner_target: "k8s" });
+    renderBanner(run);
+    expect(screen.getByText("This run's sandbox stopped")).toBeInTheDocument();
+    expect(screen.getByText("The node it ran on restarted. Files on your drive are kept; the rest is gone.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+});
+
 describe("RunLifetimeBanner — lost (outage): F5, one sentence, no contradiction", () => {
   it("shows ONLY LOST_OUTAGE — never the reboot body or the harness-continuity line", () => {
     const run = detail({ lost_reason: "outage", agent: "claude-code", ends_at: new Date(NOW + 3600_000).toISOString() });
@@ -140,11 +154,13 @@ describe("RunLifetimeBanner — lost (outage): F5, one sentence, no contradictio
 });
 
 describe("RunLifetimeBanner — a lease-ended run", () => {
-  it("ENDED_TITLE, NO date in the body (F4 — the grace deadline isn't on the wire, #1320), never the lost copy", () => {
+  it("ENDED_TITLE, ONLY the approved no-date sentence (R2-1 — #1320 gates the real date), never the lost copy", () => {
     const run = detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true });
     renderBanner(run);
     expect(screen.getByText("This run ended at its end time")).toBeInTheDocument();
-    expect(screen.getByText("It has no network. Extend to revive it before its files are cleaned up.")).toBeInTheDocument();
+    // R2-1: "before its files are cleaned up" was unapproved copy nobody
+    // drew — only the two sentences the owner actually approved render.
+    expect(screen.getByText("It has no network. Extend to revive it.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend and revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
     expect(screen.queryByText("This run's sandbox stopped")).not.toBeInTheDocument();
@@ -169,19 +185,21 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(Date.parse(patchBody.endsAt)).toBeGreaterThan(Date.now());
   });
 
-  // F9 (PR #1317 review): reviveEligible always refuses a task run's revive
-  // ("task run's agent cannot be started again") — offering "Extend and
-  // revive" would PATCH successfully and then 409 on the pointless revive.
-  it("F9: a non-interactive (task) run offers Extend alone, never Extend and revive", async () => {
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
+  // R2-2 (PR #1317 round-2 review, F9 REJECTED): reviveEligible always
+  // refuses a task run's revive, AND run_end_wait.go is explicit that
+  // extending an already-ended run changes nothing observable — no network,
+  // no revive, no extra file time (the grace counts from lost_at, never from
+  // a later PATCH). Round 1's "Extend alone" fix was a button that does
+  // nothing; the only real action left is End run.
+  it("R2-2: a non-interactive (task) run offers End run ONLY — no Extend, no revive sentence", () => {
     const run = detail({ lost_reason: "ended", interactive: false });
     renderBanner(run);
+    expect(screen.getByText("This run ended at its end time")).toBeInTheDocument();
+    expect(screen.getByText("It has no network.")).toBeInTheDocument();
+    expect(screen.queryByText(/Extend to revive it/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend and revive" })).not.toBeInTheDocument();
-    const extendButton = screen.getByRole("button", { name: "Extend" });
-    expect(extendButton).toBeInTheDocument();
-    await user.click(extendButton);
-    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalled());
-    expect(reviveRunMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
   });
 });
 
@@ -251,6 +269,32 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
+  });
+
+  // R2-3 (PR #1317 round-2 review): Change end… used to show for ANY
+  // canAct, skipping the captured user_changes_limits gate run-ends-row.tsx's
+  // own Change… honours — the server refuses an earlier end or No end
+  // without it (run_end_wait.go), so a locked member got a dialog whose only
+  // live options always 403.
+  it("R2-3: a locked member (no user_changes_limits) never sees Change end…", () => {
+    const run = detail({
+      ends_at: new Date(NOW + 9 * 60_000).toISOString(),
+      run_limits: { user_changes_limits: false },
+    });
+    renderBanner(run, [], () => {}, { operator: false, principal: OWNER });
+    expect(screen.getByText("This run ends in 10 minutes")).toBeInTheDocument();
+    // Extend is still offered — extending within the max is always allowed.
+    expect(screen.getByRole("button", { name: "Extend 1 day" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change end…" })).not.toBeInTheDocument();
+  });
+
+  it("R2-3: a member the gate DOES admit sees Change end…", () => {
+    const run = detail({
+      ends_at: new Date(NOW + 9 * 60_000).toISOString(),
+      run_limits: { user_changes_limits: true },
+    });
+    renderBanner(run, [], () => {}, { operator: false, principal: OWNER });
+    expect(screen.getByRole("button", { name: "Change end…" })).toBeInTheDocument();
   });
 });
 

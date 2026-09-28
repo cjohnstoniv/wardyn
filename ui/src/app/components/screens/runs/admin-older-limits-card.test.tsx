@@ -83,19 +83,67 @@ describe("AdminOlderLimitsCard", () => {
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
   });
 
-  it("a lost_again result names it, rather than reading as a plain success", async () => {
+  // R2-4 (PR #1317 round-2 review): a real restart rewrites the run's own
+  // proxy_release (store_run_revive.go), so the very NEXT listing this same
+  // reload asks for comes back with nothing outside the window — the result
+  // must survive that, not vanish the instant the card re-lists.
+  it("R2-4: keeps the restart result visible after the refetch comes back with nothing outside", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getAdminProxyWindowMock
+      .mockResolvedValueOnce({
+        release: "0.8.0",
+        window: ["0.8"],
+        outside: [{ run_id: "r1", created_by: "u1", state: "RUNNING", proxy_release: "0.6" }],
+      })
+      .mockResolvedValueOnce({ release: "0.8.0", window: ["0.8"], outside: [] });
+    restartAdminRunsMock.mockResolvedValue({ results: [{ run_id: "r1", ok: true }] });
+    renderCard();
+    await screen.findByText("Older limits · 1");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
+    // The chip and button are gone (nothing left outside), but the result of
+    // what just happened is still on screen.
+    expect(screen.queryByText(/Older limits/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restart with current limits" })).not.toBeInTheDocument();
+    expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
+  });
+
+  // R2-4, also: reviveBulkMax (run_revive.go) 400s a single request over 100
+  // ids — a fleet with more out-of-window runs than that must go in batches.
+  it("R2-4: batches a restart above the server's 100-id limit", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const ids = Array.from({ length: 150 }, (_, i) => `r${i}`);
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: ids.map((id) => ({ run_id: id, created_by: "u1", state: "RUNNING", proxy_release: "0.6" })),
+    });
+    restartAdminRunsMock.mockImplementation(async (batch: string[]) => ({
+      results: batch.map((run_id) => ({ run_id, ok: true })),
+    }));
+    renderCard();
+    await screen.findByText("Older limits · 150");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(2));
+    expect(restartAdminRunsMock.mock.calls[0][0]).toHaveLength(100);
+    expect(restartAdminRunsMock.mock.calls[1][0]).toHaveLength(50);
+  });
+
+  it("a failed result shows the server's OWN refusal text, with no invented 'still lost' gloss on it", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const serverError = "run was lost to a reboot and its agent is stopped; revive it from the run's page";
     getAdminProxyWindowMock.mockResolvedValue({
       release: "0.8.0",
       window: ["0.8"],
       outside: [{ run_id: "r1", created_by: "u1", state: "RUNNING", lost_reason: "reboot", proxy_release: "0.6" }],
     });
     restartAdminRunsMock.mockResolvedValue({
-      results: [{ run_id: "r1", ok: false, error: "run was lost to a reboot and its agent is stopped; revive it from the run's page", lost_again: true }],
+      results: [{ run_id: "r1", ok: false, error: serverError, lost_again: true }],
     });
     renderCard();
     await screen.findByText("Older limits · 1");
     await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
-    expect(await screen.findByText(/still lost/)).toBeInTheDocument();
+    expect(await screen.findByText(new RegExp(serverError))).toBeInTheDocument();
+    expect(screen.queryByText(/still lost/)).not.toBeInTheDocument();
   });
 });

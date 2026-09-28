@@ -60,6 +60,14 @@ export function RunLifetimeBanner({
   // server (run_revive.go, run_pause.go, run_end_wait.go) — a security admin
   // looking at a foreign run must not be offered a button that always 403s.
   const canAct = operator || run.created_by === principal;
+  // R2-3 (PR #1317 round-2 review): the SAME formula run-ends-row.tsx's own
+  // Change…/Set an end… gate uses — Change end… (and its dialog's No end
+  // option) needs the captured user_changes_limits gate too, not just
+  // ownership; the server refuses an earlier end or No end without it
+  // (run_end_wait.go), regardless of who is asking.
+  const limits = run.run_limits;
+  const mayChange = canAct && (operator || !!limits?.user_changes_limits);
+  const allowNoEnd = canAct && (operator || !!limits?.allow_no_end);
 
   const revive = async () => {
     setAction("revive");
@@ -158,14 +166,21 @@ export function RunLifetimeBanner({
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">{isClaudeCode(run.agent) ? RL.LOST_BODY_CLAUDE : RL.LOST_BODY_OTHER}</p>
           )}
-          {canAct && !k8s && (
+          {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => void revive()} disabled={busy}>
-                {action === "revive" ? RL.REVIVING : RL.REVIVE}
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
-                {RL.ENDS_EXTEND}
-              </Button>
+              {/* F18 (PR #1317 round-2 review): no revive on k8s in 0.8 (L6) —
+                  Revive/Extend stay Docker-only, but the owner can still End
+                  the run either way. */}
+              {!k8s && (
+                <>
+                  <Button size="sm" onClick={() => void revive()} disabled={busy}>
+                    {action === "revive" ? RL.REVIVING : RL.REVIVE}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
+                    {RL.ENDS_EXTEND}
+                  </Button>
+                </>
+              )}
               <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
                 {RL.END_RUN}
               </Button>
@@ -177,22 +192,26 @@ export function RunLifetimeBanner({
 
     // ---- Ended: the lease ran out; kept for the grace, Extend + revive or End ----
     if (run.lost_reason === "ended") {
-      // F9 (PR #1317 review): a task (non-interactive) run's agent ran once at
-      // dispatch — reviveEligible always refuses "task run's agent cannot be
-      // started again" for one, so Extend-and-revive would PATCH successfully
-      // and then 409 on the revive half. Extend alone (no revive attempt) is
-      // offered instead.
+      // R2-2 (PR #1317 round-2 review, F9 rejected): a task (non-interactive)
+      // run's agent ran once at dispatch — reviveEligible always refuses one
+      // ("task run's agent cannot be started again", run_revive.go), and
+      // run_end_wait.go is explicit that extending an already-ended run
+      // changes nothing observable (no network, no revive, no extra file
+      // time — the grace is counted from lost_at, not from a later PATCH).
+      // Offering Extend here would be a button that does nothing; End run is
+      // the only real action left.
       return (
-        <Banner data-testid="run-lifetime-ended" tone="plain" title={RL.ENDED_TITLE} body={RL.ENDED_BODY_NO_DATE}>
+        <Banner
+          data-testid="run-lifetime-ended"
+          tone="plain"
+          title={RL.ENDED_TITLE}
+          body={run.interactive ? RL.ENDED_BODY_NO_DATE : RL.ENDED_BODY_TASK}
+        >
           {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">
-              {run.interactive ? (
+              {run.interactive && (
                 <Button size="sm" onClick={() => void extendAndRevive()} disabled={busy}>
                   {RL.ENDED_EXTEND_AND_REVIVE}
-                </Button>
-              ) : (
-                <Button size="sm" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
-                  {RL.ENDED_EXTEND_ONLY}
                 </Button>
               )}
               <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
@@ -250,16 +269,19 @@ export function RunLifetimeBanner({
         <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={run.ends_at ? RL.warnBody(weekdayClock(run.ends_at)) : undefined}>
           <div className="mt-2.5 flex flex-wrap gap-2">
             {canAct && (
-              <>
-                <Button size="sm" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
-                  {RL.WARN_EXTEND_1_DAY}
-                </Button>
-                {/* M1 (PR #1317 review): shares run-ends-row.tsx's own Change…
-                    dialog — one Change flow, never a second copy. */}
-                <Button size="sm" variant="outline" onClick={() => setChangeOpen(true)} disabled={busy}>
-                  {RL.WARN_CHANGE_END}
-                </Button>
-              </>
+              <Button size="sm" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
+                {RL.WARN_EXTEND_1_DAY}
+              </Button>
+            )}
+            {/* R2-3 (PR #1317 round-2 review): Change end… needs the SAME
+                user_changes_limits gate run-ends-row.tsx's own Change… does —
+                the server refuses an earlier end or No end without it
+                (run_end_wait.go), so offering the dialog to a locked member
+                would open one whose only live options always 403. */}
+            {mayChange && (
+              <Button size="sm" variant="outline" onClick={() => setChangeOpen(true)} disabled={busy}>
+                {RL.WARN_CHANGE_END}
+              </Button>
             )}
             <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
               {RL.WARN_DISMISS}
@@ -292,8 +314,8 @@ export function RunLifetimeBanner({
         onOpenChange={setChangeOpen}
         run={run}
         onChanged={onChanged}
-        maxDays={run.run_limits?.max_end_ahead_sec ? Math.ceil(run.run_limits.max_end_ahead_sec / (24 * 3600)) : undefined}
-        allowNoEnd={operator || !!run.run_limits?.allow_no_end}
+        maxDays={limits?.max_end_ahead_sec ? Math.ceil(limits.max_end_ahead_sec / (24 * 3600)) : undefined}
+        allowNoEnd={allowNoEnd}
       />
     </>
   );
