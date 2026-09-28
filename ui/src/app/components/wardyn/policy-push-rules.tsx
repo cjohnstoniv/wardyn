@@ -211,15 +211,24 @@ function withPushRules(
 // DOM node, and focus) exactly where it was, instead of every row AFTER the
 // removed one silently shifting down onto a neighbor's DOM node.
 //
-// Local `rows` state, not `paths` directly, is what gets rendered — `paths`
-// (the wire) never carries a blank or whitespace-only entry (withPushRules
-// filters those out before they reach the spec), but the operator still needs
-// a visible, editable blank row right after clicking "Add path". Every local
-// edit writes the FILTERED projection of `rows` back to the wire via
-// `onChange`, so the two stay in lockstep without ever putting a blank on the
-// wire. If `paths` changes for a reason other than this component's own
-// edits — a hand-edited JSON textarea, a template click, switching policies —
-// `rows` is reseeded from it below.
+// Local `rows` state, not `paths` directly, is what gets rendered — this
+// component's OWN edits never put a blank or whitespace-only entry on the
+// wire (withPushRules filters those out before they reach the spec), but the
+// operator still needs a visible, editable blank row right after clicking
+// "Add path". Every local edit writes the FILTERED projection of `rows` back
+// to the wire via `onChange`, so the two stay in lockstep without ever
+// putting a blank on the wire.
+//
+// `paths` itself is NOT guaranteed blank-free, though: it is a prop, and a
+// hand-edited JSON textarea, a pasted document, or a template can hand this
+// component a document that already carries `""` or a whitespace-only entry
+// — withPushRules only ever cleans up what THIS component writes, not what
+// arrives from outside it. Reconciling `rows` against `paths` therefore
+// happens in an effect below, keyed on the wire's own (normalized) content —
+// never directly during render — specifically so a wire value this component
+// can never fully match (a blank entry, which `rows`' own non-blank
+// projection can never equal) settles once and stays settled, instead of
+// re-triggering a state update on every render forever.
 let nextRowId = 0;
 interface Row {
   id: number;
@@ -228,6 +237,10 @@ interface Row {
 
 function seedRows(paths: readonly string[]): Row[] {
   return paths.map((value) => ({ id: ++nextRowId, value }));
+}
+
+function sameContents(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 function PathListRows({
@@ -250,17 +263,36 @@ function PathListRows({
   // and cleared by the effect below, which runs after that render commits.
   const focusTargetRef = React.useRef<number | "add" | null>(null);
 
-  // Reseed from an EXTERNAL change to `paths` — withPushRules always writes
-  // back exactly this component's non-blank values (it drops blank/
-  // whitespace-only entries before they reach the wire), so if the non-blank
-  // projection of the current `rows` no longer matches `paths`, something
-  // else changed the document. A still-blank local row is never mistaken for
-  // this: it can never appear in `paths` in the first place.
-  const ownNonBlank = rows.filter((r) => r.value.trim() !== "").map((r) => r.value);
-  const external = ownNonBlank.length !== paths.length || ownNonBlank.some((v, i) => v !== paths[i]);
-  if (external) {
-    setRows(seedRows(paths));
-  }
+  // The wire value this component itself last produced (via commit, below) —
+  // compared against the CURRENT `paths` prop to tell "this is what I just
+  // wrote" from "something else changed the document since". A plain ref
+  // assignment during render (not inside an effect) is the standard way to
+  // read the latest prop from inside a later effect without adding it to a
+  // dependency array.
+  const pathsRef = React.useRef(paths);
+  pathsRef.current = paths;
+  const ownWireRef = React.useRef<readonly string[]>(paths);
+
+  // Reconcile on an EXTERNAL change to the wire — a hand-edited JSON textarea,
+  // a pasted document, a template, switching policies. This runs in an
+  // effect, keyed on the wire's own content (not the `paths` array reference,
+  // which is a new object every render regardless of whether anything
+  // changed), so it fires exactly once per distinct wire value rather than on
+  // every render: a wire value this component could never produce itself —
+  // one that still carries a blank or whitespace-only entry — settles once
+  // here and stays settled, instead of re-triggering on every subsequent
+  // render forever.
+  const wireKey = JSON.stringify(paths);
+  React.useLayoutEffect(() => {
+    const current = pathsRef.current;
+    if (!sameContents(current, ownWireRef.current)) {
+      setRows(seedRows(current));
+      ownWireRef.current = current;
+    }
+    // wireKey is `paths` normalized to a primitive the effect can depend on
+    // without re-running on every render; pathsRef (a ref, exempt from the
+    // dependency list) always holds the SAME array wireKey was derived from.
+  }, [wireKey]);
 
   const rowDomId = (id: number) => `${idBase}-row-${id}`;
   const errDomId = (id: number) => `${idBase}-err-${id}`;
@@ -279,10 +311,15 @@ function PathListRows({
   // Every row's raw text goes to `rows` (so a blank one stays visible) and to
   // `onChange` (so a mid-edit value is graded live and reflected everywhere
   // else that reads the document) — withPushRules is what keeps a blank or
-  // whitespace-only entry off the wire, not this function.
+  // whitespace-only entry off the wire, not this function. `ownWireRef` is
+  // updated to match what withPushRules will actually write, so the
+  // reconciliation effect recognizes the wire's NEXT render as this
+  // component's own edit rather than an external one.
   function commit(next: Row[]) {
     setRows(next);
-    onChange(next.map((r) => r.value));
+    const wire = next.map((r) => r.value);
+    onChange(wire);
+    ownWireRef.current = wire.filter((v) => v.trim() !== "");
   }
 
   function addRow() {

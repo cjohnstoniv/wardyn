@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // The panel now renders the SafetyMeter, which debounces a POST /policies/grade.
@@ -428,6 +428,48 @@ describe("PolicyPanel — the push_rules section", () => {
     await user.click(screen.getAllByRole("button", { name: "Add path" })[0]);
     await user.type(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
     expect(currentSpec().push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
+  });
+
+  // A blank/whitespace-only entry never comes from this section's own edits
+  // (withPushRules filters those out), but a hand-edited or pasted JSON
+  // document can carry one anyway — loading one must not crash the panel.
+  it.each([
+    ["deny_paths: ['']", { deny_paths: [""] }],
+    ["deny_paths: ['  ']", { deny_paths: ["  "] }],
+    ["deny_paths: ['a', '']", { deny_paths: ["a", ""] }],
+    ["require_review_paths: ['']", { require_review_paths: [""] }],
+  ])("renders without an infinite render loop when push_rules holds %s", (_label, push_rules) => {
+    render(
+      <Harness initial={JSON.stringify({ ...JSON.parse(VALID), push_rules }, null, 2)} />,
+    );
+    expect(screen.getByText("Push rules")).toBeInTheDocument();
+  });
+
+  // The realistic path a blank reaches the document: an admin clearing a
+  // pattern's text between its quotes, directly in the JSON textarea.
+  it("typing an empty pattern into the JSON textarea does not crash the panel", () => {
+    const withPattern = JSON.stringify(
+      { ...JSON.parse(VALID), push_rules: { deny_paths: [".github/workflows/**"] } },
+      null,
+      2,
+    );
+    render(<Harness initial={withPattern} />);
+    const cleared = withPattern.replace(".github/workflows/**", "");
+    fireEvent.change(specBox(), { target: { value: cleared } });
+    expect(screen.getByText("Push rules")).toBeInTheDocument();
+    expect(screen.getByLabelText("Deny path 1")).toHaveValue("");
+  });
+
+  // An edit made OUTSIDE the row UI — directly in the JSON textarea, a
+  // template click, switching policies — has to be reflected in the rows,
+  // not just silently accepted into the spec while the UI shows stale text.
+  it("an edit to the JSON textarea reseeds the rows with the new value", () => {
+    render(<Harness initial={JSON.stringify({ ...JSON.parse(VALID), push_rules: { deny_paths: ["old/**"] } }, null, 2)} />);
+    expect(screen.getByLabelText("Deny path 1")).toHaveValue("old/**");
+    fireEvent.change(specBox(), {
+      target: { value: JSON.stringify({ ...JSON.parse(VALID), push_rules: { deny_paths: ["new/**"] } }, null, 2) },
+    });
+    expect(screen.getByLabelText("Deny path 1")).toHaveValue("new/**");
   });
 });
 
