@@ -258,6 +258,72 @@ export interface RunAttention {
   pending: number;
 }
 
+// PATCH /runs/{id}'s response (internal/api/run_end_wait.go's
+// runEndWaitResponse, RL-4/RL-15): the run's end and wait AFTER the change,
+// which may differ from what was asked — capped names the field(s) an
+// over-ask was cut back to, and latest_end/max_wait_sec are the ceilings that
+// decided it (absent when the caller's captured limits set no ceiling there).
+export interface RunEndWaitResult {
+  id: string;
+  ends_at: string | null;
+  wait_budget_sec: number;
+  capped: string[];
+  latest_end?: string;
+  max_wait_sec?: number;
+}
+
+// POST /runs/{id}/revive's response (internal/api/run_revive.go's
+// reviveResult, RL-10/RL-11): denied_added lists the host/egress denies the
+// owner's CURRENT profile added over the run's frozen policy (empty when
+// nothing new was blocked); agent_started is true only for a reboot/outage
+// revive that also started the agent again (a proxy-only revive of a live
+// run omits it).
+export interface ReviveResult {
+  run_id: string;
+  denied_added: string[];
+  proxy_release: string;
+  agent_started?: boolean;
+}
+
+// GET /admin/runs/proxy-window's one row (internal/store's RunProxyRelease,
+// F2/#580, PR #1317 review) — one live run whose proxy started on a release
+// outside the supported N/N-1 window.
+export interface RunProxyRelease {
+  run_id: string;
+  created_by: string;
+  state: RunState;
+  lost_reason?: "ended" | "reboot" | "outage";
+  proxy_release: string;
+}
+
+// GET /admin/runs/proxy-window (internal/api/run_revive.go's
+// handleAdminProxyWindow, RL-10, F2/#580): release is this daemon's own
+// version; window names the supported minors, newest first; outside is every
+// live run outside it — these are the runs "Restart with current limits"
+// bulk-restarts.
+export interface AdminProxyWindowResult {
+  release: string;
+  window: string[];
+  outside: RunProxyRelease[];
+}
+
+// One run's outcome in POST /admin/runs/restart (internal/api/run_revive.go's
+// adminRestartResult). lost_again is true when the restart itself left the
+// run lost again (a 409 the person can act on — reviveEligible's "revive it
+// from the run's page" arm for a rebooted run, since the bulk path never
+// starts a stopped agent).
+export interface AdminRestartResult {
+  run_id: string;
+  ok: boolean;
+  error?: string;
+  lost_again?: boolean;
+  denied_added?: string[];
+}
+
+export interface AdminRestartResponse {
+  results: AdminRestartResult[];
+}
+
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
 // endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
 // the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run

@@ -66,6 +66,7 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 			`{"grant_id":"` + grantID.String() + `"}`},
 		{"injection resolve", http.MethodGet, "/api/v1/internal/injection/" + grantID.String(), ""},
 		{"recording upload", http.MethodPut, "/api/v1/internal/recordings/" + runID.String(), "cast"},
+		{"recording part upload", http.MethodPut, "/api/v1/internal/recordings/" + runID.String() + "/parts/2", "cast"},
 		{"scan-result upload", http.MethodPut, "/api/v1/internal/scan-results/" + runID.String(), `{}`},
 		{"sso-token upload", http.MethodPut, "/api/v1/internal/sso-token/" + runID.String(), `{}`},
 		// EXEMPT from refuseTerminalRun (internalSelfGatedRoutes) and in the table
@@ -124,7 +125,7 @@ func TestInternalAuth_TailUploadsLandInsideTheGrace(t *testing.T) {
 	srv := New(cfg)
 	tok := h.mintRunToken(t, runID)
 
-	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	graced := map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
 	for _, d := range internalDoors(runID, grantID) {
 		t.Run(d.name, func(t *testing.T) {
 			w := do(t, srv, d.method, d.path, tok, d.body)
@@ -172,7 +173,7 @@ func (s keptRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, e
 // tail uploads alone keep their grace, counted from the mark, and lose it
 // after. UpdatedAt is fresh on purpose: the grace must not be measured from it.
 func TestInternalAuth_KeptRunIsRefusedAtEveryDoor(t *testing.T) {
-	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	graced := map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
 	for _, reason := range []types.LostReason{types.LostEnded, types.LostReboot, types.LostOutage} {
 		for _, age := range []time.Duration{time.Second, terminalUploadGrace + time.Minute} {
 			h := newHarness(t)
@@ -221,7 +222,7 @@ func TestInternalAuth_KeptThenTerminalRunIsRefusedAsTerminal(t *testing.T) {
 	srv := New(cfg)
 	tok := h.mintRunToken(t, runID)
 
-	graced := map[string]bool{"recording upload": true, "scan-result upload": true, "sso-token upload": true}
+	graced := map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
 	for _, d := range internalDoors(runID, grantID) {
 		t.Run(d.name, func(t *testing.T) {
 			w := do(t, srv, d.method, d.path, tok, d.body)

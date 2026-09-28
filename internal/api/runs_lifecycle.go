@@ -341,65 +341,6 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	}
 }
 
-// SweepTerminalSandboxes is the retry surface for two gaps in the same
-// family: a failed StopSandbox/RevokeRun step inside a prior finalize
-// (finalizeRunTail) or kill (handleKillRun) leaves a terminal run row with a
-// sandbox nothing else revisits — ReconcileOnBoot skips terminal runs outright
-// (reconcile.go), and handleKillRun 409s a non-KILLED terminal run rather than
-// risk corrupting its recorded outcome — and, separately, killTeardownTail
-// itself can be interrupted (a shutdown past its grace, a crash) after the
-// KILLED CAS has already landed but before the teardown/revoke/audit tail
-// finishes, leaving a run correctly marked KILLED with no run.kill row at all
-// (see recoverAbandonedKillTail).
-//
-// This PROBES the runner for every terminal run with a SandboxRef (never
-// trusts the row's own state — the row is terminal by definition, so only a
-// live probe can tell orphaned from settled), tears down + re-runs the
-// idempotent revoke cascade for anything still reported running, retries any
-// KILLED row whose own kill tail looks abandoned, and reports how many it
-// swept. Read-only on run STATE: it never transitions a run (a terminal row's
-// recorded outcome is untouched either way), only the runner + broker/
-// identity + audit side effects finalizeRunTail/killTeardownTail already
-// perform for every other terminal transition.
-//
-// Caller's choice when/how often to invoke this (boot, a periodic ticker, an
-// admin route) — none are wired up here; this is the primitive itself.
-func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
-	runs, err := s.cfg.Store.ListRuns(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if s.cfg.Runner == nil {
-		return 0, nil
-	}
-	swept := 0
-	for _, run := range runs {
-		if !isTerminalRunState(run.State) {
-			continue
-		}
-		// KILLED rows get an extra, ref-independent check first: a tail that
-		// died before ever reaching KillSandbox leaves SandboxRef exactly as it
-		// was (possibly already empty), so the ref-probe below would never see
-		// it. A run this recovers still falls through to the ref-probe below on
-		// the NEXT pass only if it needs to — this pass counts it once.
-		if run.State == types.RunKilled && s.recoverAbandonedKillTail(ctx, run) {
-			swept++
-			continue
-		}
-		if run.SandboxRef == "" {
-			continue
-		}
-		st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
-		if serr != nil || st.State != types.RunRunning {
-			continue // already gone (or unprobeable) — the normal, settled case
-		}
-		s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.sweep")
-		s.revokeRunCascade(ctx, run.ID)
-		swept++
-	}
-	return swept, nil
-}
-
 // killTailRecoveryGrace is how long a KILLED run's own kill tail
 // (killTeardownTail) is given to finish before the sweep will consider it
 // abandoned. Every caller of killTeardownTail bounds it at killCascadeTimeout —
@@ -955,16 +896,15 @@ func retryQuick(ctx context.Context, fn func() error) error {
 	return err
 }
 
-// handleSweepSandboxes is the operator-triggered counterpart to the boot pass.
-//
-// SweepTerminalSandboxes deliberately does not run on a ticker: it calls
-// ListRuns UNPAGED and probes Runner.Status for every terminal run carrying a
-// SandboxRef, so its cost grows with run history forever and a periodic version
-// would additionally need reapTickLock-style leader election. Boot-only is the
-// right default (on a laptop a reboot follows most crashes) but it misses the
-// shape a laptop actually produces: suspend for a week, wake with dead
-// sandboxes, never reboot. This route is that lever, and it is cheap because the
-// operator decides when to pay for it.
+// handleSweepSandboxes is the operator-triggered counterpart to the boot pass
+// and to cmd/wardynd's periodic ticker (runTerminalSandboxSweeper, #710),
+// which calls SweepTerminalSandboxesPage on its own bounded cadence instead.
+// This route stays unbounded (SweepTerminalSandboxes, ListRuns UNPAGED,
+// probing Runner.Status for every terminal run carrying a SandboxRef) on
+// purpose: an operator asking for it once, right now, wants the whole table
+// checked immediately, not the next several bounded pages' worth — and it is
+// cheap precisely because the operator decides when to pay for it, unlike a
+// ticker that would pay on every tick forever.
 func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
 	swept, err := s.SweepTerminalSandboxes(r.Context())
 	if err != nil {

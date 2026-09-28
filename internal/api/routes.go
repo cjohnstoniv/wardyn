@@ -876,6 +876,7 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// wardyn-rec POSTs the finished cast from inside the agent container.
 	if s.cfg.RecordingStore != nil {
 		r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
+		r.Put("/internal/recordings/{runID}/parts/{part}", s.handleUploadRecordingPart)
 	}
 
 	// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}

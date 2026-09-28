@@ -31,6 +31,7 @@ import { useConsoleMode } from "../wardyn/console-view";
 import { RunsComposer } from "./runs/runs-composer";
 import { RunsFilterBar } from "./runs/runs-filter-bar";
 import { RunRowList } from "./runs/run-row";
+import { AdminOlderLimitsCard } from "./runs/admin-older-limits-card";
 import {
   applySavedViewOwner,
   DEFAULT_RUNS_FILTERS,
@@ -224,6 +225,8 @@ export function RunsScreen() {
       {noBarrier && <NoBarrierBanner onRecheck={loadSetupStatus} />}
 
       <PageHeader title="Runs" description={description} />
+
+      {adminView && <AdminOlderLimitsCard />}
 
       {!adminView && <RunsComposer />}
 
