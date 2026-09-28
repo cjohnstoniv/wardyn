@@ -136,7 +136,9 @@ async function killRun(page: Page, id: string): Promise<void> {
     const r = await fetch(`/api/v1/runs/${runID}/kill`, { method: "POST", credentials: "include" });
     return r.status;
   }, id);
-  expect(status, `killing run ${id}`).toBeLessThan(400);
+  // 409 is a run that already ended on its own (an autonomous run finishes its
+  // task), which is what this call wants too.
+  expect(status === 409 || status < 400, `killing run ${id}: ${status}`).toBe(true);
 }
 
 /** End every run still alive from the earlier files, so this file's sandboxes
