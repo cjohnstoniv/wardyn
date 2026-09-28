@@ -39,8 +39,7 @@ import {
   type Workspace,
 } from "../../../lib/types";
 import { Link } from "react-router-dom";
-import { ccRank as rank, SectionCard } from "./new-run-primitives";
-import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
+import { SectionCard } from "./new-run-primitives";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
@@ -59,37 +58,32 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
+import { PolicyPanel } from "../../wardyn/policy-panel";
 import { TierPicker, allowedFromFloor } from "../../wardyn/tier-picker";
 import { vaultRequirementReason } from "../setup/environment-step";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
 import {
-  barrierReasons,
   barrierRequirementReason,
   clearedSpecOnCustomSwitch,
-  combineFloors,
   defaultSpecText,
-  governanceRemovedTier,
-  savedPolicyGone,
 } from "./policy-lane";
-import { mergeRunSelections } from "./wizard-spec";
 import {
   agentLabel,
   initialWizardState,
   primaryWorkspaceId,
   resolvedModelProviders,
   titleFromTask,
-  workspaceUnavailableToCaller,
   type RunPrefill,
   type WizardState,
 } from "./wizard-types";
 import { useLaunch } from "./use-launch";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
 import { useModelProviderPick } from "./use-model-provider-pick";
-import { RAIL_PROVIDER } from "../../wardyn/copy";
 import { WhatToRunStep } from "./step-bodies";
+import { useNewRunPolicy } from "./use-new-run-policy";
+import { NewRunLaunchPanel } from "./new-run-launch-panel";
 
 export function NewRunScreen() {
   const navigate = useNavigate();
@@ -115,40 +109,33 @@ export function NewRunScreen() {
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState("CC1", prefill?.state),
   );
-  // The policy this run ships, as the operator wrote it. `useSaved` is the mode
-  // row: reuse a stored policy by REFERENCE (policy_id) or author one here.
-  // A clone of a run that launched by reference opens in that mode — otherwise
-  // the picker would hold the id while the panel showed an authored document
-  // nobody wrote.
+  // `useSaved` is the mode row: reuse a stored policy by REFERENCE (policy_id)
+  // or author one here. A clone of a run that launched by reference opens in
+  // that mode — otherwise the picker would hold the id while the panel showed
+  // an authored document nobody wrote.
   const [useSaved, setUseSaved] = React.useState(!!prefill?.state.selectedPolicyId);
-  // The DEFAULT body floors at CC1 — NOT Minimal's authored CC2. The
-  // pre-panel screen was launchable by construction (its composed floor was
-  // the selected tier); a hardcoded CC2 default would open every fresh
-  // /runs/new on a Fence-only host fail-closed, all tiers dead, before the
-  // operator authored anything. Clicking the Minimal CHIP afterwards is an
-  // authored act and still floors CC2 — that corner stays, with its reason
-  // line and preflight naming it.
+  // The DEFAULT body floors at CC1 — NOT Minimal's authored CC2. A hardcoded
+  // CC2 default would open every fresh /runs/new on a Fence-only host
+  // fail-closed, all tiers dead, before the operator authored anything.
   const [specText, setSpecText] = React.useState(() => defaultSpecText());
-  // The floor the LAST SUCCESSFUL parse authored — deliberately sticky across a
-  // broken edit: a half-typed document must not momentarily drop the floor and
+  // The floor the LAST SUCCESSFUL parse authored — sticky across a broken
+  // edit: a half-typed document must not momentarily drop the floor and
   // re-open a barrier tier the operator's own policy forbids.
   const [parsedFloor, setParsedFloor] = React.useState<ConfinementClass | undefined>("CC1");
-  // The form as the MACHINE left it — what `dirty` below compares against.
-  // specText's baseline is fixed, but the barrier is the one field the machine
-  // writes on its own (the health probe re-resolves it, the policy floor
-  // up-clamps it), so its baseline moves with those writes. Comparing it to a
-  // constant would call an untouched form dirty and break Esc entirely.
+  // What `dirty` below compares against. The barrier is the one field the
+  // machine writes on its own (probe/floor up-clamp), so its baseline moves
+  // with those writes — a constant baseline would call an untouched form
+  // dirty and break Esc entirely.
   const pristineSpec = React.useRef(specText);
   const pristineCc = React.useRef(state.confinementClass);
   // Whether the Barrier control carries an EXPLICIT pick (a clone's
-  // carried-over class counts, B4b). Untouched, buildRunInput omits
-  // confinement_class so the server's own default decides, and its audit
-  // trail reads `defaulted` rather than `requested` (confinement_source).
+  // carried-over class counts, B4b). Untouched, the server's own default
+  // decides and its audit trail reads `defaulted`, not `requested`.
   const [ccTouched, setCcTouched] = React.useState(!!prefill?.state.confinementClass);
-  // The clone's barrier as this form was seeded with it, read once like the
-  // useState seeds above: the top bar's New run navigates to /runs/new with no
-  // state, which keeps this screen mounted and clears `prefill`; that must not
-  // re-run the /setup/status effect below and half-reset the form.
+  // The clone's barrier as seeded, read once like the useState seeds above:
+  // New run navigates to /runs/new with no state, keeping this screen mounted
+  // and clearing `prefill` — that must not re-run the /setup/status effect
+  // below and half-reset the form.
   const clonedCc = React.useRef(prefill?.state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
@@ -164,45 +151,35 @@ export function NewRunScreen() {
   // SetupStatus.harnesses — absent while unfetched or failed, same "unknown
   // stays unknown" rule as llmReady above (AgentPicker's own fallback).
   const [harnesses, setHarnesses] = React.useState<SetupHarnessTool[] | undefined>(undefined);
-  // #542/#922 — this person's own model providers (/setup/status, already
-  // filtered to what they may use — capVisible(capModelProvider), #832/#1015)
-  // and their connection state. Same "unknown stays unknown" rule as
-  // harnesses above: undefined until the read lands, which is also what keeps
-  // the rail's provider picker from rendering (and forcing a preselection)
-  // before there is anything to pick from. It is also the one member-safe
-  // signal for "is the chosen workspace's pinned model provider available to
-  // me" (#922). Read off the SAME /setup/status fetch above, never a second one.
+  // #542/#922 — this person's own model providers (already filtered to what
+  // they may use, #832/#1015) and connection state. Same "unknown stays
+  // unknown" rule as harnesses: undefined until the read lands, which also
+  // keeps the rail's provider picker from rendering before there is anything
+  // to pick from, and is the one member-safe signal for #922's
+  // pinned-provider-availability check.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> under the Title input.
   // Grouping is by EXACT string, so without this the operator has to retype a
-  // title character-perfect for a run to ever join its family — the feature
-  // would look broken while working precisely as designed.
+  // title character-perfect for a run to ever join its family.
   const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
-  // #1197 L2: Title is optional now, and tracks the task's first line
-  // (titleFromTask, wizard-types.ts) until the operator edits it themselves —
-  // a clone's carried-over title counts as an edit too, so a non-empty
-  // prefill is never silently overwritten by whatever the task says.
-  // Clearing the field by hand also counts: re-arming would fight the
-  // operator's own delete.
+  // #1197 L2: Title tracks the task's first line (titleFromTask) until the
+  // operator edits it themselves — a clone's carried-over title, or clearing
+  // the field by hand, both count as an edit and must not be fought.
   const [titleUserEdited, setTitleUserEdited] = React.useState(!!prefill?.state.title);
-  // The governance profile bounding THIS caller, named by GET
-  // /policies/default. undefined for a caller with no assignment (the key is
-  // omitted on the wire) and for a read that failed — in both cases the rail's
-  // ceiling section simply does not render, which is the honest answer: never
-  // claim a ceiling that could not be read.
+  // The governance profile bounding THIS caller (GET /policies/default).
+  // Undefined for no assignment or a failed read — either way the rail's
+  // ceiling section simply does not render, never claiming a ceiling it
+  // could not confirm.
   const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
-  // #1200 — the SAME read's min_confinement_class: the governance ceiling's
-  // own floor, which composer.Clamp raises the run to regardless of what the
-  // authored policy sets (internal/composer/clamp.go). Undefined for the same
-  // two reasons governanceProfile is: no assignment, or a read that failed —
-  // in both cases the Barrier control falls back to the authored floor alone,
-  // never a floor it could not confirm.
+  // #1200 — the SAME read's min_confinement_class, the governance ceiling's
+  // own floor (composer.Clamp raises the run to it, internal/composer/clamp.go).
+  // Undefined for the same two reasons governanceProfile is; the Barrier
+  // control then falls back to the authored floor alone.
   const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
   // #1200 review P2-6/R2-4 — Vault's driver-aware reason (the /dev/kvm probe
-  // on docker, a Kata RuntimeClass on k8s), read off the same /setup/status
-  // call, so the T-9 requirement card names the SAME honest reason
-  // environment-step.tsx computes instead of a generic "isn't installed".
+  // on docker, a Kata RuntimeClass on k8s), so T-9 names the SAME honest
+  // reason environment-step.tsx computes instead of a generic "not installed".
   const [vaultReason, setVaultReason] = React.useState<string | undefined>(undefined);
   // The Workspace card's drive block: this caller's allocation (nil-means-none)
   // and the door beside it ("" means open), read off the shell's ONE GET /me
@@ -321,18 +298,14 @@ export function NewRunScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
 
-  // The envelope-field detach funnel retired with the controls it guarded:
-  // four of its five fields were the Network card's, and the fifth —
-  // confinementClass — is now guarded by the floor-DISABLE below instead, which
-  // is strictly stronger. A one-time up-clamp alone would re-open the
-  // below-floor 422 (runs_create.go's floor check, on both the policy_id and
-  // inline paths) the moment the operator lowered the Seg afterwards. Detach
-  // now has exactly one trigger: editing the spec text (see onSpecChange).
+  // The envelope-field detach funnel retired with the controls it guarded;
+  // confinementClass is now guarded by the floor-DISABLE below instead, which
+  // is strictly stronger. Detach now has exactly one trigger: editing the
+  // spec text (see onSpecChange).
   const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
 
   const isAgent = state.runType === "agent";
   const cc = state.confinementClass;
-  const parsed = parseSpec(specText);
   // A shell command is unattended by definition — buildSpec forces batch for
   // one, so the Run mode segment is hidden rather than offering a combination
   // that would silently drop the command.
@@ -341,32 +314,43 @@ export function NewRunScreen() {
   // is exactly the drift that helper's doc says it exists to prevent.
   const agentName = agentLabel(state.agent);
 
-  // #542 — this agent's own model-provider candidates (already access-filtered
-  // per person by the server — #1015; the harness/disabled narrowing is the
-  // console's own). `undefined` modelProviders (unfetched, or an unreachable
-  // /setup/status) means "unknown" — no picker, not a false "no provider
-  // serves this agent" (R9's shape, which is for a REAL empty answer).
+  // The policy this run authors or references — floor, the post-parse merge,
+  // tool_rules and the ADO launch door — see use-new-run-policy.ts's header
+  // for why this lane is a hook rather than a pure function like
+  // policy-lane.ts's.
+  const policy = useNewRunPolicy({
+    state,
+    patch,
+    useSaved,
+    specText,
+    parsedFloor,
+    setParsedFloor,
+    savedPolicies,
+    availableClasses,
+    probeSettled,
+    governanceProfile,
+    govFloor,
+    operator,
+    workspaces,
+    pristineCc,
+  });
+
+  // #542 — this agent's own model-provider candidates (access-filtered
+  // server-side, #1015). `undefined` modelProviders means "unknown" — no
+  // picker, not a false "no provider serves this agent" (R9's shape).
   const providerCandidates = isAgent && modelProviders ? candidatesForAgent(modelProviders, state.agent) : [];
 
-  // F2 (#612) — the primary workspace's own pinned provider: its
-  // llm_cred.provider_ref (internal/types.WorkspaceLLMCred), the SAME "pin"
-  // the server falls back to when nothing was explicitly requested
-  // (cmp.Or(requested, pin), internal/api/run_model_provider.go). Read the
-  // primary the same way the server does — wizard-types.ts's
-  // primaryWorkspaceId — so this rail can never pin a different workspace's
-  // credential than the run actually inherits.
+  // F2 (#612) — the primary workspace's own pinned provider (llm_cred.provider_ref),
+  // the SAME "pin" the server falls back to (cmp.Or(requested, pin),
+  // run_model_provider.go) — read the primary the same way the server does.
   const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
   const pin = workspaces.find((w) => w.id === primaryWsId)?.llm_cred?.provider_ref;
 
-  // #1052 — this agent's own providers_ungranted fact (SetupHarnessTool),
-  // read off the same `harnesses` state as agentRow below, never a second
-  // fetch: serving > 0 && granted == 0 for this agent, computed server-side
-  // beside chooseModelProvider.
+  // #1052 — this agent's own providers_ungranted fact, off the same
+  // `harnesses` state as agentRow below: serving > 0 && granted == 0.
   const providersUngranted = !!harnesses?.find((h) => h.id === state.agent)?.providers_ungranted;
 
-  // #542 rail-gap packet (owner-approved 2026-09-25) — R5b/R5c: undefined for
-  // the ordinary R1-R4/R6-R8 shapes and for R9 (model-provider-lane.ts's
-  // providerGate).
+  // #542 rail-gap packet — R5b/R5c; undefined for R1-R4/R6-R9.
   const providerGateState =
     isAgent && modelProviders ? providerGate(modelProviders, state.agent, providersUngranted) : undefined;
 
@@ -383,167 +367,13 @@ export function NewRunScreen() {
     patch,
   });
 
-  const selectedPolicy =
-    useSaved && state.selectedPolicyId
-      ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
-      : undefined;
-  // The screen's ONE validation rule. Deliberately a local derivation rather
-  // than a shared validator: it answers "can this button be pressed", which is
-  // this screen's question, and a second general-purpose answer living
-  // elsewhere is what drifts out of sync with the form it describes.
-  const needsTask = !isAgent || state.mode === "batch";
-  // #922: the CHOSEN workspace, resolved the same way workspace-card.tsx's own
-  // per-reason advisory lines resolve it (state.workspaces[0] is the primary
-  // selection) — folded into ONE generic reason via workspaceUnavailableToCaller,
-  // never the picker's own more specific copy (that stays put, unchanged).
-  //
-  // review F2: the model-provider arm is gated on `isAgent` — a Shell/exec run
-  // sends no `agent`, and the server's own model-provider door only ever asks
-  // for a model run (run_model_provider.go's `needsModel`/`createDoorIsModelRun`,
-  // runs_dispatch_llm.go's `taskMode != "exec"`); applying it to every run type
-  // was a false-disable for a command the server would happily admit. The
-  // WORKSPACE and git-provider arms (#1267's `available_to_you`) are NOT
-  // gated — they refuse regardless of run type, because the server excludes
-  // the model-provider pin from that flag for the identical reason.
-  const pickedWorkspace = workspaces.find((w) => w.id === state.workspaces[0]?.workspaceId);
-  const workspaceUnavailable =
-    !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);
-  // #1197 L2: Title dropped out of this chain — the server never required
-  // one (runs_create_validate.go's own doc comment), only the console did,
-  // and the console default now derives one from the task instead of asking.
-  //
-  // review F5: `workspaceUnavailable` is NOT a clause here — it disables
-  // Launch through the rail's own `workspaceUnavailable` prop instead (below),
-  // so the sentence renders exactly once, on the workspace picker's own
-  // advisory line (workspace-card.tsx), never a second time in the rail's
-  // problem slot.
-  const problem = needsTask && !state.task.trim()
-    ? isAgent
-      ? "An autonomous run needs a task to perform."
-      : "Enter a command to run."
-    : // A Custom policy that doesn't parse has nothing to send. The saved
-      // lane launches by reference, so its body is never on the wire.
-      !useSaved && !parsed.ok
-      ? "The policy spec isn't valid JSON."
-      : savedPolicyGone(useSaved, state.selectedPolicyId, selectedPolicy, policiesLoaded) // F2-F5
-        ? RUN.POLICY_GONE
-        : useSaved && !state.selectedPolicyId
-          ? "Pick a saved policy, or write a custom one."
-          : // R5b (#1052) — no provider serves this person for this agent at
-            // all, though at least one serves it org-wide. Launch is refused,
-            // never silently left on R9's "nothing to see" shape.
-            providerGateState?.kind === "not_granted"
-            ? RAIL_PROVIDER.NOT_GRANTED(agentName)
-            : // R5c (#542 rail-gap packet) — the admin's own default is
-              // disabled. Named regardless of how many other candidates
-              // remain, until an explicit pick lands (same "silent once
-              // chosen" rule as R7's changeNote).
-              providerGateState?.kind === "default_off" && !state.modelProviderId
-            ? providerCandidates.length > 0
-              ? RAIL_PROVIDER.DEFAULT_OFF(
-                  providerGateState.provider.name ?? providerGateState.provider.id,
-                  agentName,
-                )
-              : RAIL_PROVIDER.DEFAULT_OFF_ONLY(
-                  providerGateState.provider.name ?? providerGateState.provider.id,
-                  agentName,
-                )
-            : // R6 (QC-4): several candidates, none granted as this agent's
-              // default (or the default isn't one of them) — Wardyn never
-              // silently substitutes, so Launch waits for an explicit pick.
-              // Rule (3): a workspace pin already answers "why wait" its own
-              // way (the server's own named refusal on launch), so this
-              // generic hint stays silent whenever one is set.
-              providerCandidates.length > 1 && !state.modelProviderId && !pin
-              ? RAIL_PROVIDER.LAUNCH_HINT
-              : null;
-
-  // Every successful parse re-reads the floor the document authors; a FAILED
-  // parse changes nothing (parsedFloor stays whatever last parsed).
-  React.useEffect(() => {
-    const p = parseSpec(specText);
-    if (!p.ok) return;
-    const f = p.spec.min_confinement_class as ConfinementClass;
-    setParsedFloor(ORDERED_CLASSES.includes(f) ? f : undefined);
-  }, [specText]);
-
-  // C5's one real trap (policy-panel.tsx's own doc) — the field is present and
-  // this build can't spell it.
-  const unparseableFloor = unparseableFloorClass(parsed);
-
-  // The ACTIVE floor: a picked saved policy's stored floor, else the last
-  // successful parse's. Both paths refuse to launch below it server-side.
-  const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
-
-  // #1200 review P2-2 — govFloor binds ONLY where the server would actually
-  // clamp to it, mirrored exactly from the two doors that decide that:
-  //   - an OPERATOR is never clamped at all (effectiveCeiling's own
-  //     short-circuit, internal/api/governance.go; an admin's inline policy
-  //     specifically, inline_policy.go's "admin ⇒ no clamp");
-  //   - the INLINE (custom) lane clamps every non-operator unconditionally —
-  //     even unassigned, since the deployment default IS the ceiling then;
-  //   - the SAVED-POLICY lane clamps only when a NAMED profile is assigned
-  //     (governanceProfile present) — an unassigned member's saved policy is
-  //     not raised to the deployment default at all (inline_policy.go:310's
-  //     `ceiling.Profile != nil`).
-  // Folding it unconditionally (the pre-review build) hid tiers the server
-  // would have let an admin, or an unassigned member's saved policy, use.
-  const govFloorApplies = !operator && (!useSaved || !!governanceProfile);
-  const boundGovFloor = govFloorApplies ? govFloor : undefined;
-
-  // #1200 — the floor that actually binds: whichever of the authored
-  // policy's own floor and the (now correctly gated) governance ceiling's
-  // ranks HIGHER (combineFloors — composer.Clamp raises a weaker authored
-  // floor to the ceiling's, never the other way). A Barrier control that
-  // only read `floor` could offer a tier the server then 422s at launch.
-  const effectiveFloor = combineFloors(floor, boundGovFloor);
-
-  // #1200 review P2-1/R2-1 — whether the GOVERNANCE ceiling actually removed
-  // an installed tier, as opposed to this host simply having one tier, or the
-  // run's OWN authored floor doing the narrowing (governanceRemovedTier).
-  // Only this case gets TierPicker's "set by your admin" line and the
-  // governance-sourced requirement wording.
-  const governanceBinding = governanceRemovedTier(availableClasses, floor, boundGovFloor);
-
-  // The Barrier control's per-tier state — see barrierReasons.
-  const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, effectiveFloor);
-
-  // #214 — a SETTLED probe reporting zero classes: this host genuinely
-  // cannot build any barrier, so Launch itself is disabled, not just every
-  // tier. Deliberately host-level, not the governance-narrowed empty-qualifying
-  // shape TierPicker's own T-9 card already answers below (effectiveFloor set,
-  // every installed tier still below it) — that is a policy choice, not a
-  // reason Launch can never work here. Also deliberately NOT the unknown-probe
-  // case (probeSettled stays false there): unresolved stays selectable, exactly
-  // as it already was, unrelated to this issue.
-  const noBarrierOnHost = probeSettled && !!availableClasses && availableClasses.length === 0;
-
-  // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
-  // purpose: the /setup/status read resolves ASYNCHRONOUSLY and re-seeds
-  // confinementClass from the server's own default, which can land BELOW a
-  // floor this already clamped to. Watching the value, not just the floor,
-  // makes "never below the floor" an invariant instead of a one-shot.
-  React.useEffect(() => {
-    if (!effectiveFloor || !ORDERED_CLASSES.includes(effectiveFloor)) return;
-    if (rank(effectiveFloor) > rank(cc)) {
-      pristineCc.current = effectiveFloor;
-      patch({ confinementClass: effectiveFloor });
-    }
-  }, [effectiveFloor, cc, patch]);
-
-  // The post-parse union, computed ONCE: the same value renders the "Added for
-  // this run's selections" line and goes on the wire, so the screen cannot show
-  // one policy and launch another.
-  const merged = React.useMemo(
-    () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- parsed is rebuilt every render; specText is what actually changes
-    [specText, state, workspaces],
-  );
-  const added = merged?.added;
+  // needsTask / workspaceUnavailable / problem all move into
+  // NewRunLaunchPanel now — they feed only its `launch` block, and the panel
+  // computes them from the same explicit inputs this screen used to (see its
+  // own header).
 
   // Launch + preflight state and actions — see use-launch.ts's header for why
   // this lane is a hook rather than a pure function like policy-lane.ts's.
-  const adoDoor = useAdoLaunchDoor(); // #386's launch door — F8: never relaunches
   const {
     launching,
     launchDisabled,
@@ -559,35 +389,26 @@ export function NewRunScreen() {
     preflightErrorSeq,
     preflightIsCurrent,
     preflight,
-  } = useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError: adoDoor.notifyLaunchError });
+  } = useLaunch({
+    state,
+    workspaces,
+    useSaved,
+    ccTouched,
+    merged: policy.merged,
+    onLaunchError: policy.adoDoor.notifyLaunchError,
+  });
 
-  // What happens the moment this launches, in one sentence. Derived HERE and
-  // handed to the rail, so the rail cannot describe one run while Launch sends
-  // another.
-  const startupLine = isInteractive
-    ? state.task.trim()
-      ? state.interactiveStart === "agent"
-        ? `Starts ${agentName} on your prompt at boot — attach to watch and take over.`
-        : "Runs your startup command at boot, then a terminal is ready."
-      : state.interactiveStart === "agent"
-        ? `Comes up idle with the workspace ready. Attaching starts ${agentName} in it.`
-        : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
-    : isAgent
-      ? `${agentName} runs the task unattended, then the run stops.`
-      : "The command runs unattended in the sandbox, then the run stops.";
+  // startupLine (what happens the moment this launches) also moves into
+  // NewRunLaunchPanel — it is the panel's own `startup` line and nothing
+  // else reads it.
 
-  // What this run's tool_rules actually say, from the SAME spec that ships:
-  // the merged document on the custom lane, the stored one on the saved lane.
-  // Null when there are no rules, so a policy written before the field existed
-  // grows no empty rail section.
-  const specForRules = useSaved ? selectedPolicy?.spec : merged?.spec;
-  const toolRules = React.useMemo(() => (specForRules ? toolRulesSummary(specForRules) : null), [specForRules]);
+  const added = policy.added;
   const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
   // #181 — same source as toolRules above; a shell command has no
   // specForRules at all (RunRail's pushRulesIsSet reads undefined as "no
   // section"). `unattended` mirrors isInteractive's own doc: a shell command
   // is unattended by definition, and so is an agent run left on batch mode.
-  const pushRules = specForRules?.push_rules;
+  const pushRules = policy.specForRules?.push_rules;
   const unattended = !isInteractive;
 
   // Editing the spec text DETACHES a picked saved policy: the body on screen is
@@ -776,19 +597,19 @@ export function NewRunScreen() {
               // to the floor's own allowed set, not the unfiltered
               // ORDERED_CLASSES, and only to that when there is no floor
               // either.
-              tiers={qualifying ?? allowedFromFloor(effectiveFloor) ?? ORDERED_CLASSES}
+              tiers={policy.qualifying ?? allowedFromFloor(policy.effectiveFloor) ?? ORDERED_CLASSES}
               selected={cc}
               onSelect={(id) => {
                 setCcTouched(true);
                 patch({ confinementClass: id });
               }}
-              decidedLine={governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
+              decidedLine={policy.governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
               pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
               requirementNote={
-                qualifying && qualifying.length === 0 && effectiveFloor
-                  ? (governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
-                      CC_META[effectiveFloor].label,
-                      barrierRequirementReason(effectiveFloor, unavailable, belowFloor, vaultReason),
+                policy.qualifying && policy.qualifying.length === 0 && policy.effectiveFloor
+                  ? (policy.governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
+                      CC_META[policy.effectiveFloor].label,
+                      barrierRequirementReason(policy.effectiveFloor, policy.unavailable, policy.belowFloor, vaultReason),
                     )
                   : undefined
               }
@@ -812,7 +633,7 @@ export function NewRunScreen() {
                 interactive={isInteractive}
                 savedPolicy={{
                   active: useSaved,
-                  onActiveChange: (v: boolean) => { 
+                  onActiveChange: (v: boolean) => {
                     const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId);
                     if (c) setSpecText(c);
                     setUseSaved(v);
@@ -856,8 +677,8 @@ export function NewRunScreen() {
               />
 
               {/* C5: named, not left to the barrier above silently winning. */}
-              {!useSaved && unparseableFloor && (
-                <p className="text-xs text-warning">{AGENTS.FLOOR_UNPARSEABLE(unparseableFloor)}</p>
+              {!useSaved && policy.unparseableFloor && (
+                <p className="text-xs text-warning">{AGENTS.FLOOR_UNPARSEABLE(policy.unparseableFloor)}</p>
               )}
 
               {/* What buildSpec unions in AFTER the parse, named out loud. A
@@ -908,65 +729,55 @@ export function NewRunScreen() {
           </SectionCard>
         </div>
 
-        {/* Right: the live rail, a fixed 320px */}
-        <RunRail
+        {/* Right: the live rail, a fixed 320px. NewRunLaunchPanel derives
+            startup/workspaceUnavailable/problem itself from the raw fields
+            below — see its own header for why. */}
+        <NewRunLaunchPanel
           governanceProfile={governanceProfile}
-          savedPolicy={selectedPolicy}
+          savedPolicy={policy.selectedPolicy}
           cc={cc}
           showModelWarning={isAgent && llmReady === false}
-          startup={startupLine}
-          // The server derives a hold in the OPPOSITE case from what this used
-          // to check: autonomyDerive (runs_autonomy.go) sets tool_approvals=
-          // hold when the run is non-interactive, the agent has a hold lane
-          // (claude-code, here) and the request did NOT already ask for hold.
-          // Picking hold yourself derives nothing to announce.
-          showHoldNote={
-            !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals !== "hold"
-          }
-          toolRules={toolRules}
+          isInteractive={isInteractive}
+          interactiveStart={state.interactiveStart}
+          mode={state.mode}
+          agent={state.agent}
+          toolApprovals={state.toolApprovals}
+          toolRules={policy.toolRules}
           pushRules={pushRules}
           unattended={unattended}
-          launch={{
-            onLaunch: launch,
-            disabled: launchDisabled,
-            spinning: launchSpinning,
-            inFlight: launching,
-            problem,
-            // review F5: disables Launch WITHOUT a second rendering of the
-            // sentence — workspace-card.tsx's own advisory line is the one
-            // place it's shown. noBarrier follows the identical rule (#1328
-            // review F4 — ONE source of truth: the rail's own disabled check
-            // already folds `noBarrier` in, so this screen never duplicates
-            // it into `disabled` itself, same as workspaceUnavailable right
-            // above): the rail states ITS OWN reason beside Launch (below),
-            // so `problem` never also carries it.
-            workspaceUnavailable,
-            noBarrier: noBarrierOnHost,
-            error,
-            errorSeq,
-            credentialRefused,
-            refusedProvider,
-          }}
-          preflight={
-            preflightIsCurrent
-              ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult }
-              : { error: null, errorSeq: preflightErrorSeq, result: null }
-          }
+          onLaunch={launch}
+          launchDisabled={launchDisabled}
+          launchSpinning={launchSpinning}
+          launching={launching}
+          task={state.task}
+          useSaved={useSaved}
+          specParsedOk={policy.parsed.ok}
+          selectedPolicyId={state.selectedPolicyId}
+          policiesLoaded={policiesLoaded}
+          pin={pin}
+          workspaces={workspaces}
+          selectedWorkspaceId={state.workspaces[0]?.workspaceId}
+          caps={caps}
+          modelProviders={modelProviders}
+          noBarrier={policy.noBarrierOnHost}
+          error={error}
+          errorSeq={errorSeq}
+          credentialRefused={credentialRefused}
+          refusedProvider={refusedProvider}
+          preflightIsCurrent={preflightIsCurrent}
+          preflightError={preflightError}
+          preflightErrorSeq={preflightErrorSeq}
+          preflightResult={preflightResult}
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
-          modelProvider={
-            isAgent
-              ? {
-                  candidates: providerCandidates,
-                  access: providerAccess,
-                  selectedId: state.modelProviderId,
-                  onChange: onModelProviderChange,
-                  changeNote: providerChangeNote,
-                  gate: providerGateState,
-                  harnessLabel: agentName,
-                }
-              : undefined
-          }
-          adoDialog={adoDoor.dialog}
+          isAgent={isAgent}
+          providerCandidates={providerCandidates}
+          providerAccess={providerAccess}
+          selectedModelProviderId={state.modelProviderId}
+          onModelProviderChange={onModelProviderChange}
+          providerChangeNote={providerChangeNote}
+          providerGateState={providerGateState}
+          agentName={agentName}
+          adoDialog={policy.adoDoor.dialog}
         />
       </div>
 
