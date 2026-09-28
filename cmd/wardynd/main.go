@@ -560,7 +560,7 @@ type tlsPosture struct {
 //     unspecified bind (":8080", the compose 0.0.0.0-in-container topology) stay
 //     warn-only (boot_serve.go), since the unspecified bind is indistinguishable
 //     from a safe compose 127.0.0.1-publish from inside the container.
-//     allowPlaintextListen is the explicit escape hatch (WARDYN_ALLOW_PLAINTEXT_LISTEN).
+//     allowPlaintextListen is the explicit escape hatch (WARDYN_LISTEN_ALLOW_PLAINTEXT).
 func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPlaintextListen bool) (tlsPosture, error) {
 	if dsn == "" {
 		return tlsPosture{}, errors.New("missing -dsn / WARDYN_PG_DSN")
@@ -591,7 +591,7 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 //
 // The carve-outs are deliberately identical for both: loopback and the
 // unspecified bind (the compose 0.0.0.0-in-container topology) stay warn-only,
-// and WARDYN_ALLOW_PLAINTEXT_LISTEN is the one explicit escape hatch.
+// and WARDYN_LISTEN_ALLOW_PLAINTEXT is the one explicit escape hatch.
 func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPlaintextListen bool) error {
 	if posture.secureCookies || allowPlaintextListen || !listenBindsSpecificRoutable(listen) {
 		return nil
@@ -599,7 +599,7 @@ func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPla
 	return fmt.Errorf("refusing to start: serving plaintext HTTP but the %s address %q binds a specific non-loopback interface — "+
 		"every credential and cookie it speaks would travel in cleartext to any LAN/WAN peer; "+
 		"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
-		"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", flagName, listen)
+		"or explicitly set WARDYN_LISTEN_ALLOW_PLAINTEXT=true to override", flagName, listen)
 }
 
 // sameListenAddress reports whether two listen addresses land on the same

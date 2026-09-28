@@ -4,7 +4,8 @@
  */
 
 import type { Page } from "@playwright/test";
-import { test, expect, mockMemberRole } from "./fixtures";
+import { test, expect, mockMemberRole, ADMIN_TOKEN } from "./fixtures";
+import { SITE } from "../src/app/components/wardyn/copy";
 
 /**
  * Count the /setup/status reads the page has actually made. The console
@@ -601,5 +602,101 @@ test.describe("egress-redirect endpoint picker at 390px", () => {
     // 390px viewport) used to push page scrollWidth wider still the instant
     // it opened. max-w-[calc(100vw-2rem)] keeps it from adding any.
     await expect.poll(scrollWidth, "scrollWidth after opening the picker").toBeLessThanOrEqual(before);
+  });
+});
+
+// T-68 (#728) — the corp-network step's own save round trip against the real
+// seeded backend: a saved proxy URL and a saved egress redirect both survive
+// a reload, and a save that collides with another write (#492's If-Match) is
+// refused rather than silently overwriting it. Serial: both tests write the
+// SAME site-config document one backend serves (policies.spec.ts's own rule
+// for a shared, mutating resource) — the second test's stale-save case reads
+// whatever the first test left behind rather than assuming a blank document.
+//
+// No CA PEM field exists to round-trip: docs/design/corp-network's only
+// CA-related fact is `trusted_ca_certs` (SITE.TRUSTED_CA_COUNT), a read-only
+// count derived server-side from WARDYN_TRUSTED_CA_FILE at boot — there is no
+// console-editable CA PEM input to drive. This covers the two fields the step
+// actually lets an operator write: the Host proxy URL and an Egress redirect.
+test.describe("Corporate network step — site-config round trip and a stale save (#728)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+
+  test("a saved proxy URL and a saved redirect both persist across a reload", async ({ page }) => {
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    await expect(page.getByRole("heading", { name: "Network" })).toBeVisible();
+
+    const proxyUrl = "http://proxy.e2e-roundtrip.invalid:3128";
+    await page.getByLabel("Proxy URL").fill(proxyUrl);
+    const proxySave = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await proxySave).ok()).toBe(true);
+    await expect(page.getByText(proxyUrl)).toBeVisible();
+
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+    await page.getByRole("combobox").click();
+    await page.getByText("https://registry.npmjs.org", { exact: true }).click();
+    await page
+      .getByPlaceholder(/artifactory\.corp\.internal/i)
+      .fill("https://artifactory.corp-e2e.internal/api/npm/npm-remote");
+    const redirectSave = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: /\+ add redirect/i }).click();
+    expect((await redirectSave).ok()).toBe(true);
+    const row = page.getByTitle(/^https:\/\/registry\.npmjs\.org →/);
+    await expect(row).toBeVisible();
+
+    // The round trip: a fresh document load, not a client-side rerender.
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Network" })).toBeVisible();
+    await expect(page.getByText(proxyUrl)).toBeVisible();
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+    await expect(page.getByTitle(/^https:\/\/registry\.npmjs\.org →/)).toBeVisible();
+  });
+
+  test("a save that collides with another write is refused 412: the toast names it, the draft survives, and the outside write is not overwritten", async ({
+    page,
+  }) => {
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    await expect(page.getByLabel("Proxy URL")).toBeVisible();
+
+    // Another admin (a second tab, in the real scenario this proves) saves
+    // over the SAME document right after this page's own mount read — real
+    // GET+PUT, real ETags, not a stubbed 412 (providers.spec.ts's own 412
+    // case stubs the response; this drives the actual precondition failure
+    // #869 wired up).
+    const mounted = await page.request.get("/api/v1/site-config", { headers: auth });
+    const mountedEtag = mounted.headers()["etag"] ?? null;
+    const outsideHeaders: Record<string, string> = { ...auth };
+    if (mountedEtag) outsideHeaders["If-Match"] = mountedEtag;
+    const outsideUrl = "http://proxy.e2e-outside-write.invalid:3128";
+    const outsideWrite = await page.request.put("/api/v1/site-config", {
+      headers: outsideHeaders,
+      data: { ...(await mounted.json()), upstream_proxy_url: outsideUrl },
+    });
+    expect(outsideWrite.ok(), await outsideWrite.text()).toBe(true);
+
+    // This page still holds the OLDER etag from its own mount read — its own
+    // save now collides with the write above.
+    const draftUrl = "http://proxy.e2e-my-write.invalid:3128";
+    await page.getByLabel("Proxy URL").fill(draftUrl);
+    const staleSave = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await staleSave).status()).toBe(412);
+    await expect(page.getByText(SITE.SAVED_ELSEWHERE)).toBeVisible();
+
+    // No silent overwrite: the outside write is what actually stuck.
+    const after = await page.request.get("/api/v1/site-config", { headers: auth });
+    expect((await after.json()).upstream_proxy_url).toBe(outsideUrl);
+    // The draft is not reverted or cleared — the operator can just retry.
+    await expect(page.getByLabel("Proxy URL")).toHaveValue(draftUrl);
   });
 });

@@ -918,7 +918,11 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if derr != nil {
 				return nil, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
-			if sinkReservedSecret(secretName) {
+			// nameSinkReservedSecret, not sinkReservedSecret (#1048): this kind
+			// returns the raw value into the sandbox, so it needs the wider guard
+			// that also refuses a wardyn-provider-*-key name. api_key above stays
+			// on the narrower guard — the provider arm legitimately names a -key.
+			if nameSinkReservedSecret(secretName) {
 				return nil, fmt.Errorf("git_pat grant references reserved secret name %q", secretName)
 			}
 			needed = append(needed, neededSecret{secretName, types.GrantGitPAT, g.OwnerOnly})
@@ -927,7 +931,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if derr != nil {
 				return nil, fmt.Errorf("ssh_key grant scope invalid: %w", derr)
 			}
-			if sinkReservedSecret(keyRef) || sinkReservedSecret(khRef) {
+			// nameSinkReservedSecret, not sinkReservedSecret (#1048) — same
+			// reasoning as git_pat above.
+			if nameSinkReservedSecret(keyRef) || nameSinkReservedSecret(khRef) {
 				return nil, errors.New("ssh_key grant references a reserved secret name")
 			}
 			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly})
