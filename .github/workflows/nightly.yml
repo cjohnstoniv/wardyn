@@ -362,6 +362,15 @@ jobs:
           go-version-file: go.mod
       - name: Docker available
         run: docker --version
+      # The test's two subfake instances (control-plane + vendor) run inside
+      # busybox:latest containers (provider_subscription_docker_test.go's
+      # startSubfakeCP/startSubfakeVendor), created straight through the Go
+      # docker client with no pull-if-missing fallback -- it is not the
+      # docker CLI's implicit-pull-on-run behavior. A hosted runner has never
+      # pulled busybox before, so ContainerCreate fails "No such image"
+      # without this (found on this job's first real run, 2026-09-28).
+      - name: Pre-pull busybox (the subfake containers' base image)
+        run: docker pull busybox:latest
       - name: Hermetic per-person subscription test (real Docker + real Postgres)
         env:
           WARDYN_TEST_DOCKER: "1"
