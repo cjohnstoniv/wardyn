@@ -169,10 +169,13 @@ workspace create/update/admission/env-as-code/providers routes), slice 2
 `/ssh-keys`, the user-drive doors), and slice 3 (every remaining `run_*.go`
 per-run action, the UI gateway, device federation, and the rest of the route
 surface) — but a route reached today answers exactly like one reached at the
-start: `apiErr.Reason` is never empty on a non-2xx response, full stop. A
-repo-wide guard (`TestEveryWriteErrorCallCarriesAReasonOrIsReviewed`) enforces
-this at test time: an unreviewed bare body fails the build. Three refusals
-are DELIBERATELY still bare, each with its own pinning test proving the
+start. Two repo-wide guards keep it that way:
+`TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new
+bare `writeError`/`http.Error` call outside its small, evidence-backed
+allowlist, and `TestNoAdHocErrorBodyOrReasonLiteral` catches a direct
+`writeJSON(errorBody{...})` construction with no `Reason`, or a hand-typed
+string literal passed to `writeErrorReason` instead of a named constant.
+Three refusals are DELIBERATELY still bare, each with its own pinning test proving the
 absence is intentional (a transient model-provider store failure that is no
 door, an unanswered AWS Bedrock SSO renewal that is not a refusal class, and
 the drive-mount resolver's own runner-unavailable/caller-cancelled arms) — see

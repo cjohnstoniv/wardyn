@@ -394,10 +394,10 @@ func TestDevices_DeviceTokenIs401OnCreateRun(t *testing.T) {
 	}
 }
 
-// TestDevices_InvalidTokenReasonIsPinned (#656 final review round FIX-3): a
-// device-shaped bearer no device was ever enrolled under. Asserts the LITERAL
-// wire value, not the Go const, so a rename of reasonInvalidDeviceToken
-// without updating docs/sdk.md fails here too.
+// TestDevices_InvalidTokenReasonIsPinned covers a device-shaped bearer no
+// device was ever enrolled under. Asserts the LITERAL wire value, not the Go
+// const, so a rename of reasonInvalidDeviceToken without updating
+// docs/sdk.md fails here too.
 func TestDevices_InvalidTokenReasonIsPinned(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	w := do(t, srv, http.MethodPost, "/api/v1/devices/"+uuid.NewString()+"/heartbeat", deviceTokenPrefix+"never-enrolled", "")

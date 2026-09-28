@@ -315,10 +315,10 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	}
 }
 
-// TestReviveRun_NotRunningReasonIsPinned (#656 final review round FIX-3): a
-// run outside RunRunning cannot be revived at all — reviveEligible's very
-// first check. Asserts the LITERAL wire value, not the Go const, so a rename
-// of reasonReviveNotRunning without updating docs/sdk.md fails here too.
+// TestReviveRun_NotRunningReasonIsPinned covers a run outside RunRunning,
+// which cannot be revived at all — reviveEligible's very first check.
+// Asserts the LITERAL wire value, not the Go const, so a rename of
+// reasonReviveNotRunning without updating docs/sdk.md fails here too.
 func TestReviveRun_NotRunningReasonIsPinned(t *testing.T) {
 	f := newReviveFixture(t)
 	f.st.state = types.RunCompleted

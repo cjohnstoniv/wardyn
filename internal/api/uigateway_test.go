@@ -484,10 +484,10 @@ func TestUIGateway_EnterRejectsBadTickets(t *testing.T) {
 	}
 }
 
-// TestUIGateway_TicketInvalidReasonIsPinned (#656 final review round FIX-3):
-// a garbage ticket string hits the SAME shared "invalid, expired, or
-// already-used" refusal TestUIGateway_EnterRejectsBadTickets exercises.
-// Asserts the LITERAL wire value, not the Go const.
+// TestUIGateway_TicketInvalidReasonIsPinned covers a garbage ticket string,
+// which hits the SAME shared "invalid, expired, or already-used" refusal
+// TestUIGateway_EnterRejectsBadTickets exercises. Asserts the LITERAL wire
+// value, not the Go const.
 func TestUIGateway_TicketInvalidReasonIsPinned(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}})
@@ -499,18 +499,18 @@ func TestUIGateway_TicketInvalidReasonIsPinned(t *testing.T) {
 	}
 }
 
-// TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket (#656 final review
-// round 2, N1): uiEnterCommon's uiTicketBound check ("not bound to this
-// browser") is DELIBERATELY byte-identical to its consumeAttachTicket
-// ok==false arm ("garbage/expired/already-used") a few lines later — a probe
-// must not tell an unbound-but-real ticket from one that never existed.
+// TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket covers
+// uiEnterCommon's uiTicketBound check ("not bound to this browser"), which
+// is DELIBERATELY byte-identical to its consumeAttachTicket ok==false arm
+// ("garbage/expired/already-used") a few lines later — a probe must not
+// tell an unbound-but-real ticket from one that never existed.
 // TestUIGateway_TicketInvalidReasonIsPinned above pins the SHARED value both
 // carry, but blanking either site's own reason argument alone still passes
-// the whole suite (round 2's own finding, N1): only a body comparison
-// catches that. A REAL, freshly-minted ticket sent with no binding cookie at
-// all (bypassing uiHarness.enter's own h.bound, which binds whatever ticket
-// string it is given, garbage included) reaches uiTicketBound's refusal; the
-// existing "garbage ticket" string reaches consumeAttachTicket's.
+// the rest of the suite: only a body comparison catches that. A REAL,
+// freshly-minted ticket sent with no binding cookie at all (bypassing
+// uiHarness.enter's own h.bound, which binds whatever ticket string it is
+// given, garbage included) reaches uiTicketBound's refusal; the existing
+// "garbage ticket" string reaches consumeAttachTicket's.
 func TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	real := h.ticket(h.run.ID, h.owner, oidc.RoleUser)

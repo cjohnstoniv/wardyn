@@ -63,11 +63,11 @@ func TestCeilingAndDriveErrorsLogMethodAndPath(t *testing.T) {
 	}
 }
 
-// TestWriteServerError_InternalErrorReasonIsPinned (#656 final review round
-// FIX-3): the generic, otherwise-unclassified 500 every OTHER writeServerError
-// call in this package falls through to. Asserts the LITERAL wire value, not
-// the Go const, so a rename of reasonInternalError without updating
-// docs/sdk.md fails here too.
+// TestWriteServerError_InternalErrorReasonIsPinned covers the generic,
+// otherwise-unclassified 500 every OTHER writeServerError call in this
+// package falls through to. Asserts the LITERAL wire value, not the Go
+// const, so a rename of reasonInternalError without updating docs/sdk.md
+// fails here too.
 func TestWriteServerError_InternalErrorReasonIsPinned(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
 	w := httptest.NewRecorder()
@@ -80,10 +80,10 @@ func TestWriteServerError_InternalErrorReasonIsPinned(t *testing.T) {
 	}
 }
 
-// TestParseIDParam_InvalidIDReasonIsPinned (#656 final review round FIX-3):
-// parseIDParam's one refusal, reused by every {param} path segment in the
-// package. Asserts the LITERAL wire value, not the Go const, so a rename of
-// reasonInvalidIDParam without updating docs/sdk.md fails here too.
+// TestParseIDParam_InvalidIDReasonIsPinned covers parseIDParam's one
+// refusal, reused by every {param} path segment in the package. Asserts the
+// LITERAL wire value, not the Go const, so a rename of reasonInvalidIDParam
+// without updating docs/sdk.md fails here too.
 func TestParseIDParam_InvalidIDReasonIsPinned(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/not-a-uuid", nil)
 	rctx := chi.NewRouteContext()

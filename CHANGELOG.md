@@ -92,10 +92,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   registered reason too, not only the doors this package validates by hand), and nine of the
   newly-converted reasons are pinned by a literal-string test against a renamed constant slipping
   past the docs guard unnoticed. The Azure DevOps sign-in callback's own post-exchange failures
-  (a bad code, identity-binding, an unusable grant, a store error) are 302 redirects carrying
-  `?ado_signin_error=<reason>` for the console's own error banner, not an error body — its
-  pre-exchange 400s (an unconfigured/foreign app, no session, an invalid scope or prompt) do carry
-  `reason` in the body. Three refusals are deliberately still bare, each with its own pinning
+  (a failed code exchange, identity-binding, an unusable grant, a store error) are 302 redirects
+  carrying `?ado_signin_error=<reason>` for the console's own error banner, not an error body —
+  as is the identity provider's own `?error=` redirect, before the exchange even starts. The
+  callback's own pre-exchange 400s (bad state/nonce/pkce cookies, a missing code parameter) do
+  carry `reason` in the body. Three refusals are deliberately still bare, each with its own pinning
   test: a transient model-provider store failure (no door), an unanswered AWS Bedrock SSO renewal
   (not a refusal class), and the drive-mount
   resolver's runner-unavailable/caller-cancelled arms.

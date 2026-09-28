@@ -109,11 +109,11 @@ func TestInternalAuth_TerminalRunIsRefusedAtEveryDoor(t *testing.T) {
 	}
 }
 
-// TestInternalAuth_RenewRunNotFoundReasonIsPinned (#656 final review round
-// FIX-3): renew's own GetRun call, exempt from refuseTerminalRun's earlier
-// gate, on a run token store.GetRun cannot find at all. Asserts the LITERAL
-// wire value, not the Go const, so a rename of reasonRunNotFound without
-// updating docs/sdk.md fails here too.
+// TestInternalAuth_RenewRunNotFoundReasonIsPinned covers renew's own GetRun
+// call, exempt from refuseTerminalRun's earlier gate, on a run token
+// store.GetRun cannot find at all. Asserts the LITERAL wire value, not the Go
+// const, so a rename of reasonRunNotFound without updating docs/sdk.md fails
+// here too.
 func TestInternalAuth_RenewRunNotFoundReasonIsPinned(t *testing.T) {
 	h := newHarness(t)
 	knownRunID, missingRunID := uuid.New(), uuid.New()

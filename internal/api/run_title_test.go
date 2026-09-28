@@ -111,10 +111,10 @@ func TestSetRunTitle_OwnerRenamesRunningRun(t *testing.T) {
 	}
 }
 
-// TestSetRunTitle_StoreUnavailableReasonIsPinned (#656 final review round
-// FIX-3): this backend's store does not implement store.RunTitler at all —
-// the bare dispatchTestStore, unlike titleStore's wrapper. Asserts the
-// LITERAL wire value, not the Go const.
+// TestSetRunTitle_StoreUnavailableReasonIsPinned covers a backend whose
+// store does not implement store.RunTitler at all — the bare
+// dispatchTestStore, unlike titleStore's wrapper. Asserts the LITERAL wire
+// value, not the Go const.
 func TestSetRunTitle_StoreUnavailableReasonIsPinned(t *testing.T) {
 	run := newFinalizeRun()
 	run.CreatedBy = runTitleOwner

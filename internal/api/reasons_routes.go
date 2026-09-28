@@ -577,7 +577,7 @@ const (
 // The callback half of the same door (consumeADOCookies, handleADOCallback):
 // browser-reachable (the identity provider's own redirect lands here), and
 // previously answered with a bare http.Error — no JSON body, no reason at
-// all (#656 final review round FIX-2). reasonADOCallbackCookiesInvalid covers
+// all. reasonADOCallbackCookiesInvalid covers
 // all three single-use state/nonce/pkce cookie causes as one bucket: the
 // remedy is identical for all three (start the sign-in again from Settings),
 // so there is nothing a caller could do differently by telling them apart.

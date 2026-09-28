@@ -36,10 +36,10 @@ var documentedDuplicateReasonValues = map[string]bool{}
 // authzWireReasons returns every registered authz.Reason whose Effect
 // actually reaches the wire — everything except EffectHidden, whose whole
 // point is to answer byte-identical to a missing row and so is never itself
-// a wire value; s.refuse's AsIf is what a Hidden decision actually sends
-// (#656 final review round FIX-1: s.refuse now writes d.Reason/d.WireReason
-// on every OTHER effect, so every one of those 25 names is as wire-visible as
-// a reasons.go literal, and TestReasonDocsMatchReasonsGo must see it as one).
+// a wire value; s.refuse's AsIf is what a Hidden decision actually sends.
+// s.refuse writes d.Reason/d.WireReason on every OTHER effect, so every one
+// of those names is as wire-visible as a reasons.go literal, and
+// TestReasonDocsMatchReasonsGo must see it as one.
 func authzWireReasons(t *testing.T) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
@@ -65,10 +65,10 @@ func authzWireReasons(t *testing.T) map[string]bool {
 // documented), modulo ADOEntraFailure's own documented exception. This is the
 // guard the FINAL review on PR #1299 asked for: without it, renaming a
 // PUBLISHED wire value (a breaking change for any caller matching on it)
-// passes every other test in the package. Extended in #656's final review
-// round (FIX-1) to also read authz.Reasons(): a value that only ever reaches
-// the wire through authz's registry (s.refuse) is just as published as one in
-// reasons.go, and was invisible to this guard before.
+// passes every other test in the package. Also reads authz.Reasons(): a
+// value that only ever reaches the wire through authz's registry (s.refuse)
+// is just as published as one in reasons.go, and was invisible to this guard
+// before authzWireReasons was added.
 func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	docBytes, err := os.ReadFile("../../docs/sdk.md")
 	if err != nil {

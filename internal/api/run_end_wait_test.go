@@ -261,10 +261,10 @@ func TestSetRunEnd_Refusals(t *testing.T) {
 	}
 }
 
-// TestSetRunEnd_MustBeFutureReasonIsPinned (#656 final review round FIX-3):
-// the same "an end in the past" case TestSetRunEnd_Refusals already covers,
-// with the wire reason asserted as a LITERAL, not the Go const, so a rename
-// of reasonRunEndMustBeFuture without updating docs/sdk.md fails here too.
+// TestSetRunEnd_MustBeFutureReasonIsPinned covers the same "an end in the
+// past" case TestSetRunEnd_Refusals already exercises, with the wire reason
+// asserted as a LITERAL, not the Go const, so a rename of
+// reasonRunEndMustBeFuture without updating docs/sdk.md fails here too.
 func TestSetRunEnd_MustBeFutureReasonIsPinned(t *testing.T) {
 	f := newEndWaitFixture(t, types.RunLimits{UserChangesLimits: true, AllowNoEnd: true})
 	w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSession(t), endsAtBody(f.now.Add(-time.Minute)))

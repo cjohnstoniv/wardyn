@@ -46,10 +46,10 @@ import (
 // server_error_driver_text_guard_test.go's own allowlist is: a line number
 // shifts on any unrelated edit landing above the site, and that must never
 // make a still-correct entry look stale. Each entry PINS the exact number of
-// sites it covers (#656 final review round FIX-2): `if _, ok := ...; ok {
-// continue }` used to skip every bare call inside an allowlisted function,
-// so a NEW bare site landing inside one went undetected — the reviewer
-// proved this by adding a 4th bare call to enforceRunModelProvider and
+// sites it covers: an earlier version of this map keyed by name alone, so
+// `if _, ok := ...; ok { continue }` skipped every bare call inside an
+// allowlisted function — a NEW bare site landing inside one went undetected,
+// demonstrated by adding a 4th bare call to enforceRunModelProvider and
 // watching the guard still pass. Comparing len(found[key]) against the
 // entry's own count closes that: an allowlisted function may have EXACTLY
 // its stated number of bare sites, never more, never fewer.
@@ -218,10 +218,10 @@ func TestEveryWriteErrorCallCarriesAReasonOrIsReviewed(t *testing.T) {
 			}
 			continue
 		}
-		// #656 final review round FIX-2: pinned per site, not skipped whole-hog.
-		// An allowlisted function may have EXACTLY its stated number of bare
-		// calls — a new one landing beside a reviewed site is still a new,
-		// unreviewed site, and must fail exactly like one anywhere else.
+		// Pinned per site, not skipped whole-hog: an allowlisted function may
+		// have EXACTLY its stated number of bare calls — a new one landing
+		// beside a reviewed site is still a new, unreviewed site, and must
+		// fail exactly like one anywhere else.
 		if got := len(found[k]); got != entry.count {
 			violations++
 			t.Errorf("%s has %d bare error-writer call(s), bareWriteErrorAllowlist pins %d (%s): %v\n"+
@@ -240,12 +240,12 @@ func TestEveryWriteErrorCallCarriesAReasonOrIsReviewed(t *testing.T) {
 }
 
 // bareErrorBodyAllowlist is TestNoAdHocErrorBodyOrReasonLiteral's own small
-// exception list (#656 final review round 2, N2/G4): an errorBody{} composite
-// literal built with no Reason: key, because the enclosing function sets
-// body.Reason afterward, on every path, before its writeJSON call — a
-// construct-then-assign shape the AST check below cannot see is safe without
-// tracing data flow, so it is reviewed and pinned here instead. Keyed
-// "file:enclosing-symbol", same reason bareWriteErrorAllowlist is.
+// exception list: an errorBody{} composite literal built with no Reason: key,
+// because the enclosing function sets body.Reason afterward, on every path,
+// before its writeJSON call — a construct-then-assign shape the AST check
+// below cannot see is safe without tracing data flow, so it is reviewed and
+// pinned here instead. Keyed "file:enclosing-symbol", same reason
+// bareWriteErrorAllowlist is.
 var bareErrorBodyAllowlist = map[string]string{
 	"run_model_provider.go:Server.writeProviderRefusal": "constructs body without Reason, then sets body.Reason on both branches below (credential vs generic bucket) before its one writeJSON call",
 }
@@ -316,7 +316,7 @@ func findAdHocAndDirectReasonLiterals(fset *token.FileSet, name string, file *as
 			}
 			lit, ok := call.Args[2].(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
-				return true // an identifier/selector/call — traced back to a const is FIX-1's job, not this check's
+				return true // an identifier/selector/call — tracing it back to a declared const is TestReasonDocsMatchReasonsGo's job, not this check's
 			}
 			if v, err := strconv.Unquote(lit.Value); err == nil && v == "" {
 				return true // writeError's own bare-reason forwarder; the other guard's concern
@@ -330,15 +330,15 @@ func findAdHocAndDirectReasonLiterals(fset *token.FileSet, name string, file *as
 	return found
 }
 
-// TestNoAdHocErrorBodyOrReasonLiteral is #656's second repo-wide reason guard
-// (final review round 2, N2): TestEveryWriteErrorCallCarriesAReasonOrIsReviewed
-// only catches a BARE writer (no reason argument at all); it cannot see a
-// writer that DOES carry something, but the wrong kind of something — a raw
-// string typed at the call site (G5) instead of a name from the closed set,
-// or an errorBody{} construction that skips the field a JSON encoder cannot
-// tell apart from "reviewed and empty" (G4). Neither shape exists in this
-// package today outside bareErrorBodyAllowlist's one reviewed exception;
-// this guard is what keeps it that way.
+// TestNoAdHocErrorBodyOrReasonLiteral is #656's second repo-wide reason
+// guard: TestEveryWriteErrorCallCarriesAReasonOrIsReviewed only catches a
+// BARE writer (no reason argument at all); it cannot see a writer that DOES
+// carry something, but the wrong kind of something — a raw string typed at
+// the call site instead of a name from the closed set, or an errorBody{}
+// construction that skips the field a JSON encoder cannot tell apart from
+// "reviewed and empty". Neither shape exists in this package today outside
+// bareErrorBodyAllowlist's one reviewed exception; this guard is what keeps
+// it that way.
 func TestNoAdHocErrorBodyOrReasonLiteral(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {

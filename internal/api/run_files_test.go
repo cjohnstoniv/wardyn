@@ -214,12 +214,11 @@ func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	}
 }
 
-// TestRunFiles_NoRunnerReasonIsPinned (#656 final review round FIX-3): this
-// deployment configures no runner at all — the earliest refusal
-// handleRunFiles can give, before it ever asks the runner anything. Asserts
-// the LITERAL wire value, not the Go const, so a rename of
-// reasonRunInspectNoRunner without updating docs/sdk.md fails here too, not
-// only in TestReasonDocsMatchReasonsGo.
+// TestRunFiles_NoRunnerReasonIsPinned covers a deployment that configures no
+// runner at all — the earliest refusal handleRunFiles can give, before it
+// ever asks the runner anything. Asserts the LITERAL wire value, not the Go
+// const, so a rename of reasonRunInspectNoRunner without updating
+// docs/sdk.md fails here too, not only in TestReasonDocsMatchReasonsGo.
 func TestRunFiles_NoRunnerReasonIsPinned(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-owner@corp.example", State: types.RunRunning, SandboxRef: "sandbox-abc"}
 	srv := New(Config{Store: runFilesStore{run: run}, Runner: nil, Audit: &recRecorder{}})
