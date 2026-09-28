@@ -781,10 +781,6 @@ export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
 export WARDYN_WALK_PIN_ROLE="${PIN_ROLE}"
 export WARDYN_WALK_SSO_START_URL="${SSO_START_URL}"
 export WARDYN_WALK_SSO_REGION="${SSO_REGION}"
-# The walk's bedrock_sso model provider (ui/e2e/walk/helpers.ts putProvider)
-# serves claude-code with the pinned-account ARN, addressed at the fake's
-# bedrock-runtime stub: since #548 a run's model credential comes only from its
-# provider, so these ride the provider record rather than the daemon's env.
 export WARDYN_WALK_BEDROCK_MODEL="${BEDROCK_MODEL}"
 export WARDYN_WALK_BEDROCK_BASE_URL="${FAKE_BEDROCK_URL}"
 # The recovery spec's cold-start case manufactures a Pending run pod with a node
