@@ -110,10 +110,10 @@ func TestRunTerminalSandboxSweeper_SweepsEveryRunAcrossTicksOnePageAtATime(t *te
 // holds it" case.
 func alwaysDeniedLock(context.Context) (func(), bool) { return nil, false }
 
-// TestRunTerminalSandboxSweeper_SkipsTheTickWhenTheLockIsHeldElsewhere is
-// F3's pin: a tick that cannot take the per-control-plane lock does no
-// work at all — it neither sweeps nor advances the offset — rather than
-// racing whoever holds it.
+// TestRunTerminalSandboxSweeper_SkipsTheTickWhenTheLockIsHeldElsewhere pins
+// that a tick which cannot take the per-control-plane lock does no work at
+// all — it neither sweeps nor advances the offset — rather than racing
+// whoever holds it.
 func TestRunTerminalSandboxSweeper_SkipsTheTickWhenTheLockIsHeldElsewhere(t *testing.T) {
 	fake := &fakeTerminalSandboxPager{totalRuns: 10}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,7 +184,7 @@ func TestStartTerminalSandboxSweeper_ShutdownWaitsForTheTickerToExit(t *testing.
 	}
 }
 
-// TestStartBackgroundWorkers_WiresTerminalSandboxSweeper is N5's wiring pin:
+// TestStartBackgroundWorkers_WiresTerminalSandboxSweeper pins the wiring:
 // startTerminalSandboxSweeper needs a real *pgxpool.Pool and *api.Server to
 // exercise for real, so nothing else in this package's test suite calls it —
 // removing its call from startBackgroundWorkers would otherwise pass the
@@ -232,7 +232,116 @@ func TestStartBackgroundWorkers_WiresTerminalSandboxSweeper(t *testing.T) {
 	}
 	if sweeperPos < reconcilePos {
 		t.Error("startBackgroundWorkers calls startTerminalSandboxSweeper before ReconcileOnBoot — the ticker must start " +
-			"AFTER boot reconciliation returns (N1), so an overlapping tick cannot double-tear an orphan " +
+			"AFTER boot reconciliation returns, so an overlapping tick cannot double-tear an orphan " +
 			"TestReconcileOnBoot_SweepsOrphanedTerminalSandbox requires be torn down exactly once")
+	}
+}
+
+// countingLock grants the tick lock every time it is called and counts how
+// many times it was taken vs. released, so a test can prove release always
+// runs — even when the tick panics or overruns its deadline — without a real
+// Postgres connection.
+type countingLock struct {
+	mu       sync.Mutex
+	taken    int
+	released int
+}
+
+func (l *countingLock) lock(context.Context) (func(), bool) {
+	l.mu.Lock()
+	l.taken++
+	l.mu.Unlock()
+	return func() {
+		l.mu.Lock()
+		l.released++
+		l.mu.Unlock()
+	}, true
+}
+
+func (l *countingLock) counts() (taken, released int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.taken, l.released
+}
+
+// TestTerminalSandboxSweepLockedTick_ReleasesExactlyOnceOnANormalTick is
+// R2-1's control case: a tick that completes normally takes the lock once and
+// releases it exactly once.
+func TestTerminalSandboxSweepLockedTick_ReleasesExactlyOnceOnANormalTick(t *testing.T) {
+	lock := &countingLock{}
+	fake := &fakeTerminalSandboxPager{totalRuns: 5}
+
+	terminalSandboxSweepLockedTick(context.Background(), fake, lock.lock, 0)
+
+	taken, released := lock.counts()
+	if taken != 1 || released != 1 {
+		t.Errorf("taken=%d released=%d, want 1 and 1", taken, released)
+	}
+}
+
+// panicPager panics on every call, simulating a bug surfacing inside the
+// sweep itself (Runner.Status, stopSandboxOrAudit, revokeRunCascade) rather
+// than a lock or deadline failure.
+type panicPager struct{}
+
+func (panicPager) SweepTerminalSandboxesPage(context.Context, store.Page) (int, int, error) {
+	panic("boom")
+}
+
+// TestTerminalSandboxSweepLockedTick_ReleasesEvenWhenThePagerPanics is R2-1's
+// pin: a panic unwinding out of the sweep must still release the lock,
+// because release is deferred immediately after the lock is taken, not
+// called inline after the sweep returns — the shape production's outer
+// goSafe (main.go) also recovers from, reproduced here with a plain recover
+// so the test does not depend on that helper.
+func TestTerminalSandboxSweepLockedTick_ReleasesEvenWhenThePagerPanics(t *testing.T) {
+	lock := &countingLock{}
+
+	func() {
+		defer func() { _ = recover() }()
+		terminalSandboxSweepLockedTick(context.Background(), panicPager{}, lock.lock, 0)
+	}()
+
+	taken, released := lock.counts()
+	if taken != 1 || released != 1 {
+		t.Errorf("taken=%d released=%d, want 1 and 1 — a panic inside the tick must not leak the lock", taken, released)
+	}
+}
+
+// slowPager blocks until ctx is done, then returns — simulating a wedged
+// Runner.Status/stopSandboxOrAudit/revokeRunCascade call that only the tick's
+// own deadline, never the call itself, can bound.
+type slowPager struct{}
+
+func (slowPager) SweepTerminalSandboxesPage(ctx context.Context, _ store.Page) (int, int, error) {
+	<-ctx.Done()
+	return 0, 0, ctx.Err()
+}
+
+// TestTerminalSandboxSweepLockedTick_ReturnsAndReleasesWhenTheDeadlineIsExceeded
+// is R2-2's pin: a tick whose sweep call wedges past
+// terminalSandboxSweepTickTimeout still returns (bounded by that timeout, not
+// by the wedged call) and still releases the lock.
+func TestTerminalSandboxSweepLockedTick_ReturnsAndReleasesWhenTheDeadlineIsExceeded(t *testing.T) {
+	prev := terminalSandboxSweepTickTimeout
+	terminalSandboxSweepTickTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { terminalSandboxSweepTickTimeout = prev })
+
+	lock := &countingLock{}
+	done := make(chan struct{})
+	go func() {
+		terminalSandboxSweepLockedTick(context.Background(), slowPager{}, lock.lock, 0)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminalSandboxSweepLockedTick did not return after its deadline elapsed — a wedged sweep call pinned it")
+	}
+
+	taken, released := lock.counts()
+	if taken != 1 || released != 1 {
+		t.Errorf("taken=%d released=%d, want 1 and 1 — a tick that exceeds its deadline must still release the lock", taken, released)
 	}
 }

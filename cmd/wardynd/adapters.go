@@ -659,8 +659,8 @@ func pruneAWSSSOSpentTokens(ctx context.Context, pool *pgxpool.Pool) {
 }
 
 // terminalSandboxSweepTickLock is the terminal-sandbox sweep ticker's
-// single-flight gate (F3, #710): the same shape as reapTickLock, a different
-// key (db.TerminalSandboxSweepLockKey) — see that key's own doc for why
+// single-flight gate: the same shape as reapTickLock, a different key
+// (db.TerminalSandboxSweepLockKey) — see that key's own doc for why
 // claimSingleInstance alone is not enough. A lock we cannot reach skips the
 // tick entirely; the sweep that follows would fail on the same database
 // anyway.

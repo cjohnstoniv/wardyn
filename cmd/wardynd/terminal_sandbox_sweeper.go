@@ -30,6 +30,21 @@ const terminalSandboxSweepInterval = 5 * time.Minute
 // terminal runs than this simply takes more ticks to wrap the whole table.
 const terminalSandboxSweepPageSize = 200
 
+// terminalSandboxSweepTickTimeout bounds one locked tick end-to-end — lock
+// acquisition through the sweep's own per-run calls — mirroring
+// lifecycle.Reaper.Tick's Interval+defaultStopTimeout budget (that method's
+// own doc comment: "a single wedged StopRun must not pin the lock ... past
+// that bound"). The advisory-lock connection and a pool connection are held
+// for the tick's duration, so a single wedged Runner.Status,
+// stopSandboxOrAudit or revokeRunCascade call must not pin
+// db.TerminalSandboxSweepLockKey — and with it, every other control plane's
+// sweep — forever. 2 minutes mirrors the reaper's own defaultStopTimeout
+// margin, added on top of the interval for the same reason: a child
+// context.WithTimeout can only shorten its parent's deadline, so budgeting at
+// bare interval would silently cap the per-tick margin at whatever tick time
+// was left. A var only so a test can shrink it.
+var terminalSandboxSweepTickTimeout = terminalSandboxSweepInterval + 2*time.Minute
+
 // terminalSandboxPager is the *api.Server surface runTerminalSandboxSweeper
 // needs, narrowed so a test can drive the paging/offset/wrap arithmetic with
 // a fake's worth of runs instead of a real *api.Server and PG.
@@ -85,18 +100,35 @@ func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if tickLock == nil {
-				offset = terminalSandboxSweepTick(ctx, pager, offset)
-				continue
-			}
-			release, ok := tickLock(ctx)
-			if !ok {
-				continue // another control plane holds the lock this tick; skip, don't queue
-			}
-			offset = terminalSandboxSweepTick(ctx, pager, offset)
-			release()
+			offset = terminalSandboxSweepLockedTick(ctx, pager, tickLock, offset)
 		}
 	}
+}
+
+// terminalSandboxSweepLockedTick is one tick, gated by tickLock when wired —
+// mirrors lifecycle.Reaper.Tick's own shape exactly, for the same reason.
+// The WHOLE tick (lock acquisition through the sweep's own per-run calls)
+// runs under terminalSandboxSweepTickTimeout, applied unconditionally like
+// Reaper.Tick's own deadline, and the lock is released via defer immediately
+// after it is taken — never called inline after the sweep returns. Without
+// both: a panic inside the sweep (caught only by the outer goSafe, which ends
+// this loop for the process) unwinds past an inline release and leaves the
+// advisory-lock connection checked out forever, and a wedged
+// Runner.Status/stopSandboxOrAudit/revokeRunCascade call pins that same
+// connection until it returns — either way holding
+// db.TerminalSandboxSweepLockKey, and with it every other control plane's
+// sweep, indefinitely.
+func terminalSandboxSweepLockedTick(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), offset int) int {
+	ctx, cancel := context.WithTimeout(ctx, terminalSandboxSweepTickTimeout)
+	defer cancel()
+	if tickLock != nil {
+		release, ok := tickLock(ctx)
+		if !ok {
+			return offset // another control plane holds the lock this tick; skip, don't queue
+		}
+		defer release()
+	}
+	return terminalSandboxSweepTick(ctx, pager, offset)
 }
 
 // terminalSandboxSweepTick runs one page and returns the next tick's offset:
