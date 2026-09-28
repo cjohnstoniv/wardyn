@@ -28,6 +28,16 @@ vi.mock("./components/screens/runs", () => ({
   RunsScreen: () => <div>runs screen stub</div>,
 }));
 
+// M-5 (#636) — the settings-split route table. Stubbed the same way
+// RunsScreen is above: these cases only care WHICH screen a path mounts, not
+// either screen's own internals (each has its own suite).
+vi.mock("./components/screens/settings/admin-settings-screen", () => ({
+  AdminSettingsScreen: () => <div>admin settings screen stub</div>,
+}));
+vi.mock("./components/screens/settings/your-account-screen", () => ({
+  YourAccountScreen: () => <div>your account screen stub</div>,
+}));
+
 function renderLanding(role: Role, roleResolved: boolean, status: SetupStatus | null) {
   return render(
     <MemoryRouter initialEntries={["/"]}>
@@ -203,16 +213,16 @@ describe("roleCanReach — pure", () => {
 
   // M3: MEMBER_REACHABLE_PREFIXES must be the member REACHABLE set, not
   // merely the member NAV set — /secrets (self-service WRITE/DELETE since
-  // migration 0050) and /account + /ssh-keys (rendered in the account menu
-  // for every role) have no sidebar entry but ARE reachable, or a member's
-  // own mid-session 401 on any of the three would read as "no longer yours"
-  // and send them to /runs instead of carrying on. M-1b: /settings is
-  // deleted; /account is its member-side twin.
-  it("a member reaches the three self-service routes with no sidebar entry", () => {
+  // migration 0050) and /account (rendered in the account menu for every
+  // role) have no sidebar entry but ARE reachable, or a member's own
+  // mid-session 401 on either would read as "no longer yours" and send them
+  // to /runs instead of carrying on. M-1b: /settings is deleted; /account is
+  // its member-side twin. M-5 (#636) deleted /ssh-keys the same way, with no
+  // alias — SshKeysPane is mounted once now, in /account.
+  it("a member reaches the self-service routes with no sidebar entry", () => {
     // ticket: M3
     expect(roleCanReach("/secrets", "user")).toBe(true);
     expect(roleCanReach("/account", "user")).toBe(true);
-    expect(roleCanReach("/ssh-keys", "user")).toBe(true);
   });
 
   // Negative control: a route with no special tier (neither member-scoped
@@ -365,5 +375,26 @@ describe("App — the setup-status poll behind the model-access door", () => {
 
     secondRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
     await screen.findByText("runs screen stub");
+  });
+});
+
+// M-5 (#636) — the settings split's route table: /admin/settings and
+// /account each mount their OWN screen now, not the same unsplit one.
+// DONE WHEN: a test fails if either path is wired to the other's screen.
+describe("App — the settings-split route table", () => {
+  it("mounts AdminSettingsScreen at /admin/settings", async () => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp("/admin/settings");
+    expect(await screen.findByText("admin settings screen stub")).toBeInTheDocument();
+    expect(screen.queryByText("your account screen stub")).toBeNull();
+  });
+
+  it("mounts YourAccountScreen at /account", async () => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp("/account");
+    expect(await screen.findByText("your account screen stub")).toBeInTheDocument();
+    expect(screen.queryByText("admin settings screen stub")).toBeNull();
   });
 });

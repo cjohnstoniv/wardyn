@@ -75,6 +75,15 @@ const (
 	mpcNotGranted = "you are not granted model provider %q — ask an admin to grant it before adding your key or token to it"
 )
 
+// keyDoorSaveUnavailable (design packet F, canon KEY_DOOR.SAVE_UNAVAILABLE) is
+// the key dialog's 503: the configured store answered secretstore.ErrUnavailable
+// — a transient failure (sealed, unreachable, rate-limited), never "nothing is
+// configured" (mpcNoStore, above) — so the save never landed and nothing
+// changed. Distinguished from a generic writeServerError 500 so the dialog can
+// show it without the notice's storage lines, which claim a store that never
+// actually took the write.
+const keyDoorSaveUnavailable = "Wardyn couldn't reach the service that stores credentials, so this wasn't saved. Nothing changed. Try again in a moment."
+
 // ownSecret reads name from owner's OWN namespace and never the operator's.
 // Store.For(owner).Get FALLS BACK to the operator's row by contract, so the
 // obvious one-liner would serve an admin's credential to a person who stored
@@ -200,6 +209,13 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {
+		if errors.Is(err, secretstore.ErrUnavailable) {
+			// loggedMsg keeps the daemon's own record of a sealed/unreachable
+			// store on save (review finding F7) — writeServerError's log line,
+			// minus its generic 500, since this is its own named 503.
+			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), keyDoorSaveUnavailable, err))
+			return
+		}
 		writeServerError(w, r, "store model provider credential", err)
 		return
 	}

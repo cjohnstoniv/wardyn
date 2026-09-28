@@ -59,6 +59,11 @@ type SetupStatus struct {
 	Secrets SetupSecrets `json:"secrets"`
 	// AgeKey reports whether the at-rest secret store survives a restart.
 	AgeKey SetupAgeKey `json:"age_key"`
+	// CredentialStorage names the KIND of store credentials live in — never a
+	// host, path or vault name (design F-3): local/key_service/vault/key_vault.
+	// Unlike Checks (the same fact as admin-only detail), this is KEPT through
+	// redactSetupStatusForUser — every person reads it, not just an admin.
+	CredentialStorage string `json:"credential_storage,omitempty"`
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// OnboardingComplete reports whether an operator has finished (or
@@ -597,26 +602,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	checks = append(checks, platformChecks(plat)...)
 
-	// has_runs: an EXISTENCE check, so it reads exactly one row. ListRuns builds
-	// an unbounded `SELECT <every column> FROM agent_runs ORDER BY created_at
-	// DESC` — every run this install ever launched, decoded in full, on an
-	// endpoint the console polls every 5s — only to test len(runs) > 0. Use the
-	// same Pager idiom firstBrokeredRepoFromRuns already uses
-	// (setup_checks.go); ListRuns stays the fallback, which only test doubles
-	// lacking Pager ever take (every real deployment is PG). A dedicated
-	// COUNT(*)/EXISTS is the remaining upgrade, but LIMIT 1 already makes the
-	// cost independent of run history.
-	hasRuns := false
-	if s.cfg.Store != nil {
-		var runs []types.AgentRun
-		var err error
-		if pg, ok := s.cfg.Store.(store.Pager); ok {
-			runs, err = pg.ListRunsPage(ctx, store.Page{Limit: 1})
-		} else {
-			runs, err = s.cfg.Store.ListRuns(ctx)
-		}
-		hasRuns = err == nil && len(runs) > 0
-	}
+	hasRuns := s.setupHasRuns(ctx)
 
 	// ready: CONSERVATIVE — false when the runner is nil / has no live class, so
 	// the wizard opens rather than hiding a half-configured bootstrap.
@@ -635,6 +621,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Providers:          providers,
 		Secrets:            sec,
 		AgeKey:             SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
+		CredentialStorage:  credentialStorageMode(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService),
 		HasRuns:            hasRuns,
 		OnboardingComplete: onboardingComplete,
 		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
@@ -666,6 +653,23 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		resp = redactSetupStatusForUser(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// setupHasRuns is the has_runs EXISTENCE check (LIMIT 1, the Pager idiom
+// firstBrokeredRepoFromRuns already uses — never the whole run table). Split
+// out of handleSetupStatus (funlen ratchet), like oidcDefaultRoleIsAdmin.
+func (s *Server) setupHasRuns(ctx context.Context) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
+	var runs []types.AgentRun
+	var err error
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		runs, err = pg.ListRunsPage(ctx, store.Page{Limit: 1})
+	} else {
+		runs, err = s.cfg.Store.ListRuns(ctx)
+	}
+	return err == nil && len(runs) > 0
 }
 
 // consoleRoleMappingsPresent reports whether any console role-mapping rows

@@ -14,7 +14,7 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | Q457-7 | Two fields, text and URL. The link's label is fixed: "Request access". |
 | Q457-8 | The text limit is **1,000 characters**. This is an owner change from the mock's 280. Counted as characters, not bytes. |
 | #489 (2026-09-25) | The sign-in help link is **https:// only**. A new http:// link is refused at save with the scheme error. A link already stored as http:// surfaces as a setup warning. |
-| #584 (2026-09-25) | The SSH keys screen shows a chip on a capped key (one added in the user view). |
+| #584 (2026-09-25) | Your SSH keys pane (`/account`) shows a chip on a capped key (one added in the user view). |
 | Q491-1 | Warn whenever the default role is admin, whether or not a role map is set — not only when neither a role map nor an admin list is set (#484's original condition). Same banner and setup row; the copy shown depends on which condition tripped it. |
 
 ## Frozen strings
@@ -53,8 +53,9 @@ only `String` and `Where` traded places.
 | refusal: bad URL | `PUT /site-config` 400, scheme failures only, a new http:// link included (#489 dropped "http:// or ") | sign_in_help_url: must be an https:// address — it is shown to people who have not signed in |
 | `sign_in_help_url.label` | `/setup/status` row label (`signInHelpHTTPCheck`), the card's own title | When someone can't sign in |
 | `sign_in_help_url.warn` | setup row `detail`, warn, never blocking (#489) | The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page. |
-| SSH keys chip | SSH keys screen, a key whose `capped` is true (#584) | Member access |
-| SSH keys chip tooltip | the chip's `title` (#584) | Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH. |
+| SSH keys chip | Your SSH keys pane (`/account`), a key whose `capped` is true (#584; rewritten M-5/#636 S-2, 2026-09-27) | User access |
+| SSH keys chip tooltip | Your SSH keys pane (`/account`), the chip's `title` (#584; rewritten M-5/#636 S-2, 2026-09-27) | Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view. |
+| SSH pane description | Your SSH keys pane (`/account`), the page header's description (M-5/#636 S-2, 2026-09-27) | Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's. |
 
 ## Implementation strings (not in the mock)
 

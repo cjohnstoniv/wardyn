@@ -49,6 +49,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
   admin" only when the governance ceiling actually did the narrowing; none qualifying names the
   requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
+- **The UI-sandbox gateway's enter hand-off gains a `POST` form, beside the existing `GET` (#1220).**
+  `POST <ui-origin>/__wardyn/enter` takes `run`/`app`/`ticket` as an
+  `application/x-www-form-urlencoded` body instead of a query string, runs the exact same
+  consume-then-re-check path as `GET` (owner-or-admin, `RUNNING`, kept-run `409`, the declared app),
+  sets the same `wardyn_ui_sess` cookie, and answers `303` to the relay path (`GET` still answers
+  `302`, unchanged). A ticket in the query string on a `POST` is refused outright — no mixed mode.
+  `/healthz`'s `ui_sandbox` block gains `enter_post_url` (the enter URL with no query string at all)
+  beside the existing `enter_url_template`. The console's run-detail **Open** button now submits a
+  hidden auto-submitted form built from `enter_post_url` instead of `window.open`-ing a URL, so the
+  single-use ticket never lands in a URL, browser history, or a reverse-proxy access log. `GET`
+  stays for compatibility.
+
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
   (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,
@@ -940,7 +952,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
   `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
   `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
-  now (`/ssh-keys` stays until M-5, and `/demos` until M-6). Every in-app link, the sidebar's
+  now (`/ssh-keys` was deleted the same way by M-5 below, and `/demos` stays until M-6). Every in-app link, the sidebar's
   Policies/Governance/Permissions/Audit/Recordings entries, the account-menu and sidebar Settings
   links (which now land on `/admin/settings` for an admin tier and `/account` for a user), the
   first-run model-provider "Connect →" doors (`/admin/settings`), the "New policy", "Drives",
@@ -949,6 +961,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Recordings library" now render only for the tier whose Admin view screen they open, so a user
   never gets a link to a page that refuses them. The operator docs' console-screen citations are
   re-pointed too. A stale bookmark or link falls through to the console's ordinary catch-all.
+- **The unsplit Settings screen is split per view (M-5, #636).** `/admin/settings` (Admin view)
+  and `/account` (User view) now mount their own screens instead of the same one: Admin Settings
+  keeps Host, the admin Model providers list, the shared Model provider credential card, Providers
+  and User drives, and gains an **Admin SSH keys** card — super admins only — for the override keys
+  that reach other people's runs. Your account keeps a person's own model connection, Azure DevOps
+  and Your SSH keys. A security admin who reaches `/admin/settings` from a stale link now gets a
+  refusal naming the tier, with nothing fetched, instead of the old unsplit screen's redacted
+  leftovers. `/ssh-keys` is deleted, clean break, no alias — every in-app link now points at
+  `/account`, which already carries the same pane. Two SSH-key strings changed: the capped-key chip
+  reads "User access" (was "Member access", frozen by #584) and its tooltip now points at the new
+  Admin SSH keys card; the pane's own description no longer says "no admin view of anyone else's",
+  which collided with the console's own Admin view — it now reads "admins can't list anyone else's".
 - **A held tool call now waits the operator's real approval ceiling (RL-1, #566).**
   `wardyn-toolgate`'s `-deadline` and Claude Code's `MCP_TOOL_TIMEOUT` were hardcoded, so
   raising `WARDYN_APPROVAL_EXPIRY_AFTER` on the daemon did not change how long a parked tool
@@ -1135,6 +1159,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   used, plus counts; it reads row metadata only, never a value. Each person's
   `provider_access` rows on `GET /setup/status` gain `added_at` and `last_used_at` for their
   own credential.
+
+- **Keeping people's credentials: an admin Credentials page, and an admin can erase a person's
+  whole namespace (#592).** A new `/admin/credentials` page, both admin tiers, lists who holds a
+  credential for each model provider and lets an admin erase one (offboarding), on top of the
+  metadata (#591, above) and erase route (`DELETE /people/{principal}/credentials`, 0.8) that
+  already shipped. `GET /api/v1/model-providers/credentials` rows now also carry `email` and
+  `provider_name` (both non-secret, additive) so a `security_admin` — who has no route to the
+  model-provider roster or an identity directory — can read the table well enough to offboard
+  from it. Erase is confirmed by typing the person's email; it is offered per listed person, and
+  by email or subject for someone whose only stored credentials are secrets. `GET
+  /api/v1/setup/status` gains `credential_storage` (`local`, `key_service`, `vault` or
+  `key_vault`) — never a host, path or vault name — kept for every signed-in person (unlike the
+  admin-only `checks`), so the key dialog's storage notice can say where a credential actually
+  goes. The key dialog also gains a Write-only field chip, a stored-value hint on Replace, and a
+  confirm on Remove (today it deleted on the first click). The erase route's `?owner=`-shaped
+  refusal is now its own sentence (it takes no `?owner=`), and a transient store failure on save
+  is its own 503, distinct from "no store configured".
 
 - **The key services now have a live suite (T-33, #693).** `make test-kek-conformance` runs the
   Vault Transit key-encryption key and the Vault KV store against the official `hashicorp/vault`
