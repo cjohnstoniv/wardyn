@@ -141,14 +141,16 @@ PROXY_INJECT="${WARDYN_KIND_SSO_PROXY_INJECT:-on}"
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
 BASE_URL="http://localhost:${HTTP_PORT}"
 
-# The fake, addressed as the sandbox will address it (see the fourth
-# precondition above). ONE Service backs sso-oidc, the sso portal and the
-# bedrock-runtime stub — their paths never collide (test/awsssofake's package
-# doc), so one host and one internal_hosts entry cover all three.
+# The fake, addressed as the sandbox will (fourth precondition). sso-oidc and the
+# portal share a Service; the bedrock stub has its own (same pod, :8091), so a
+# model call takes real Bedrock's SigV4 passthrough, not the portal's terminated
+# tunnel. Each host gets an internal_hosts entry.
 FAKE_SVC="wardyn-awsssofake"
 FAKE_HOST="${FAKE_SVC}.${NAMESPACE}.svc.cluster.local"
 FAKE_PORT=8090
 FAKE_URL="https://${FAKE_HOST}:${FAKE_PORT}"
+FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
+FAKE_BEDROCK_URL="https://${FAKE_BEDROCK_HOST}:8091"
 # …and the host-side port-forward this script opens to READ the fake's /_seen.
 #
 # THIS IS AN OBSERVATION CHANNEL, NOT A ROUTE THE WALK USES. Everything under
@@ -188,8 +190,8 @@ mkdir -p "${EVIDENCE_DIR}"
 step "checking the cluster and the SSO overlay"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" >/dev/null 2>&1 \
   || die "no wardyn release on ${CONTEXT} — run: WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${FAKE_SVC}" >/dev/null 2>&1 \
-  || die "the fake AWS endpoints are not installed — run: make kind-sso"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${FAKE_SVC}" "${FAKE_SVC}-bedrock" >/dev/null 2>&1 \
+  || die "the fake AWS endpoints (or the bedrock stub's own Service) are not installed — run: make kind-sso"
 health="$(curl -s "${BASE_URL}/healthz" || true)"
 [[ "${health}" == *'"runner":"k8s"'* ]] \
   || die "${BASE_URL}/healthz did not answer with runner=k8s (another daemon on that port?). Body: ${health}"
@@ -479,7 +481,7 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   --set "env.WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" \
   --set "env.WARDYN_BEDROCK_REGION=${SSO_REGION}" \
   --set "env.WARDYN_BEDROCK_AWS_SSO_REGION=${SSO_REGION}" \
-  --set "env.WARDYN_BEDROCK_BASE_URL=${FAKE_URL}" \
+  --set "env.WARDYN_BEDROCK_BASE_URL=${FAKE_BEDROCK_URL}" \
   --set "env.WARDYN_BEDROCK_MODEL=${BEDROCK_MODEL}" \
   --set "env.WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT}" \
   --set-file "trustedCA=${FAKE_CA}" \
@@ -640,8 +642,8 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 [[ -n "${current}" ]] || die "GET /site-config never answered with the admin token this run set (last body: ${body:-<empty>})"
-merged="$(echo "${current}" | jq --arg h "${FAKE_HOST}" --arg c "${SERVICE_CIDR}" '
-  .internal_hosts = ((.internal_hosts // []) | map(select(.host_suffix != $h)) + [{host_suffix:$h, cidrs:[$c]}])')"
+merged="$(echo "${current}" | jq --arg h "${FAKE_HOST}" --arg b "${FAKE_BEDROCK_HOST}" --arg c "${SERVICE_CIDR}" '
+  .internal_hosts = ((.internal_hosts // []) | map(select(.host_suffix != $h and .host_suffix != $b)) + [{host_suffix:$h, cidrs:[$c]}, {host_suffix:$b, cidrs:[$c]}])')"
 code="$(curl -s -o "${EVIDENCE_DIR}/site-config-put.json" -w '%{http_code}' \
   -X PUT -H "Authorization: Bearer ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
   -d "${merged}" "${BASE_URL}/api/v1/site-config")"

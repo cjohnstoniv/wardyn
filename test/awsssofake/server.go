@@ -83,6 +83,9 @@ type session struct {
 	access, refresh string
 	roleCredCallers map[string]int
 	bedrockCallers  map[string]int
+	// roleCredPairs counts the account/role pairs its GetRoleCredentials asked
+	// for, so a walk can see which identity each session was spent as.
+	roleCredPairs map[string]int
 }
 
 func (s *Server) newSessionLocked() *session {
@@ -92,6 +95,7 @@ func (s *Server) newSessionLocked() *session {
 		refresh:         "fake-refresh-token-" + randHex(8),
 		roleCredCallers: map[string]int{},
 		bedrockCallers:  map[string]int{},
+		roleCredPairs:   map[string]int{},
 	}
 	s.sessions = append(s.sessions, ss)
 	return ss
@@ -643,6 +647,7 @@ func (s *Server) handleSeen(w http.ResponseWriter, r *http.Request) {
 			"session":           ss.n,
 			"role_cred_callers": maps.Clone(ss.roleCredCallers),
 			"bedrock_callers":   maps.Clone(ss.bedrockCallers),
+			"role_cred_pairs":   maps.Clone(ss.roleCredPairs),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -677,6 +682,7 @@ func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request
 	}
 	s.mu.Lock()
 	ss.roleCredCallers[peerIP(r)]++
+	ss.roleCredPairs[r.URL.Query().Get("account_id")+"/"+r.URL.Query().Get("role_name")]++
 	s.roleCredsSeen = Account{
 		AccountID: r.URL.Query().Get("account_id"),
 		Roles:     []string{r.URL.Query().Get("role_name")},

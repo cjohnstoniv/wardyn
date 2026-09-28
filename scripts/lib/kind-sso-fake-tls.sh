@@ -16,7 +16,7 @@
 # upstream dials, and each sandbox's CA trust (installSandboxTrustedCA); the
 # harness trusts it through NODE_EXTRA_CA_CERTS and curl --cacert.
 #
-# Reads the walk's EVIDENCE_DIR, FAKE_HOST, FAKE_SVC, NAMESPACE and CONTEXT;
+# Reads the walk's EVIDENCE_DIR, FAKE_HOST, FAKE_BEDROCK_HOST, FAKE_SVC, NAMESPACE and CONTEXT;
 # sets FAKE_TLS_DIR and FAKE_CA (the walk reads FAKE_CA after); dies through the
 # walk's own die(). The patch also turns the fake's TLS on (AWSSSOFAKE_TLS_*),
 # which the walk's later `kubectl set env` of its TTLs leaves in place.
@@ -29,8 +29,8 @@ fake_tls_up() {
       -keyout "${FAKE_TLS_DIR}/ca.key" -out "${FAKE_CA}" >/dev/null 2>&1 \
     && openssl req -newkey rsa:2048 -nodes -subj "/CN=${FAKE_HOST}" \
       -keyout "${FAKE_TLS_DIR}/tls.key" -out "${FAKE_TLS_DIR}/tls.csr" >/dev/null 2>&1 \
-    && printf 'subjectAltName=DNS:%s,DNS:%s,DNS:%s.%s,DNS:%s.%s.svc,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' \
-      "${FAKE_HOST}" "${FAKE_SVC}" "${FAKE_SVC}" "${NAMESPACE}" "${FAKE_SVC}" "${NAMESPACE}" >"${FAKE_TLS_DIR}/ext.cnf" \
+    && printf 'subjectAltName=DNS:%s,DNS:%s,DNS:%s.%s,DNS:%s.%s.svc,DNS:%s,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' \
+      "${FAKE_HOST}" "${FAKE_SVC}" "${FAKE_SVC}" "${NAMESPACE}" "${FAKE_SVC}" "${NAMESPACE}" "${FAKE_BEDROCK_HOST}" >"${FAKE_TLS_DIR}/ext.cnf" \
     && openssl x509 -req -in "${FAKE_TLS_DIR}/tls.csr" -CA "${FAKE_CA}" -CAkey "${FAKE_TLS_DIR}/ca.key" \
       -CAcreateserial -days 2 -extfile "${FAKE_TLS_DIR}/ext.cnf" -out "${FAKE_TLS_DIR}/tls.crt" >/dev/null 2>&1; }; then
     die "could not mint the fake's TLS material (openssl) in ${FAKE_TLS_DIR}"

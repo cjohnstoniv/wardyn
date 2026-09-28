@@ -4168,8 +4168,10 @@ make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
 The overlay adds Dex with one static principal per role path —
 `admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
-(`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
-in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
+(`sso-oidc` and the `sso` portal) on one in-cluster Service, and a
+bedrock-runtime stub on a second (`wardyn-awsssofake-bedrock`, port 8091), so a
+model call takes the SigV4 passthrough real Bedrock gets rather than the portal's
+terminated tunnel. `make kind-sso-down` removes the overlay; the cluster itself
 belongs to `make kind-down`.
 
 **The knobs.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO

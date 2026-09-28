@@ -32,6 +32,7 @@ func getRoleCreds(t *testing.T, s *Server, token string) (int, string) {
 
 type seenSession struct {
 	Session         int            `json:"session"`
+	RoleCredPairs   map[string]int `json:"role_cred_pairs"`
 	RoleCredCallers map[string]int `json:"role_cred_callers"`
 	BedrockCallers  map[string]int `json:"bedrock_callers"`
 }
@@ -133,6 +134,9 @@ func TestConcurrentSignInsKeepTheirOwnSessions(t *testing.T) {
 	}
 	if a.RoleCredCallers["127.0.0.1"] != 2 || b.RoleCredCallers["127.0.0.1"] != 2 {
 		t.Errorf("role-credential callers: A %v, B %v; want 2 calls each from 127.0.0.1", a.RoleCredCallers, b.RoleCredCallers)
+	}
+	if a.RoleCredPairs["222222222222/WardynDev"] != 2 || b.RoleCredPairs["222222222222/WardynDev"] != 2 {
+		t.Errorf("role-credential pairs: A %v, B %v; want 222222222222/WardynDev twice each", a.RoleCredPairs, b.RoleCredPairs)
 	}
 	if a.BedrockCallers["127.0.0.1"] != 1 || b.BedrockCallers["127.0.0.1"] != 1 {
 		t.Errorf("bedrock callers: A %v, B %v; want the call signed with B's key under B and the one carrying A's bearer under A", a.BedrockCallers, b.BedrockCallers)
