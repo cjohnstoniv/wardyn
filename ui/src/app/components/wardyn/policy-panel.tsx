@@ -39,6 +39,7 @@ import { Field, OptionCard } from "./form-primitives";
 import { FIELD_HELP } from "./policy-field-help";
 import { EFFECT_PAST, splitToolRules, ToolRulesSection } from "./policy-tool-rules";
 import { PushRulesSection } from "./policy-push-rules";
+import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 
 export type PolicyPanelInstance = "run" | "policies";
 
@@ -443,6 +444,15 @@ export function PolicyPanel({
               rather than authored blind in the textarea. */}
           {parsed.ok && (
             <PushRulesSection
+              spec={parsed.spec}
+              onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
+            />
+          )}
+
+          {/* azure_devops_capabilities: a closed set, so a checklist rather
+              than hand-typed wire words the server would refuse. */}
+          {parsed.ok && (
+            <ADOCapabilitiesSection
               spec={parsed.spec}
               onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
             />
