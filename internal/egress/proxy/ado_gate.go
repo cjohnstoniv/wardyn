@@ -9,11 +9,11 @@ package proxy
 //
 // THIS IS THE BOUNDARY, not a second opinion: an Entra token carries every
 // scope the person ever consented to and no organisation claim, so the
-// organisation pin and the capability check below are the only things that
-// narrow what the injected credential can do. Everything that cannot be
-// classified honestly is refused: a classification error, an unrecognized or
-// denied write, a body too large to peek, and git-over-HTTP (git uses the
-// broker path, never the intercepted connection).
+// organisation pin and capability check below are the only things narrowing
+// what the injected credential can do. Everything that cannot be classified
+// honestly is refused: a classification error, an unrecognized or denied
+// write, a body too large to peek, and git-over-HTTP (git uses the broker
+// path, never the intercepted connection).
 
 import (
 	"bytes"
@@ -44,10 +44,10 @@ type ADOGrant struct {
 // protected-branch list yet, so every ref counts as protected. Fail closed.
 func adoRefProtected(string) bool { return true }
 
-// adoRunRefProtected is the ONE protected-ref predicate both Azure DevOps doors
-// use — the REST gate's classifier and the git broker's push check — so a ref
-// needs the same capability whichever door moves it. It is adoRefProtected with
-// one exception: a ref inside this run's own branch namespace
+// adoRunRefProtected is the ONE protected-ref predicate both Azure DevOps
+// doors use — the REST gate's classifier and the git broker's push check — so
+// a ref needs the same capability whichever door moves it. adoRefProtected
+// with one exception: a ref inside this run's own branch namespace
 // (refs/heads/wardyn/<run-id>/…) needs code_write, not policy_bypass.
 func (p *Proxy) adoRunRefProtected(ref string) bool {
 	prefix := BranchNSPrefix(p.runID)
@@ -93,7 +93,7 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 // never runs gateADO, so an absolute-form `https://` request-line there would
 // otherwise be credentialed with nothing checking organisation or capability;
 // REST reaches these hosts through a CONNECT tunnel and git through the
-// broker, so this lane is not a third door.
+// broker, so this lane must not become a third door.
 func (p *Proxy) refuseADOPlain(w http.ResponseWriter, r *http.Request) bool {
 	if p.adoGrants == nil || r.URL == nil {
 		return false
@@ -120,9 +120,9 @@ func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(st
 	if adoGitPath(path) {
 		return "Wardyn refused this Azure DevOps request: git must use Wardyn's git broker, not the API connection.", nil
 	}
-	// The path classifies first with the body withheld; only a route whose
-	// capability depends on the body answers ErrNeedsBody and is peeked, so
-	// every other body streams through untouched at whatever size.
+	// Classifies first with the body withheld; only a route whose capability
+	// depends on the body answers ErrNeedsBody and is peeked, so every other
+	// body streams through untouched at whatever size.
 	req := adoscope.Request{
 		Method:       r.Method,
 		Host:         host,
@@ -166,8 +166,8 @@ func adoRawPath(r *http.Request) string {
 }
 
 // adoOrgMatches is the organisation pin, applied before anything else: on a
-// legacy <org>.visualstudio.com host the organisation is the first label, on
-// every other host it is the first path segment. Compared as raw bytes, so an
+// legacy <org>.visualstudio.com host the organisation is the first label; on
+// every other host it's the first path segment. Compared as raw bytes, so an
 // encoded spelling of the right name is refused rather than decoded.
 func adoOrgMatches(host, path, org string) bool {
 	want := strings.ToLower(strings.TrimSpace(org))
@@ -236,10 +236,11 @@ type adoRefusal struct {
 }
 
 // refuseADO is the ONE refusal point, and the hold point. held names a
-// capability a person may grant (adoCheck); for that refusal alone the request
-// is escalated (awaitADOCapability) and, if approved in time, refuseADO
-// reports true and the caller forwards. Every other refusal is answered here,
-// with 403 (never 401, which git and several tools read as "try another credential").
+// capability a person may grant (adoCheck); for that refusal alone the
+// request is escalated (awaitADOCapability) and, if approved in time,
+// refuseADO reports true and the caller forwards. Every other refusal answers
+// here with 403 (never 401, which git and several tools read as "try another
+// credential").
 func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, port int, msg string, held *adoscope.Verdict) bool {
 	if held != nil {
 		var ok bool

@@ -259,7 +259,7 @@ func TestPlainLaneNoCleartextInjectionToTheTLSPort(t *testing.T) {
 
 	// The authored-port escape hatch must NOT reach back to the TLS port: an
 	// api_key grant appends the BARE host beside whatever the operator wrote
-	// (addAPIKeyGrant, internal/api/llmcred.go), so "vendor.test:443" — the
+	// (applyRequiredSecretGrant, internal/api/runs_create_requirements.go), so "vendor.test:443" — the
 	// port-scoping remedy docs/POLICIES.md now recommends — and "vendor.test"
 	// coexist, the grant still resolves, and AuthoredPortFor answers true for
 	// :443. Without the unconditional clamp that spelling puts the operator's

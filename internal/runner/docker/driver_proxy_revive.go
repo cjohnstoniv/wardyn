@@ -25,10 +25,10 @@ import (
 
 // proxyStartWatch/proxyStartWatchInterval bound how long startProxy waits to
 // see whether a just-started proxy stays up, versus exiting right back out
-// because it refused its own rendered config (#894/#984). Kept short: this
-// sits on the create-latency path for every run, and a HEALTHY proxy reaches
-// a STABLE Running well inside it — the watch exists to catch the FAST,
-// config-load failure, not to babysit a slow one.
+// because it refused its own rendered config. Kept short: this sits on the
+// create-latency path for every run, and a HEALTHY proxy reaches a STABLE
+// Running well inside it — the watch exists to catch the FAST config-load
+// failure, not to babysit a slow one.
 //
 // proxyStartSettle is how long Running must have HELD before the watch trusts
 // it (Driver.proxySettle's production value, set by New()). Docker flips
@@ -37,26 +37,24 @@ import (
 // real daemon, a real wardyn-proxy given an unknown config key was observed
 // dying 47-451ms after that first Running sighting, and a watch that returned
 // on the FIRST Running observation (no settle check) caught that failure only
-// ~2/10 times (F1). Any exit inside the settle window — a bad config, an OOM
-// kill, anything — is reported with the SAME fixed cause string below: from
-// the driver's side, a proxy that never stayed up long enough to matter IS a
-// config-load failure, whatever actually killed it.
+// ~2/10 times. Any exit inside the settle window is reported with the SAME
+// fixed cause string below: from the driver's side, a proxy that never
+// stayed up long enough to matter IS a config-load failure, whatever
+// actually killed it.
 //
 // The settle window is measured from max(the container's own StartedAt, the
-// watch's own start) — never from StartedAt alone (L1): a daemon whose clock
-// lags the host's (a remote daemon, or Docker Desktop's VM clock after the
-// host sleeps) can report a StartedAt already several seconds in the past on
-// the very FIRST inspect, which would let that inspect look already settled
-// and reopen F1 exactly the way a genuinely-fast exit does. See
-// proxySettleSince.
+// watch's own start), never from StartedAt alone: a daemon whose clock lags
+// the host's can report a StartedAt already several seconds in the past on
+// the very FIRST inspect, which would let that inspect look already settled.
+// See proxySettleSince.
 const (
 	proxyStartWatch         = 3 * time.Second
 	proxyStartWatchInterval = 200 * time.Millisecond
 	proxyStartSettle        = 1 * time.Second
 )
 
-// proxyConfigStdinEnv tells the proxy sidecar its config arrives on stdin
-// (#1176): the rendered config (run token, per-run MITM CA key, upstream-proxy
+// proxyConfigStdinEnv tells the proxy sidecar its config arrives on stdin:
+// the rendered config (run token, per-run MITM CA key, upstream-proxy
 // credential) is written there once at start and lives only in the proxy's
 // memory, so neither the container's config nor its environment holds it.
 const proxyConfigStdinEnv = "WARDYN_PROXY_CONFIG_STDIN"
@@ -104,18 +102,17 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		// config (stdin is gone), and only the control plane starts a proxy.
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
 		// Map host.docker.internal to the docker host gateway so the brokered
-		// control-plane forward (resolveTrustedURL) can reach a wardynd running on
-		// the host in host mode. Docker Desktop injects this alias automatically;
-		// native docker needs the explicit host-gateway mapping. Scoped to the
-		// proxy — only it forwards to the control plane, and the alias is consulted
-		// ONLY by the trusted forward path, never by the agent's policy-governed
-		// egress (which still denies host IPs via the private-IP guard). General
-		// egress is NOT broadened.
+		// control-plane forward can reach a wardynd running on the host in
+		// host mode. Docker Desktop injects this alias automatically; native
+		// docker needs the explicit mapping. Scoped to the proxy and
+		// consulted ONLY by the trusted forward path, never by the agent's
+		// policy-governed egress (still denies host IPs via the private-IP
+		// guard) — general egress is NOT broadened.
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-		// The proxy only relays HTTP, so a tight resource envelope still leaves
-		// ample headroom while bounding a compromised proxy: its own PID cap
-		// (fork-bomb guard) and a modest memory cap (MemorySwap pinned so the
-		// cap is not silently doubled via swap).
+		// SECURITY: the proxy only relays HTTP, so a tight resource envelope
+		// still leaves ample headroom while bounding a compromised proxy: its
+		// own PID cap (fork-bomb guard) and a modest memory cap (MemorySwap
+		// pinned so the cap isn't silently doubled via swap).
 		Resources: proxyResources(),
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
@@ -156,16 +153,13 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	// Watch briefly for the proxy exiting right back out — the shape of it
 	// refusing its own rendered config at boot (a strict-decode error, an
 	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
-	// to the IP lookup, which found no IP on a dead container and reported the
-	// generic "proxy has no IP…" — never the proxy's own, named cause — and
-	// k8s already surfaces that cause (CreateSandbox's BuildProxyConfig check
-	// in the k8s runner's sandbox.go), so Docker was the
-	// odd substrate out.
+	// to the IP lookup, which found no IP on a dead container and reported
+	// the generic "proxy has no IP…" instead of the proxy's own named cause.
 	//
 	// On a watch failure the container is deliberately NOT removed here: on
-	// the CreateSandbox path the caller removes it after also rolling back the
-	// per-run network (driver_network.go); on the ReplaceProxy path it stays so
-	// its logs still name the cause, and the next revive removes it by name.
+	// the CreateSandbox path the caller removes it after also rolling back
+	// the per-run network; on the ReplaceProxy path it stays so its logs
+	// still name the cause, and the next revive removes it by name.
 	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
 		return resp.ID, err
 	}
@@ -238,16 +232,13 @@ func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
 
 // proxySettleSince resolves the moment watchProxyExit measures its settle
 // window from: the LATER of the container's own StartedAt (Docker's
-// RFC3339Nano timestamp) and watchStart, the watch's own start time — never
-// earlier than watchStart (L1). A missing/unparseable StartedAt leaves
-// watchStart standing, same as before; the new case this guards is a
-// PARSEABLE StartedAt that is nonetheless further in the past than
-// watchStart, which a clock-skewed daemon can report on the very first
-// inspect. Using it directly (as F1's original fix did) would let that first
-// inspect already look "settled" — max() refuses to count any time before the
-// watch itself began, so a skewed StartedAt can only ever make the wait
-// LONGER (if it were somehow later than watchStart) or be ignored entirely,
-// never shorter.
+// RFC3339Nano timestamp) and watchStart, never earlier than watchStart. A
+// missing/unparseable StartedAt leaves watchStart standing; the case this
+// guards is a PARSEABLE StartedAt further in the past than watchStart, which
+// a clock-skewed daemon can report on the very first inspect — using it
+// directly would let that inspect already look "settled". max() refuses to
+// count any time before the watch itself began, so a skewed StartedAt can
+// only make the wait LONGER or be ignored, never shorter.
 func proxySettleSince(st *container.State, watchStart time.Time) time.Time {
 	since := watchStart
 	if t, err := time.Parse(time.RFC3339Nano, st.StartedAt); err == nil && t.After(since) {
@@ -275,9 +266,9 @@ func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
 }
 
 // EnsureProxyImage — see runner.ProxyReviver. ReplaceProxy also ensures the
-// image itself (a cheap local check once it is cached); calling this first
-// keeps a slow FIRST pull out of the window between the revive claim and the
-// new proxy actually starting (F2).
+// image itself (a cheap local check once cached); calling this first keeps a
+// slow FIRST pull out of the window between the revive claim and the new
+// proxy actually starting.
 func (d *Driver) EnsureProxyImage(ctx context.Context) error {
 	return d.ensureImage(ctx, d.cfg.ProxyImage, func() {})
 }
@@ -289,12 +280,12 @@ func (d *Driver) CanReplaceProxy(context.Context, string) error { return nil }
 // a new one running cfgJSON on the current proxy image (runner.ProxyReviver).
 // The old sidecar is removed first: it holds the name, and its address is the
 // one the agent pins. The new one takes that address, read from the agent's
-// own hosts entry (immutable, and still there after the old proxy gave its
+// own hosts entry (immutable, still there after the old proxy gave its
 // address back), carries the agent's labels as a proxy, and re-joins the
 // control-plane-facing network as at create. Every check that can fail
 // without touching the old sidecar runs before the remove. Nothing is put
-// back when the new one does not start: the config is the control plane's,
-// not the container's (#1176), so a later revive rebuilds from it.
+// back when the new one doesn't start: the config is the control plane's,
+// not the container's, so a later revive rebuilds from it.
 //
 // If the NEW proxy then exits at config load, startProxy's watch reports that
 // (wrapped in ErrProxyReplaceFailed below) and leaves the exited container in
@@ -339,11 +330,10 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 
 // StartSandbox starts the agent ref's kept, stopped container again
 // (runner.SandboxStarter): `docker start`, which re-runs its main process
-// (`agent-run --idle`) over the writable layer the run left behind. It
-// refuses unless the run's proxy sidecar is running: a stopped or removed
-// proxy has given its address back, and an agent started first could take the address its own
-// hosts entry pins as wardyn-proxy. The recording dirs are prepared again as
-// at create.
+// over the writable layer the run left behind. Refuses unless the run's
+// proxy sidecar is running: a stopped or removed proxy has given its address
+// back, and an agent started first could take the address its own hosts
+// entry pins as wardyn-proxy. Recording dirs are prepared again as at create.
 func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {

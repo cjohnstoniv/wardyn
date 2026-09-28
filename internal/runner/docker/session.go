@@ -18,58 +18,46 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// attachShell launches the interactive shell for Attach. It PREFERS a PERSISTENT
-// tmux session ("wardyn") so the terminal survives WebSocket detaches — switching
-// UI tabs, a browser refresh, or a dropped connection re-attaches to the SAME
-// session (same cwd, env, scrollback, and any running `claude`), giving one
-// durable terminal per run. tmux runs bash inside, so readline (tab-completion,
-// history, line editing) works. Fallbacks keep the attach portable: bash when
-// tmux is absent, then /bin/sh for minimal/busybox images. NOT a login shell
-// (-l): minimal images may lack profile scripts. A real TERM is set on the exec
-// env (see Attach) so readline and TUIs render correctly.
+// attachShell launches the interactive shell for Attach. It prefers a
+// persistent tmux session ("wardyn") so a WebSocket detach (tab switch,
+// refresh, dropped connection) re-attaches to the same session (cwd, env,
+// scrollback, any running `claude`) rather than starting a new one; falls
+// back to bash, then /bin/sh, on images without tmux. Not a login shell (-l):
+// minimal images may lack profile scripts. `new-session -A -s wardyn bash`
+// creates or attaches; the bash arg is ignored on attach so the session
+// persists exactly as first created.
 //
-// `new-session -A -s wardyn bash`: create the session running bash, or (if it
-// already exists) attach to it — the bash arg is ignored on attach, so the
-// session persists exactly as first created.
-//
-// Two prep guards run first — agent-run's session prep does the same work,
-// but only after slower steps (a measured 18s on a live session), while an
-// attach shell opens the instant the container runs, so the operator's first
-// command can win that race. Both are runtime-and-requirements-driven (from
-// the run's own env / the operator's own mounts), so nothing
-// toolchain-specific is ever baked into an image:
-//   - GOTMPDIR mkdir: dispatch points it at a dir the go tool refuses to
-//     create itself; a run whose env doesn't set it does nothing.
-//   - git safe.directory '*': a dir-mounted workspace keeps its HOST
-//     ownership while the session may run as another uid — git's
-//     dubious-ownership refusal (exit 128) breaks git AND go's VCS stamping.
-//     Everything mounted here is what the operator onboarded, and the config
-//     dies with the container. Lockstep: trust_mounted_repos, agent-run-lib.sh.
+// Two prep guards run first, ahead of agent-run's session prep which does the
+// same work but only after slower steps (measured 18s), so the operator's
+// first command wins that race. Both come only from the run's own env/mounts,
+// never baked into an image:
+//   - GOTMPDIR mkdir: the go tool won't create it itself; a no-op if unset.
+//   - git safe.directory '*': a mounted workspace keeps host ownership while
+//     the session may run as another uid, so without this git's
+//     dubious-ownership refusal (exit 128) breaks git and go's VCS stamping;
+//     config dies with the container. Lockstep: trust_mounted_repos, agent-run-lib.sh.
 var attachShell = []string{"/bin/sh", "-c",
 	`[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; ` +
 		`command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null; ` +
 		`if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; ` +
 		`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
 
-// Attach opens a NEW interactive exec (an interactive shell) inside the running
-// sandbox ref and returns a live PTY runner.Session. It mirrors Exec's
-// interactive-style hijack (Tty + AttachStdin/out/err + ExecAttach)
-// but is deliberately SEPARATE from the agent process:
+// Attach opens a new interactive exec inside the running sandbox ref and
+// returns a live PTY runner.Session, mirroring Exec's hijack style (Tty +
+// AttachStdin/out/err + ExecAttach) but kept deliberately separate from the
+// agent process: not registered in d.agentExecs (only the agent's own Wait
+// watches that map — an interactive shell's lifecycle is the WebSocket
+// attach, not the run), and closing the Session tears down only this exec
+// stream (resp.Close), never the sandbox, agent, or sidecars.
 //
-//   - The new exec is NOT registered in d.agentExecs. That map is exclusively
-//     the agent process Wait observes; an interactive shell is a distinct,
-//     human-owned stream whose lifecycle is the WebSocket attach, not the run.
-//   - Closing the returned Session tears down only this exec stream (resp.Close)
-//     — it never touches the sandbox, the agent, or the sidecars.
-//
-// Security (invariant 3): the shell runs inside the already-confined sandbox, so
-// it inherits the same L0 structural-egress + confinement envelope as the agent.
-// No new network path is opened: the PTY bytes flow control-plane -> dockerd ->
-// container over the Docker exec hijack, never through the sandbox's HTTP_PROXY
-// egress path. Egress and credential-mint enforcement remain at the proxy/broker
+// Security (invariant 3): the shell runs inside the already-confined sandbox,
+// inheriting the same L0 structural-egress + confinement envelope as the
+// agent. No new network path opens: PTY bytes flow control-plane -> dockerd ->
+// container over the Docker exec hijack, never the sandbox's HTTP_PROXY egress
+// path; egress and credential-mint enforcement stay at the proxy/broker
 // regardless of this attach. The human principal is recorded for attribution
-// (invariant 4) by the caller (the API layer), not here — the driver is
-// identity-agnostic by the parity rule.
+// (invariant 4) by the caller (the API layer), not here — the driver stays
+// identity-agnostic per the parity rule.
 func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("docker: attach: empty sandbox ref")
@@ -81,21 +69,18 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          attachShell,
-		// A real TERM so readline (tab-completion, history) and TUIs (claude's
-		// own UI) render correctly; the image leaves TERM unset otherwise.
-		// A UTF-8 locale is REQUIRED: tmux re-encodes its cell buffer for the
-		// attach client, and with a non-UTF-8 client locale it transcodes
-		// Unicode it can't represent (block elements ▐▛█, symbols like ❯) to
-		// "_" — the underscores operators saw. C.UTF-8 is built into glibc, so
-		// no locale package is needed.
+		// TERM makes readline/TUIs render correctly; the image leaves it unset
+		// otherwise. UTF-8 locale is required: tmux re-encodes its cell buffer
+		// for the attach client, and without it transcodes unrepresentable
+		// Unicode (▐▛█, ❯) to "_" (the underscores operators saw). C.UTF-8 is
+		// built into glibc.
 		Env: []string{
 			"TERM=xterm-256color",
 			"LANG=C.UTF-8",
 			"LC_ALL=C.UTF-8",
 		},
 	}
-	// Seed the initial PTY size when the client supplied one; ExecCreate
-	// accepts ConsoleSize so the very first output is already correctly wrapped.
+	// Seed initial PTY size, if given, so the first output is already wrapped correctly.
 	if opts.Cols > 0 && opts.Rows > 0 {
 		execCfg.ConsoleSize = client.ConsoleSize{Height: uint(opts.Rows), Width: uint(opts.Cols)}
 	}
@@ -118,10 +103,9 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	}, nil
 }
 
-// dockerSession is the runner.Session backed by a Docker exec TTY hijack. The
-// hijacked response carries the bidirectional PTY: Reader is terminal output,
-// Conn is keystroke input. Resize drives ExecResize; Close closes the
-// hijack (and only the hijack).
+// dockerSession is the runner.Session backed by a Docker exec TTY hijack:
+// Reader is terminal output, Conn is keystroke input; Resize drives
+// ExecResize, Close closes only the hijack.
 type dockerSession struct {
 	cli    dockerAPI
 	execID string
@@ -130,9 +114,9 @@ type dockerSession struct {
 
 var _ runner.Session = (*dockerSession)(nil)
 
-// Read copies terminal output from the hijacked PTY. With Tty:true the stream is
-// raw (no Docker stdcopy multiplexing header), so the bytes are the literal
-// terminal output and can be forwarded verbatim as a binary WebSocket frame.
+// Read copies terminal output from the hijacked PTY. With Tty:true the stream
+// is raw (no stdcopy multiplexing header), so bytes forward verbatim as a
+// binary WebSocket frame.
 func (s *dockerSession) Read(p []byte) (int, error) {
 	return s.resp.Reader.Read(p)
 }
@@ -157,20 +141,19 @@ func (s *dockerSession) Resize(ctx context.Context, cols, rows uint16) error {
 	return nil
 }
 
-// Close tears down ONLY the interactive exec stream (the hijacked connection).
-// The sandbox, the agent process, and the sidecars are untouched: detaching a
-// human leaves the run exactly as it was. HijackedResponse.Close is idempotent.
+// Close tears down only the interactive exec stream (the hijacked
+// connection); the sandbox, agent process, and sidecars are untouched, so
+// detaching a human leaves the run exactly as it was. Idempotent.
 func (s *dockerSession) Close() error {
 	s.resp.Close()
 	return nil
 }
 
 // execStdin adapts a docker exec's hijacked write side to io.WriteCloser:
-// Write sends bytes to the exec's stdin; Close HALF-closes the write side
-// (HijackedResponse.CloseWrite) so the exec observes EOF on stdin while
-// Stdout/Stderr keep flowing. A full resp.Close() would tear down the whole
-// hijacked connection out from under the still-live output streams, so Close
-// here MUST NOT call it.
+// Close half-closes the write side (CloseWrite) so the exec sees EOF on
+// stdin while Stdout/Stderr keep flowing. It must never call resp.Close(),
+// which would tear down the whole hijacked connection out from under the
+// still-live output streams.
 type execStdin struct {
 	resp *client.HijackedResponse
 }
@@ -178,18 +161,15 @@ type execStdin struct {
 func (s execStdin) Write(p []byte) (int, error) { return s.resp.Conn.Write(p) }
 func (s execStdin) Close() error                { return s.resp.CloseWrite() }
 
-// ExecStream launches spec.Argv inside ref as a fresh, streamable exec —
-// distinct from the agent process Exec starts (tracked in d.agentExecs,
-// observed by Wait) and from Attach's interactive shell (attachShell wraps a
-// login-style shell in tmux/bash; ExecStream runs spec.Argv directly, no
-// wrapping).
+// ExecStream launches spec.Argv inside ref as a fresh, streamable exec,
+// distinct from the agent process Exec starts (tracked/observed via
+// d.agentExecs) and from Attach's shell (which wraps tmux/bash; this runs
+// spec.Argv directly, unwrapped).
 //
-// When spec.TTY is false, stdout and stderr are demultiplexed (stdcopy) into
-// SEPARATE streams so a binary protocol riding stdout (SFTP, socat) is never
-// corrupted by interleaved stderr bytes. When spec.TTY is true the PTY merges
-// both onto Stdout (PTY semantics), so Stderr is a reader that yields io.EOF
-// immediately — present (never nil) so callers can read it uniformly without
-// a TTY check, but empty.
+// Non-TTY: stdout/stderr are demultiplexed (stdcopy) into separate streams so
+// a binary protocol on stdout (SFTP, socat) is never corrupted by interleaved
+// stderr bytes. TTY: the PTY merges both onto Stdout, so Stderr yields io.EOF
+// immediately — present (never nil) so callers can read it uniformly.
 func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	if len(spec.Argv) == 0 {
 		return nil, errors.New("docker: exec stream: empty argv")
@@ -203,8 +183,7 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 		Env:          spec.Env,
 		Cmd:          spec.Argv,
 	}
-	// ConsoleSize is only valid alongside TTY (getConsoleSize rejects it
-	// otherwise), mirroring Attach's guard above.
+	// ConsoleSize is only valid alongside TTY; mirrors Attach's guard above.
 	if spec.TTY && spec.Cols > 0 && spec.Rows > 0 {
 		execCfg.ConsoleSize = client.ConsoleSize{Height: uint(spec.Rows), Width: uint(spec.Cols)}
 	}
@@ -225,10 +204,8 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 		stdout = resp.Reader
 		stderr = bytes.NewReader(nil)
 	} else {
-		// Non-TTY: the hijacked stream multiplexes stdout/stderr behind an
-		// 8-byte frame header per chunk (see stdcopy). Demux it live into a
-		// pipe pair so Stdout/Stderr stream progressively rather than
-		// buffering the whole exec's output before either is readable.
+		// Non-TTY: demux the stdcopy-framed stream live into a pipe pair so
+		// Stdout/Stderr stream progressively instead of buffering it all first.
 		outR, outW := io.Pipe()
 		errR, errW := io.Pipe()
 		go func() {
@@ -259,12 +236,11 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 		Wait: func() (int, error) { return d.pollExecExit(ctx, execID) },
 		Close: func() error {
 			resp.Close()
-			// Also close the pipe READ ends (non-TTY branch): resp.Close alone
-			// leaves the demux goroutine parked on a pipe write and any reader
-			// parked on a pipe read — closing the read side fails both with
-			// io.ErrClosedPipe so every blocked caller (evidence endpoints, the
-			// SSH exec/sftp/forward bridges) actually unblocks. TTY branch
-			// readers aren't Closers; the type assertions no-op there.
+			// Also close the pipe read ends (non-TTY): resp.Close alone leaves
+			// the demux goroutine and any reader parked; closing the read side
+			// fails both with io.ErrClosedPipe so blocked callers (evidence
+			// endpoints, SSH exec/sftp/forward bridges) unblock. TTY readers
+			// aren't Closers, so the assertions no-op there.
 			if c, ok := stdout.(io.Closer); ok {
 				_ = c.Close()
 			}

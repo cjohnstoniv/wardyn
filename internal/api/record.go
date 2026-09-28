@@ -518,13 +518,6 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 		}
 	}
 	add(s.modelProviderEgress(s.cfg.DefaultPolicy))
-	// The WORKSPACE's own model-provider transport (SPINE-7): a bound bedrock
-	// integration's regional host is HARNESS plumbing a record session logs, not a
-	// workspace-specific egress need — modelProviderEgress only matches the
-	// anthropic/openai convention hosts, so without this a bedrock-bound workspace's
-	// bedrock-runtime.<region> host was offered for promotion into permanent
-	// ApprovedEgress, writing harness plumbing for the wrong lane.
-	add(s.workspaceModelProviderHosts(ctx, ws))
 	// The workspace's REQUIRED integration: rows (SEAM-2): launchRecordRun
 	// folds these into every session's egress unconditionally — contract
 	// plumbing, not an observed workspace need — same honesty rule as the
@@ -591,8 +584,8 @@ func promoteEntryReject(taskKey string, res RecordTaskResult) string {
 // row in ws's effective contract opens (requiredIntegrationIDs,
 // workspace_run.go) — used by promoteSkipHosts so a record session never
 // offers one for promotion into permanent ApprovedEgress: launchRecordRun
-// already wires it in unconditionally as contract plumbing, mirroring
-// workspaceModelProviderHosts above.
+// already wires it in unconditionally as contract plumbing, the same honesty
+// rule as the model-provider hosts.
 func (s *Server) integrationRequirementHosts(ctx context.Context, ws types.Workspace) []string {
 	var hosts []string
 	for _, id := range requiredIntegrationIDs(ws) {
@@ -601,31 +594,6 @@ func (s *Server) integrationRequirementHosts(ctx context.Context, ws types.Works
 		}
 	}
 	return hosts
-}
-
-// workspaceModelProviderHosts returns the model-provider egress hosts a
-// workspace's OWN bound integration implies — today just a bedrock integration's
-// regional bedrock-runtime/control hosts (region from the integration config, else
-// the global default). Empty for an unbound workspace or a non-bedrock binding
-// (the anthropic/openai convention hosts are already covered by
-// modelProviderEgress). Used by promoteSkipHosts so a record session's real
-// transport is never offered for promotion.
-func (s *Server) workspaceModelProviderHosts(ctx context.Context, ws types.Workspace) []string {
-	if ws.LLMCred == nil || ws.LLMCred.IntegrationRef == "" {
-		return nil
-	}
-	integ, ok := s.resolveIntegrationRef(ctx, "", ws.LLMCred.IntegrationRef)
-	if !ok || integ.Kind != types.IntegrationKindBedrock {
-		return nil
-	}
-	region, _ := integ.Config["region"].(string)
-	if region == "" {
-		region = s.cfg.BedrockRegion
-	}
-	if region == "" {
-		return nil
-	}
-	return []string{s.bedrockDataPlaneHost(region), bedrockControlHost(region)}
 }
 
 // promotableHosts is every host a recording could ever offer up: observed

@@ -15,16 +15,13 @@ import (
 	"time"
 )
 
-// exit is os.Exit, stubbed in tests. An env value the helper cannot parse is
-// FATAL, not "fall back to the default": the same setting arriving as a bad
-// -flag value already exits 2 (flag.CommandLine is ExitOnError), so the env
-// door must not be quieter than the flag door — a silently-reinterpreted typo
-// is how a security toggle ends up silently off.
+// exit is os.Exit, stubbed in tests. An unparseable env value is FATAL, not "fall back to default": a bad
+// -flag value already exits 2, so the env door must not be quieter — a silently-reinterpreted typo is how
+// a security toggle ends up silently off.
 var exit = os.Exit
 
-// envFatal reports an unusable env value and exits 2, mirroring how the flag
-// package rejects a bad -flag value. Written to flag.CommandLine's output
-// (os.Stderr by default) so it lands with flag's own diagnostics.
+// envFatal reports an unusable env value and exits 2, mirroring a bad -flag value; written to
+// flag.CommandLine's output so it lands with flag's own diagnostics.
 func envFatal(env, val, want string) {
 	fmt.Fprintf(flag.CommandLine.Output(), "invalid %s=%q: want %s\n", env, val, want)
 	exit(2)
@@ -38,15 +35,11 @@ func EnvOr(key, def string) string {
 	return def
 }
 
-// EnvAlias lets a deprecated env var name go on working for one deprecation
-// window while a new name takes over (UT-5, user-types-design.md rev 4 §6).
-// Empty counts as unset for both names.
-//
-// When newEnv is unset and oldEnv is set, it copies oldEnv's value into newEnv
-// and reports aliased. When both are set, newEnv wins; if the values differ it
-// reports ignored, since a dropped old value can be a longer deny list the
-// operator still believes is in force. Callers must run it before ANY flag is
-// parsed or either name is otherwise read.
+// EnvAlias lets a deprecated env var name go on working for one deprecation window while a new name takes
+// over. Empty counts as unset for both. If newEnv is unset and oldEnv set, copies oldEnv into newEnv and
+// reports aliased. If both are set, newEnv wins; a differing value reports ignored, since a dropped old
+// value can be a longer deny list the operator still believes is in force. Must run before ANY flag parse
+// or other read of either name.
 func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
 	oldV := os.Getenv(oldEnv)
 	if oldV == "" {
@@ -59,16 +52,13 @@ func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
 	return true, false
 }
 
-// FlagEnv defines a string flag whose default is overridden by an env var.
-// Unset/empty means "use the default", like FlagBool/FlagDuration/FlagIntEnv/
-// EnvOr; the escape hatch for a genuinely-intended blank is `-name=`.
+// FlagEnv defines a string flag whose default is overridden by an env var. Unset/empty keeps the default;
+// the escape hatch for a genuinely-intended blank is `-name=`.
 //
-// SECURITY: the env value is applied to the flag's VARIABLE, never to its
-// registered DEFAULT — PrintDefaults renders a non-empty string default as
-// `(default "…")` on every parse error, so seeding the default from the env
-// would write secrets like WARDYN_AGE_KEY verbatim to stderr on one typo'd
-// flag. Writing through the returned pointer instead keeps the same
-// precedence while the usage block shows only the compiled default.
+// SECURITY: the env value is applied to the flag's VARIABLE, never its registered DEFAULT — PrintDefaults
+// renders a non-empty default as `(default "…")` on every parse error, so seeding the default from the env
+// would write secrets like WARDYN_AGE_KEY verbatim to stderr on one typo'd flag. Writing through the
+// returned pointer keeps the same precedence while usage shows only the compiled default.
 func FlagEnv(name, env, def, usage string) *string {
 	p := flag.String(name, def, usage+" (env "+env+")")
 	if v := os.Getenv(env); v != "" {
@@ -77,16 +67,13 @@ func FlagEnv(name, env, def, usage string) *string {
 	return p
 }
 
-// FlagBool defines a bool flag whose default is overridden by an env var.
-// 1/true/yes/on is true, 0/false/no/off is false (case-insensitive, trimmed).
-// Unset/empty means "use the default", silently. Anything else exits 2: a
-// value that is neither truthy nor falsey states no intent this helper can
-// honor, and guessing "false" is the worst guess available.
+// FlagBool defines a bool flag whose default is overridden by an env var. 1/true/yes/on is true,
+// 0/false/no/off is false (case-insensitive, trimmed); unset/empty keeps the default. Anything else exits
+// 2 — a value that's neither truthy nor falsey states no intent this helper can honor.
 func FlagBool(name, env string, def bool, usage string) *bool {
 	v := strings.TrimSpace(os.Getenv(env))
 	switch strings.ToLower(v) {
-	case "":
-		// unset (or explicitly empty): keep def, no noise.
+	case "": // unset/empty: keep def, no noise
 	case "1", "true", "yes", "on":
 		def = true
 	case "0", "false", "no", "off":
@@ -97,9 +84,8 @@ func FlagBool(name, env string, def bool, usage string) *bool {
 	return flag.Bool(name, def, usage+" (env "+env+")")
 }
 
-// FlagDuration defines a time.Duration flag whose default is overridden by an
-// env var. Unset/empty keeps the default; an unparseable value exits 2 rather
-// than silently reinstating it.
+// FlagDuration defines a time.Duration flag whose default is overridden by an env var. Unset/empty keeps
+// the default; an unparseable value exits 2 rather than silently reinstating it.
 func FlagDuration(name, env string, def time.Duration, usage string) *time.Duration {
 	if v := strings.TrimSpace(os.Getenv(env)); v != "" {
 		d, err := time.ParseDuration(v)
@@ -126,9 +112,8 @@ func FlagIntEnv(name, env string, def int, usage string) *int {
 	return flag.Int(name, def, usage+" (env "+env+")")
 }
 
-// EnvBool reads a bool directly from an env var, with no flag registered — for
-// sites where flag.Parse() has already run before the read. Same token set and
-// loudness contract as FlagBool.
+// EnvBool reads a bool directly from an env var, no flag registered, for sites after flag.Parse(). Same
+// token set and loudness contract as FlagBool.
 func EnvBool(name string, def bool) bool {
 	v := strings.TrimSpace(os.Getenv(name))
 	switch strings.ToLower(v) {
@@ -144,8 +129,7 @@ func EnvBool(name string, def bool) bool {
 	}
 }
 
-// EnvDuration reads a time.Duration directly from an env var, with no flag
-// registered — the non-flag twin of FlagDuration for post-flag.Parse() sites.
+// EnvDuration is the non-flag twin of FlagDuration for post-flag.Parse() sites.
 func EnvDuration(name string, def time.Duration) time.Duration {
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
 		d, err := time.ParseDuration(v)
@@ -158,21 +142,17 @@ func EnvDuration(name string, def time.Duration) time.Duration {
 	return def
 }
 
-// ScrubChildEnv returns env with the variables a third-party CLI child must
-// never receive removed, without mutating the input: ANTHROPIC_API_KEY and
-// every WARDYN_* variable (the daemon's own configuration, including secrets
-// like WARDYN_AGE_KEY and WARDYN_ADMIN_TOKEN).
+// ScrubChildEnv returns env, without mutating the input, minus variables a third-party CLI child must
+// never receive: ANTHROPIC_API_KEY and every WARDYN_* (the daemon's own config, including secrets like
+// WARDYN_AGE_KEY and WARDYN_ADMIN_TOKEN).
 //
-// Denylist, not allowlist: these children legitimately need whatever
-// HTTPS_PROXY / NO_PROXY / AWS_* the shell carries, and a prefix covers every
-// future WARDYN_* secret for free.
+// Denylist, not allowlist: these children legitimately need whatever HTTPS_PROXY/NO_PROXY/AWS_* the shell
+// carries, and a prefix covers every future WARDYN_* secret for free.
 //
-// HONEST RESIDUAL: defense-in-depth and consistency, NOT containment — a
-// host-exec'd child runs as the same uid as wardynd and can read
-// /proc/<ppid>/environ regardless. One documented exception (enforced by
-// cmd/wardyn's childenv_guard_test.go): `docker compose config` in
-// supportbundle.go, whose output goes through redactSecrets before it reaches
-// a bundle.
+// SECURITY, HONEST RESIDUAL: defense-in-depth and consistency, NOT containment — a host-exec'd child runs
+// as the same uid as wardynd and can read /proc/<ppid>/environ regardless. One documented exception
+// (enforced by childenv_guard_test.go): `docker compose config` in supportbundle.go, whose output goes
+// through redactSecrets first.
 func ScrubChildEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -184,8 +164,8 @@ func ScrubChildEnv(env []string) []string {
 	return out
 }
 
-// SplitCSV splits a comma-separated list, trimming whitespace and dropping
-// empties. Returns nil for an empty input (meaning "no restriction").
+// SplitCSV splits a comma-separated list, trimming whitespace and dropping empties; nil for empty input
+// (meaning "no restriction").
 func SplitCSV(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil

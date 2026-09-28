@@ -154,22 +154,17 @@ func TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode(t *testing.T) {
 	}
 }
 
-// TestLaunchRecordRun_HonorsSiteWideDefaultIntegration: model access resolves
-// in three tiers (docs/OPERATIONS.md "Model access resolves") — run-explicit
-// integration_id, then the workspace's own LLMCred.IntegrationRef binding,
-// then the operator's site-wide DefaultFor:agent_runs integration.
-// launchRecordRun must not gate its foldRunIntegration call on the workspace
-// carrying its own binding, or an unbound workspace's record session never
-// consults tier 3 and falls straight to the generic ceiling/convention grant
-// — silently skipping the operator's configured default integration. This
-// workspace has NO LLMCred binding; the site config has one AI-provider
-// integration marked DefaultFor: agent_runs, so the record session's minted
-// credential grant must carry THAT integration's secret, not the convention
-// fallback's.
-func TestLaunchRecordRun_HonorsSiteWideDefaultIntegration(t *testing.T) {
+// TestLaunchRecordRun_MintsNoOperatorModelCredential pins #547 on the step-run
+// door (record, verify and build all launch through launchRecordRun): with no
+// model-provider block, a session no longer mints an api_key grant from the
+// OPERATOR's secrets — not the site-wide DefaultFor:agent_runs AI integration's,
+// not the workspace's own AI-integration pin's, and not the convention
+// anthropic-api-key the old fallback reached for (ensureLLMGrant). Each put the
+// operator's key behind every session's model calls.
+func TestLaunchRecordRun_MintsNoOperatorModelCredential(t *testing.T) {
 	h := newHarness(t)
-	wsID := uuid.New()
-	ws := types.Workspace{ID: wsID, Status: types.WorkspaceScanned} // LLMCred nil: no workspace-level binding
+	ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned,
+		LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "corp-default-anthropic"}}
 	fake := newRecordLLMModeStore(ws)
 	fake.sc = types.SiteConfig{
 		Integrations: []types.Integration{{
@@ -177,20 +172,22 @@ func TestLaunchRecordRun_HonorsSiteWideDefaultIntegration(t *testing.T) {
 			Name:       "Corp default Anthropic key",
 			Kind:       types.IntegrationKindAnthropicAPIKey,
 			DefaultFor: []string{"agent_runs"},
-			Secrets: []types.IntegrationSecret{{
-				Role:       "api_key",
-				SecretName: "corp-anthropic-key",
-			}},
+			Secrets:    []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}},
 		}},
 	}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"corp-anthropic-key": []byte("sk-corp")}}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{
+		"corp-anthropic-key": []byte("sk-corp"),
+		"anthropic-api-key":  []byte("sk-operator"),
+	}}
+	// The ceiling allows the model host but blesses no subscription mount, so
+	// nothing but an api_key grant could have credentialed the session.
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
 	srv := New(cfg)
 
-	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", ws, "build", "build", false)
-	if err != nil {
+	if _, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", ws, "build", "build", false); err != nil {
 		t.Fatalf("launchRecordRun: %v", err)
 	}
 
@@ -198,20 +195,13 @@ func TestLaunchRecordRun_HonorsSiteWideDefaultIntegration(t *testing.T) {
 	grants := fake.grants
 	fake.mu.Unlock()
 	for _, g := range grants {
-		if g.Spec.Kind != types.GrantAPIKey {
-			continue
-		}
-		var scope struct {
-			SecretName string `json:"secret_name"`
-		}
-		_ = json.Unmarshal(g.Spec.Scope, &scope)
-		if scope.SecretName == "corp-anthropic-key" {
-			return // found: the site-wide default integration's own grant was minted
+		if g.Spec.Kind == types.GrantAPIKey {
+			t.Fatalf("the session minted an api_key grant from an operator secret: %s", g.Spec.Scope)
 		}
 	}
-	t.Fatalf("no credential grant named the site-wide DefaultFor:agent_runs integration's secret "+
-		"(corp-anthropic-key); got grants=%+v — an unbound workspace's record session must still "+
-		"resolve tier 3 of model-access precedence, not skip straight to the convention fallback", grants)
+	if got := fake.lastRecord().LLMMode; got != "none" {
+		t.Errorf("session llm_mode = %q, want none", got)
+	}
 }
 
 // TestLaunchRecordRun_RepoDevcontainerImageWarnsMissingCLI is

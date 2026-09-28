@@ -172,14 +172,10 @@ type Origin struct {
 
 var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
 
-// Datum is the data of d's audit row, refused to p over method (empty when
-// no request carried it). A detail never stands in for a reserved key, so it
-// can never forge the reason or a marker.
-//
-// user_view is a marker, present only when true (renamed in 0.8 from
-// member_mode; no dual-emit needed since this key lives inside authz.denied's
-// own Data map, not a separate audit row). device_channel is a sibling of
-// the ingest marker device_origin, never that key.
+// Datum is the data of d's audit row, refused to p over method (empty when no request
+// carried it). A detail never stands in for a reserved key, so it can never forge the
+// reason or a marker. user_view is a marker present only when true (renamed in 0.8 from
+// member_mode); device_channel is a sibling of the ingest marker device_origin, never that key.
 func Datum(d Decision, p Principal, method string) map[string]any {
 	m := make(map[string]any, len(d.Detail)+len(reservedDatumKeys))
 	for k, v := range d.Detail {

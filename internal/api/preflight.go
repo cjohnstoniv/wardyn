@@ -183,16 +183,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !s.validateRunTextFields(w, req) {
 		return
 	}
-	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
-	// runs_create.go): a typo or a non-AI-provider id 400s here exactly as it
-	// would at launch, instead of silently resolving to nothing at
-	// foldRunIntegration time below (previewing as "no model access" on
-	// Review) and only failing for real once the operator clicks launch.
+	// Same integration_id refusal launch runs (decodeAndValidateCreateRun), so
+	// Review never previews a request launch refuses.
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(ctx, s.secretOwnerFromRequest(r), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
-			writeErrorReason(w, http.StatusBadRequest, reasonIntegrationNotAIProvider, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
-			return
-		}
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
+		return
 	}
 
 	// Resolve the policy through the SAME chokepoint launch uses. resolveRunPolicy
@@ -228,18 +223,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fold the run's model-access binding AND each referenced workspace's
-	// requirements contract into the spec BEFORE computing the enforced confinement
-	// class and grading — the SAME order launch now uses (SPINE-2/SPINE-6), so a
-	// workspace's integration:<id> requirement floors the run to CC3 here exactly
-	// as it will at launch, and the risk grade below sees the fold's write
-	// narrowing + grants rather than a pre-fold snapshot. foldRunIntegration folds
-	// the WHOLE precedence chain (explicit integration_id, workspace binding,
-	// operator default), not just the workspace tier. bedrockRef is KEPT (SPINE-5):
-	// a bedrock integration that supplies the region/model must reach
-	// resolveBedrockAuth below, or the checklist previews "no model access" for a
-	// run launch credentials fine. No audit event — preflight persists nothing
-	// (the run.workspace_cred.resolve audit is the create path's launch-only half).
+	// Fold each referenced workspace's requirements contract into the spec
+	// BEFORE computing the enforced confinement class and grading — the SAME
+	// order launch now uses (SPINE-2/SPINE-6), so a workspace's integration:<id>
+	// requirement floors the run to CC3 here exactly as it will at launch, and
+	// the risk grade below sees the fold's write narrowing + grants rather than
+	// a pre-fold snapshot. No audit event — preflight persists nothing.
 	wsRefs := s.referencedWorkspaces(ctx, spec)
 	// Widen the spec's egress from onboarded-workspace registries +
 	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),
@@ -259,7 +248,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Which secrets actually exist (names only) — the SAME map compose builds,
 	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
 	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-	_, _, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
 	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
@@ -317,7 +305,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modelCred := mpChoice.modelCredential()
-	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, nil, ssoSubject, &modelCred, false) {
 		return
 	}
 
@@ -387,7 +375,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject, mpChoice)
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, nil, ssoSubject, mpChoice)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)

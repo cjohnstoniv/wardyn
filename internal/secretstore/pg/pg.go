@@ -2,16 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package pg implements secretstore.Store over the Postgres `secrets` table,
-// one envelope-encrypted row per credential (credential-storage design §2.2,
-// envelope v1): every Put mints a fresh 32-byte data key (DEK), seals the value
-// under it with AES-256-GCM bound to the row's (owned_by, name), and stores the
-// DEK wrapped by a key-encryption key (package kek). The row records which KEK
-// wrapped it (kek_id), and a read dispatches on enc_version and kek_id.
+// one envelope-encrypted row per credential (envelope v1): every Put mints a
+// fresh 32-byte data key (DEK), seals the value under it with AES-256-GCM
+// bound to the row's (owned_by, name), and stores the DEK wrapped by a
+// key-encryption key (package kek). The row records which KEK wrapped it
+// (kek_id); a read dispatches on enc_version and kek_id.
 //
-// Security invariant: the plaintext and the DEK are only in memory during the
-// Put/Get call, and no error carries either — errors name the row, never its
-// value. Reads are recorded by the secretstore.Audited decorator wardynd wraps
-// this store in; Get reports the row it read to it (secretstore.NoteRow).
+// SECURITY: the plaintext and the DEK are only in memory during the Put/Get
+// call, and no error carries either. Reads are recorded by the
+// secretstore.Audited decorator this store is wrapped in.
 package pg
 
 import (
@@ -31,7 +30,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
-// Compile-time assertion: Store implements secretstore.Store.
 var _ secretstore.Store = (*Store)(nil)
 
 // encVersion is the row format every local write produces. 0 is the legacy
@@ -56,35 +54,30 @@ const secretAADLabel = "wardyn/secret/v1"
 // The zero value is unusable; use New.
 type Store struct {
 	pool *pgxpool.Pool
-	// kek wraps the DEK of every credential row this store writes, platform
-	// that of every boot key (secretstore.PlatformNames) — design §2.13 c —
-	// unless the key service writes. A read accepts only the KEK the row's
-	// purpose writes with, or legacy (reader); a row whose kek_id names any
-	// other is refused. All nil with no WARDYN_AGE_KEY (store mode, or a key
-	// service that writes): then every local (v1) row is refused by name.
+	// kek wraps the DEK of every credential row this store writes; platform
+	// wraps every boot key, unless the key service writes. A read accepts
+	// only the KEK the row's purpose writes with, or legacy. Both nil with no
+	// WARDYN_AGE_KEY (store mode, or a writing key service).
 	kek, platform kek.KEK
-	// legacy is the pre-split KEK of the age key: it wrote every row before
-	// the purpose split, and now only reads them, until `wardynd -rewrap`.
+	// legacy is the pre-split KEK of the age key: wrote every row before the
+	// purpose split, now only reads them, until `wardynd -rewrap`.
 	legacy kek.KEK
 	// separate: the platform KEK comes from WARDYN_PLATFORM_KEY_FILE, not the
-	// age key. Then no KEK the age key derives opens a platform row.
+	// age key, so no KEK the age key derives opens a platform row.
 	separate bool
 	// service is the configured key service (Deps.KEK, Vault Transit), or
-	// nil. It opens the rows sealed under it; with serviceWrites
-	// (WARDYN_KEK=transit) it also wraps every new data key, boot keys
-	// included.
+	// nil. Opens rows sealed under it; with serviceWrites it also wraps every
+	// new data key, boot keys included.
 	service       kek.KEK
 	serviceWrites bool
-	// ext is the configured external store, or nil. Pointer rows (enc_version
-	// 2) are read through it in every mode; writeExt says whether Put writes
-	// there (store mode) or seals locally.
-	ext      secretstore.External
-	writeExt bool
-	// extTimeout bounds each call to ext (Deps.ExternalTimeout).
-	extTimeout time.Duration
-	// owner is the secretstore.Store.For namespace this view is scoped to.
-	// "" (the zero value, and New's own result) is the operator namespace —
-	// every Store built before For existed keeps its exact behavior.
+	// ext is the configured external store, or nil. Pointer rows are read
+	// through it in every mode; writeExt says whether Put writes there
+	// (store mode) or seals locally.
+	ext        secretstore.External
+	writeExt   bool
+	extTimeout time.Duration // bounds each call to ext
+	// owner is the secretstore.Store.For namespace this view is scoped to;
+	// "" is the operator namespace.
 	owner string
 }
 
@@ -157,12 +150,11 @@ func (s *Store) localWriter(owner, name string) kek.KEK {
 	return s.kek
 }
 
-// reader is the KEK that may open row e, by its exact kek_id and never a
-// fallback to another: the key service for its own rows; for a local row, the
-// local KEK its purpose writes with, or the pre-split KEK — except for a
-// platform row once the platform key is separate, which only the platform key
-// opens. Anything the age key derives could otherwise forge a boot key there
-// (a signing key, a session key).
+// reader is the KEK that may open row e, by its exact kek_id, never a
+// fallback: the key service for its own rows; for a local row, the local KEK
+// its purpose writes with, or the pre-split KEK — except a platform row once
+// the platform key is separate, which only the platform key opens (anything
+// the age key derives could otherwise forge a boot key).
 func (s *Store) reader(e envelope) (kek.KEK, error) {
 	if s.service != nil && e.kekID == s.service.ID() {
 		return s.service, nil
@@ -308,17 +300,12 @@ type envelope struct {
 }
 
 // Get retrieves and opens a secret by name: this view's own (owner, name)
-// row if one exists, else the operator's ("", name) row — a member with no
-// key of their own resolves the operator's, exactly as every caller did
-// before For existed. For owner="" the IN clause names "" twice, so only the
-// operator row can ever match. Under secretstore.OwnRowOnly (an owner_only
-// grant) only the view owner's own row matches: for owner "" the operator's,
-// which is that view's own. A caller reaches For("") for an owner_only grant
-// only for a run the operator itself owns (identity.Claims.OperatorOwned).
-// Returns an error wrapping pgx.ErrNoRows and secretstore.ErrNotFound when
-// absent, and ONLY then: a row that exists but will not open is a distinct
-// error, so loadOrCreateSecret can never mistake a tampered boot key for a
-// missing one and mint over it.
+// row if one exists, else the operator's ("", name) row. Under
+// secretstore.OwnRowOnly (an owner_only grant) only the view owner's own row
+// matches. Returns an error wrapping pgx.ErrNoRows and secretstore.ErrNotFound
+// when absent, and ONLY then: a row that exists but will not open is a
+// distinct error, so loadOrCreateSecret can never mistake a tampered boot key
+// for a missing one and mint over it.
 func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	e := envelope{name: name}
 	q := `SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
@@ -337,7 +324,7 @@ func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	}
 	if err != nil {
 		// The database did not answer: transient, like an external store's
-		// outage, so a running run rides it out on its last-good value (K8).
+		// outage, so a running run rides it out on its last-good value.
 		return nil, fmt.Errorf("pg secretstore: get %s: %w: %w", rowRef(s.owner, name), secretstore.ErrUnavailable, err)
 	}
 	secretstore.NoteRow(ctx, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Ref: e.kekID})
@@ -407,16 +394,11 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// DeleteEverywhere removes every owner's row of each name — see
-// secretstore.Store.DeleteEverywhere. Deliberately NOT scoped to s.owner.
-//
-// One transaction, all or nothing: the first row that cannot be deleted rolls
-// every row back (a value already removed leaves its row a dangling pointer,
-// a refusal a retry clears). Rows are locked one at a time in (owned_by, name)
-// order, so two DeleteEverywhere calls take their locks in the same order and
-// cannot deadlock. The listing takes no row lock: Put takes a row's advisory
-// lock before the row itself, and holding the row before its advisory lock
-// here would close a cycle with it.
+// DeleteEverywhere removes every owner's row of each name, deliberately NOT
+// scoped to s.owner. One transaction, all or nothing. Rows are locked one at
+// a time in (owned_by, name) order, so two calls take their locks in the same
+// order and cannot deadlock; the listing takes no row lock, since Put takes a
+// row's advisory lock before the row itself.
 func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
@@ -498,36 +480,31 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 
 // Rekey rewraps every row's data key from the local KEKs of oldID to those of
 // newID and returns how many rows it rewrapped. It is the body of wardynd's
-// `-rotate-age-key` maintenance mode (cmd/wardynd's rotateAgeKeyMode) and is NOT
-// part of the secretstore.Store seam: the Store contract is per-name late-bound
-// access, while this is a whole-table administrative operation. wrapped_dek,
-// kek_id and updated_at change — a rotation is a write, and least-retention
-// sweeps read updated_at — but the sealed value (and its DEK) is untouched,
-// so a rotation never decrypts a credential. platform is the separate platform
-// identity (WARDYN_PLATFORM_KEY_FILE), or nil: the boot keys under it are not
-// under the age key, and stay as they are.
+// `-rotate-age-key` maintenance mode and is NOT part of the secretstore.Store
+// seam: Store is per-name late-bound access, this is a whole-table admin
+// operation. wrapped_dek, kek_id and updated_at change, but the sealed value
+// (and its DEK) is untouched, so a rotation never decrypts a credential.
+// platform is the separate platform identity (WARDYN_PLATFORM_KEY_FILE), or
+// nil: boot keys under it stay as they are.
 //
 // Pointer rows (store mode) and rows under a key service (Transit) hold
 // nothing under the age key and are left alone; `wardynd -rewrap` moves those.
 //
-// ALL-OR-NOTHING. One transaction: any row that is not a v1 row under the old
-// keys, or whose data key does not unwrap, aborts the whole thing — the returned
-// error names the row and how far it had got, and nothing is committed, so every
-// secret is still readable with the OLD key. A v0 row aborts too: the serving
-// boot converts those (ConvertV0), and a rotation is not a conversion.
+// ALL-OR-NOTHING: one transaction, and any row that is not a v1 row under the
+// old keys, or whose data key does not unwrap, aborts the whole thing with
+// nothing committed, so every secret stays readable with the OLD key. A v0
+// row aborts too — the serving boot converts those (ConvertV0), not a rotation.
 //
-// The FOR UPDATE on the select buys lost-update prevention, NOT exclusivity: it
-// holds the rows it read, so a concurrent Put of one of those names waits and
-// lands AFTER the commit instead of being clobbered by this transaction's
-// rewrap of the envelope it replaced. It does NOT keep rows out from under the
-// retired key — under READ COMMITTED a Put of a NEW name inserts straight past
-// these locks, and a queued Put of an existing name still writes its old-key
-// wrap once released. That every committed row is readable with newID is
-// carried by the offline requirement below, not by the lock.
+// The FOR UPDATE on the select buys lost-update prevention, not exclusivity:
+// a concurrent Put of one of those names waits and lands after the commit
+// instead of being clobbered, but does not keep rows out from under the
+// retired key (a Put of a new name inserts straight past these locks under
+// READ COMMITTED). That every committed row reads with newID is carried by
+// the offline requirement below, not the lock.
 //
-// The caller supplies BOTH identities: the daemon must be offline (its in-memory
-// Store still holds the old KEK), and the caller is responsible for persisting
-// newID before a restart and for emitting the secret.rekey audit event.
+// The caller supplies BOTH identities: the daemon must be offline (its
+// in-memory Store still holds the old KEK), and the caller must persist
+// newID before a restart and emit the secret.rekey audit event.
 func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.Identity) (int, error) {
 	from, to := &Store{}, &Store{}
 	if err := from.setLocalKeys(oldID, platform); err != nil {
@@ -571,27 +548,25 @@ func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Iden
 // RewrapKeys moves every sealed row's data key to the KEK a write under d
 // uses today, and returns what it did. It is the body of wardynd's `-rewrap`
 // maintenance mode, the one command that moves data keys between KEKs:
-//   - onto the local KEK of the row's purpose (design §2.13 c): a row written
-//     before the purpose split, and, once WARDYN_PLATFORM_KEY_FILE is set, a
-//     boot key still under the age key's platform KEK;
-//   - between the local keys and a key service (design §2.3), either way:
-//     with d.KEKWrites (WARDYN_KEK=transit) every row moves to the key
-//     service, and with the key service read-only every row under it moves
-//     back to the local keys;
-//   - onto a versioned key service's latest version, so the older versions
-//     can be retired (Transit's min_decryption_version).
+//   - onto the local KEK of the row's purpose: a row written before the
+//     purpose split, and, once WARDYN_PLATFORM_KEY_FILE is set, a boot key
+//     still under the age key's platform KEK;
+//   - between the local keys and a key service: with d.KEKWrites
+//     (WARDYN_KEK=transit) every row moves to the key service, and with the
+//     key service read-only every row under it moves back to the local keys;
+//   - onto a versioned key service's latest version, so older versions can be
+//     retired (Transit's min_decryption_version).
 //
 // The rewrap is CLIENT-SIDE: each data key is unwrapped under the row's own
 // KEK and wrapped again under the target, both bound to the row. Transit's
-// server-side rewrap endpoint is never called — Vault does not document
+// server-side rewrap endpoint is never called — Vault doesn't document
 // associated_data on it, and a rewrap that dropped the binding would be
-// silent. Only wrapped_dek, kek_id and updated_at change, as in Rekey, the
-// sealed value is never decrypted, and it is all-or-nothing the same way: a
-// key service that fails mid-run aborts it with nothing committed. Pointer
+// silent. The sealed value is never decrypted, and it is all-or-nothing:
+// a key service that fails mid-run aborts with nothing committed. Pointer
 // rows hold no data key and are never touched.
 //
 // Moving the boot keys onto a separate platform key trusts what the age key
-// holds at that moment: it is the one step at which the age key vouches for a
+// holds at that moment — the one step at which the age key vouches for a
 // platform row. From then on nothing the age key derives opens one.
 func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	var res RewrapResult
@@ -737,19 +712,19 @@ func rewrap(ctx context.Context, source func(envelope) (kek.KEK, error), to kek.
 
 // beginReadCommitted starts a transaction on pool pinned to READ COMMITTED.
 //
-// Rekey and ConvertV0 each rewrite EVERY row they select under one transaction,
-// so it must not inherit default_transaction_isolation: on a pool set to
-// REPEATABLE READ a long rewrite takes a snapshot at its first statement and
-// then holds it for the whole rewrite, which turns any concurrent writer into a
-// serialization failure reported as an abort — and a ConvertV0 queued behind
-// another's advisory lock would select the rows that one already converted.
-// READ COMMITTED is also exactly the isolation the FOR UPDATE lock reasoning
-// above is written against.
+// Rekey and ConvertV0 each rewrite EVERY row they select under one
+// transaction, so it must not inherit default_transaction_isolation: on a
+// pool set to REPEATABLE READ a long rewrite takes a snapshot at its first
+// statement and holds it for the whole rewrite, turning any concurrent
+// writer into a serialization failure — and a ConvertV0 queued behind
+// another's advisory lock would select rows that one already converted.
+// READ COMMITTED is also the isolation the FOR UPDATE lock reasoning above
+// is written against.
 //
-// SET TRANSACTION rather than pgx.TxOptions: equivalent as long as it is the FIRST
-// statement of the transaction, which it is. A failed SET rolls the half-open
-// transaction back so no unpinned tx is ever returned (same shape as the broker's
-// PgxStore.BeginReadCommitted and internal/db's beginReadCommitted).
+// SET TRANSACTION rather than pgx.TxOptions: equivalent as long as it's the
+// first statement of the transaction, which it is. A failed SET rolls the
+// half-open transaction back so no unpinned tx is ever returned (same shape
+// as the broker's PgxStore.BeginReadCommitted and internal/db's beginReadCommitted).
 func beginReadCommitted(ctx context.Context, pool *pgxpool.Pool) (pgx.Tx, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {

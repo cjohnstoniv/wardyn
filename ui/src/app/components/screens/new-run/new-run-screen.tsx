@@ -508,6 +508,16 @@ export function NewRunScreen() {
   // The Barrier control's per-tier state — see barrierReasons.
   const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, effectiveFloor);
 
+  // #214 — a SETTLED probe reporting zero classes: this host genuinely
+  // cannot build any barrier, so Launch itself is disabled, not just every
+  // tier. Deliberately host-level, not the governance-narrowed empty-qualifying
+  // shape TierPicker's own T-9 card already answers below (effectiveFloor set,
+  // every installed tier still below it) — that is a policy choice, not a
+  // reason Launch can never work here. Also deliberately NOT the unknown-probe
+  // case (probeSettled stays false there): unresolved stays selectable, exactly
+  // as it already was, unrelated to this issue.
+  const noBarrierOnHost = probeSettled && !!availableClasses && availableClasses.length === 0;
+
   // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
   // purpose: the /setup/status read resolves ASYNCHRONOUSLY and re-seeds
   // confinementClass from the server's own default, which can land BELOW a
@@ -740,6 +750,56 @@ export function NewRunScreen() {
             driveUnavailable={driveUnavailable}
           />
 
+          {/* #214 — the Barrier control OUT of the Policy card and into its
+              own section: it decides whether a run is confined at all, and
+              it was the hardest thing on the screen to find. */}
+          <SectionCard title="Barrier">
+            {/* #1200 — the shared TierPicker: only what THIS run can
+                actually use (installed ∧ at-or-above the active floor, which
+                folds in the governance ceiling ONLY where the server would
+                clamp to it — see govFloorApplies). A tier the floor forbids
+                or the host can't build is DROPPED, never shown disabled (the
+                global rule every user-facing picker now follows); the ONE
+                qualifying case collapses to TierPicker's own decided row, and
+                NONE qualifying shows the T-9 requirement card instead of a
+                fully-disabled Seg (its own REQUIREMENT_TITLE fallback is what
+                names "No sandbox runner" for the host-level #214 case below —
+                requirementNote here still overrides it only for the
+                governance-floor shape). Review P2-1/P2-3: decidedLine/
+                pickOneNote override TierPicker's defaults, which both assume
+                a governance floor and a browser-persisted pick — neither
+                true of this screen's non-governance decided case or its
+                per-run choice. */}
+            <TierPicker
+              // P2-7: an UNKNOWN probe (qualifying: null) must not offer
+              // a tier the active floor already forbids — it falls back
+              // to the floor's own allowed set, not the unfiltered
+              // ORDERED_CLASSES, and only to that when there is no floor
+              // either.
+              tiers={qualifying ?? allowedFromFloor(effectiveFloor) ?? ORDERED_CLASSES}
+              selected={cc}
+              onSelect={(id) => {
+                setCcTouched(true);
+                patch({ confinementClass: id });
+              }}
+              decidedLine={governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
+              pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
+              requirementNote={
+                qualifying && qualifying.length === 0 && effectiveFloor
+                  ? (governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
+                      CC_META[effectiveFloor].label,
+                      barrierRequirementReason(effectiveFloor, unavailable, belowFloor, vaultReason),
+                    )
+                  : undefined
+              }
+            />
+            {/* Unknown never blocks launch: an untouched pick sends no
+                confinement_class (ccTouched), so the server decides. */}
+            {probeSettled && !availableClasses && (
+              <p className="mt-2 text-xs text-muted-foreground">{RUN.BARRIER_UNKNOWN}</p>
+            )}
+          </SectionCard>
+
           <SectionCard title="Policy">
             <div className="space-y-4">
               <PolicyPanel
@@ -844,57 +904,6 @@ export function NewRunScreen() {
                   </div>
                 </div>
               )}
-
-              {/* #1200 — the shared TierPicker: only what THIS run can
-                  actually use (installed ∧ at-or-above the active floor,
-                  which folds in the governance ceiling ONLY where the server
-                  would clamp to it — see govFloorApplies). A tier the floor
-                  forbids or the host can't build is DROPPED, never shown
-                  disabled (the global rule every user-facing picker now
-                  follows); the ONE qualifying case collapses to TierPicker's
-                  own decided row, and NONE qualifying shows the T-9
-                  requirement card instead of a fully-disabled Seg. Review
-                  P2-1/P2-3: decidedLine/pickOneNote override TierPicker's
-                  defaults, which both assume a governance floor and a
-                  browser-persisted pick — neither true of this screen's
-                  non-governance decided case or its per-run choice. */}
-              <div className="border-t border-border pt-3">
-                <div className="text-sm font-medium text-foreground">Barrier</div>
-                <TierPicker
-                  className="mt-2"
-                  // P2-7: an UNKNOWN probe (qualifying: null) must not offer
-                  // a tier the active floor already forbids — it falls back
-                  // to the floor's own allowed set, not the unfiltered
-                  // ORDERED_CLASSES, and only to that when there is no floor
-                  // either.
-                  tiers={qualifying ?? allowedFromFloor(effectiveFloor) ?? ORDERED_CLASSES}
-                  selected={cc}
-                  onSelect={(id) => {
-                    setCcTouched(true);
-                    patch({ confinementClass: id });
-                  }}
-                  decidedLine={governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
-                  pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
-                  requirementNote={
-                    qualifying && qualifying.length === 0 && effectiveFloor
-                      ? (governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
-                          CC_META[effectiveFloor].label,
-                          barrierRequirementReason(
-                            effectiveFloor,
-                            unavailable,
-                            belowFloor,
-                            vaultReason,
-                          ),
-                        )
-                      : undefined
-                  }
-                />
-                {/* Unknown never blocks launch: an untouched pick sends no
-                    confinement_class (ccTouched), so the server decides. */}
-                {probeSettled && !availableClasses && (
-                  <p className="mt-2 text-xs text-muted-foreground">{RUN.BARRIER_UNKNOWN}</p>
-                )}
-              </div>
             </div>
           </SectionCard>
         </div>
@@ -925,8 +934,14 @@ export function NewRunScreen() {
             problem,
             // review F5: disables Launch WITHOUT a second rendering of the
             // sentence — workspace-card.tsx's own advisory line is the one
-            // place it's shown.
+            // place it's shown. noBarrier follows the identical rule (#1328
+            // review F4 — ONE source of truth: the rail's own disabled check
+            // already folds `noBarrier` in, so this screen never duplicates
+            // it into `disabled` itself, same as workspaceUnavailable right
+            // above): the rail states ITS OWN reason beside Launch (below),
+            // so `problem` never also carries it.
             workspaceUnavailable,
+            noBarrier: noBarrierOnHost,
             error,
             errorSeq,
             credentialRefused,

@@ -15,24 +15,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Compile-time assertion: PGStore implements Store.
 var _ Store = (*PGStore)(nil)
 
-// maxCastBytes bounds a single stored cast (migration 0028), matching
-// internal/api/recording.go's maxRecordingUploadBytes so behavior doesn't
-// depend on which path recorded the session. Not redundant with that cap:
-// it also fronts the in-process attach-session recorder, which has no HTTP
-// body to bound another way. An oversized BYTEA row bloats the shared
-// Postgres table/WAL/backups for every replica, not just one pod's disk, so
-// the store enforces its own cap rather than trusting every caller upstream.
+// maxCastBytes bounds a single stored cast, matching maxRecordingUploadBytes so behavior
+// doesn't depend on which path recorded the session; also fronts the in-process
+// attach-session recorder, which has no HTTP body to bound another way. An oversized BYTEA
+// row bloats the shared Postgres table/WAL/backups for every replica, so the store enforces
+// its own cap rather than trusting callers upstream.
 const maxCastBytes = 64 << 20 // 64 MiB
 
 // readCapped reads everything r yields, stopping at limit+1 bytes so the
 // caller can tell "exactly at the cap" from "over it".
 //
-// A plain io.ReadAll or bytes.Buffer+io.Copy grows by REALLOCATING, so old
-// and new backing arrays are live at once — measured peak HeapAlloc for one
-// 64 MiB cast (go1.26):
+// A plain io.ReadAll or bytes.Buffer+io.Copy grows by reallocating, so old and new backing
+// arrays are live at once — measured peak HeapAlloc for one 64 MiB cast (go1.26):
 //
 //	io.ReadAll(io.LimitReader(r, cap+1))        158.3 MiB
 //	bytes.Buffer(1 MiB) + io.Copy                224.6 MiB   (worse)
@@ -63,23 +59,22 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 	}
 }
 
-// PGStore is a Postgres-backed Store (migration 0028). Unlike FSStore
-// (per-pod directory), a cast saved via one replica is immediately visible
-// through any other. The zero value is unusable; use NewPGStore.
+// PGStore is a Postgres-backed Store. Unlike FSStore (per-pod directory), a cast saved via
+// one replica is immediately visible through any other. The zero value is unusable; use
+// NewPGStore.
 type PGStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewPGStore returns a Store backed by pool, the same pgxpool the rest of
-// the control plane uses.
+// NewPGStore returns a Store backed by pool, the same pgxpool the rest of the control
+// plane uses.
 func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
 }
 
-// SaveCastNamed persists r under the composite "<runID>~<suffix>" key (see
-// Store's doc for the addressing contract). validSuffix (store.go) is shared
-// verbatim with FSStore so a suffix is accepted or rejected identically
-// regardless of which store an operator has selected.
+// SaveCastNamed persists r under the composite "<runID>~<suffix>" key (see Store's doc for
+// the addressing contract). validSuffix is shared verbatim with FSStore so a suffix is
+// accepted or rejected identically regardless of the selected store.
 func (s *PGStore) SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error {
 	if err := validSuffix(suffix); err != nil {
 		return err
@@ -135,10 +130,9 @@ func (s *PGStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, erro
 	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
-// StatAndTail reports the cast's byte size and its last tailBytes, computed
-// and sliced SERVER-SIDE so a caller wanting only a size and a duration never
-// pulls the whole payload across the wire. tailBytes is clamped to size when
-// the cast is smaller.
+// StatAndTail reports the cast's byte size and its last tailBytes, computed and sliced
+// server-side so a caller wanting only a size and duration never pulls the whole payload
+// across the wire. tailBytes is clamped to size when the cast is smaller.
 func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, error) {
 	if err := validKey(key); err != nil {
 		return 0, nil, err
@@ -160,16 +154,14 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	return size, tail, nil
 }
 
-// Sweep deletes every cast row last written more than olderThan ago,
-// returning how many rows it removed. Measured on updated_at, not
-// created_at, so a re-saved cast is never swept from under an in-progress
-// session. Like FSStore.Sweep, deliberately NOT part of the Store interface
-// — retention is a storage-backend concern; reached via the unexported
-// recordingSweepable interface instead.
+// Sweep deletes every cast row last written more than olderThan ago, returning how many
+// rows it removed. Measured on updated_at, not created_at, so a re-saved cast is never
+// swept from under an in-progress session. Deliberately not part of the Store interface —
+// retention is a storage-backend concern, reached via the unexported recordingSweepable
+// interface instead.
 func (s *PGStore) Sweep(olderThan time.Duration) (int, error) {
-	// Bounded: the caller runs this synchronously on the sweep loop, so an
-	// unbounded DELETE would stall shutdown. Timing out just skips a sweep;
-	// the next tick retries.
+	// Bounded: the caller runs this synchronously on the sweep loop, so an unbounded DELETE
+	// would stall shutdown. Timing out just skips a sweep; the next tick retries.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	tag, err := s.pool.Exec(ctx,
@@ -185,8 +177,7 @@ func (s *PGStore) Sweep(olderThan time.Duration) (int, error) {
 func init() {
 	Register("pg", func(d Deps) (Store, error) {
 		if d.Pool == nil {
-			// wardynd always has a pool by the time it selects a recording
-			// store, so nil here can only mean a wiring bug — fail loud.
+			// wardynd always has a pool by store-selection time, so nil here is a wiring bug — fail loud.
 			return nil, errors.New("recording: pg store requires a pool (Deps.Pool is nil)")
 		}
 		return NewPGStore(d.Pool), nil

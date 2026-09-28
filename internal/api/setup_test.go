@@ -258,11 +258,11 @@ func TestSetupStatus_AdminToken(t *testing.T) {
 // The two additive SetupStatus fields (Integrations, Harnesses) are populated
 // alongside the existing checks, never in place of them: Harnesses always
 // echoes the static harness catalog, and Integrations reflects a legacy row
-// derived from a plain stored secret exactly like GET /integrations would.
+// derived from plain stored secrets exactly like GET /integrations would.
 func TestSetupStatus_IntegrationsAndHarnessesAdditive(t *testing.T) {
 	srv := New(Config{
 		AdminToken: adminToken,
-		Secrets:    &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}},
+		Secrets:    &memSecrets{m: map[string][]byte{secretGitHubAppID: []byte("123"), secretGitHubAppKey: []byte("key")}},
 	})
 	code, st := decodeSetup(t, srv, adminToken)
 	if code != http.StatusOK {
@@ -273,12 +273,12 @@ func TestSetupStatus_IntegrationsAndHarnessesAdditive(t *testing.T) {
 	}
 	found := false
 	for _, in := range st.Integrations {
-		if in.ID == "anthropic_api_key" {
+		if in.ID == "github_app" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("Integrations = %+v, want an anthropic_api_key entry derived from the stored secret", st.Integrations)
+		t.Errorf("Integrations = %+v, want a github_app entry derived from the stored secrets", st.Integrations)
 	}
 }
 

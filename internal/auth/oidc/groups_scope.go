@@ -9,11 +9,11 @@ import (
 	"strings"
 )
 
-// claimKeyedRoleMapValues returns the role-map keys that ONLY a `roles` or
-// `groups` claim can answer, sorted (map iteration order is not, and both the
-// boot half and login half of this warning must render the same fact the
-// same way). A key holding "@" is an email, already covered by the requested
-// `email` claim, so it never triggers the warning.
+// claimKeyedRoleMapValues returns the role-map keys only a `roles`/`groups`
+// claim can answer, sorted (map order isn't, and the boot and login halves of
+// this warning must render the same fact identically). A key holding "@" is
+// an email, already covered by the requested `email` claim, so it never
+// triggers the warning.
 func claimKeyedRoleMapValues(roleMap map[string]string) []string {
 	var claimKeyed []string
 	for k := range roleMap {
@@ -25,23 +25,21 @@ func claimKeyedRoleMapValues(roleMap map[string]string) []string {
 	return claimKeyed
 }
 
-// warnMergedMapNeedsGroupsScope is the LOGIN-TIME half of
-// warnUnrequestedGroupsScope: boot only sees Config.RoleMap, but the map a
-// login actually uses is that MERGED with Config.RoleMappings (console rows
-// added/removed at runtime), so a console-only deployment needs this check
-// at login, not construction.
+// warnMergedMapNeedsGroupsScope is the login-time half of
+// warnUnrequestedGroupsScope: boot only sees Config.RoleMap, but login uses
+// that merged with Config.RoleMappings (console rows added/removed at
+// runtime), so a console-only deployment needs this check at login, not
+// construction.
 //
 // Fires only when all three hold: the provider advertises an unrequested
-// `groups` scope (Entra never does, so this never fires there); the merged
-// map has a value only a `roles`/`groups` claim can answer; and no login
-// this process has seen carried that claim (sawGroupClaim latches true
-// permanently the first time one does).
+// `groups` scope (Entra never does); the merged map has a value only a
+// `roles`/`groups` claim can answer; and no login this process has seen
+// carried that claim (latched permanently once one does).
 //
-// Logs once per process (warnedMergedGroupsScope) rather than per login: an
-// operator can't fix this from the log, so repeating it just gets filtered.
-// It cannot deny the login: an omitted `groups` claim is indistinguishable
-// from "this human is in no groups", so failing closed here would lock out
-// every human on an IdP that has none to send.
+// Logs once per process, not per login — an operator can't fix this from the
+// log, so repeating it is just noise. It never denies the login: an omitted
+// `groups` claim is indistinguishable from "this human is in no groups", so
+// failing closed here would lock out every human on an IdP that sends none.
 func (a *Authenticator) warnMergedMapNeedsGroupsScope(roleMap map[string]string, rolesClaim, groupsClaim []string) {
 	if !a.groupsScopeUnrequested {
 		return

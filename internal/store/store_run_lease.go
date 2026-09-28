@@ -1,9 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The run lease (long-holds design rev 4, RL-3; migration 0073): the reads and
-// the two conditional writes the lease sweep needs. Kept out of store.go for
-// the same size reason as store_watcher.go.
+// The run lease (long-holds design rev 4; migration 0073): the reads and the
+// conditional writes the lease sweep needs. Kept out of store.go for the same
+// size reason as store_watcher.go.
 package store
 
 import (
@@ -24,58 +24,49 @@ import (
 type RunLeaser interface {
 	// ListLeasedRuns returns every RUNNING run that has an end or is kept.
 	ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error)
-	// MarkRunEnded marks run id kept-and-ended at now, but only while it is
-	// still RUNNING, not already kept, and its end is at or before now. It
-	// clears a pause: the end stops the agent, paused or not. The
-	// conditional UPDATE is the mutual exclusion between replicas: exactly one
-	// caller sees true and runs the end.
+	// MarkRunEnded marks run id kept-and-ended at now, only while still
+	// RUNNING, not already kept, and its end is at or before now; clears a
+	// pause. The conditional UPDATE is the cross-replica mutual exclusion:
+	// exactly one caller sees true and runs the end.
 	MarkRunEnded(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
-	// MarkRunEndingSoon records that the warning for thresholdSec before endsAt
-	// went out, and reports whether this call is the one that recorded it: false
-	// when that warning (or a closer one) was already sent for this same end, or
-	// the run's end is no longer endsAt.
+	// MarkRunEndingSoon records that the thresholdSec-before-endsAt warning
+	// went out, reporting whether this call recorded it: false when that
+	// warning (or a closer one) already went for this end, or the end changed.
 	MarkRunEndingSoon(ctx context.Context, id uuid.UUID, endsAt time.Time, thresholdSec int) (bool, error)
-	// SetRunEndAndWait moves run id's end and wait from (fromEnd, fromWait) to
-	// (toEnd, toWait), but only while the run still has those values and the
-	// run limits fromLimits the caller decided against, and is not terminal. A
-	// run lost to a reboot or a control-plane outage may still move its end
-	// (F1, long-holds design rev 4 §2.3): extending it is how it becomes
-	// revivable again. A run kept by its OWN end (LostEnded) moves only with
-	// ended set, and only as EndedKept describes; with ended nil it never does.
-	// false means the run changed since the caller read it — its end, its
-	// wait, or a tightened profile re-clamping its limits; nil ends are "no
-	// end". Moving the end clears end_tightened_at.
+	// SetRunEndAndWait moves run id's end/wait from (fromEnd, fromWait) to
+	// (toEnd, toWait), only while the run still has those values, limits
+	// fromLimits, and isn't terminal. A run lost to a reboot/outage may still
+	// move its end — extending it is how it becomes revivable again. A run
+	// kept by its OWN end (LostEnded) moves only with ended set, exactly as
+	// EndedKept describes. false means the run changed since the read (end,
+	// wait, or a re-clamped profile); nil ends mean "no end". Moving the end
+	// clears end_tightened_at.
 	SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types.RunLimits, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *EndedKept) (bool, error)
-	// StopKeptRunIf makes a kept run (RUNNING with a lost/end mark) terminal, but
-	// only while the row still carries the EXACT kept mark the caller read:
-	// lostAt, lostReason and endsAt, compared atomically with the state guard in
-	// one UPDATE (F04, long-holds review). This closes the same class of TOCTOU
-	// UpdateRunStateIfIdle closes for the idle reaper: a stale lease-sweep row —
-	// read before a successful extension, a revive, or a fresher end landed —
-	// must never win the destructive RUNNING->terminal transition and tear down
-	// a run that is no longer the one it read. state='RUNNING' stays in the
-	// predicate too, so a concurrent kill's outcome is still preserved. false
-	// means the mark or the state changed since the read; the caller's re-assert
-	// on the next sweep pass is what makes that safe to just drop.
+	// StopKeptRunIf makes a kept run (RUNNING with a lost/end mark) terminal,
+	// only while the row still carries the EXACT kept mark read (lostAt,
+	// lostReason, endsAt), checked atomically with the state guard in one
+	// UPDATE. Closes the same TOCTOU class UpdateRunStateIfIdle closes for the
+	// idle reaper: a stale lease-sweep row must never win the destructive
+	// RUNNING->terminal transition and tear down a run it no longer describes.
+	// false means the mark or state changed; the caller's re-assert next sweep
+	// pass makes dropping that safe.
 	StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error)
-	// SetRunContainmentError records that a kept run's stop (its proxy, or its
-	// agent) failed with msg (#1060, migration 0088): only while it is RUNNING
-	// and kept. The message is refreshed on every call; containment_error_at
-	// keeps the first failure's time.
+	// SetRunContainmentError records that a kept run's stop (proxy or agent)
+	// failed with msg, only while RUNNING and kept. Message refreshes on every
+	// call; containment_error_at keeps the first failure's time.
 	SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string, now time.Time) error
-	// ClearRunContainmentError clears it once the stop is confirmed. true only
-	// for the call that cleared a recorded error, so the resolution is audited
+	// ClearRunContainmentError clears it once the stop is confirmed; true only
+	// for the call that cleared a recorded error, so resolution is audited
 	// once across replicas.
 	ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 // EndedKept is the condition a write on a run kept by its OWN end (LostEnded)
-// lands under during its files grace (#1061): the row must still carry the
-// exact ended mark the caller decided on (LostAt), and that mark must be after
-// KeptAfter, the caller's Now less the ended-run grace on the application
-// clock. A grace that runs out between the caller's check and the write
-// refuses the write; nothing here moves the mark, so no write renews the
-// grace. A revive also needs the run's end to be after Now.
+// lands under during its files grace: the row must still carry the exact
+// ended mark decided on (LostAt), after KeptAfter (Now less the ended-run
+// grace). A grace that runs out between check and write refuses the write;
+// nothing here moves the mark, so no write renews the grace. A revive also
+// needs the run's end to be after Now.
 type EndedKept struct {
 	LostAt, KeptAfter, Now time.Time
 }

@@ -637,16 +637,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		unionAllowedDomains(&policy, s.modelProviderEgress(s.cfg.DefaultPolicy))
 	}
 
-	// Model access for the session comes from the WORKSPACE's OWN binding
-	// — the same resolveRunIntegration precedence (explicit → workspace pin →
-	// operator default) a real run of this workspace uses — not just the operator
-	// ceiling's convention secret. A confined replay whose job is to PROVE least
-	// privilege must authenticate on the SAME credential path a real run will, or
-	// its capture (and the promotion candidates derived from it) reflect a different
-	// transport. A synthetic claude-code request with this one workspace as wsRefs
-	// drives the identical fold launch/preflight run; bedrockRef is threaded into
-	// dispatch below so a bedrock-bound workspace records its own region, not the
-	// global default.
 	var injections []runner.InjectionGrant
 
 	// The workspace's REQUIRED contract rows ride a session the SAME way they
@@ -667,17 +657,13 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	before := len(policy.EligibleGrants)
 	reqEvents := s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
 	// Audited the way POST /runs audits them, before any grant is minted.
-	s.recordCreateFolds(ctx, runID, types.Integration{}, "", reqEvents)
+	s.recordCreateFolds(ctx, runID, reqEvents)
 	minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
 	if ierr != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
 	injections = append(injections, minted...)
-	llmMode, bedrockRef, llmInjections, lerr := s.recordSessionModelAccess(ctx, runID, now, &policy, ws, mp, len(injections) > 0)
-	if lerr != nil {
-		return types.AgentRun{}, false, abort(lerr)
-	}
-	injections = append(injections, llmInjections...)
+	llmMode := s.recordSessionModelAccess(&policy, mp, len(injections) > 0)
 
 	// Save the resolved auth mode + model onto the session entry so it's visible and a
 	// later confined replay reflects the SAME provider the operator configured (not a
@@ -704,10 +690,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		GitGrants:          gitBrokerGrant(primaryCloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		Injections:         injections,
-		// The workspace's own Bedrock region/model — nil for a non-bedrock
-		// binding, so dispatch keeps the global config exactly as before.
-		BedrockRef:  bedrockRef,
-		Interactive: true,
+		Interactive:        true,
 		// A record/verify session runs ONE workspace — its scans decide the
 		// toolchain env, same rule as an ordinary workspace run.
 		Toolchains: runToolchainNeeds([]types.Workspace{ws}),

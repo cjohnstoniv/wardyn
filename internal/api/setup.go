@@ -327,24 +327,6 @@ func llmProvenance(providers []SetupProvider, secretNames []string, claudeDetail
 	return ""
 }
 
-// computeLLMReady is SetupStatus.LLMReady's verdict (HIGH-4 review fix),
-// pulled out of handleSetupStatus as its own pure function purely to keep
-// that handler's branching under the gocyclo gate — llmDetail already IS
-// llmProvenance's own winning signal (plus Bedrock/managed-harness, folded in
-// by the caller before this runs), so the only new branching here is the
-// AI-provider Integration fallback for when llmDetail came up empty.
-func computeLLMReady(llmDetail string, integrations []SetupIntegration) bool {
-	if llmDetail != "" {
-		return true
-	}
-	for _, in := range integrations {
-		if types.AIProviderKind(in.Kind) {
-			return true
-		}
-	}
-	return false
-}
-
 // subscriptionLLMDetail composes the LLM-access detail for a resident Claude Code
 // CLI login, distinguishing a live Claude SUBSCRIPTION (a peeked OAuth token) from
 // a fresh/expired token and folding in whether subscription runs inject the live
@@ -510,18 +492,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 	// llm_ready (HIGH-4 review fix): llmDetail's own winning signal (resident
 	// CLI login, a secret-name heuristic, Bedrock, or a managed harness token —
-	// everything folded in above) OR'd with an
-	// AI-provider Integration being configured, computed ONCE here and reused
-	// below for resp.Integrations so effectiveIntegrations() is not walked
-	// twice. Computed BEFORE redaction and left untouched by it (see
-	// redactSetupStatusForUser) — a member's console needs the ANSWER even
-	// though it can no longer see the detail that produced it.
-	//
-	// PLATFORM-API-7: use the *Using form, reusing the present/providers/bedrock
-	// already computed above, so this single call does NOT redo a full secret
-	// listing, a CLI sweep + subscription peek, and an AWS-SSO-blob age decrypt.
-	integrations := s.integrationsWithCapabilitiesUsing(ctx, present, providers, bedrock)
-	llmReady := computeLLMReady(llmDetail, integrations)
+	// everything folded in above). Computed BEFORE redaction and left untouched
+	// by it (see redactSetupStatusForUser) — a member's console needs the ANSWER
+	// even though it can no longer see the detail that produced it.
+	llmReady := llmDetail != ""
 	modelProviders, providerAccess, providerChecks := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
@@ -637,11 +611,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Bedrock:            bedrock,
 		Deployment:         SetupDeployment{HostLike: deploymentHostLike(providers)},
 		Harness:            harnessCreds,
-		// Integrations reuses the single integrationsWithCapabilitiesUsing call
-		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
-		// Every list holds only what this caller may use (capVisible; model providers
-		// on the roster line, funlen ratchet); llmReady stays the deployment fact.
-		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
+		// The harness and model-provider lists hold only what this caller may use
+		// (capVisible; model providers on the roster line, funlen ratchet);
+		// llmReady stays the deployment fact.
+		Integrations: s.integrationsWithCapabilities(ctx, present),
 		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages, modelProviders), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
 		LLMReady:    llmReady,
 		ModelAccess: modelAccess,

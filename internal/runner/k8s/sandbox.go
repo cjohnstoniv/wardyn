@@ -27,27 +27,13 @@ import (
 // config JSON under.
 const proxyConfigSecretKey = "config.json"
 
-// The proxy config reaches the main wardyn-proxy container as a FILE, never
-// as a secret-backed environment variable (T-28, issue #688): an env var
-// resolved via secretKeyRef still lands in the container's own process
-// environment, where `kubectl exec ... env`, /proc/<pid>/environ, a core
-// dump, or any of the env-var credential scanners enterprise security teams
-// run all see it — the pod SPEC being API-unreadable (the property
-// secretKeyRef alone bought) does not help once the process is actually
-// running. Two volumes and a nonroot init container close that gap:
-//
-//  1. proxyConfigSecretVolumeName projects ONLY proxyConfigSecretKey out of
-//     the per-run Secret (never the agent's SecretEnv or managed-file
-//     entries that share the same Secret object) into the INIT container
-//     alone, at proxyConfigSecretFileMode.
-//  2. The init container (the SAME wardyn-proxy image, run with
-//     -stage-config-src/-stage-config-dst — cmd/wardyn-proxy's
-//     StageProxyConfig) copies that file into proxyConfigStagedVolumeName,
-//     an in-memory (Medium: Memory) emptyDir, as an owner-only 0400 file,
-//     then exits.
-//  3. The MAIN container mounts ONLY the staged emptyDir, read-only, and is
-//     launched with `-config <path>` — no Env entry for the config at all,
-//     so no secret-backed (or any) environment variable carries it.
+// SECURITY: the proxy config reaches the main wardyn-proxy container as a
+// FILE, never a secret-backed env var — an env var is readable via `kubectl
+// exec ... env`, /proc/<pid>/environ, or a core dump. Two volumes + a nonroot
+// init container close the gap: the Secret volume projects only
+// proxyConfigSecretKey into the init container, which stages it into an
+// in-memory emptyDir at owner-only 0400; the main container mounts only that
+// staged emptyDir, read-only, via `-config <path>`, with no Env entry for it.
 const (
 	proxyConfigSecretVolumeName = "wardyn-proxy-config-secret"
 	proxyConfigSecretMountDir   = "/var/run/wardyn-proxy-secret"
@@ -57,29 +43,17 @@ const (
 	stageProxyConfigInitName    = "stage-proxy-config"
 )
 
-// proxyConfigSecretFileMode is the Secret volume projection's file mode —
-// the plan's "project only the config JSON into a nonroot init container at
-// file mode 0440". A Secret-projected file is always OWNED by root:root
-// regardless of Mode (Mode sets permission bits only), so 0440's group-read
-// bit is what actually lets the init container's nonroot uid (65532) read
-// it — which requires proxyNonrootGID below on the POD's FSGroup, confirmed
-// empirically against a real cluster: without it the kubelet leaves the
-// file's group at root(0), a uid-65532 process is in neither root nor any
-// group that grants it, and the init container fails closed on "permission
-// denied" reading its own Secret volume.
+// proxyConfigSecretFileMode: 0440 on the Secret volume projection. A
+// Secret-projected file is always root:root-owned regardless of Mode, so the
+// group-read bit is what lets the init container's nonroot uid (65532) read
+// it (requires proxyNonrootGID below); confirmed on a real cluster that
+// without it the init container fails closed with "permission denied".
 var proxyConfigSecretFileMode = int32(0o440)
 
-// proxyNonrootGID is the proxy pod's FSGroup. The kubelet adds FSGroup as a
-// supplemental group to every container in the pod, so any value works; it
-// mirrors the image's own nonroot gid (65532) only for readability. It makes
-// the kubelet chown the Secret-projected config
-// file's GROUP to it, making proxyConfigSecretFileMode's group-read bit
-// actually effective for the init container that reads it. It does NOT
-// widen who can read the STAGED file: that one is created by the init
-// container itself at mode 0400 (StageProxyConfig, owner-only — no group or
-// other bit at all), so FSGroup membership on every container in this pod
-// (fsGroup is pod-wide, not per-container) never lets the main container, or
-// anything else, read it by a group path that does not exist.
+// proxyNonrootGID is the proxy pod's FSGroup, chowned onto the Secret-projected
+// file's group so proxyConfigSecretFileMode's group-read bit works for the
+// init container. Does NOT widen access to the STAGED file, which the init
+// container creates itself at owner-only 0400.
 var proxyNonrootGID = int64(65532)
 
 // proxyConfigSecretPath and proxyConfigStagedPath are the config file's full
@@ -88,14 +62,12 @@ func proxyConfigSecretPath() string { return proxyConfigSecretMountDir + "/" + p
 func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + proxyConfigFileName }
 
 // CreateSandbox provisions the run's Secret, NetworkPolicies, proxy pod, and
-// agent pod, in that order, fail-closed with full rollback on any error —
-// mirrors the docker driver's rollback shape (a LIFO list of teardown
-// closures, run on any later failure). One linear, ordered assembly sequence
-// (preflight -> secret -> netpols -> proxy pod -> agent pod) whose
-// rollback-on-failure compensations must stay in one scope to be verifiably
-// complete — that's the funlen nolint below.
+// agent pod, in that order, fail-closed with full rollback on any error
+// (mirrors the docker driver's LIFO teardown-closure shape). Kept as one
+// linear ordered sequence in one scope so the rollback compensations stay
+// verifiably complete — hence the funlen nolint below.
 //
-//nolint:funlen // see the doc comment above: one linear ordered sequence, kept in one scope on purpose
+//nolint:funlen // one linear ordered sequence, kept in one scope on purpose
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	ns := d.cfg.Namespace
 
@@ -103,10 +75,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if len(spec.Mounts) > 0 {
 		return runner.Sandbox{}, fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
-	// Managed files are validated in the same free-failure window, and for the
-	// same reason the mounts refusal sits here: an unusable path or an
-	// agent-writable mode must refuse the run before the namespace has
-	// anything in it.
 	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
 	}
@@ -116,38 +84,27 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	enforced := spec.ConfinementClass
 	if enforced == "" {
-		// Class-less floor for direct driver callers only, mirrors docker: every
-		// wardynd dispatch path resolves a concrete class before reaching here.
+		// Class-less floor for direct driver callers only (mirrors docker).
 		enforced = types.CC1
 	}
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
 	}
-	// The user drive comes LAST in preflight because it is the only step here
-	// that writes: everything that can fail for free has already failed by now,
-	// so a refused drive leaves the namespace exactly as it found it. The claim
-	// this may create outlives the run on purpose and carries no wardyn.run-id
-	// label, so the rollback below (teardownByRunID selects on exactly that
-	// label) cannot reach it — a later failure must never delete the person's
-	// storage. It is spec.Drive, not a spec.Mounts entry, which is why the
-	// blanket host-bind refusal above needs no drive exemption.
+	// The user drive comes LAST in preflight since it's the only step that
+	// writes; its PVC outlives the run on purpose and carries no
+	// wardyn.run-id label, so rollback can never delete the person's storage.
 	if spec.Drive != nil {
 		if err := ensureDrivePVC(ctx, d.clientset, ns, spec.Drive); err != nil {
 			return runner.Sandbox{}, err
 		}
 	}
 
-	// fail tears down everything CreateSandbox may have created so far via
-	// teardownByRunID — the SAME wait-before-netpol-drop guard StopSandbox/
-	// KillSandbox use (H3), not a hand-rolled fire-and-forget delete list.
-	// A bare LIFO list of `_ = ...Delete(...)` calls (the prior shape here)
-	// drops the NetworkPolicies the instant the proxy pod's Delete is
-	// ISSUED, not once it's actually gone — a pod mid-Terminating is
-	// unselected by any policy and so default-allow, reopening unconfined
-	// egress on a pod that already holds this run's live MITM CA key and
-	// RunToken (the staged proxy config file) for up to its full grace period.
-	// Zero grace period: a partially-created sandbox was never handed to a
-	// caller, so there is no in-flight work to let drain gracefully.
+	// SECURITY: fail tears down via teardownByRunID, the same
+	// wait-before-netpol-drop guard Stop/KillSandbox use — a bare LIFO delete
+	// list would drop NetworkPolicies as soon as Delete is issued, and a pod
+	// mid-Terminating is unselected by any policy (default-allow), reopening
+	// unconfined egress on a pod still holding this run's MITM CA key and
+	// RunToken. Zero grace period: nothing has been handed to a caller yet.
 	fail := func(err error) (runner.Sandbox, error) {
 		zero := int64(0)
 		if terr := d.teardownByRunID(context.Background(), spec.RunID, &zero); terr != nil {
@@ -157,17 +114,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{}, err
 	}
 
-	// (2) BOTH NetworkPolicies, BEFORE any pod exists AND before the Secret.
+	// (2) BOTH NetworkPolicies, before any pod AND before the Secret.
 	//
-	// Before the SECRET: these two objects carry no credential, so the
-	// orphan sweep may list THEM (the Role withholds every Secret-body
-	// read verb, and `list` is one — RBAC cannot scope a list by label, so it
-	// returns every Secret in the namespace, which with an unset k8s.runsNamespace
-	// is the control plane's own). Creating them first, and deleting them LAST at
-	// teardown, makes the pair strictly outlive the Secret: any Secret that still
-	// exists has both of its NetworkPolicies still there to be found by. A Secret
-	// written first would survive a crash in the window before the first
-	// NetworkPolicy Create with nothing left to key on.
+	// SECURITY/RBAC: these two carry no credential, so the orphan sweep may
+	// list them (the Role withholds every Secret-body read verb, which RBAC
+	// can't scope by label). Created first and deleted last at teardown, so
+	// any surviving Secret always has both NetworkPolicies to be found by.
 	agentLabels := wardynLabels(spec.RunID, componentAgent, nil)
 	proxyLabels := wardynLabels(spec.RunID, componentProxy, nil)
 
@@ -195,11 +147,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: agentLabels}}},
 			}},
-			// BOTH rules carry the same metadata-excluding peer. A rule
-			// with Ports but no To matches ALL destinations on those ports —
-			// a peer-less "DNS" rule would permit port 53 to the metadata
-			// address too, voiding the Except on the general rule right
-			// next to it.
+			// SECURITY: both rules share the metadata-excluding peer — a
+			// peer-less DNS rule would permit port 53 to the metadata address,
+			// voiding the Except on the rule beside it.
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{ // DNS
 					Ports: []networkingv1.NetworkPolicyPort{
@@ -219,30 +169,22 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (3) Per-run Secret holding the proxy config JSON: pod specs are
-	// API-readable, secretKeyRef values are not.
+	// API-readable, secretKeyRef values aren't.
 	proxyJSON, err := runner.BuildProxyConfig(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: build proxy config: %w", err))
 	}
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
-	// The AGENT's credential-bearing environment rides the SAME per-run Secret,
-	// one entry per variable, for the reason stated above and on
-	// runner.SandboxSpec.SecretEnv; secretEnvVars gives the agent container a
-	// secretKeyRef to each of these instead of an inline EnvVar.Value. One
-	// Secret, not a second one: teardown already sweeps it by the run-id label,
-	// and a separate object would be one more thing the rollback path has to
-	// get right.
+	// The agent's credential-bearing env rides this SAME Secret (see
+	// runner.SandboxSpec.SecretEnv), via a secretKeyRef per variable rather
+	// than an inline EnvVar.Value. One Secret, not two, is one less object
+	// for rollback to get right.
 	for k, v := range spec.SecretEnv {
 		secretData[secretEnvDataKey(k)] = []byte(v)
 	}
-	// The MANAGED FILES ride it too, one entry per file. Not because their
-	// content is necessarily secret — it is operator policy, and the agent is
-	// meant to read it — but because a Secret volume is the only projection on
-	// this substrate that lands a file ROOT-OWNED and read-only inside a
-	// directory the agent cannot replace. A ConfigMap volume would do the same
-	// thing; the Secret is already here, already labelled, and already swept by
-	// teardown, and a second object is one more thing the rollback has to get
-	// right.
+	// MANAGED FILES ride it too: not because the content is secret, but
+	// because a Secret volume is the only projection here that lands a file
+	// root-owned and read-only in a directory the agent can't replace.
 	for k, v := range managedFileSecretData(spec.ManagedFiles) {
 		secretData[k] = v
 	}
@@ -264,26 +206,16 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
 		Spec: corev1.PodSpec{
 			AutomountServiceAccountToken: boolPtr(false),
-			// FSGroup makes proxyConfigSecretFileMode's group-read bit
-			// effective for the init container reading the Secret-projected
-			// config (see that var's doc — a Secret volume file is always
-			// root:root-owned regardless of Mode). Confirmed empirically: the
-			// init container fails closed on "permission denied" without this.
+			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
+			// for the init container; without it, "permission denied".
 			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID},
-			// The kubelet injects a <SVC>_SERVICE_HOST/<SVC>_PORT pair for EVERY
-			// Service in the namespace into every container when this is left at
-			// its default true. Nothing in any Wardyn image reads them — the agent
-			// reaches its one egress path through the HostAliases entry below, and
-			// its NetworkPolicy would deny anything else anyway — so all it does
-			// is hand untrusted code a free enumeration of the operator's service
-			// topology. Off, for the same reason as the line above it.
+			// SECURITY: default true injects a <SVC>_SERVICE_HOST/PORT pair for
+			// every namespace Service into every container — a free
+			// service-topology enumeration nothing here needs.
 			EnableServiceLinks: boolPtr(false),
-			// InitContainers stages the proxy config JSON from the per-run
-			// Secret into an in-memory emptyDir as an owner-only 0400 file —
-			// see the doc comment on proxyConfigSecretVolumeName above. Runs
-			// the SAME image as the main container; restrictedSecurityContext
-			// (not agentSecurityContext) because that image, like the proxy's,
-			// runs as the distroless nonroot uid by default.
+			// InitContainers stages the proxy config from the Secret into an
+			// in-memory emptyDir as owner-only 0400 (see proxyConfigSecretVolumeName
+			// doc above).
 			InitContainers: []corev1.Container{{
 				Name:  stageProxyConfigInitName,
 				Image: d.cfg.ProxyImage,
@@ -298,9 +230,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Containers: []corev1.Container{{
 				Name:  proxyContainerName,
 				Image: d.cfg.ProxyImage,
-				// -config, not WARDYN_PROXY_CONFIG_JSON: the config now reaches
-				// this container only via the read-only staged-file mount below,
-				// never as a secret-backed environment variable (T-28, #688).
+				// -config, not an env var: reaches this container only via the
+				// read-only staged-file mount (see SECURITY note above).
 				Args: []string{"-config", proxyConfigStagedPath()},
 				Env: []corev1.EnvVar{
 					{Name: "WARDYN_RUN_ID", Value: spec.RunID.String()},
@@ -331,12 +262,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			},
 		},
 	}
-	// Operator knobs the sidecar reads from ITS OWN environment. A pod inherits
-	// nothing from wardynd, so without this an operator's
-	// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (either scope, or the
-	// content-inspection kill-switch) is not "off" on Kubernetes — it is
-	// unreachable, set on the control plane and read by nobody. Same list as the
-	// docker driver's, by construction (runner.ProxySidecarEnvKnobs).
+	// Operator knobs the sidecar reads from its OWN environment: a pod
+	// inherits nothing from wardynd, so without this an operator setting is
+	// unreachable rather than "off". Same list as the docker driver's.
 	for _, kv := range runner.ProxySidecarEnvKnobs() {
 		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
 			corev1.EnvVar{Name: kv[0], Value: kv[1]})
@@ -353,10 +281,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: proxy pod never got an IP: %w", err))
 	}
 
-	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy"
-	// to the resolved IP (the agent's ONLY route to it — mirrors docker's
-	// static /etc/hosts entry, needed because the agent NetworkPolicy allows
-	// no DNS at all, see the agent netpol above).
+	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" to
+	// the resolved IP (its only route there, since the agent NetworkPolicy
+	// allows no DNS at all).
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
@@ -370,57 +297,37 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
-			// The kubelet injects a <SVC>_SERVICE_HOST/<SVC>_PORT pair for EVERY
-			// Service in the namespace into every container when this is left at
-			// its default true. Nothing in any Wardyn image reads them — the agent
-			// reaches its one egress path through the HostAliases entry below, and
-			// its NetworkPolicy would deny anything else anyway — so all it does
-			// is hand untrusted code a free enumeration of the operator's service
-			// topology. Off, for the same reason as the line above it.
-			EnableServiceLinks: boolPtr(false),
-			HostAliases:        []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
-			// The default ClusterFirst dnsPolicy points the agent at
-			// kube-dns/CoreDNS — which its own NetworkPolicy denies (no DNS
-			// egress at all; see the agent netpol above). A proxy-UNAWARE
-			// lookup (a tool that ignores HTTP_PROXY) would then hang for
-			// the full resolver timeout instead of failing fast. DNSNone
-			// with a loopback nameserver (nothing listens there) makes such
-			// a lookup fail IMMEDIATELY with connection-refused.
+			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
+			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
+			// Default ClusterFirst would point the agent at kube-dns, which its
+			// NetworkPolicy denies; DNSNone with a loopback nameserver fails a
+			// proxy-unaware lookup immediately instead of hanging the full
+			// resolver timeout.
 			DNSPolicy: corev1.DNSNone,
 			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"127.0.0.1"}},
 			Containers: []corev1.Container{{
 				Name:    mainContainerName,
 				Image:   spec.Image,
 				Command: idleCmd,
-				// Non-secret env inline, credential-bearing env as a secretKeyRef
-				// into the run Secret above — never inline, whatever it holds. Exec
-				// copies this whole slice onto the ephemeral container it adds, so
-				// the reference (and therefore the non-exposure) carries over there
-				// by construction rather than by a second call site staying in step.
+				// SECURITY: credential-bearing env is a secretKeyRef into the run
+				// Secret, never inlined; Exec copies this whole slice onto the
+				// ephemeral container it adds.
 				Env:             append(envVars(spec.Env), secretEnvVars(spec.RunID, spec.SecretEnv)...),
 				SecurityContext: agentSecurityContext(),
 				Resources:       resourceRequirements(spec.Resources),
 			}},
 		},
 	}
-	// The scratch volumes, and ONLY when the run carries a disk budget: they are
-	// what puts the AGENT's own writes inside disk_mib, because Exec copies the
-	// main container's mounts onto the ephemeral container the agent actually runs
-	// in (see ephemeralScratchVolumes).
+	// Scratch volumes, only when the run carries a disk budget: puts the
+	// agent's own writes inside disk_mib.
 	scratchVols, scratchMounts := ephemeralScratchVolumes(spec.Resources.DiskMiB)
 	addMainContainerVolumes(agentPod, scratchVols, scratchMounts)
-	// The managed files, read-only off the per-run Secret created above, for
-	// exactly the same reason: Exec copies the main container's mounts verbatim
-	// onto the ephemeral container the agent actually runs in, so mounting here
-	// is what reaches the agent. They are in the pod's filesystem before any
-	// container starts — there is no window in which the agent runs without its
-	// ceiling.
+	// Managed files, read-only off the Secret, in the pod's filesystem before
+	// any container starts, so there's no window where the agent runs without them.
 	managedVols, managedMounts := managedFileVolumes(spec.RunID, spec.ManagedFiles)
 	addMainContainerVolumes(agentPod, managedVols, managedMounts)
-	// The drive, and ONLY on a pod that has one: a drive-less agent pod keeps the
-	// nil pod-level SecurityContext it has always had, so nothing about the pods
-	// this substrate already produces changes shape. applyDriveToPod appends
-	// rather than assigns — see its doc comment.
+	// The drive, only when the pod has one, so a drive-less pod keeps its nil
+	// pod-level SecurityContext unchanged.
 	if spec.Drive != nil {
 		applyDriveToPod(agentPod, spec.Drive, runtimeHandler)
 	}
@@ -435,14 +342,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (6) Wait for the main container to actually be Running before handing
-	// the sandbox out. A k8s Pod Create is purely declarative (accepted, not
-	// yet scheduled/pulled/started) — unlike docker's ContainerStart, which
-	// blocks until the container's init process is actually running. Without
-	// this wait, a caller racing straight into Attach/ExecStream immediately
-	// after CreateSandbox returns (exactly what the conformance suite does)
-	// hits "container not found" against a pod still Pending — a REAL gap a
-	// live-cluster conformance run surfaced (a fake-clientset unit test
-	// can't: nothing simulates the kubelet).
+	// the sandbox out: a k8s Pod Create is purely declarative, unlike
+	// docker's ContainerStart, so a caller racing straight into
+	// Attach/ExecStream would hit "container not found" against a pod still Pending.
 	if err := d.waitContainerRunning(ctx, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
 	}
@@ -451,13 +353,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 }
 
 // addMainContainerVolumes attaches vols to pod and mounts them on the MAIN
-// container only, doing nothing when there is nothing to attach.
-//
-// The main container ALONE, and that is not an omission: exec.go is not a
-// second call site to keep in step — it reads the main container's mounts back
-// off the live pod and copies them verbatim onto the ephemeral container the
-// agent actually runs in. Both of this function's callers depend on that, which
-// is why they share it rather than each spelling the walk out.
+// container only (not an omission: exec.go copies the main container's
+// mounts onto the ephemeral container the agent actually runs in).
 func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []corev1.VolumeMount) {
 	if len(vols) == 0 {
 		return
@@ -471,34 +368,18 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 }
 
 // waitContainerRunning polls podName until its named container reports
-// Running. canaryWaitTimeout (not the tighter podIPWaitTimeout): the agent
-// image is whatever the run specifies, not the proxy image the canary (or a
-// prior run) has likely already pulled onto this node — a first pull of an
-// arbitrary, possibly large agent image needs the same generous budget the
-// canary itself gets.
+// Running, using canaryWaitTimeout (not the tighter podIPWaitTimeout) since
+// the agent image, unlike the proxy's, may need a fresh first pull.
 //
-// On timeout it says WHY the pod never started, which is the whole point of the
-// lastPod capture below. A pod that never leaves Pending has no container status
-// at all, so every check inside the poll is looking at an empty list, and
-// without this enrichment the caller gets only "context deadline exceeded" and nothing else. The most
-// common cause on a drive-mounting deployment is exactly the one that reads
-// worst: the claim never bound, and the scheduler said so, in the PodScheduled
-// condition, for the whole timeout — "0/3 nodes are available: pod has unbound
-// immediate PersistentVolumeClaims". Reading it back turns a blind wait into the
-// sentence an operator can act on.
+// On timeout it reports WHY via the captured lastPod, since a re-fetch on a
+// dead context returns nothing and a pod stuck Pending has no container
+// status otherwise (e.g. the scheduler's "unbound immediate PersistentVolumeClaims").
 //
-// onWaiting (nil-safe) gets that same reason WHILE the wait is happening rather
-// than only in the error at the end of it, once per CHANGE — see
-// runner.SandboxSpec.OnWaiting. The pod is already fetched every poll; the one
-// extra read is the pod's Events, at most once a second and only while the
-// container is ContainerCreating, to tell a pull apart (pull_events.go).
+// onWaiting (nil-safe) gets that reason while waiting, once per change — see
+// runner.SandboxSpec.OnWaiting.
 func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string, onWaiting func(string)) error {
-	// The last pod the poll actually observed. Captured rather than re-fetched
-	// after the fact: a re-fetch on a dead context returns nothing at all, which
-	// is precisely the state the enrichment exists for.
 	var lastPod *corev1.Pod
-	// The last reason REPORTED, so the report fires on a change and not on a
-	// tick. No mutex: the poll body runs on this goroutine, one call at a time.
+	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
 	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
@@ -527,12 +408,8 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 			if cs.State.Running != nil {
 				return true, nil
 			}
-			// A container that crashes before ever reaching Running (a bad
-			// image whose entrypoint exits immediately, CrashLoopBackOff's
-			// first cycle, ...) must fail fast here — without this check
-			// without this check it falls through to "keep polling"
-			// and burns the full canaryWaitTimeout on a container that will
-			// never run.
+			// A container that crashes before ever reaching Running must fail
+			// fast here, or it burns the full timeout polling.
 			if t := cs.State.Terminated; t != nil {
 				return false, fmt.Errorf("%s container terminated before ever reaching Running (exit code %d): %s", containerName, t.ExitCode, t.Message)
 			}
@@ -543,9 +420,8 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 		}
 		return false, nil
 	})
-	// Only a TIMEOUT is enriched. The two errors the poll returns itself
-	// (terminated, terminally waiting) already name their cause, and a Get
-	// failure is about the apiserver, not the pod.
+	// Only a TIMEOUT is enriched: the poll's own errors already name their
+	// cause, and a Get failure is about the apiserver, not the pod.
 	if errors.Is(err, context.DeadlineExceeded) {
 		if why := podStuckReason(lastPod); why != "" {
 			return fmt.Errorf("%w (%s)", err, why)
@@ -554,36 +430,22 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 	return err
 }
 
-// isClientThrottled reports client-go's own rate-limiter refusal. x/time/rate
-// refuses a Wait whose token would arrive after the context's deadline, and
-// that error does not wrap context.DeadlineExceeded — so returned as-is from
-// the poll, a timeout under load read as "client rate limiter" and dropped
-// podStuckReason. Treated as "not yet", the poll ends on its own deadline and
-// the enrichment runs. A string match on client-go's wrapper text: if upstream
-// renames it, this degrades to passing the error through, as before.
+// isClientThrottled reports client-go's own rate-limiter refusal, which does
+// not wrap context.DeadlineExceeded; treated as "not yet" so the poll ends on
+// its own deadline and enrichment still runs. String match on client-go's
+// wrapper text; degrades to pass-through if upstream renames it.
 func isClientThrottled(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "client rate limiter Wait returned an error")
 }
 
-// podStuckReason renders why a pod that never started is where it is, from the
-// last status the poll saw. "" when the pod looks fine or was never observed —
-// the caller then reports the bare timeout rather than a fabricated cause.
-//
-// PodScheduled=False is read FIRST and is the one that matters here: it is where
-// the scheduler writes "pod has unbound immediate PersistentVolumeClaims" (a
-// drive whose claim never bound at all) and "node(s) didn't match
-// PersistentVolume's node affinity" (a bound PV whose affinity excludes every
-// candidate node). Both are storage facts an operator can act on and neither
-// appears anywhere else in the pod's status.
-//
-// The cross-node ReadWriteOnce case does NOT arrive here and this hint does not
-// carry it. Nothing schedules around RWO — kube-scheduler's volumerestrictions
-// plugin enforces only ReadWriteOncePod — so that pod IS scheduled
-// (PodScheduled=True) and then stalls in ContainerCreating waiting on a detach
-// that is not coming. Its evidence is a FailedAttachVolume warning EVENT on the
-// pod, which this function never reads, so such a run reports the bare
-// dispatch-wait timeout. docs/OPERATIONS.md, "User drives on Kubernetes", is
-// where an operator is sent for it.
+// podStuckReason renders why a pod never started, from the last status the
+// poll saw; "" when it looks fine or was never observed, so the caller falls
+// back to the bare timeout rather than a fabricated cause. PodScheduled=False
+// is checked first: it's where the scheduler writes storage facts like
+// "unbound immediate PersistentVolumeClaims". The cross-node ReadWriteOnce
+// case is NOT covered here: that pod is scheduled and stalls in
+// ContainerCreating on a FailedAttachVolume event this function never reads —
+// see docs/OPERATIONS.md ("User drives on Kubernetes").
 func podStuckReason(pod *corev1.Pod) string {
 	if pod == nil {
 		return ""
@@ -601,19 +463,13 @@ func podStuckReason(pod *corev1.Pod) string {
 
 // resolveRuntimeClassName is CreateSandbox's fail-closed enforcement
 // counterpart to Classes' advertisement: CC1 needs no RuntimeClass override;
-// CC2/CC3 REQUIRE an explicit WARDYN_CONFINEMENT_MAP pin (see Config.
-// ConfinementRuntimes's doc — a k8s RuntimeClass object name carries no
-// platform convention Wardyn could safely guess) resolving to a RuntimeClass
-// that exists and clears the class's floor guard. Never silently downgrade.
+// CC2/CC3 REQUIRE an explicit WARDYN_CONFINEMENT_MAP pin resolving to a class
+// that exists and clears its floor guard. SECURITY: never silently downgrade.
 //
-// It returns the resolved .Handler alongside the object NAME because the two
-// answer different questions and only one of them is guessable from the other:
-// the name is what the pod spec carries, the handler is what names the runtime
-// FAMILY (see handlerRunscPrefix). applyDriveToPod needs the family to decide
-// whether this pod gets gVisor's per-mount directfs annotation, and resolving
-// it a second time there would be a second RuntimeClasses Get per run — and a
-// second place for the two answers to drift. Empty handler for CC1, which pins
-// no RuntimeClass at all.
+// Returns .Handler alongside the object NAME: applyDriveToPod needs the
+// runtime FAMILY (handlerRunscPrefix) to decide gVisor's directfs annotation,
+// so resolving it here avoids a second RuntimeClasses Get. CC1 gets an empty
+// handler.
 func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.ConfinementClass) (name, handler string, err error) {
 	switch class {
 	case "", types.CC1:
@@ -655,12 +511,10 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 	}
 }
 
-// waitPodIP polls podName until its CNI-assigned Status.PodIP is set, reporting
-// why it is still waiting (nil-safe, once per change — runner.SandboxSpec.
-// OnWaiting). This is the FIRST wait CreateSandbox blocks on, so on a cluster
-// with nowhere to put the pod it is the one a person actually sits through: the
-// CNI assigns the IP at PodSandbox creation, before any application image is
-// pulled, so this bound bites on SCHEDULING and its reason says so.
+// waitPodIP polls podName until its CNI-assigned Status.PodIP is set,
+// reporting why via onWaiting (nil-safe, once per change). It's the FIRST
+// wait CreateSandbox blocks on, so on a cluster with nowhere to schedule it's
+// the one a person sits through — the CNI assigns the IP before any image pull.
 func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(string)) (string, error) {
 	var ip string
 	var lastReason string
@@ -692,22 +546,18 @@ func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(s
 func protoPtr(p corev1.Protocol) *corev1.Protocol          { return &p }
 func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString { return &v }
 
-// cloudMetadataAddr is the link-local address every major cloud provider
-// serves its instance-metadata API on (AWS/GCP/Azure all use it) — the
-// proxy netpol's egress carves it out so a compromised proxy cannot reach
-// node/instance credentials.
+// cloudMetadataAddr is the link-local instance-metadata address on every
+// major cloud. SECURITY: the proxy netpol's egress carves it out so a
+// compromised proxy can't reach node/instance credentials.
 const cloudMetadataAddr = "169.254.169.254/32"
 
 // notMetadataIPBlock is 0.0.0.0/0 except the cloud-metadata address, shared
-// by the proxy netpol's DNS and general egress rules so they can never
-// drift apart (a rule missing this peer permits its ports to
-// the metadata address too, voiding the other rule's Except). IPv4-only —
-// this substrate does not yet reason about IPv6 pod networks.
+// by the proxy netpol's DNS and general egress rules so they can't drift
+// apart. IPv4-only.
 func notMetadataIPBlock() *networkingv1.IPBlock {
 	return &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{cloudMetadataAddr}}
 }
 
-// isNotFound reports whether err is a k8s "not found" API error — used
-// throughout teardown so Stop/Kill stay idempotent on an already-gone
-// sandbox, mirroring docker's isNotFound.
+// isNotFound reports whether err is a k8s "not found" API error, so
+// Stop/Kill stay idempotent on an already-gone sandbox.
 func isNotFound(err error) bool { return err != nil && apierrors.IsNotFound(err) }

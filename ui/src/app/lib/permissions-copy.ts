@@ -23,7 +23,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature", "policy"] as const;
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -103,22 +103,6 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only launch agents granted to them. A run naming another one is refused at launch, with the reason.",
     direction: "narrows",
   },
-  integration: {
-    // DRAFT (M2 canon pending): was "Model providers", which is now the
-    // model_provider kind's label; this kind retires with the AI integrations.
-    label: "Model integrations",
-    blurb: "Which model provider a member may name on a run of their own.",
-    valueLabel: "Integration",
-    valueHint: "The exact integration id. Use * for every integration.",
-    unenforced: "Members can name any model provider integration on a run they launch.",
-    // The doctrine, restated where it is most likely to be misread: this kind
-    // bounds the integration_id a MEMBER typed, and nothing else. A workspace's
-    // own binding and the site-wide default are admin-authored, and both keep
-    // applying to every run whatever the member holds.
-    enforced:
-      "A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them.",
-    direction: "narrows",
-  },
   // A new kind's strings are staged in docs/design/workspace-providers-prompt.md
   // §7.6 as DRAFT (M2 canon pending) until the owner's canon sitting freezes
   // them, and the swap to canon is then a one-file diff here.
@@ -133,9 +117,9 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only bring work from providers granted to them — on a run, and on a workspace they create, edit, scan or build. A repository on another provider is refused, naming the provider's kind and nothing more.",
     direction: "narrows",
   },
-  // Unlike `integration`, this kind bounds a workspace's pin and an agent's
-  // default too: every model credential is the person's own, so no admin pin
-  // is exempt (multi-provider design §2.10).
+  // This kind bounds a workspace's pin and an agent's default too: every model
+  // credential is the person's own, so no admin pin is exempt (multi-provider
+  // design §2.10).
   model_provider: {
     // DRAFT (M2 canon pending)
     label: "Model providers",

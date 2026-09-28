@@ -19,7 +19,7 @@
 // below still dismisses the funnel's own "seen it" flag (setup-gate.ts), which
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import type {
   ConfinementClass,
@@ -53,7 +53,7 @@ import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
-import { SITE } from "../../wardyn/copy";
+import { NO_BARRIER, SITE } from "../../wardyn/copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   OPTIONAL_STEPS,
@@ -792,6 +792,39 @@ export function SetupScreen({
       }
     : undefined;
 
+  // #214 — Setup cannot finish on a host with no barrier: this is the one
+  // decision the maintainer was most warned about, and it is deliberate.
+  // `readiness.barrierReady` (lib/readiness.ts's deriveReadiness) is NOT the
+  // same fact New Run's own noBarrierOnHost gates Launch on (#1328 review
+  // F3): that one folds a nil runner AND a member's redacted empty status to
+  // "unknown" and leaves Launch enabled rather than guess, where this is a
+  // deployment-wide fact that is always resolved once status has landed —
+  // the same one the shell banner, the top bar and environment-step.tsx's
+  // own danger card read. This funnel is the one surface that can genuinely
+  // trap someone (#214's own acceptance), so it stays the stricter of the
+  // two on purpose.
+  //
+  // The route is RELATIVE (`?step=environment`, #1328 review F2), not
+  // NO_BARRIER.ADMIN_ROUTE's absolute `/admin/setup?...`: this gate renders
+  // inside the funnel itself, which mounts at EITHER /setup or /admin/setup
+  // depending on which view sent an operator here (App.tsx's RequireSetup) —
+  // a query-only link resolves against whichever one is already current, so
+  // following it can never itself switch the view out from under an admin.
+  const finishGate = !readiness.barrierReady
+    ? {
+        head: NO_BARRIER.FINISH_GATE_HEAD,
+        reason: (
+          <>
+            {NO_BARRIER.FINISH_GATE_REASON}{" "}
+            <Link to={NO_BARRIER.RELATIVE_ROUTE} className="font-medium text-info hover:underline">
+              {NO_BARRIER.CTA}
+            </Link>
+            .
+          </>
+        ),
+      }
+    : undefined;
+
   return (
     <>
       <SetupLayout
@@ -819,6 +852,7 @@ export function SetupScreen({
         onSelect={selectStep}
         onFinish={finish}
         nextGate={nextGate}
+        finishGate={finishGate}
         backOverride={
           stepId === "corp_network" && corpTab === "egress"
             ? () => setCorpTab("proxy")

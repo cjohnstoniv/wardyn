@@ -200,7 +200,7 @@ var envDocShellOnly = map[string]bool{
 	// The walk's own EXPORTS to ui/e2e/walk/sso-member.spec.ts and
 	// ui/e2e/walk/sso-member-recovery.spec.ts (process.env, never Go) — outputs
 	// of the walk, not operator inputs.
-	"WARDYN_WALK_ADMIN_TOKEN": true, "WARDYN_WALK_FAKE_URL": true,
+	"WARDYN_WALK_ADMIN_TOKEN": true, "WARDYN_WALK_FAKE_URL": true, "WARDYN_WALK_FAKE_CA": true,
 	"WARDYN_WALK_PIN_ACCOUNT": true, "WARDYN_WALK_PIN_ROLE": true,
 	"WARDYN_WALK_SSO_START_URL": true, "WARDYN_WALK_SSO_REGION": true,
 	// 0.7.5: the cluster coordinates the recovery spec's cold-start case taints

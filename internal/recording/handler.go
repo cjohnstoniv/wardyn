@@ -13,31 +13,27 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Authorizer decides whether the caller of req may read the recording whose
-// cast key names runIDPrefix — the run id up to an optional "~<suffix>"
-// session marker (see CastKey). It is the ONLY authorization check Handler
-// performs: the route's own auth middleware (wired by the caller, e.g.
-// humanOrAdminAuth in internal/api) proves the caller is SOME authenticated
-// human/admin, not WHICH run's recordings they may read. A false return is
-// turned into the SAME 404 an absent recording gets (see Handler) — no
-// existence oracle distinguishing "not yours" from "never recorded".
+// Authorizer decides whether req's caller may read the recording whose cast
+// key names runIDPrefix (the run id, up to an optional "~<suffix>" session
+// marker; see CastKey). It is Handler's ONLY authorization check — route auth
+// middleware proves SOME authenticated human/admin, not WHICH run's
+// recordings they may read. False collapses to the SAME 404 an absent
+// recording gets: no existence oracle for "not yours" vs "never recorded".
 type Authorizer func(r *http.Request, runIDPrefix string) bool
 
-// Handler returns an http.Handler that serves GET /{runID} as an asciicast
-// stream (Content-Type: application/x-asciicast). Mount it under
-// /api/v1/runs/{id}/recording in the wardynd router.
+// Handler returns an http.Handler serving GET /{runID} as an asciicast
+// stream (Content-Type: application/x-asciicast); mount it under
+// /api/v1/runs/{id}/recording.
 //
-// The {runID} URL parameter is the CAST KEY (extracted via chi) — a bare run
-// id (a batch run's cast) or a "<runID>~<suffix>" composite (an interactive
-// attach session, or a future SSH session — see CastKey). SECURITY: this
-// sub-route's own {runID} is NOT the same path segment as the PARENT mount's
-// {id} (the run this recording is being fetched THROUGH) — the two are
-// enforced equal (case-insensitively, on the run-id PREFIX) before authorize
-// ever runs, so a caller cannot request .../runs/A/recording/B to read run
-// B's cast under an authorization check scoped to run A. Both checks collapse
-// to the SAME 404 "recording not found" a missing cast gets (no existence
-// oracle). Errors from the store produce 500. A bare run id is served joined
-// across its tail-uploaded parts (OpenJoined).
+// The {runID} param is the CAST KEY: a bare run id (a batch run's cast) or a
+// "<runID>~<suffix>" composite (an interactive attach session, or a future
+// SSH session; see CastKey). SECURITY: this sub-route's {runID} is NOT the
+// parent mount's {id} (the run this recording is fetched THROUGH) — the two
+// are enforced equal (case-insensitive, on the run-id prefix) before
+// authorize runs, so a caller can't request .../runs/A/recording/B to read
+// run B's cast under an authorization scoped to run A. Both checks collapse
+// to the same 404 (no existence oracle). Store errors produce 500. A bare run
+// id is served joined across its tail-uploaded parts (OpenJoined).
 func Handler(store Store, authorize Authorizer) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/{runID}", func(w http.ResponseWriter, req *http.Request) {

@@ -4,10 +4,9 @@
 // Governance profiles and their subject assignments (migration 0052).
 //
 // This file is DUMB on purpose: it round-trips rows and owns exactly one
-// piece of logic, ResolveGovernanceProfile's ORDER BY, so that precedence is
-// a property of the single indexed read rather than of a caller that could
-// forget it. Every write is validated at the API boundary
-// (internal/api/governance.go).
+// piece of logic, ResolveGovernanceProfile's ORDER BY, so precedence is a
+// property of the single indexed read, not a caller that could forget it.
+// Every write is validated at the API boundary (internal/api/governance.go).
 package store
 
 import (
@@ -36,7 +35,7 @@ const governanceAssignmentCols = `id, subject_type, subject, profile_id, priorit
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write. created_by and
 // created_at are NOT touched on update: creation provenance stays with
-// whoever authored the profile (the A-9 rule).
+// whoever authored the profile.
 func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
@@ -167,18 +166,17 @@ func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAs
 // ErrNotFound when no assignment matches (which the caller reads as "fall
 // through to the deployment ceiling", the absent-row back-compat rule).
 //
-// The whole precedence rule is the ORDER BY, and that is deliberate: it is one
-// indexed read on the UNIQUE(subject_type, subject) btree, so there is no
-// second implementation in Go for a caller to skip, mis-order, or forget. The
-// match and the ranking are subjectMatch and subjectPrecedence, the same
-// fragments ResolveUserDrive splices, so the ceiling and the drive cannot
-// disagree about what "most specific" means.
+// The whole precedence rule is the ORDER BY, deliberately: one indexed read
+// on the UNIQUE(subject_type, subject) btree, so there's no second
+// implementation in Go to skip, mis-order, or forget. subjectMatch and
+// subjectPrecedence are the same fragments ResolveUserDrive splices, so the
+// ceiling and the drive can't disagree about "most specific".
 //
-// users/groups are normalized from nil to empty for the same reason
-// ListCapabilityGrantsFor normalizes them: a nil Go slice binds as SQL NULL and
-// `x = ANY(NULL)` is NULL rather than false. It fails closed either way, but a
-// predicate whose behavior depends on a driver detail is not one to leave
-// standing at an authorization boundary.
+// SECURITY: users/groups are normalized from nil to empty for the same reason
+// ListCapabilityGrantsFor does: a nil Go slice binds as SQL NULL and
+// `x = ANY(NULL)` is NULL, not false. Fails closed either way, but a
+// predicate whose behavior hinges on a driver detail has no place at an
+// authorization boundary.
 //
 // userType is the caller's one type id; "" matches no row.
 func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {

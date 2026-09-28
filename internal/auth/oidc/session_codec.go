@@ -20,36 +20,36 @@ import (
 // SessionCodecVersion is the wardyn_session payload's format version, stamped
 // by encodeSession and REQUIRED to match by decodeSession.
 //
-// It exists for one field that cannot be tolerantly decoded: GroupsTruncated. A
-// 0.6 cookie carries no such key, so a JSON decode reads it as false — and
-// false is the FAIL-OPEN answer (see the field). A human whose group snapshot
-// was ALREADY truncated at their last login would keep a cookie asserting
-// "complete" and silently shed the group-assigned governance profile walling
-// them, which is exactly the evaporation the bit closes. Nothing in-band
-// distinguishes "0.6 cookie" from "0.7 cookie, not truncated", so the payload
-// gets a version and a mismatch is simply not a session.
+// It exists for one field that cannot be tolerantly decoded: GroupsTruncated.
+// A 0.6 cookie carries no such key, so a JSON decode reads it as false — the
+// FAIL-OPEN answer (see the field). A human whose group snapshot was already
+// truncated at their last login would keep a cookie asserting "complete" and
+// silently shed the group-assigned governance profile walling them in.
+// Nothing in-band distinguishes "0.6 cookie" from "0.7 cookie, not
+// truncated", so the payload carries a version and a mismatch is simply not a
+// session.
 //
-// THE COST IS ONE EXTRA LOGIN, once, for every human holding a pre-0.7 cookie —
+// THE COST IS ONE EXTRA LOGIN, once, per human holding a pre-0.7 cookie —
 // folded into the same re-login PF-12 already documents for the pre-0.6
-// snapshot. A mismatch behaves exactly like the empty-Role case below:
-// Middleware falls through with no principal, the browser is bounced to sign
-// in, and CallbackHandler mints a current cookie. Of the three options — this,
-// tolerant-decode-false, or a permanent second guess — it is the only one that
-// is neither a silent widening nor a permanent one.
+// snapshot. A mismatch behaves like the empty-Role case below: Middleware
+// falls through with no principal, the browser is bounced to sign in, and
+// CallbackHandler mints a current cookie. Of the three options — this,
+// tolerant-decode-false, or a permanent second guess — it alone is neither a
+// silent widening nor a permanent one.
 //
 // Version 2 (0.8) renamed the non-admin tier "member" to "user" and added
 // Session.UserType: one more re-login, and no cookie carrying the old tier
 // word, or no type, is ever half-trusted.
 //
-// The compare is EXACT rather than `<`: under `<`, an OLD binary in a rolling
-// upgrade accepts a NEW cookie and reads its unknown fields as zero, which is
-// the same fail-open this constant exists to prevent. A mixed-version rollout
-// therefore costs logins, not containment.
+// Compared EXACT, not `<`: under `<`, an old binary in a rolling upgrade
+// accepts a new cookie and reads its unknown fields as zero — the same
+// fail-open this constant prevents. A mixed-version rollout costs logins,
+// not containment.
 //
 // EXPORTED because a hand-minted payload is otherwise unverifiable: anything
-// that builds a session cookie without going through encodeSession — this
-// module's own integration tests, an embedder's harness — has to stamp the
-// current version or produce a cookie the very next request rejects.
+// building a session cookie outside encodeSession (this module's own tests,
+// an embedder's harness) must stamp the current version or produce a cookie
+// the very next request rejects.
 const SessionCodecVersion = 2
 
 // ─── session encoding ────────────────────────────────────────────────────────
@@ -57,8 +57,8 @@ const SessionCodecVersion = 2
 // encodeSession JSON-encodes the session, appends an HMAC-SHA256 tag, and
 // returns a signed HttpOnly SameSite=Lax cookie.
 func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
-	// Stamped HERE rather than at the mint site so no caller can forget it and
-	// write a cookie its own binary then refuses.
+	// Stamped here, not at the mint site, so no caller can forget it and write
+	// a cookie its own binary then refuses.
 	sess.V = SessionCodecVersion
 	payload, err := json.Marshal(sess)
 	if err != nil {
@@ -111,20 +111,17 @@ func (a *Authenticator) decodeSession(r *http.Request) (Session, error) {
 		return Session{}, ErrInvalidSession
 	}
 	if sess.V != SessionCodecVersion {
-		// A pre-0.7 cookie (no "v" key at all, so 0), or one written by a
-		// different codec version. Treated exactly like the empty-Role case
-		// below and for the same reason: a payload this binary cannot read
-		// field-for-field must not be half-trusted. See SessionCodecVersion for
-		// why tolerant decoding is not an option here and what the one extra
-		// login buys.
+		// A pre-0.7 cookie (no "v" key, so 0) or one from a different codec
+		// version: treated like the empty-Role case below, since a payload
+		// this binary cannot read field-for-field must not be half-trusted
+		// (see SessionCodecVersion).
 		return Session{}, ErrInvalidSession
 	}
 	if sess.Role == "" || sess.UserType == "" {
-		// Pre-0.5 cookie (the role field didn't exist yet) or a corrupt/empty
-		// payload: never treat an undefined role as authenticated. Middleware
-		// falls through on this exactly like any other invalid session,
-		// forcing a re-login where CallbackHandler derives and stamps a role
-		// fresh — never a 500.
+		// Pre-0.5 cookie (role field didn't exist yet) or a corrupt/empty
+		// payload: never treat an undefined role as authenticated. Forces a
+		// re-login where CallbackHandler derives and stamps a role fresh —
+		// never a 500.
 		return Session{}, ErrInvalidSession
 	}
 	return sess, nil

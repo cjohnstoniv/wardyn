@@ -7,43 +7,40 @@ package proxy
 //
 // A push no deny rule refuses, but which introduces a path a review rule
 // matches, is parked on its own connection while an admin decides. The
-// question is a push_content approval (types.PushContentScope) raised through
-// the same internal route and polled on the same cadence as a first-use
-// egress hold (approvals.go); git waits on the open request, which it does not
-// abort unless http.lowSpeedLimit and http.lowSpeedTime are set.
+// question is a push_content approval (types.PushContentScope), raised
+// through the same internal route and polled on the same cadence as a
+// first-use egress hold (approvals.go); git waits on the open request,
+// which it won't abort unless http.lowSpeedLimit/lowSpeedTime are set.
 //
 // THE KEY. A push is identified by its repository, the refs it updates, the
-// commits it sets them to and a digest of every path a review rule matched —
-// not by its pack bytes, which a retry repacks. The control plane deduplicates
-// PENDING rows on the whole scope, and pushHolds maps the same key to the
-// row's id and its outcome, so:
+// commits it sets them to, and a digest of every matched path — not by its
+// pack bytes, which a retry repacks. The control plane dedupes PENDING rows
+// on the whole scope; pushHolds maps the same key to the row's id and
+// outcome, so:
 //
 //   - an approved push is forwarded, and so is every later push of the same
-//     commits to the same repository and branch (git's retry after the hold,
-//     or after a failed forward) without a second question — identical commits
-//     are identical content. The same commits to ANOTHER repository or branch
-//     are another question, and are held again;
-//   - a denied push stays denied for the rest of the run: the same push is
-//     refused at once, without asking again;
-//   - a hold that times out leaves its row PENDING, and a retry waits on that
+//     commits to the same repository and branch, without a second question
+//     — identical commits are identical content. The same commits to
+//     ANOTHER repository or branch are held again;
+//   - a denied push stays denied for the rest of the run;
+//   - a hold that times out leaves its row PENDING; a retry waits on that
 //     same row instead of raising a second one;
-//   - a row that EXPIRED or was CANCELLED without a decision is forgotten, so
-//     the next push of those commits asks afresh.
+//   - a row EXPIRED or CANCELLED without a decision is forgotten, so the
+//     next push of those commits asks afresh.
 //
-// UNATTENDED RUNS DO NOT HOLD. A non-interactive run has nobody to be asked, so
-// a review match is refused at once (brokered:git:push-held-unattended) and no
+// UNATTENDED RUNS DO NOT HOLD. A non-interactive run has nobody to ask, so a
+// review match is refused at once (brokered:git:push-held-unattended) and no
 // row is raised; the control plane refuses such a raise too
 // (internal/api's admitPushContentRaise).
 //
-// BOUNDED. At most maxPushHoldsActive pushes are parked at once, each holding
-// its buffer against scanRetained, and at most maxPushHoldKeys distinct pushes
-// are remembered per run; past either the push is refused, never waved on.
+// BOUNDED. At most maxPushHoldsActive pushes are parked at once, and at most
+// maxPushHoldKeys distinct pushes are remembered per run; past either, the
+// push is refused, never waved on.
 //
-// Paths ride the structured log (capped at maxDeniedPathsLogged, count exact)
-// and the refusal body (at most maxDeniedPathsInBody), never the decision log,
-// exactly as a deny refusal's do. The raise carries the complete list beside
-// the scope, bounded (types.PushPathList), for the control plane to keep with
-// the approval.
+// Paths ride the structured log (capped at maxDeniedPathsLogged) and the
+// refusal body (capped at maxDeniedPathsInBody), never the decision log. The
+// raise carries the complete list beside the scope (types.PushPathList) for
+// the control plane to keep with the approval.
 
 import (
 	"context"
@@ -103,14 +100,13 @@ func patPushTarget(host, rest string, g PATGrant) pushTarget {
 	return pushTarget{repo: host + "/" + repo, actsAs: string(types.GrantGitPAT) + ":" + g.GrantID.String()}
 }
 
-// adoPushTarget is the Azure DevOps Entra lane's: the repository, keyed by
-// keys exactly as the REST door's adoRESTTarget already keys it (both read
-// through adoscope's NameKey rule), so a spelling that reaches the git door is
-// the same approval key as the same repository reaching the REST door — a
-// sticky deny or an approved push on one spelling is not reopened by another.
-// actsAs is the person's injected credential, named by the grant their bearer
-// resolves from ("api_key:<id>"); the control plane recognises that grant as
-// the lane's and labels it with the person (internal/api's pushActsAs).
+// adoPushTarget is the Azure DevOps Entra lane's: the repository, keyed
+// exactly as the REST door's adoRESTTarget keys it (both via adoscope's
+// NameKey), so the same repository reaching either door shares one approval
+// key — a sticky deny or approval on one spelling isn't reopened by another.
+// actsAs is the person's injected credential grant ("api_key:<id>"); the
+// control plane recognises that grant as this lane's and labels it with the
+// person (internal/api's pushActsAs).
 func (p *Proxy) adoPushTarget(host string, keys []string) pushTarget {
 	t := pushTarget{repo: host + "/" + strings.Join(keys, "/")}
 	if p.inject != nil {
@@ -170,13 +166,12 @@ func pushScope(paths []string, cmds []gitpack.Command, t pushTarget) (types.Push
 	return s, strings.Join([]string{s.Repo, s.Branch, s.PathsDigest, strings.Join(s.Commits, ",")}, "\x00")
 }
 
-// quotePath is p as git names it with core.quotePath on (git's quote_c_style):
-// unchanged unless it holds a control byte, '"', '\\', DEL or a byte past
-// ASCII, and then double-quoted with C escapes and every other such byte as a
-// three-digit octal escape. A held push's paths are named this way everywhere
-// — card, list, digest, dedup key — because the wire is JSON: a path that is
-// not UTF-8 would reach the control plane altered and fail its own digest.
-// Quoting is one-to-one, so distinct paths stay distinct.
+// quotePath is p as git names it with core.quotePath on (quote_c_style):
+// unchanged unless it holds a control byte, '"', '\\', DEL or non-ASCII,
+// then double-quoted with C escapes. A held push's paths are named this way
+// everywhere — card, list, digest, dedup key — because the wire is JSON: a
+// non-UTF-8 path would reach the control plane altered and fail its own
+// digest. Quoting is one-to-one, so distinct paths stay distinct.
 func quotePath(p string) string {
 	if !strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == '"' || r == '\\' || r >= 0x7f }) {
 		return p
@@ -272,7 +267,7 @@ func (h *pushHolds) leave() {
 
 // record stores what id came to, unless key has since been filed under a
 // different approval (discriminate, then store — approvals.go ResolveWait's
-// order, for its reason).
+// order).
 func (h *pushHolds) record(key string, id uuid.UUID, state approvalState) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

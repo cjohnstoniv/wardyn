@@ -57,10 +57,9 @@ func (s Status) Lag() int64 { return max(s.HeadSeq-s.AckedSeq, 0) }
 
 // Forwarder pushes this daemon's chained audit rows to the organisation from
 // the durable cursor in org_federation, one batch at a time — at-least-once:
-// the cursor moves only after the organisation acknowledged, and the
-// organisation recognises a re-sent row by its seq and row hash. The cursor
-// is a seq and the row hash acknowledged at it, because a local table reset can
-// reuse the seq.
+// the cursor moves only after acknowledgement, and the organisation
+// recognises a re-sent row by seq + row hash (the cursor keeps both, since a
+// local table reset can reuse the seq).
 type Forwarder struct {
 	client   *Client
 	store    Store
@@ -76,13 +75,12 @@ type Forwarder struct {
 	halted  bool
 	backoff time.Duration
 
-	// markPending is true from a revoke whose MarkFederationRevoked failed until
-	// step retries it durably. The in-process gate (Status().Revoked) is closed
-	// the instant revoke runs, regardless — this only tracks the durable write.
+	// markPending is true from a revoke whose durable write failed, until step
+	// retries it. Status().Revoked closes the instant revoke runs regardless —
+	// this only tracks the durable write.
 	markPending bool
 
-	// done closes once Run returns, so a caller that started Run on its own
-	// goroutine can join it (see Done).
+	// done closes once Run returns, so a caller on its own goroutine can join it.
 	done chan struct{}
 }
 
@@ -93,11 +91,9 @@ func NewForwarder(c *Client, st Store, cred Credential, rec audit.Recorder) *For
 }
 
 // Done closes once Run has returned — after ctx ends or the organisation
-// revokes this device. A caller that starts Run on its own goroutine (as
-// bootHybrid does) must join it before treating shutdown as complete: cancel
-// the context, then <-Done(), rather than walking away the instant cancel is
-// called. Run must be called at most once per Forwarder; a second call
-// double-closes done and panics.
+// revokes this device. A caller running Run on its own goroutine must join it
+// (cancel, then <-Done()) before treating shutdown as complete. Run must be
+// called at most once per Forwarder; a second call double-closes done and panics.
 func (f *Forwarder) Done() <-chan struct{} { return f.done }
 
 // Status returns a copy of the current state.
@@ -113,9 +109,9 @@ func (f *Forwarder) update(fn func(*Status)) {
 	fn(&f.status)
 }
 
-// Load reads the durable cursor and revoked mark. bootHybrid calls it before
-// the server starts, so a laptop revoked before a restart refuses new runs from
-// its first request, whether or not the organisation is reachable.
+// Load reads the durable cursor and revoked mark, called before the server
+// starts so a laptop revoked before a restart refuses new runs from its first
+// request, regardless of organisation reachability.
 func (f *Forwarder) Load(ctx context.Context) error {
 	acked, ackedHash, err := f.store.GetFederationCursor(ctx)
 	if err != nil {
@@ -158,10 +154,9 @@ func (f *Forwarder) Run(ctx context.Context) {
 // step does one unit of work — push the next batch, or heartbeat when there is
 // none — and says how long to wait before the next.
 //
-// The head is read before anything can fail upstream, so an unreachable
-// organisation shows as lag that grows. Rows with no row_hash predate the
-// chain (migration 0047) and cannot be verified upstream; they are skipped,
-// never sent, and the cursor moves past them.
+// Head is read before anything can fail upstream, so an unreachable
+// organisation shows as growing lag. Rows with no row_hash predate the chain
+// and can't be verified upstream; skipped, never sent, cursor moves past them.
 func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 	if !f.loaded {
 		if err := f.Load(ctx); err != nil {
@@ -186,13 +181,11 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 
 	var rows []types.FederatedAuditEvent
 	if acked > 0 {
-		// One read, one snapshot: the row at the cursor, then the batch after it.
-		// The row at the cursor must still be the one the organisation
-		// acknowledged. Gone (a truncate or restore below the cursor) or carrying
-		// another hash (a reset that restarted seq and refilled past it), the
-		// local chain was reset: the rows after it would link to nothing the
-		// organisation holds, so start over from genesis — the organisation skips
-		// what it already holds and records the new genesis as a chain reset.
+		// One read, one snapshot: the row at the cursor, then the batch after
+		// it. It must still be the row the organisation acknowledged; if gone
+		// or carrying another hash, the local chain was reset — rows after it
+		// would link to nothing the organisation holds, so start over from
+		// genesis (it skips what it already holds and records a chain reset).
 		if rows, err = f.store.ListAuditEventsAfterSeq(ctx, acked-1, batchSize+1); err != nil {
 			return f.retry(err, 0), false
 		}
@@ -261,11 +254,10 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 }
 
 // refused maps an organisation answer to what the forwarder does next:
-// 401/410 revoke; 429 waits as its Retry-After says, or backs off when it says
-// nothing usable; any other 4xx is definitive — the batch
-// will never be accepted as sent, so it is not retried (the forwarder halts
-// pushing, keeps heart-beating so revocation is still noticed, and says so on
-// its status until a restart); everything else backs off and retries.
+// 401/410 revoke; 429 waits per Retry-After or backs off if it's unusable;
+// any other 4xx is definitive and not retried (halts pushing, keeps
+// heart-beating so revocation is still noticed, reports on status until a
+// restart); everything else backs off and retries.
 func (f *Forwarder) refused(ctx context.Context, err error) (time.Duration, bool) {
 	var se *StatusError
 	if !errors.As(err, &se) {
@@ -274,10 +266,9 @@ func (f *Forwarder) refused(ctx context.Context, err error) (time.Duration, bool
 	switch {
 	case se.Revoked():
 		f.revoke(ctx, se)
-		// The in-process gate (Status().Revoked) is already closed; stop calling
-		// the organisation only once the mark is durable too — otherwise step
-		// retries the write on the next tick, at the normal interval, without
-		// contacting the organisation again.
+		// Status().Revoked is already closed; only stop calling the organisation
+		// once the mark is durable too, else step retries the write next tick
+		// without contacting it again.
 		if f.markPending {
 			return f.interval, false
 		}
@@ -328,11 +319,11 @@ func (f *Forwarder) revoke(ctx context.Context, se *StatusError) {
 	}
 }
 
-// markRevokedDurable tries once to persist the revoked mark and clears
-// markPending on success; on failure it sets markPending so step retries it on
-// the next tick. The in-process gate (Status().Revoked) is already closed
-// either way — a laptop never trusts the credential again on the strength of
-// an unwritten mark, but a restart before the write lands would forget it.
+// markRevokedDurable tries once to persist the revoked mark, clearing
+// markPending on success or setting it on failure so step retries next tick.
+// Status().Revoked is already closed either way — the credential is never
+// trusted again on the strength of an unwritten mark, but a restart before
+// the write lands would forget it.
 func (f *Forwarder) markRevokedDurable(ctx context.Context) {
 	if err := f.store.MarkFederationRevoked(ctx); err != nil {
 		slog.Error("federation: recording the revocation durably failed; retrying on the tick loop", "error", err)

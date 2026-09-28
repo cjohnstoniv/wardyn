@@ -19,6 +19,7 @@ import { ThemeProvider } from "../wardyn/theme-provider";
 import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
+import { NO_BARRIER } from "../wardyn/copy";
 import { baseStatus } from "../../lib/test-fixtures";
 // Both bands are React.lazy chunks, and the strip's is the slow one (the login
 // pane rides in it). Loaded here, each lazy import resolves from the module
@@ -47,7 +48,12 @@ const ADMIN_ME = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function renderShellAt(path: string, me: Record<string, unknown>, healthExtra: Record<string, unknown> = {}) {
+function renderShellAt(
+  path: string,
+  me: Record<string, unknown>,
+  healthExtra: Record<string, unknown> = {},
+  noBarrier?: boolean,
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: RequestInfo | URL) => {
@@ -69,7 +75,12 @@ function renderShellAt(path: string, me: Record<string, unknown>, healthExtra: R
           onRefresh={() => {}}
         >
           <Routes>
-            <Route path="*" element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
+            <Route
+              path="*"
+              element={
+                <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} noBarrier={noBarrier} />
+              }
+            >
               <Route path="*" element={<div>screen</div>} />
             </Route>
           </Routes>
@@ -129,5 +140,77 @@ describe("a clamped admin at an /admin/* path reads the resolved view, not the U
     // it proves the shell resolved this session to the User view.
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
     expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
+  });
+});
+
+// #214 (#1328 review round 2, R2-1) — the shell's own global route to the
+// fix, present in BOTH views (unlike the two view-scoped bands above). Only
+// /admin/setup?step=environment ever reaches the Environment step (the plain
+// /setup path always renders the read-only member recap regardless of
+// `?step=`, onboarding-screen.tsx's GettingStarted) — so the CTA renders only
+// for a caller who can actually get there: an operator, or a session-user
+// via ViewGate's own "to-admin" click. Everyone else reads the reason with
+// no link at all.
+describe("the #214 no-barrier banner: present in both views, CTA gated on who can reach it", () => {
+  it("a member in the User view: the reason shows, with no CTA at all", async () => {
+    renderShellAt(
+      "/runs",
+      { principal: "m@corp.example", method: "sso", role: "user", operator: false, security_operator: false },
+      {},
+      true,
+    );
+    expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(NO_BARRIER.BANNER_BODY)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+  });
+
+  it("an operator in the Admin view: the banner routes into /admin/setup, and the top-bar link is absent (no New run there)", async () => {
+    renderShellAt("/admin/runs", ADMIN_ME, {}, true);
+    expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: NO_BARRIER.CTA })).toHaveAttribute(
+      "href",
+      "/admin/setup?step=environment",
+    );
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+  });
+
+  // R2-1's central fix: an admin who switched to the User view is clamped by
+  // the server exactly like a plain member (role "user", operator false —
+  // internal/api/me.go's own doc), so `meta.operator` alone cannot tell them
+  // apart. `access === "session-user"` is what does: the CTA still renders,
+  // routed at the SAME /admin/setup?step=environment — ViewGate answers with
+  // the "to-admin" interstitial (never a refusal) the moment it's clicked,
+  // and that click's own target already carries the query string.
+  it("an SSO admin who switched to the User view (session-user): the CTA still offers /admin/setup, from both the banner and the top bar", async () => {
+    renderShellAt(
+      "/runs",
+      { principal: "admin-in-member@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true },
+      {},
+      true,
+    );
+    expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
+    const links = screen.getAllByRole("link", { name: NO_BARRIER.CTA });
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/admin/setup?step=environment");
+    }
+  });
+
+  it("a security admin (not a full operator) in the Admin view: no CTA — /admin/setup would only refuse them", async () => {
+    renderShellAt(
+      "/admin/runs",
+      { principal: "sec@corp.example", method: "sso", role: "security_admin", operator: false, security_operator: true },
+      {},
+      true,
+    );
+    expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+  });
+
+  it("stays silent when the deployment has a barrier", async () => {
+    renderShellAt("/runs", { principal: "m@corp.example", method: "sso", role: "user", operator: false, security_operator: false }, {}, false);
+    await screen.findByText("screen");
+    expect(screen.queryByText(NO_BARRIER.BANNER_TITLE)).toBeNull();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
 });

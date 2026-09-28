@@ -20,32 +20,27 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Brokered LOCAL routes served by the proxy listener itself (origin-form only;
-// see ServeHTTP for the security gating). They let the sandbox obtain its
-// broker-minted credentials WITHOUT ever holding the run token: the proxy holds
-// the run token in its config and injects it when forwarding internal API calls
-// to the control plane. The sandbox-supplied Authorization header is always
-// stripped before injection so the sandbox cannot smuggle or replace brokered
-// credentials.
+// Brokered LOCAL routes served by the proxy listener itself (origin-form
+// only; see ServeHTTP for the security gating). SECURITY: they let the
+// sandbox obtain broker-minted credentials WITHOUT ever holding the run
+// token; the sandbox-supplied Authorization header is always stripped before
+// injection so the sandbox can't smuggle or replace brokered credentials.
 const (
 	localRoutePrefix = "/wardyn/"
 
 	routeMint = "/wardyn/v1/credentials/mint"
 	// routeApprovalsCreate (POST, exact path) raises a tool_call hold from the
-	// sandbox; routeApprovals (GET, {id} suffix) polls one. Same control-plane
-	// endpoint pair, same token injection.
+	// sandbox; routeApprovals (GET, {id} suffix) polls one.
 	routeApprovalsCreate = "/wardyn/v1/approvals"
 	routeApprovals       = "/wardyn/v1/approvals/"
 	// routeApprovalsExpireSuffix (POST, {id}+suffix) is wardyn-toolgate's own
-	// give-up signal (#811): it closes the tool_call approval it raised the
-	// moment its wait deadline is reached, instead of leaving the row PENDING
-	// for the periodic sweep to catch up to.
+	// give-up signal: closes the approval it raised at its wait deadline
+	// instead of leaving the row PENDING for the periodic sweep.
 	routeApprovalsExpireSuffix = "/expire"
 	routeRecordings            = "/wardyn/v1/recordings/"
 	routeScanResults           = "/wardyn/v1/scan-results/"
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
-	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
-	// scan/verify result uploads.
+	// container-login run. Same brokered shape as the scan/verify result uploads.
 	routeSSOToken = "/wardyn/v1/sso-token/"
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
@@ -54,42 +49,31 @@ const (
 	ruleSourceRecordings  = "brokered:recording"
 	ruleSourceScanResults = "brokered:scan-result"
 	// A tool call decided by the run's own tool_rules, with no human asked.
-	// Distinct source strings per effect so the decision log answers "how many
-	// calls did policy wave through" without parsing anything.
 	ruleSourceToolAllow = "policy:tool-allow"
 	ruleSourceToolDeny  = "policy:tool-deny"
 	ruleSourceSSOToken  = "brokered:sso-token"
-	// ruleSourceArtifactMITM marks a corp artifact-registry request TLS-MITM'd only
-	// to inject the operator's registry token on the wire — NOT an LLM/inspection
-	// path, so the decision log reads honestly (no scan coverage implied).
+	// ruleSourceArtifactMITM marks a corp artifact-registry request TLS-MITM'd
+	// only to inject the operator's registry token — not an inspection path.
 	ruleSourceArtifactMITM = "artifact:mitm"
 
-	// ruleSourceCredentialReauthTimeout names the ONE decision a spent re-auth
-	// hold writes: the proxy parked a sandbox's AWS SSO credential exchange
-	// while its owner was asked to sign in again, and nobody did before the
-	// budget ended. It is a DENY, and it is deliberately its own rule_source
-	// rather than folded into the credential-refresh failure beside it: "nobody
-	// signed in" and "the credential could not be refreshed" have different
-	// fixes, and only one of them is a person's to make.
+	// ruleSourceCredentialReauthTimeout: the proxy parked a sandbox's AWS SSO
+	// credential exchange while its owner was asked to sign in again, and
+	// nobody did before the budget ended. Its own rule_source since "nobody
+	// signed in" and "the credential couldn't be refreshed" have different fixes.
 	//
-	// Appended, not slotted in beside its siblings: docs/AUDIT-ACTIONS.md cites
-	// each of these by LINE with a zero-line window, so inserting above them
-	// rots three citations for nothing.
+	// Appended, not slotted beside its siblings: docs/AUDIT-ACTIONS.md cites
+	// each by LINE, so inserting above rots citations.
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
 
 	// maxBrokeredBody caps mint/approvals forward bodies. LLM bodies are
 	// unbounded (streamed) — Anthropic is the size authority there.
 	maxBrokeredBody = 10 << 20 // 10 MiB
-	// maxRecordingBody caps recording uploads (PTY casts compress poorly but
-	// are text; 100 MiB is generous for a session).
+	// maxRecordingBody caps recording uploads (100 MiB is generous for a session).
 	maxRecordingBody = 100 << 20
-	// maxScanResultBody caps scan-result uploads. ScanFacts is bounded by the
-	// scanner's manifest-count + per-file caps, so this is a generous DoS ceiling.
+	// maxScanResultBody caps scan-result uploads, a generous DoS ceiling.
 	maxScanResultBody = 8 << 20
-	// Bounds for a sandbox-raised tool_call approval. The body cap is a DoS
-	// ceiling; the field caps bound what is PERSISTED and shown to a human — a
-	// megabyte of agent-supplied text in an approval card is a decision nobody
-	// can actually read.
+	// Bounds for a sandbox-raised tool_call approval: the body cap is a DoS
+	// ceiling, the field caps bound what is shown to a human.
 	maxToolApprovalBody = 64 << 10
 	maxToolCmd          = 4 << 10
 	maxToolName         = 128
@@ -132,12 +116,10 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 // plane's internal mint endpoint with the run token injected. The response
 // (status + body) is passed through verbatim.
 //
-// A grant this proxy brokers on /wardyn/gh/ is REFUSED here (see
-// isBrokeredGitGrant): that route mints the GitHub App installation token
-// server-side and re-originates with it, so handing the same token to the
-// sandbox would defeat the per-repo allowlist and the push branch-namespace
-// parser — and, because an approval-gated grant is single-use, would also burn
-// the broker's one mint out from under the run's own clone/push.
+// TRUST BOUNDARY: a grant this proxy brokers on /wardyn/gh/ is REFUSED here
+// (see isBrokeredGitGrant) — that route mints the GitHub App installation
+// token server-side, so handing the same token to the sandbox would defeat
+// the per-repo allowlist and burn the broker's one (single-use) mint.
 func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBrokeredBody))
 	if err != nil {
@@ -151,8 +133,7 @@ func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 			http.StatusForbidden)
 		return
 	}
-	// The 409 body carries the approval id (decision-log enrichment); a 200 mint
-	// body is not parsed for one.
+	// The 409 body carries the approval id; a 200 mint body is not parsed for one.
 	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/credentials/mint",
 		body, r.Header.Get("Content-Type"), ruleSourceMint, approvalIDOn409)
 }
@@ -161,9 +142,8 @@ func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 // plane's internal approval endpoint with the run token injected.
 func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, routeApprovals)
-	// Only a bare UUID segment is a valid approval id. Parsing (not just a
-	// no-slash check) makes the token-injected forward path structurally
-	// traversal-proof regardless of URL re-parsing behavior.
+	// Only a bare UUID segment is valid: parsing makes the forward path
+	// structurally traversal-proof regardless of URL re-parsing behavior.
 	if _, err := uuid.Parse(id); err != nil {
 		http.Error(w, "invalid approval id", http.StatusNotFound)
 		return
@@ -172,10 +152,9 @@ func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 		nil, "", ruleSourceApprovals, nil)
 }
 
-// handleBrokerExpireApproval forwards POST /wardyn/v1/approvals/{id}/expire to
-// the control plane's internal expire endpoint with the run token injected —
-// wardyn-toolgate's own give-up signal (#811), closing the tool_call approval
-// it raised itself rather than leaving it PENDING for the periodic sweep.
+// handleBrokerExpireApproval forwards POST /wardyn/v1/approvals/{id}/expire
+// to the control plane's internal expire endpoint with the run token
+// injected — wardyn-toolgate's own give-up signal.
 func (p *Proxy) handleBrokerExpireApproval(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, routeApprovals), routeApprovalsExpireSuffix)
 	if _, err := uuid.Parse(id); err != nil {
@@ -187,12 +166,10 @@ func (p *Proxy) handleBrokerExpireApproval(w http.ResponseWriter, r *http.Reques
 }
 
 // toolApprovalRequest is the SANDBOX-facing body for POST /wardyn/v1/approvals.
-// Payload is the shape the approvals UI already renders for a tool_call
-// (screens/approvals.tsx: {tool, cmd, env}).
 //
-// Env is a list of variable NAMES, and it is a name list BY TYPE: the wire
-// cannot carry a value, so no code path exists that could persist one. A client
-// that sends {"env":{"AWS_SECRET":"…"}} gets a 400, not a stored secret.
+// SECURITY: Env is a list of variable NAMES by type — the wire can't carry a
+// value, so no code path could persist one; {"env":{"AWS_SECRET":"…"}} gets a
+// 400, not a stored secret.
 type toolApprovalRequest struct {
 	Kind    string `json:"kind"`
 	Payload struct {
@@ -202,31 +179,28 @@ type toolApprovalRequest struct {
 	} `json:"payload"`
 }
 
-// toolCallScope is the requested_scope persisted for a tool_call approval:
-// {tool, cmd, env} exactly, because that is what the approvals screen reads
-// (deriveTitle/deriveBanner in screens/approvals.tsx). env is the joined name
-// list — a display string, never values.
+// toolCallScope is the requested_scope persisted for a tool_call approval,
+// what the approvals screen reads. env is the joined name list, a display
+// string, never values.
 type toolCallScope struct {
 	Tool string `json:"tool"`
 	Cmd  string `json:"cmd"`
 	Env  string `json:"env,omitempty"`
 }
 
-// handleBrokerCreateApproval forwards POST /wardyn/v1/approvals to the control
-// plane's internal approval endpoint with the run token injected — the
-// sandbox-facing alias the tool-approval gate uses to park a tool call for a
-// human decision.
+// handleBrokerCreateApproval forwards POST /wardyn/v1/approvals to the
+// control plane's internal approval endpoint with the run token injected —
+// the sandbox-facing alias the tool-approval gate uses to park a tool call
+// for a human decision.
 //
-// The run identity is never sandbox input: it rides the run token this proxy
-// holds (forwardToControlPlane), which the control plane binds from its
-// verified claims — the same derivation the approvals GET and the recording PUT
-// use, and the reason the sandbox itself stays tokenless.
+// TRUST BOUNDARY: the run identity is never sandbox input — it rides the run
+// token this proxy holds, which the control plane binds from its verified
+// claims.
 //
-// Only kind "tool_call" is accepted. Egress holds are raised by the PROXY
-// (approvals.go raise()), the component that can actually park the connection;
-// letting the sandbox mint an egress_domain approval would let it open a hold
-// for a host it was never allowed to reach — and, approved, teach the workspace
-// an allow-list entry nothing ever asked for.
+// Only kind "tool_call" is accepted: egress holds are raised by the PROXY
+// itself (approvals.go raise()), never the sandbox, since a sandbox-minted
+// egress_domain approval could open a hold for a host it was never allowed to
+// reach.
 func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxToolApprovalBody))
 	var body toolApprovalRequest
@@ -234,10 +208,9 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid tool approval request", http.StatusBadRequest)
 		return
 	}
-	// `lane` names a control-plane-raised escalation (the Azure DevOps
-	// capability hold). The typed re-marshal below would drop it anyway, but a
-	// sandbox that tries to say it is refused out loud rather than silently
-	// cleaned: the control plane refuses the same key on its own route.
+	// `lane` names a control-plane-raised escalation. The typed re-marshal
+	// below would drop it anyway, but a sandbox that tries to say it is
+	// refused out loud rather than silently cleaned.
 	if sandboxNamesLane(raw) {
 		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
 		http.Error(w, "wardyn: a tool approval may not name a lane", http.StatusBadRequest)
@@ -254,8 +227,7 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		Cmd:  clampToolField(body.Payload.Cmd, maxToolCmd),
 		Env:  envNames(body.Payload.Env),
 	}
-	// An approval that names neither a tool nor a command asks a human to decide
-	// about nothing. Refuse it here rather than persisting an undecidable card.
+	// Neither tool nor command asks a human to decide about nothing.
 	if scope.Tool == "" && scope.Cmd == "" {
 		http.Error(w, "tool approval needs a tool or a cmd", http.StatusBadRequest)
 		return
@@ -271,8 +243,7 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		p.httpError(w, "encode tool approval", err, http.StatusInternalServerError)
 		return
 	}
-	// The created row's id rides the decision log so audit can join "the sandbox
-	// raised this hold" to the approval it raised, without parsing the response.
+	// The created row's id rides the decision log so audit can join it to the approval.
 	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals",
 		fwd, "application/json", ruleSourceApprovals, approvalIDAlways)
 }
@@ -303,8 +274,7 @@ func sandboxNamesLane(raw []byte) bool {
 }
 
 // clampToolField bounds a sandbox-supplied string for storage and marks any
-// truncation honestly — a human decides on what this renders, so a silently
-// shortened command would be a decision made on a half-true string.
+// truncation honestly, since a human decides on what this renders.
 // ToValidUTF8 drops the partial rune a byte-slice cut can leave behind.
 func clampToolField(s string, max int) string {
 	s = strings.TrimSpace(s)
@@ -333,8 +303,8 @@ func envNames(names []string) string {
 // control plane's internal recording-upload endpoint with the run token
 // injected. The control plane rejects cross-run uploads (403: token run id
 // must match the path run id), so the sandbox can deliver ONLY its own cast —
-// this is the multi-node-safe delivery path that replaces the shared volume
-// (which leaked recordings across same-uid agent containers).
+// the multi-node-safe delivery path that replaces the shared volume (which
+// leaked recordings across same-uid agent containers).
 //
 // A long run's cast arrives in parts (wardyn-rec's tail upload): part 1 on the
 // bare route, part n >= 2 on /{runID}/parts/{n}. A part number that is not
@@ -387,24 +357,19 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, id
 }
 
 // handleBrokerScanResult forwards PUT /wardyn/v1/scan-results/{runID} to the
-// control plane's internal scan-result-upload endpoint with the run token
-// injected — the exact sibling of handleBrokerRecording. The control plane
-// rejects cross-run uploads (403: token run id must match the path run id), so a
-// governed scan run can deliver ONLY its own facts. The sandbox's query string
-// is deliberately NOT forwarded (like recordings): the run→workspace linkage the
-// control plane needs must come from TRUSTED state, never from sandbox input.
+// control plane's internal scan-result-upload endpoint, the exact sibling of
+// handleBrokerRecording. TRUST BOUNDARY: a governed scan run can deliver ONLY
+// its own facts, cross-run uploads being control-plane rejected.
 func (p *Proxy) handleBrokerScanResult(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, routeScanResults)
 	p.forwardBrokeredUpload(w, r, id, "/api/v1/internal/scan-results/"+id,
 		ruleSourceScanResults, "read scan result body", maxScanResultBody)
 }
 
-// handleBrokerSSOToken forwards PUT /wardyn/v1/sso-token/{runID} to the control
-// plane's internal sso-token endpoint with the run token injected — the exact
-// sibling of handleBrokerScanResult. It carries the AWS SSO session
-// wardyn-aws-sso captured in the sandbox back to the control plane. Cross-run
-// uploads are rejected control-plane-side (token run id must match the path run
-// id); the sandbox-supplied Authorization is stripped, the run token injected.
+// handleBrokerSSOToken forwards PUT /wardyn/v1/sso-token/{runID} to the
+// control plane's internal sso-token endpoint, the exact sibling of
+// handleBrokerScanResult. Carries the AWS SSO session wardyn-aws-sso captured
+// in the sandbox back to the control plane.
 func (p *Proxy) handleBrokerSSOToken(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, routeSSOToken)
 	p.forwardBrokeredUpload(w, r, id, "/api/v1/internal/sso-token/"+id,
@@ -412,23 +377,19 @@ func (p *Proxy) handleBrokerSSOToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // forwardToControlPlane builds and sends a request to the control plane,
-// injecting the run token as Authorization. The control-plane host is resolved
-// and IP-vetted once, and the vetted target is pinned on the request context so
-// the shared transport dials it directly (no re-resolution). The inbound
-// sandbox Authorization is never carried here — this request is constructed
-// fresh, and only the run token is set.
+// injecting the run token as Authorization. The control-plane host is
+// resolved and IP-vetted once, pinned on the request context so the shared
+// transport dials it directly. SECURITY: the inbound sandbox Authorization is
+// never carried here — constructed fresh with only the run token set.
 func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
 	if p.controlPlaneURL == "" {
 		return nil, fmt.Errorf("control plane url not configured")
 	}
-	// The control-plane URL is TRUSTED operator configuration (same trust
-	// boundary as the run token the proxy already holds), NOT an agent-chosen
-	// target. It legitimately resolves to a private-network address (wardynd on
-	// a Docker/k8s internal net). The agent-SSRF private/reserved-IP guard
-	// (invariant 3) must therefore NOT apply here — it exists to stop the
-	// SANDBOX from reaching internal/metadata IPs via the forward-proxy path,
-	// not to stop the proxy from reaching its own control plane. We still
-	// resolve+pin the IP so the dial cannot be re-pointed mid-request.
+	// TRUST BOUNDARY: the control-plane URL is TRUSTED operator configuration,
+	// not an agent-chosen target, and legitimately resolves to a
+	// private-network address — the agent-SSRF private-IP guard must NOT
+	// apply here. Still resolve+pin the IP so the dial can't be re-pointed
+	// mid-request.
 	target, err := p.resolveTrustedURL(p.controlPlaneURL)
 	if err != nil {
 		return nil, err
@@ -451,9 +412,8 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 	return p.localClient.Do(req)
 }
 
-// reqOf builds the egress.Request every handler-side emitter records: the run,
-// the upstream host/port actually contacted, and the sandbox request's method +
-// path. Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
+// reqOf builds the egress.Request every handler-side emitter records.
+// Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
 func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
 	return egress.Request{
 		RunID:  p.runID,
@@ -465,13 +425,11 @@ func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
 	}
 }
 
-// resolveTrustedURL resolves the host of a TRUSTED rawURL (the operator-
-// configured control-plane endpoint) to a pinned "ip:port" dial target WITHOUT
-// applying the private/reserved-IP denial. Unlike vetURL, this is used only for
-// the proxy's own control-plane forwarding, where a private-network address is
-// expected and legitimate. Resolution still pins a single IP (TOCTOU / DNS-
-// rebinding guard); a literal IP is used as-is. Fails closed on any unparseable
-// URL or unresolvable host.
+// resolveTrustedURL resolves the host of a TRUSTED rawURL (the
+// operator-configured control-plane endpoint) to a pinned "ip:port" dial
+// target WITHOUT applying the private/reserved-IP denial, unlike vetURL.
+// Still pins a single IP (TOCTOU/DNS-rebinding guard). Fails closed on any
+// unparseable URL or unresolvable host.
 func (p *Proxy) resolveTrustedURL(rawURL string) (string, error) {
 	host, port, err := hostPortFromURL(rawURL)
 	if err != nil {
@@ -527,11 +485,10 @@ func hostPortFromURL(rawURL string) (host string, port int, err error) {
 }
 
 // relayControlPlane is the shared tail of every brokered sandbox->control-plane
-// route: forward with the run token injected, capture the capped response body,
-// emit the brokered decision under ruleSource, and pass the response through
-// verbatim. A forward error is a Deny row plus a 502 — the fail-closed shape all
-// four callers already had. Each caller keeps its own prologue (the guards).
-// idOf, when non-nil, derives the approval id the decision row carries.
+// route: forward with the run token injected, capture the capped response
+// body, emit the brokered decision, and pass the response through verbatim.
+// A forward error is a Deny row plus a 502. idOf, when non-nil, derives the
+// approval id the decision row carries.
 func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method, path string,
 	body []byte, contentType, ruleSource string, idOf func(status int, body []byte) *uuid.UUID) {
 	resp, err := p.forwardToControlPlane(r.Context(), method, path, body, contentType)
@@ -561,9 +518,8 @@ func approvalIDOn409(status int, body []byte) *uuid.UUID {
 // approvalIDAlways reads the approval id out of any response body.
 func approvalIDAlways(_ int, body []byte) *uuid.UUID { return extractApprovalID(body) }
 
-// relay streams an upstream response back to the client verbatim: headers (less
-// hop-by-hop), status code, then the body. The streaming sibling of passThrough,
-// which writes an already-captured (capped) body instead.
+// relay streams an upstream response back to the client verbatim. The
+// streaming sibling of passThrough, which writes an already-captured body.
 func relay(w http.ResponseWriter, resp *http.Response) {
 	dst := w.Header()
 	copyHeader(dst, resp.Header)
@@ -586,9 +542,8 @@ func passThrough(w http.ResponseWriter, resp *http.Response, body []byte) {
 }
 
 // decisionForStatus maps a forwarded control-plane status to an egress
-// decision for the brokered decision log: 2xx is allow, anything else deny.
-// (A 409 pending is recorded as deny here only for the decision-log decision
-// field; the approval_id is carried separately so audit can correlate.)
+// decision: 2xx is allow, anything else deny (a 409 pending is deny here;
+// the approval_id is carried separately so audit can correlate).
 func decisionForStatus(status int) egress.Decision {
 	if status >= 200 && status < 300 {
 		return egress.Allow
@@ -620,17 +575,13 @@ func extractApprovalID(body []byte) *uuid.UUID {
 	return &id
 }
 
-// emitLocalDecision records a DecisionLog for a brokered local route so it
-// lands in audit via the existing decisions pipeline. It is for the routes that
-// FORWARD TO THE CONTROL PLANE — mint, approval lookup, recording upload — whose
-// host AND port are therefore the recorded upstream (an unparseable URL leaves
-// both zero rather than fabricating a port).
+// emitLocalDecision records a DecisionLog for a brokered local route that
+// FORWARDS TO THE CONTROL PLANE, whose host/port are the recorded upstream.
 //
-// The two broker routes that re-originate to a forge do NOT use it and must not:
-// they have their own emitters that record the forge they actually dialled
-// (emitGitDecision -> github.com:443, emitPATDecision -> the granted PAT host).
-// Logging those through here recorded the control plane instead, which made a
-// clone of one forge indistinguishable from a mint, and from a clone of another.
+// The two broker routes that re-originate to a forge must NOT use it: they
+// have their own emitters recording the forge they actually dialled
+// (emitGitDecision, emitPATDecision); logging those through here would make a
+// clone of one forge indistinguishable from a mint or another forge's clone.
 func (p *Proxy) emitLocalDecision(r *http.Request, decision egress.Decision, ruleSource string, approvalID *uuid.UUID) {
 	if p.sink == nil {
 		return

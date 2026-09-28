@@ -14,52 +14,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // setup_integrations.go wires the Integrations entity (integrations.go) into
 // the live server and the first-run setup surface:
-//   - liveCapEnv folds the Server's config/secret store into the capability
-//     matrix's external-signal input (capEnv, defined in integrations.go);
-//     the row itself goes to capabilitiesFor unchanged.
+//   - integrationsWithCapabilities folds the caller's stored-secret presence
+//     into the capability matrix's external-signal input (capEnv, defined in
+//     integrations.go); the row itself goes to capabilitiesFor unchanged.
 //   - SetupIntegration is the wire shape GET /integrations and
 //     SetupStatus.Integrations both return: an effective row (stored or
 //     legacy-derived) plus its live capabilities.
 //   - SetupHarnessTool/setupHarnessTools project the static coding-agent
 //     harness catalog (harnessCatalog, harness.go) for SetupStatus.Harnesses.
-
-// liveCapEnv builds a capEnv from the server's actual live config/secret
-// store — the readiness signals capabilitiesFor cannot derive from an
-// integrationView alone. Read-only throughout (Peek/host-CLI detection,
-// never a refresh or a write).
-//
-// present/providers are taken as parameters, not recomputed; bedrock likewise
-// (its own SetupStatus/GET-/integrations callers already compute it once).
-// See integrationsWithCapabilities' doc for why.
-func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) capEnv {
-	residentLive := false
-	if s.cfg.SubscriptionToken != nil {
-		if tok, err := s.cfg.SubscriptionToken.Peek(); err == nil && tok.Value != "" {
-			residentLive = true
-		}
-	}
-	return capEnv{
-		SecretPresent:    func(name string) bool { return present[name] },
-		HostLike:         deploymentHostLike(providers),
-		BedrockRegionSet: s.cfg.BedrockRegion != "",
-		BedrockModelSet:  s.cfg.BedrockModel != "",
-		ManagedBlobPresent: func(provider string) bool {
-			_, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), provider)
-			return err == nil && ok
-		},
-		ResidentSubscriptionLive: residentLive,
-		// mirrors setupBedrock's own four-lane OR (runs_bedrock.go) — reused, not
-		// re-derived, so this can never drift from what resolveBedrockAuth accepts.
-		BedrockCredentialPresent: bedrock.CredsPresent || bedrock.AWSMount || bedrock.BearerPresent || bedrock.SSOPresent,
-		BedrockCredentialExpired: bedrock.SSOExpired,
-	}
-}
 
 // SetupIntegration is one integration as the UI sees it: the effective row
 // (stored or legacy-derived, integrationRow) plus its live capability
@@ -94,28 +61,9 @@ func (si *SetupIntegration) UnmarshalJSON(b []byte) error {
 // disagree. `present` is the CALLER's presence map — owner-scoped for a
 // request (presentSecretNamesFor with secretOwnerFromRequest), so a member's
 // own key lists exactly as it resolves in their run; operator-wide elsewhere.
-//
-// The Bedrock snapshot is OPERATOR-scoped even so: this surface answers "what
-// connections does this deployment have", and the per-principal answer is
-// SetupStatus.ModelAccess, computed on its own caller-scoped read. Handing this
-// a per-user scope would blank an admin's bedrock row on the integrations page
-// the moment they declared per_user, which is not what that page is about.
 func (s *Server) integrationsWithCapabilities(ctx context.Context, present map[string]bool) []SetupIntegration {
-	providers, _ := s.setupProviders()
-	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present, types.SiteConfig{}, awsSSOScope{}))
-}
-
-// integrationsWithCapabilitiesUsing is integrationsWithCapabilities' pure-ish
-// half, taking the three live signals capabilitiesFor's inputs are built from
-// (present secret names, detected providers, Bedrock readiness) as parameters
-// instead of recomputing them: /setup/status ALREADY computes all three for
-// its own checklist rows, and recomputing here would silently redo each 1-2
-// more times on the SAME polled request — a full secret listing, a filesystem
-// CLI-detection sweep + subscription peek, an AWS-SSO-blob age decrypt, each
-// 2-3x instead of once.
-func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) []SetupIntegration {
-	rows := s.effectiveIntegrations(ctx, present, bedrock)
-	env := s.liveCapEnv(ctx, present, providers, bedrock)
+	rows := s.effectiveIntegrations(ctx, present)
+	env := capEnv{SecretPresent: func(name string) bool { return present[name] }}
 	out := make([]SetupIntegration, len(rows))
 	for i, row := range rows {
 		out[i] = SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, env)}
@@ -257,7 +205,7 @@ func userDropsIntegration(in SetupIntegration) bool {
 
 // userSafeIntegrations projects a whole list, leaving the caller's slice
 // untouched — both call sites share a value computed once per request
-// (integrationsWithCapabilitiesUsing), so editing in place would redact an
+// (integrationsWithCapabilities), so editing in place would redact an
 // operator's own copy. Rows userDropsIntegration names are omitted
 // entirely; every other row is projected by userSafeIntegration.
 func userSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
@@ -273,10 +221,6 @@ func userSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 	}
 	return out
 }
-
-// setupIntegrationID is the capIntegration value a row is offered under — the
-// id a run names in req.IntegrationID.
-func setupIntegrationID(in SetupIntegration) string { return in.ID }
 
 // setupHarnessToolID is the capAgent value a harness is offered under — the
 // run's --agent string.
@@ -310,7 +254,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
-	rows := capVisible(r.Context(), s, capIntegration, s.integrationsWithCapabilities(r.Context(), present), setupIntegrationID)
+	rows := s.integrationsWithCapabilities(r.Context(), present)
 	if !s.isOperator(r.Context()) {
 		rows = userSafeIntegrations(rows)
 	}
@@ -334,16 +278,17 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 		}
 		row := integrationRow{Integration: in, Source: "stored"}
 		present := s.presentSecretNames(ctx)
-		providers, _ := s.setupProviders()
-		bedrock := s.setupBedrock(ctx, present, sc, awsSSOScope{})
-		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, s.liveCapEnv(ctx, present, providers, bedrock))}
+		env := capEnv{SecretPresent: func(name string) bool { return present[name] }}
+		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, env)}
 	}
 	return SetupIntegration{}
 }
 
 // putIntegrationRequest is the wire body for PUT /integrations/{id}: every
 // operator-settable field of a stored Integration, and ONLY those — name, kind,
-// disabled, secrets, egress, config, docs, disabled_capabilities, default_for.
+// disabled, secrets, egress, config, docs, disabled_capabilities. default_for
+// is not one: it marked an AI-kind row as a default, and no writable kind
+// takes it, so the strict decode refuses it by name.
 // id comes from the URL, not the body (mirrors handleDeleteSecret's
 // path-is-authoritative style).
 //
@@ -353,9 +298,9 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 // has no home for — id, created_at, updated_at, source, capabilities — and the
 // decode is STRICT, so PUTting a GET row back unchanged is a 400 naming the
 // first of them, not a round trip. Take the GET row, drop those five, send the
-// rest. (Strict stays deliberately: this write steers every run's model
-// credential, so a misspelled field name has to 400 rather than silently
-// resolve to the zero value.)
+// rest. (Strict stays deliberately: this write decides which credential a run
+// granted the row presents, so a misspelled field name has to 400 rather than
+// silently resolve to the zero value.)
 type putIntegrationRequest struct {
 	Name                 string                    `json:"name"`
 	Kind                 string                    `json:"kind"`
@@ -365,16 +310,13 @@ type putIntegrationRequest struct {
 	Config               map[string]any            `json:"config,omitempty"`
 	Docs                 string                    `json:"docs,omitempty"`
 	DisabledCapabilities []string                  `json:"disabled_capabilities,omitempty"`
-	DefaultFor           []string                  `json:"default_for,omitempty"`
 }
 
 // handlePutIntegration creates-or-replaces a STORED Integration. operatorOnly
-// (same corp-wide blast radius as site-config: an AI-provider row here can
-// steer every run's model credential — a strictly larger reach than a single
+// (same corp-wide blast radius as site-config: a row here reaches every run of
+// every workspace that requires it — a strictly larger reach than a single
 // workspace/policy write). Validated by validateIntegrationWrite
-// (integrations.go) before anything is read/written. DefaultFor uses RADIO
-// semantics: naming a mark here CLEARS it from every OTHER stored row in the
-// SAME write (applyDefaultForRadio) — never a 409, per the approved spec.
+// (integrations_write.go) before anything is read/written.
 //
 // Adoption: the write IS the adoption now. A PUT whose id so far exists only
 // as a DERIVATION simply stores it — the explicit POST {id}/adopt promotion
@@ -405,7 +347,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		ID: id, Name: req.Name, Kind: req.Kind,
 		Disabled: req.Disabled, Secrets: req.Secrets, Egress: req.Egress,
 		Config: req.Config, Docs: req.Docs,
-		DisabledCapabilities: req.DisabledCapabilities, DefaultFor: req.DefaultFor,
+		DisabledCapabilities: req.DisabledCapabilities,
 	}
 	if err := validateIntegrationWrite(in); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonIntegrationInvalid, "invalid integration: "+err.Error())
@@ -423,6 +365,17 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get site config", err)
 		return
 	}
+	// A credential never rides an integration onto a host that serves a model:
+	// a model credential comes only from a model provider, on its owner's own
+	// key. The requirement fold skips such a host at launch too
+	// (applyIntegrationRequirement); refusing it here says so up front.
+	if hasProxyHeaderSecret(in) {
+		serving := s.modelServingHosts(sc)
+		if i := slices.IndexFunc(in.Egress, serving); i >= 0 {
+			writeError(w, http.StatusBadRequest, "invalid integration: "+fmt.Sprintf(integration400ModelHost, in.Egress[i]))
+			return
+		}
+	}
 	now := s.cfg.Now().UTC()
 	rows := slices.Clone(sc.Integrations)
 	if idx := slices.IndexFunc(rows, func(x types.Integration) bool { return x.ID == id }); idx >= 0 {
@@ -438,7 +391,6 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		in.CreatedAt, in.UpdatedAt = now, now
 		rows = append(rows, in)
 	}
-	applyDefaultForRadio(rows, id, in.DefaultFor)
 	sc.Integrations = rows
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, sc)
 	if err != nil {
@@ -453,8 +405,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	_, auditHeader, _, _ := in.HeaderSecret()
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"integration.write", id, "success", mustJSON(map[string]any{
-			"kind": in.Kind, "default_for": in.DefaultFor,
-			"egress": in.Egress, "header": auditHeader,
+			"kind": in.Kind, "egress": in.Egress, "header": auditHeader,
 		})))
 	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }

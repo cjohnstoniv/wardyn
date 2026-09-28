@@ -25,11 +25,10 @@ const maxJSONDepth = 64
 
 // peekBody returns the body bytes the classifier may trust, or refuses.
 //
-// Every refusal here is a case where the bytes on the wire are not the bytes
-// the server will parse, or are not all of them: a Content-Encoding hides the
-// body inside a compressed stream, and a declared length longer than the peek
-// (or a peek sitting exactly on the bound) means the body continues past what
-// we can see.
+// Every refusal here is a case where the wire bytes are not the bytes the
+// server will parse, or not all of them: a Content-Encoding hides the body in
+// a compressed stream, and a declared length longer than the peek (or sitting
+// exactly on the bound) means the body continues past what we can see.
 func peekBody(req Request) ([]byte, error) {
 	if req.BodyWithheld {
 		return nil, ErrNeedsBody
@@ -85,10 +84,10 @@ func declaredLength(h http.Header) (int, bool, error) {
 // decodeUnique decodes body into v, refusing a body with a DUPLICATE KEY.
 //
 // Azure DevOps' parser is last-key-wins, and so is Go's, but they need not
-// agree about which key is last, so `{"bypassPolicy":false,…,"bypassPolicy":
-// true}` could show a classifier "false" while the server acts on "true".
-// Refusing the body is the only answer immune to key order. The comparison
-// FOLDS CASE, since the server's binding does too.
+// agree which key is last, so `{"bypassPolicy":false,…,"bypassPolicy":true}`
+// could show a classifier "false" while the server acts on "true". Refusing
+// the body is the only answer immune to key order. The comparison FOLDS CASE,
+// since the server's binding does too.
 func decodeUnique(body []byte, v any) error {
 	if err := uniqueKeys(body); err != nil {
 		return err
@@ -137,8 +136,8 @@ func walkUnique(dec *json.Decoder, depth int) error {
 			}
 		}
 	}
-	// Closing delimiter of this array; not inspected — a malformed stream
-	// surfaces as the decode error above on the next read.
+	// Closing delimiter; not inspected — a malformed stream surfaces as the
+	// decode error above on the next read.
 	_, err = dec.Token()
 	return err
 }
@@ -169,9 +168,9 @@ func walkObject(dec *json.Decoder, depth int) error {
 }
 
 // pullRequestWrite classifies a pull-request write, promoting it to
-// CapPolicyBypass when the body asks to complete the PR THROUGH the branch
-// policy. Azure DevOps takes the same vso.code_write scope either way, so the
-// body is the only place the difference exists.
+// CapPolicyBypass when the body asks to complete the PR through the branch
+// policy — Azure DevOps takes the same vso.code_write scope either way, so
+// the body is the only place the difference exists.
 func pullRequestWrite(method string, req Request) (Verdict, error) {
 	if method == http.MethodDelete {
 		return Verdict{Capability: CapPR}, nil
@@ -202,11 +201,11 @@ type refUpdate struct {
 	Name string `json:"name"`
 }
 
-// refWrite classifies a ref move, which is CapCodeWrite on an ordinary branch
-// and CapPolicyBypass on a policy-protected one — a distinction Azure DevOps
-// does not make in its scopes, hence parsing the ref names here. Names are
-// returned on EVERY verdict, protected or not, so the caller can re-decide off
-// its per-run protected-branch cache without re-parsing a body it no longer has.
+// refWrite classifies a ref move: CapCodeWrite on an ordinary branch,
+// CapPolicyBypass on a policy-protected one — a distinction Azure DevOps
+// doesn't make in its scopes, hence parsing ref names here. Names are
+// returned on every verdict so the caller can re-decide off its per-run
+// protected-branch cache without re-parsing a body it no longer has.
 func refWrite(req Request) (Verdict, error) {
 	body, err := peekBody(req)
 	if err != nil {
@@ -224,9 +223,9 @@ func refWrite(req Request) (Verdict, error) {
 }
 
 // refNames are the refs a ref-update or push body names. Two endpoint shapes
-// are parsed here — a bare ARRAY of updates, or an object with refUpdates —
-// so one ref gate covers both doors. A body naming no ref is REFUSED rather
-// than classified: "none visible" is not an answer a policy can apply to.
+// are parsed — a bare array of updates, or an object with refUpdates — so one
+// ref gate covers both doors. A body naming no ref is refused rather than
+// classified: "none visible" is not an answer a policy can apply to.
 func refNames(body []byte) ([]string, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, fmt.Errorf("adoscope: a ref update with no body names no branch to gate")
@@ -262,8 +261,8 @@ func refNames(body []byte) ([]string, error) {
 	return out, nil
 }
 
-// CheckRefName refuses a ref name that is not one git would accept, or that a
-// protected-ref check could read differently from the service. It is the ONE
+// CheckRefName refuses a ref name git would not accept, or that a
+// protected-ref check could read differently from the service. It is the one
 // ref-name rule both Azure DevOps doors apply, so a name one door refuses
 // cannot move a ref through the other.
 //
@@ -273,7 +272,7 @@ func refNames(body []byte) ([]string, error) {
 //     cache keyed by the forward-slash spelling;
 //   - space, tab, "^", "~", ":", "?", "*" and "[" are forbidden by git's own
 //     check-ref-format;
-//   - a control byte (LF or CR above all) is how a second command rides a
+//   - a control byte (LF/CR above all) is how a second command rides a
 //     line-oriented reader.
 func CheckRefName(ref string) error {
 	if strings.Contains(ref, "..") || strings.ContainsAny(ref, " \t\\^~:?*[") {
@@ -290,10 +289,10 @@ type batchOp struct {
 	URI string `json:"uri"`
 }
 
-// batchIsWorkItemsOnly refuses a work-item $batch that carries an operation
-// aimed anywhere but the work-item area — the batch door forwards each
-// operation's URI internally, so one foreign URI would make CapWorkWrite the
-// capability for a request landing in another area entirely.
+// batchIsWorkItemsOnly refuses a work-item $batch carrying an operation aimed
+// anywhere but the work-item area — the batch door forwards each operation's
+// URI internally, so one foreign URI would make CapWorkWrite the capability
+// for a request landing in another area entirely.
 func batchIsWorkItemsOnly(req Request) error {
 	body, err := peekBody(req)
 	if err != nil {
@@ -314,21 +313,20 @@ func batchIsWorkItemsOnly(req Request) error {
 	return nil
 }
 
-// batchOpIsWorkItem holds ONE $batch operation URI to the same two rules the
-// outer request is held to: it is under the work-item area, and it is on the
-// organisation the row pinned. The accepted shapes, with _apis at a fixed
-// depth:
+// batchOpIsWorkItem holds one $batch operation URI to the same two rules the
+// outer request is held to: under the work-item area, and on the organisation
+// the row pinned. Accepted shapes, with _apis at a fixed depth:
 //
 //	/_apis/wit/…                 organisation-relative
 //	/{org}/_apis/wit/…           the pinned organisation named
 //	/{org}/{project}/_apis/wit/… the pinned organisation named, then a project
 //
 // Any other first segment is refused, including the project-relative
-// "/{project}/_apis/wit/…" shape Microsoft's WIT reference also shows: whether
-// the batch door resolves that segment as a project or an organisation is
-// unverified, so it stays refused until a live two-organisation probe settles
-// it. An ABSOLUTE URI is refused outright, since the batch door is not a place
-// to re-run host admission.
+// "/{project}/_apis/wit/…" shape Microsoft's WIT reference also shows:
+// whether the batch door resolves that segment as a project or an
+// organisation is unverified, so it stays refused until a live
+// two-organisation probe settles it. An absolute URI is refused outright,
+// since the batch door is not a place to re-run host admission.
 func batchOpIsWorkItem(uri, org string) error {
 	u, err := url.Parse(strings.TrimSpace(uri))
 	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" {

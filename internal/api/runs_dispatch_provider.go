@@ -33,7 +33,7 @@ const (
 	mpRunNoToken        = "you have not added your token for it"
 	mpRunCredUnreadable = "Wardyn couldn't read your credential for model provider %s just now, so nothing was started. Try again in a moment."
 	mpRunUnreadable     = "Wardyn couldn't read its model providers just now, so nothing was started. Try again in a moment."
-	mpRunNoIntegration  = "integration_id no longer chooses a model credential on this deployment: its model providers do — use model_provider instead."
+	mpRunNoIntegration  = "integration_id no longer chooses a model credential: a run's model provider does — use model_provider instead."
 	// mpNoProviderDetail is the brokered-LLM 404's detail for a model run no
 	// provider serves: under a provider block nothing else credentials it.
 	mpNoProviderDetail = "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
@@ -289,7 +289,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			return llmTransport{}, injections, providerDispatch{}, false
 		}
 	}
-	injections = s.dropLegacyModelInjections(ctx, run, injections, lane.hosts(s))
+	injections = s.dropLegacyModelInjections(ctx, run, injections, lane.hosts(s), s.modelServingHosts(siteCfg))
 	if !modelRun {
 		return llmTransport{}, injections, providerDispatch{}, true
 	}
@@ -376,13 +376,15 @@ func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun,
 // (only an arm names one), the subscription, managed and AWS SSO sentinels,
 // bedrock-api-key, and any grant on a model vendor's host (every harness's,
 // not only this run's: an OpenAI key on a claude-code run is still a model
-// credential), on the boot gateway that re-points one, or on a host the chosen
-// provider's arm credentials (laneHosts). Such a grant comes from a stored or default policy,
-// a recorded profile or a legacy fold, and it reads the operator's
+// credential), on the boot gateway that re-points one, on a host the chosen
+// provider's arm credentials (laneHosts), or on any other host that serves a
+// model here — every provider row's, chosen or not (serving, modelServingHosts).
+// Such a grant comes from a stored or default policy, a recorded profile, a
+// workspace requirement or a legacy fold, and it reads the operator's
 // credential — or, on the arm's own host, would be a second injection for one
 // host, which fails the sidecar at startup. It must run before every arm
 // authors: it deletes the very names the arms write.
-func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant, laneHosts []string) []runner.InjectionGrant {
+func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant, laneHosts []string, serving func(string) bool) []runner.InjectionGrant {
 	hosts := slices.Clone(laneHosts)
 	for _, h := range harnessCatalog {
 		if h.Gateway != nil {
@@ -394,7 +396,8 @@ func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentR
 		model := strings.HasPrefix(name, providerSecretPrefix) ||
 			name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret ||
 			name == types.AWSSSOAccessTokenSecret || name == bedrockAPIKeySecret ||
-			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, ig.Rule.Host) })
+			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, ig.Rule.Host) }) ||
+			serving(ig.Rule.Host)
 		if model {
 			s.auditDroppedInjection(ctx, run, ig, "model_credential_not_provider_authored")
 		}

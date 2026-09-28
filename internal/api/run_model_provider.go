@@ -172,7 +172,7 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 // and Review, so Review answers the refusal launch would. With no provider
 // block it changes nothing unless the request named a provider, which it
 // refuses rather than ignores. wsRefs[0] is the primary workspace, the one
-// whose pin a run inherits (foldRunIntegration reads the same one).
+// whose pin a run inherits.
 //
 // A chosen provider is checked live at both doors, as dispatch will check it
 // again (providerLiveness, one check per kind): the caller's own credential for

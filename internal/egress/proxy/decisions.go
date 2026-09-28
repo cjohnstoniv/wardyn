@@ -62,18 +62,17 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mirror(log)
-	// The non-blocking send runs UNDER s.mu, mutually exclusive with close()
-	// (which also holds s.mu while closing the channel) — otherwise a send that
-	// already passed the closed-check could race close() and panic on a closed
-	// channel. The send never blocks (buffered + default), so this adds no
-	// latency to the request path.
+	// Runs UNDER s.mu, mutually exclusive with close() (which also holds s.mu
+	// while closing the channel) — otherwise a send past the closed-check
+	// could race close() and panic on a closed channel. Never blocks (buffered
+	// + default), so no latency added to the request path.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		// Counted, not silently returned: MITM tunnels are served on hijacked
-		// http.Servers that Shutdown never stops, so the last (credential-
-		// injecting) requests of a run are exactly the ones still emitting while
-		// the sink drains, and close() reads this counter to report the gap.
+		// Counted, not silently returned: MITM tunnels run on hijacked
+		// http.Servers that Shutdown never stops, so a run's last
+		// credential-injecting requests are exactly the ones still emitting
+		// while the sink drains; close() reads this counter to report the gap.
 		s.dropped.Add(1)
 		return
 	}
@@ -108,9 +107,8 @@ const dropReportInterval = 30 * time.Second
 
 func (s *decisionSink) run() {
 	defer s.wg.Done()
-	// reported tracks the drop count already summarized, so each summary carries
-	// only the delta since the last report. Single-goroutine, so a plain local
-	// is safe.
+	// Tracks the drop count already summarized, so each summary carries only
+	// the delta since last report. Single-goroutine, so a plain local is safe.
 	var reported uint64
 	ticker := time.NewTicker(dropReportInterval)
 	defer ticker.Stop()
@@ -118,41 +116,34 @@ func (s *decisionSink) run() {
 		select {
 		case log, ok := <-s.ch:
 			if !ok {
-				// Channel drained + closed: emit a final summary of any tail drops.
-				s.reportDropped(&reported)
+				s.reportDropped(&reported) // drained + closed: final tail summary
 				return
 			}
-			// Piggyback: surface accrued drops on the next successful flush.
-			s.reportDropped(&reported)
-			// A decision the control plane REFUSED (e.g. a 413 over maxJSONBody)
-			// is counted as dropped too, so it isn't silently lost from the audit
-			// trail.
+			s.reportDropped(&reported) // piggyback on the next successful flush
+			// A decision the control plane REFUSED (e.g. 413 over maxJSONBody)
+			// counts as dropped too, so it isn't silently lost from the audit trail.
 			if err := s.post(log); err != nil {
 				s.dropped.Add(1)
 			}
 		case <-ticker.C:
-			// Idle path: drops accrued but no traffic to piggyback on.
-			s.reportDropped(&reported)
+			s.reportDropped(&reported) // idle: drops accrued, no traffic to piggyback on
 		}
 	}
 }
 
-// reportDropped posts a synthetic egress.deny (rule_source
-// egress:dropped-decisions-<n>) when the drop counter has advanced since
-// *reported, so the auditor learns of drops as they happen rather than only
-// at shutdown. It runs on the worker goroutine and reuses post(), so it never
-// adds latency to the request path. *reported only advances once the summary
-// post actually lands, so a CP outage retries rather than losing the count.
+// reportDropped posts a synthetic egress.deny summary when the drop counter
+// has advanced since *reported, so drops surface as they happen rather than
+// only at shutdown. Runs on the worker goroutine, reusing post(), so it adds
+// no request-path latency. *reported only advances once the post lands, so a
+// CP outage retries rather than losing the count.
 func (s *decisionSink) reportDropped(reported *uint64) {
 	cur := s.dropped.Load()
 	if cur <= *reported {
 		return
 	}
 	n := cur - *reported
-	// post() only, never mirror(): mirroring from this worker goroutine would
-	// race emit()'s stdout writes and pollute the "one mirrored line per real
-	// decision" invariant. *reported advances only on a delivered summary, so a
-	// failed post retries on the next flush/tick rather than burning the delta.
+	// post() only, never mirror(): mirroring here would race emit()'s stdout
+	// writes and break the "one mirrored line per real decision" invariant.
 	if err := s.post(droppedSummaryLog(n)); err != nil {
 		return
 	}
@@ -202,9 +193,9 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 }
 
 // maskDecisionBytes applies the process-global secret mask to the serialised
-// decision log bytes. A snapshot is taken fresh on each call so secrets
-// registered after startup (e.g. in tests) are visible immediately. A
-// package-level function, not a method, so tests can exercise it standalone.
+// decision log bytes, taking a fresh snapshot each call so secrets registered
+// after startup are visible immediately. Package-level, not a method, so
+// tests can exercise it standalone.
 func maskDecisionBytes(b []byte) []byte {
 	// uuid.Nil yields only global secrets: no per-run entries exist in the
 	// proxy process, all proxy-side secrets are global.
@@ -212,12 +203,11 @@ func maskDecisionBytes(b []byte) []byte {
 	if len(snap) == 0 {
 		return b
 	}
-	// Both callers hand this JSON, not plain text: json.Marshal escapes \n, \",
-	// \\ and HTML-escapes & < > by default, so a raw-value masker would miss a
-	// registered secret carrying any of those bytes. JSONEscapedVariants covers
-	// that expansion (also used by internal/api/recording.go and cmd/wardynd's
-	// audit maskingRecorder); it copies snap first, so httpError's plain-text
-	// path through this helper is unaffected.
+	// SECURITY: both callers hand this JSON, not plain text — json.Marshal
+	// escapes \n, \", \\ and HTML-escapes & < >, so a raw-value masker would
+	// miss a registered secret carrying those bytes. JSONEscapedVariants
+	// covers that expansion (shared with internal/api/recording.go and
+	// cmd/wardynd's audit maskingRecorder).
 	return secretmask.NewMasker(secretmask.JSONEscapedVariants(snap)).Mask(b)
 }
 

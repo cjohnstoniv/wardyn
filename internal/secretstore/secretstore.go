@@ -6,29 +6,24 @@
 // Providers:
 //   - pg: envelope-encrypted Postgres rows (default).
 //   - vaultkv: store mode — the value lives in the organisation's Vault KV v2
-//     (OpenBao is a supported endpoint) and the Postgres row is a pointer to it
-//     (package vaultkv; credential-storage design §2.3a).
-//   - azurekv: store mode in the organisation's Azure Key Vault (package
-//     azurekv; design §2.3a.3).
+//     (OpenBao supported) and the Postgres row is a pointer to it.
+//   - azurekv: store mode in the organisation's Azure Key Vault.
 //
-// In pg, the key that wraps each row's data key is its own seam (package kek,
-// selected by WARDYN_KEK): the local key derived from WARDYN_AGE_KEY, or Vault
-// Transit (package vaultkv, design §2.3).
+// In pg, the key wrapping each row's data key is its own seam (package kek,
+// selected by WARDYN_KEK): the local key derived from WARDYN_AGE_KEY, or
+// Vault Transit.
 //
-// Secrets are late-bound: they are resolved at use time by the broker or
+// SECURITY: secrets are late-bound — resolved at use time by the broker or
 // injected proxy-side, so as a RULE no value lands in a sandbox's environment
-// or disk. It is a rule with named, bounded exceptions, not an invariant — a
-// credential that structurally cannot be handed over on the wire (no header to
-// swap, no broker seam to mint through) has to go resident instead.
-// ARCHITECTURE.md invariant 1 is the authoritative list of which credentials
-// those are and what bounds each one. Deliberately NOT restated here: a second
-// copy of that list is the thing that drifts out of date.
-// Every read is audited once (credential-storage design §2.6): wardynd wraps
-// the store in Audited, which records a secret.read for each Get with the
-// purpose its caller put in the context (WithPurpose). The injection sinks
-// record their own richer secret.read and mark the context SiteAudited so the
-// decorator stays silent. cmd/wardynd's secret-read guard pins that every Get
-// site does one or the other.
+// or disk. Named, bounded exceptions exist for a credential that structurally
+// cannot be handed over on the wire; ARCHITECTURE.md invariant 1 is the
+// authoritative list, deliberately not restated here.
+//
+// Every read is audited once: wardynd wraps the store in Audited, which
+// records a secret.read for each Get with the purpose from context
+// (WithPurpose). Injection sinks record their own richer secret.read and mark
+// the context SiteAudited so the decorator stays silent; cmd/wardynd's
+// secret-read guard pins that every Get site does one or the other.
 package secretstore
 
 import (
@@ -39,22 +34,21 @@ import (
 	"time"
 )
 
-// ErrNotFound is the typed sentinel a Store.Get returns (wrapped) when no secret
-// exists for the name, so callers can distinguish "never stored" from a backend
-// error. Every Store implementation must honor it (the conformance suite checks).
+// ErrNotFound is the typed sentinel a Store.Get returns (wrapped) when no
+// secret exists for the name, distinguishing "never stored" from a backend
+// error. Every Store implementation must honor it.
 var ErrNotFound = errors.New("secretstore: secret not found")
 
 // ErrUnavailable marks a TRANSIENT failure: an external store sealed,
-// throttled, 5xx, unreachable or timing out, or the database holding the rows
-// not answering. The value may well be there; the store just could not answer. Every other Get error is DEFINITIVE — the row, the
-// value, the binding or the access is gone, and retrying will not bring it
-// back. A 401/403 is definitive by design, so revoking Wardyn's access at the
-// store bites at once (design §2.3a.4, K8).
+// throttled, 5xx, unreachable, timing out, or the database not answering —
+// the value may well be there. Every other Get error is DEFINITIVE (row,
+// value, binding, or access is gone; retrying won't help). A 401/403 is
+// definitive by design, so revoking Wardyn's access at the store bites at once.
 var ErrUnavailable = errors.New("secretstore: secret store unavailable")
 
 // ErrRowNotWritten marks a store-mode Put whose value reached the external
-// store while its row was not written (design rule 18). The caller audits it:
-// depending on where the value landed, the store may already serve it.
+// store while its row was not written. The caller audits it: depending on
+// where the value landed, the store may already serve it.
 var ErrRowNotWritten = errors.New("secretstore: the value reached the external store, but its row was not written")
 
 type Store interface {
@@ -66,46 +60,41 @@ type Store interface {
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]string, error)
 	// DeleteEverywhere removes every namespace's row of each name — the
-	// operator's and every principal's — whatever view it is called on, and
-	// returns how many rows it removed. It is the one cross-owner write: a
-	// model provider whose address changes must take every person's
-	// credential for it with it, and no caller knows every owner to Delete
-	// them one by one.
+	// operator's and every principal's — and returns how many rows it
+	// removed. The one cross-owner write: a model provider whose address
+	// changes must take every person's credential for it with it, and no
+	// caller knows every owner to Delete them one by one.
 	DeleteEverywhere(ctx context.Context, names []string) (int, error)
 	// Holders is DeleteEverywhere's read twin: for each of names, every
-	// namespace holding a row of it — the operator's ("") included — whatever
-	// view it is called on. A name nobody holds is absent. It reads rows,
-	// never a value, so a store-mode backend's external store is not asked:
-	// the model providers list counts the people connected to each provider.
+	// namespace holding a row of it (the operator's "" included). A name
+	// nobody holds is absent. Reads rows, never a value, so a store-mode
+	// backend's external store is not asked.
 	Holders(ctx context.Context, names []string) (map[string][]string, error)
 	// For returns a view of the store scoped to owner, the per-principal
 	// namespace introduced by migration 0050 (member BYOK). owner "" is the
 	// OPERATOR namespace — the zero value of every existing caller, so a call
-	// site that never invokes For is unaffected by this seam's existence.
+	// site that never invokes For is unaffected.
 	//
 	// The four methods above behave differently under a non-"" owner:
 	//   - Get first tries the owner's own row, then FALLS BACK to the
-	//     operator's ("") row — a member with no key of their own still
-	//     resolves the operator's, exactly as before For existed. A read
-	//     under GrantRead(ctx, true) (an owner_only grant) never falls back:
-	//     only the owner's own row ("" reads the operator's, its own).
-	//   - Put and Delete are scoped to the owner's row ONLY. They never read
-	//     or write the operator's row, and never fall back — a write always
-	//     means what it says.
+	//     operator's ("") row. A read under GrantRead(ctx, true) (owner_only)
+	//     never falls back.
+	//   - Put and Delete are scoped to the owner's row ONLY, never falling
+	//     back — a write always means what it says.
 	//   - List returns the owner's OWN rows only, never unioned with the
-	//     operator's. A caller that wants "everything a principal may see"
-	//     composes it itself: For("").List() ∪ For(owner).List().
-	// This is a real backend implementation, not policy: a plugged-in
-	// alternate (a store-mode backend, a KEK) keeps the same fallback/isolation
-	// contract, held to it by the shared conformance suite.
+	//     operator's; a caller wanting everything composes
+	//     For("").List() ∪ For(owner).List() itself.
+	// Real backend implementation, not policy: a plugged-in alternate (a
+	// store-mode backend, a KEK) keeps the same contract, held to it by the
+	// shared conformance suite.
 	For(owner string) Store
 }
 
-// External is a store-mode backend (design §2.3a): the value lives in the
-// organisation's secret manager, and the Postgres row is a pointer to it
-// (enc_version 2, kek_id "<Name()>:<ref>"). The pg store owns the row, the
-// owner fallback and the ordering (external first on Put and Delete); an
-// External only moves bytes to and from the store and checks the binding.
+// External is a store-mode backend: the value lives in the organisation's
+// secret manager, and the Postgres row is a pointer to it (enc_version 2,
+// kek_id "<Name()>:<ref>"). The pg store owns the row, the owner fallback and
+// the ordering (external first on Put and Delete); an External only moves
+// bytes to and from the store and checks the binding.
 //
 // A ref names one object in the store, optionally followed by "#<version>"
 // (azurekv counts the versions it wrote into the object). Two refs that
@@ -117,25 +106,25 @@ type External interface {
 	Describe() string
 	// Put writes value for the row (owner, name) and returns the ref the row
 	// records. prev is the row's current ref ("" if none). createOnly refuses
-	// to overwrite a value that is already there (the migrator's guard against
-	// racing a concurrent Put).
+	// to overwrite a value already there (the migrator's guard against a
+	// racing concurrent Put).
 	Put(ctx context.Context, owner, name, prev string, value []byte, createOnly bool) (ref string, err error)
-	// Get reads the value a pointer row names. It refuses a ref that is not the
-	// one derived from (owner, name), and a value whose store-side owner/name
-	// differs from the row. A value that is absent is a definitive refusal,
-	// never ErrNotFound: the row exists, so the credential was lost.
+	// Get reads the value a pointer row names, refusing a ref not derived from
+	// (owner, name) or a value whose store-side owner/name differs from the
+	// row. An absent value is a definitive refusal, never ErrNotFound: the
+	// row exists, so the credential was lost.
 	Get(ctx context.Context, owner, name, ref string) ([]byte, error)
 	// Check reports whether the value behind ref exists and is bound to
-	// (owner, name), without reading it (-reconcile).
+	// (owner, name), without reading it.
 	Check(ctx context.Context, owner, name, ref string) error
 	// Ref is the object DERIVED from (owner, name): where the row's value
-	// must live, whatever the row records (-reconcile). A store whose object
-	// names carry state no row can derive (Key Vault's generation) takes that
-	// part from ref, and refuses a ref whose derivable part is not the row's.
+	// must live, whatever the row records. A store whose object names carry
+	// state no row can derive (Key Vault's generation) takes that part from
+	// ref, refusing a ref whose derivable part isn't the row's.
 	Ref(owner, name, ref string) (string, error)
 	// Delete removes every version of the value behind ref. Idempotent.
 	Delete(ctx context.Context, owner, name, ref string) error
-	// Walk lists every value this install holds in the store (-reconcile).
+	// Walk lists every value this install holds in the store.
 	Walk(ctx context.Context) ([]ExternalEntry, error)
 }
 
@@ -143,20 +132,17 @@ type External interface {
 // (cmd/wardynd loadOrCreateSecret). An external store files them under their
 // own kind, so the org can audit, filter and (with a second identity)
 // restrict them apart from people's credentials; local mode wraps them under
-// a KEK of their own (design §2.13).
-// cmd/wardynd's TestBootKeysAreThePlatformSet derives the boot keys from the
-// loadOrCreateSecret call sites and fails if this map differs.
+// a KEK of their own. cmd/wardynd's TestBootKeysAreThePlatformSet derives the
+// boot keys from the loadOrCreateSecret call sites and fails if this map differs.
 var PlatformNames = map[string]bool{
 	"wardyn-signing-key":    true,
 	"wardyn-session-key":    true,
 	"wardyn-ui-session-key": true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-internal-ca":    true,
-	// Seals each run's stored proxy config (cmd/wardynd's
-	// loadOrCreateRunConfigKey, #1176).
+	// Seals each run's stored proxy config (cmd/wardynd's loadOrCreateRunConfigKey).
 	"wardyn-run-config-key": true,
-	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid),
-	// bootstrapped through loadOrCreateSecret like the keys above.
+	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid).
 	"wardyn-org-device-credential": true,
 }
 
@@ -181,9 +167,8 @@ func RefObject(ref string) string {
 }
 
 // DeleteReport is what an external store's Delete says about what it left
-// behind (design §2.3a.3), for the caller's audit row: whether the value was
-// purged, and if not, for how many days the organisation can still recover
-// it (0: unknown).
+// behind, for the caller's audit row: whether the value was purged, and if
+// not, for how many days the organisation can still recover it (0: unknown).
 type DeleteReport struct {
 	Store           string
 	Purged          bool
@@ -268,11 +253,11 @@ type EraseReport struct {
 // person's.
 var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is not a person's and cannot be erased")
 
-// EraseOwner deletes every credential in owner's own namespace (design §2.5,
-// CS-5 offboarding). Each Delete removes the external value before the row, so
-// a failure keeps the row and a retry resumes. It never reports success with a
-// row left behind: every failure is returned, and a namespace that is not empty
-// afterwards (a write racing the erase) is an error naming how many remain.
+// EraseOwner deletes every credential in owner's own namespace. Each Delete
+// removes the external value before the row, so a failure keeps the row and a
+// retry resumes. It never reports success with a row left behind: every
+// failure is returned, and a namespace not empty afterwards (a write racing
+// the erase) is an error naming how many remain.
 func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
 	rep := EraseReport{Purged: true}
 	if owner == "" {

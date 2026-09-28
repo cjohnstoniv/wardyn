@@ -184,23 +184,17 @@ func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount)
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.
 //
-// UserDrives AND ManagedFiles ARE THE CONJUNCTIONS, and the asymmetry is which side of routing
-// the flag is read on. Every union above describes a control that has to hold
-// for the run ROUTED TO THAT SUBSTRATE, and CreateSandbox picks a substrate
-// that enforces the demanded class. A drive request is refused BEFORE routing,
-// so a union would let a deployment with one drive-capable substrate promise a
-// mount to a run the orchestrator then hands to one that cannot bind it — the
-// "previewed green, failed at dispatch" shape this flag exists to close. With
-// no substrates wired there is nothing to bind, so it is false there too.
-// ManagedFiles is read on the same side of routing and answers the same way:
-// the control plane decides whether a run gets its root-owned ceiling BEFORE a
-// substrate is picked, so one substrate that cannot deliver it makes the
-// deployment unable to promise it.
+// UserDrives AND ManagedFiles ARE THE CONJUNCTIONS, not unions: both are
+// decided BEFORE a substrate is routed to (a drive request is refused before
+// routing; the control plane decides the root-owned ceiling before a
+// substrate is picked), so a union would let a deployment with one capable
+// substrate promise something the orchestrator then routes to one that can't
+// deliver it — the "previewed green, failed at dispatch" shape these flags
+// exist to close. No substrates wired reads false, same reason.
 //
-// EphemeralDiskEnforcement follows the same rule in string form: the WEAKEST word
-// any substrate reports wins, because the word is what an admin is told a disk
-// number means, and one substrate that binds nothing makes the deployment unable
-// to promise enforcement. Empty (no substrates) reads as `none`.
+// EphemeralDiskEnforcement follows the same rule in string form: the WEAKEST
+// word any substrate reports wins, since one substrate that binds nothing
+// makes the deployment unable to promise enforcement. Empty reads as `none`.
 func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, error) {
 	caps := runner.Capabilities{
 		Driver:   o.Name(),
@@ -478,7 +472,7 @@ func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []b
 // EnsureProxyImage ensures every substrate's proxy sidecar image ahead of a
 // revive claim (runner.ProxyReviver), not just the one ref's own substrate:
 // this runs BEFORE the claim identifies which run it is for, and pulling an
-// already-present image is a cheap local check (F2). There is exactly one
+// already-present image is a cheap local check. There is exactly one
 // revivable substrate today; this loops in case a future one joins it.
 func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
 	for _, s := range o.substrates {
@@ -543,13 +537,13 @@ func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
 	return err
 }
 
-// SweepOrphanedSandboxes forwards the control plane's crash-orphan sandbox sweep
-// (api.SandboxOrphanSweeper, D13) to every substrate that implements it, summing
-// the counts. A substrate without the optional capability (a future non-OCI VMM,
-// a test fake) is skipped — the docker substrate is the one that owns per-run
-// containers keyed by the wardyn.run-id label. This makes the Orchestrator, the
-// runner.Runner the control plane holds, satisfy the sweeper interface even
-// though the concrete implementation is build-tagged behind a substrate.
+// SweepOrphanedSandboxes forwards the control plane's crash-orphan sandbox
+// sweep (api.SandboxOrphanSweeper) to every substrate that implements it,
+// summing the counts. A substrate without the optional capability (a future
+// non-OCI VMM, a test fake) is skipped — docker is the one that owns per-run
+// containers keyed by the wardyn.run-id label. This makes the Orchestrator
+// satisfy the sweeper interface even though the concrete implementation is
+// build-tagged behind a substrate.
 func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	var total int
 	var errs []error

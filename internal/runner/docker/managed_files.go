@@ -27,30 +27,26 @@ var managedFileEpoch = time.Unix(0, 0).UTC()
 
 // deliverManagedFiles copies spec.ManagedFiles into containerID as a
 // ROOT-OWNED archive. It must be called BETWEEN ContainerCreate and
-// ContainerStart, and both call sites (CreateSandbox for the exec-capable
-// runtimes, runAsMainProcess for the exec-less ones) do exactly that.
+// ContainerStart; both call sites (CreateSandbox, runAsMainProcess) do
+// exactly that.
 //
-// WHY THERE AND NOWHERE ELSE. The container's filesystem exists the moment it
-// is created, and the daemon extracts into it as ROOT regardless of the
-// image's USER — so this is the only window in which Wardyn can put a file the
-// agent cannot modify into a sandbox without racing the agent itself. After
-// start, the equivalent is a one-shot root exec, which the main process is
-// already running against; before create there is no filesystem to write to.
+// WHY THERE AND NOWHERE ELSE. The container's filesystem exists the moment
+// it's created, and the daemon extracts into it as ROOT regardless of the
+// image's USER — the only window to put a file the agent can't modify into a
+// sandbox without racing it. After start the equivalent is a one-shot root
+// exec, already busy running the main process; before create there's no
+// filesystem to write to.
 //
 // WHY THE OWNERSHIP SURVIVES. Every header goes out with Uid/Gid 0 and
-// CopyToContainerOptions.CopyUIDGID stays FALSE. That flag does not mean "use
-// the archive's ids" — it makes the daemon chown the extracted tree to the
-// IMAGE'S USER (uid 1000 for every Wardyn agent image), which is precisely the
-// agent-writable outcome runner.ManagedFile exists to rule out. Left false,
-// the daemon honours the header ids and the file lands root:root.
+// CopyToContainerOptions.CopyUIDGID stays FALSE — that flag would instead
+// make the daemon chown the tree to the IMAGE'S USER (uid 1000 for every
+// Wardyn agent image), exactly the agent-writable outcome runner.ManagedFile
+// exists to rule out.
 //
-// IT NEVER DELIVERS INTO A DIRECTORY THAT ALREADY EXISTS. The daemon creates a
-// missing directory root-owned 0755; one that is already there — shipped by
-// the image, or a bind mount, which the daemon mounts for the copy — is
-// refused. The stat carries a mode but no owner, so an existing directory
-// cannot be told apart from one the agent owns (which makes the file
-// replaceable whatever its own mode), and a bind-mounted one is a HOST
-// directory the delivery would write into.
+// IT NEVER DELIVERS INTO A DIRECTORY THAT ALREADY EXISTS. The daemon creates
+// a missing directory root-owned 0755; one already there — shipped by the
+// image, or a bind mount — is refused, since the stat carries a mode but no
+// owner and can't tell an agent-owned directory from a HOST one.
 //
 // NOR INTO AN IMAGE THAT COULD UNDO IT. See checkManagedFileImage.
 func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, files []runner.ManagedFile) error {
@@ -87,15 +83,14 @@ func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, fi
 
 // checkManagedFileImage refuses a container whose image would let the agent
 // replace a root-owned file in runner.ManagedFileDir. That directory holds
-// only because the agent can neither write /etc nor act as its owner, and on
-// this substrate both depend on the image: the workload runs as the image's
-// USER, and /etc is the image's own. So the USER must resolve to a non-root
-// uid, and /etc must be a directory owned by root and not writable by group or
-// others. (Kubernetes runs the agent as uid 1000 on a read-only mount point
-// whatever the image says.)
+// only because the agent can neither write /etc nor act as its owner, and
+// both depend on the image here: the workload runs as the image's USER, and
+// /etc is the image's own. So USER must resolve to a non-root uid, and /etc
+// must be root-owned and not writable by group or others. (Kubernetes runs
+// the agent as uid 1000 on a read-only mount point regardless of the image.)
 //
-// Everything is read from the created container through the archive API,
-// never by exec: nothing may run in it before the managed files are in place.
+// Everything is read via the archive API, never by exec: nothing may run in
+// the container before the managed files are in place.
 func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string) error {
 	insp, err := d.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
@@ -172,16 +167,15 @@ func (d *Driver) firstArchiveEntry(ctx context.Context, containerID, p string, l
 	return hdr, body, err
 }
 
-// managedFilesTar builds the archive deliverManagedFiles extracts at "/": one
-// entry per file, root-owned at its own mode, with numeric uid/gid 0 rather
-// than a user NAME the daemon would have to resolve against the image's
-// /etc/passwd.
+// managedFilesTar builds the archive deliverManagedFiles extracts at "/":
+// one entry per file, root-owned at its own mode, with numeric uid/gid 0
+// rather than a user NAME the daemon would resolve against /etc/passwd.
 //
 // It carries NO directory entries. The daemon applies a directory entry's
-// owner and mode to a directory that already exists — an earlier version of
-// this archive re-owned a host bind-mount source to root that way — whereas a
-// file whose directory is missing gets that directory created root-owned 0755
-// and every existing ancestor left exactly as it was.
+// owner/mode to a directory that already exists — an earlier version of this
+// archive re-owned a host bind-mount source to root that way — whereas a
+// file whose directory is missing gets it created root-owned 0755, ancestors
+// untouched.
 func managedFilesTar(files []runner.ManagedFile) (*bytes.Buffer, error) {
 	if err := runner.ValidateManagedFiles(files); err != nil {
 		return nil, err
@@ -210,11 +204,9 @@ func managedFilesTar(files []runner.ManagedFile) (*bytes.Buffer, error) {
 	return &buf, nil
 }
 
-// preflightSpec refuses everything about spec that can be refused for free —
-// before the daemon holds a single object for this run. A refusal here leaves
-// the host exactly as it found it, which is worth more than the one branch it
-// costs CreateSandbox: the rollback path is the hardest thing in that function
-// to get right, and this is work it never has to undo.
+// preflightSpec refuses everything about spec that can be refused for free,
+// before the daemon holds a single object for this run — leaving the host
+// exactly as it found it, work CreateSandbox's rollback never has to undo.
 func (d *Driver) preflightSpec(spec runner.SandboxSpec) error {
 	if d.cfg.ProxyImage == "" {
 		return errProxyImageUnset
@@ -228,13 +220,12 @@ func (d *Driver) preflightSpec(spec runner.SandboxSpec) error {
 	return nil
 }
 
-// deliverManagedFilesAndStart is ONE function on purpose: the ordering is the
-// contract. A managed file placed after the start races the agent's own first
-// instruction, and two statements side by side in a 200-line assembly sequence
-// are two statements someone reorders. Fail closed on either half — a run
-// promised a root-owned ceiling that did not get one must not start, because
-// nothing downstream can tell that apart from a file the agent has not touched
-// yet.
+// deliverManagedFilesAndStart is ONE function on purpose: the ordering is
+// the contract. A managed file placed after start races the agent's own
+// first instruction, and two statements side by side in a long assembly
+// sequence are two statements someone reorders. Fail closed on either half —
+// a run promised a root-owned ceiling that didn't get one must not start,
+// since nothing downstream can tell that apart from an untouched file.
 func (d *Driver) deliverManagedFilesAndStart(ctx context.Context, containerID string, files []runner.ManagedFile) error {
 	if err := d.deliverManagedFiles(ctx, containerID, files); err != nil {
 		return err
@@ -247,11 +238,11 @@ func (d *Driver) deliverManagedFilesAndStart(ctx context.Context, containerID st
 
 // deliverManagedFilesOrReap is deliverManagedFilesAndStart's exec-less twin,
 // minus the start: runAsMainProcess still has its own start to do, and the
-// bookkeeping a failure needs here is different — the ref is CLAIMED in
-// d.creating and the container must be removed, because on this path the
-// container's MAIN process IS the agent workload and there is no later window
-// to deliver in at all. A started agent without its ceiling is the outcome the
-// whole field exists to prevent, so this fails closed and reaps.
+// failure bookkeeping differs — the ref is CLAIMED in d.creating and the
+// container must be removed, since on this path the container's MAIN
+// process IS the agent workload, with no later window to deliver in. A
+// started agent without its ceiling is what this field exists to prevent,
+// so this fails closed and reaps.
 func (d *Driver) deliverManagedFilesOrReap(ctx context.Context, ref, containerID string, files []runner.ManagedFile) error {
 	mfErr := d.deliverManagedFiles(ctx, containerID, files)
 	if mfErr == nil {

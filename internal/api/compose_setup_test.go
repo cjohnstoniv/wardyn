@@ -119,10 +119,9 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 	}
 }
 
-// TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret: an
-// integration-bound run's api_key grant can carry a non-convention secret
-// name (applyIntegrationCreds grants the integration's own secret, e.g.
-// via its DisplayName), not the provider convention default. The
+// TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret: a run's
+// api_key grant can carry a non-convention secret name (a policy's own grant,
+// or a workspace's required secret), not the provider convention default. The
 // "add_secret" fix must name that secret, not the convention one
 // (anthropic-api-key) — an operator who added that secret would see the
 // checklist go green while the run still authenticates through the
