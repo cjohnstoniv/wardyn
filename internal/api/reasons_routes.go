@@ -168,14 +168,13 @@ const (
 	reasonPolicyNameConflict      = "policy_name_conflict"       // a policy by that name already exists
 )
 
-// POST/Review /runs' model-provider door (run_model_provider.go), the 4 field
+// POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
 // arms outside writeProviderRefusal — which always carries its own reason,
 // llmRefusalAuditReason or the generic authz.ReasonModelProviderUnavailable.
 const (
-	reasonModelProviderIDInvalid           = "model_provider_id_invalid"           // model_provider is not a plain provider id
-	reasonModelProviderNotApplicable       = "model_provider_not_applicable"       // model_provider was set on a run that calls no model
-	reasonModelProviderNoBlockConfigured   = "model_provider_no_block_configured"  // model_provider was named but this deployment has no model providers
-	reasonModelProviderIntegrationConflict = "model_provider_integration_conflict" // integration_id was named alongside a model-providers block
+	reasonModelProviderIDInvalid         = "model_provider_id_invalid"          // model_provider is not a plain provider id
+	reasonModelProviderNotApplicable     = "model_provider_not_applicable"      // model_provider was set on a run that calls no model
+	reasonModelProviderNoBlockConfigured = "model_provider_no_block_configured" // model_provider was named but this deployment has no model providers
 )
 
 // PATCH /runs/{id}/title (run_title.go).

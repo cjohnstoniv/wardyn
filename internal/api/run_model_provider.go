@@ -235,12 +235,6 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		}
 		return runProviderChoice{}, true
 	}
-	// An AI integration no longer credentials a run here (foldRunIntegration
-	// folds none under a block), so naming one is refused, not ignored.
-	if req.IntegrationID != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderIntegrationConflict, mpRunNoIntegration)
-		return runProviderChoice{}, false
-	}
 	var pin string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
 		pin = wsRefs[0].LLMCred.ProviderRef
