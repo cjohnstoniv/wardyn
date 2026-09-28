@@ -453,12 +453,11 @@ Settings card). Top to bottom:
    `DRIVE_CEILING_TITLE`; `FIELD_DRIVES_ENABLED` switch, `FIELD_MAX_DRIVE` with `MAX_DRIVE_HINT` and
    `CEILING` as the plain note; then `UserDrivesCard` as the link out; `SAVE_CTA` teal.
 5. **Agents** — `AGENTS_TITLE` / `AGENTS_LEAD`; one row per catalog id + one per image-map key: display
-   name, `Switch` `FIELD_ENABLED` (reused from `PROVIDERS`); body: `FIELD_MECHANISM` radio grouped by vendor over the
-   existing lane titles (impossible pairs disabled with the catalog reason), `FIELD_SOURCE`
-   `Segmented` `SOURCE_SHARED` / `SOURCE_PER_USER` (the second disabled off `bedrock_sso` with
-   `PER_USER_UNAVAILABLE`), `FIELD_SSO_START_URL` when `per_user`, and the signed-in admin's own
-   `Model access` chip with its action (`SIGN_IN_AWS`, `outline` here, opens `HarnessLoginPane` in
-   place);
+   name, `Switch` `FIELD_ENABLED` (reused from `PROVIDERS`); body: `FIELD_DEFAULT_PROVIDER` in one of
+   packet MP-C's four states (G1 `NO_PROVIDER`, G2 `ONLY_PROVIDER`, G3 a select of `DEFAULT_OPTION`
+   with `DEFAULT_HINT`, G4 `MECHANISM_NONE`), and the signed-in admin's own `Model access` chip with its
+   action (`SIGN_IN_AWS`, `outline` here, opens `HarnessLoginPane` in place). The mechanism radio, the
+   credential toggle and the start URL moved to the model provider (#539);
    `S.MODEL_FOOTER` as the plain note; `SAVE_CTA` teal.
 
 **The funnel step** `providers` in "Your work" before `workspaces`: heading `STEP_HEADING`, the
@@ -838,24 +837,12 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | Key | String |
 |---|---|
 | `AGENTS_TITLE` | Agents |
-| `AGENTS_LEAD` | Which coding agents this Wardyn offers, how each one reaches its model, and whether that credential is one for everyone or one per person. |
+| `AGENTS_LEAD` | Which coding agents this Wardyn offers, and the model provider each one uses by default. Every credential is each person's own. |
 | `AGENT_ROW_DISABLED_HINT` | Off: runs naming this agent are refused, and it shows as unavailable in New run. |
-| `FIELD_MECHANISM` | Model access |
-| `MECHANISM_HINT` | One lane per agent. A run whose lane is not working is refused — Wardyn never substitutes another provider. |
 | `MECHANISM_NONE` | None — the image brings its own |
-| `MECHANISM_NONE_HINT` | Wardyn wires no model credential. The only choice for an agent outside the catalog. |
 | `MECHANISM_BEDROCK_BEARER` | Bearer key |
 | `MECHANISM_BEDROCK_SSO` | SSO sign-in |
-| `MECHANISM_BEDROCK_ENV` | Daemon environment |
-| `MECHANISM_BEDROCK_AWS_DIR` | Host `~/.aws` |
-| `FIELD_SOURCE` | Credential |
-| `SOURCE_SHARED` | Shared |
-| `SOURCE_SHARED_HINT` | One credential, captured by an admin, backs every run. |
-| `SOURCE_PER_USER` | Per person |
-| `SOURCE_PER_USER_HINT` | Each person signs in to AWS themselves. Their runs use their own session; an expiry affects one person. |
-| `PER_USER_UNAVAILABLE` | Not available: only an AWS SSO sign-in is captured per person in this release. |
 | `FIELD_SSO_START_URL` | AWS access portal start URL |
-| `SSO_START_URL_HINT` | Everyone signs in against this portal. A sign-in never chooses another. |
 | `SSO_START_URL_MANAGED` | Your admin set this organization's access portal. Your sign-in uses it — there is nothing to enter here. |
 | `ADMIN_OWN_CHIP_NOTE` | This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses. |
 | `UNAVAILABLE` | Not enabled by your admin |
@@ -874,6 +861,11 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `EFFECTIVE_NONE` | No adjustments. |
 | `LAUNCH_WARNING_TITLE` | Run launched with a warning |
 | `AGENT_ROW_DISABLED_CHIP` | Off |
+| `FIELD_DEFAULT_PROVIDER` | Default model provider |
+| `NO_PROVIDER(harness)` | No model provider is set up for {harness} — add one under Model providers. |
+| `ONLY_PROVIDER(name, harness)` | {name} — the only provider {harness} can use. |
+| `DEFAULT_OPTION(name, kind)` | {name} · {kind} |
+| `DEFAULT_HINT` | What a new run uses unless the person chooses another. |
 
 The seven lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
 (`expired_renewable` folds in — dispatch renews it); `expiring` → `MODEL_ACCESS_EXPIRING` +
@@ -885,8 +877,11 @@ live → `MEMBER_GETTING_STARTED.MODEL_ACCESS_PROVIDED_CHIP` (reused), success; 
 (the shared admin token under a per_user row), not a person, so there is no sign-in for it to
 complete. The action line renders under the chip row, in the member's own words, and `SIGN_IN_AWS`
 opens `HarnessLoginPane` in place. The admin's own chip on the Agents tab renders the same seven.
-`MECHANISM_*` labels name Bedrock's four sub-lanes under the card's "AWS Bedrock" lane title; the
-Anthropic and OpenAI lanes reuse the model card's titles (§7.1). `UNAVAILABLE` is the picker item's
+`MECHANISM_BEDROCK_*` are the provider editor's Bedrock sign-in labels, and `MECHANISM_NONE` is the
+Agents tab's G4 line (packet MP-C): the mechanism radio, the credential toggle and the start URL left
+the tab for the provider. `FIELD_DEFAULT_PROVIDER`, `NO_PROVIDER`, `ONLY_PROVIDER`, `DEFAULT_OPTION` and
+`DEFAULT_HINT` are packet MP-C's G1–G3 (owner-approved 2026-09-28); `DEFAULT_OPTION` renders `{name}`
+alone when it equals the kind label (packet MP-A, QA-5). `UNAVAILABLE` is the picker item's
 sub-line (the plan's fragment, sentence-cased). `FLOOR_UNPARSEABLE` renders under the JSON policy
 field only when a parse succeeds and `min_confinement_class` names no class; precedence is unchanged.
 `AGENTS_TITLE` / `AGENTS_LEAD` head the tab; the row's switch reuses `PROVIDERS.FIELD_ENABLED` (one word, one key), and `AGENT_ROW_DISABLED_CHIP` is the off row's neutral chip — its own key, not `AGENT_ROW_DISABLED_HINT` sliced at the colon. `EFFECTIVE_*` head the run-detail widget; its lines are the server's clamp warnings (§7.1) and its

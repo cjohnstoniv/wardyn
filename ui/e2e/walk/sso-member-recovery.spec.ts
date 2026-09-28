@@ -28,8 +28,8 @@
  *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L
  *
  * B runs FIRST because it reads the member's SIGNED-IN card while the member is
- * still `live` from the previous file — case A's console save is what flips the
- * pin and takes that state away. F runs LAST because it signs the ADMIN in to
+ * still `live` from the previous file — case A's pin flip is what takes that
+ * state away. F runs LAST because it signs the ADMIN in to
  * AWS, which breaks sso-member.spec.ts:"the capture belongs to the member
  * alone"'s admin-stays-`not_configured` invariant for anything after it.
  *
@@ -87,7 +87,7 @@ import {
   RECORDING_DISABLED_TITLE,
   YOUR_MODEL_KEY,
 } from "../../src/app/components/wardyn/copy";
-import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
   LOGIN_DONE,
@@ -104,7 +104,6 @@ import {
   me,
   modelAccess,
   openLoginPane,
-  otherPin,
   ownAWSRow,
   runIDFromURL,
   seen,
@@ -330,7 +329,7 @@ test.afterEach(() => {
 
 test("B (ui-member-model-key): a per_user member's card names their OWN AWS sign-in", async ({ page }) => {
   // FIRST, and that is not cosmetic: the member is `live` only until case A's
-  // console save moves the pin. The before-sign-in half of this card is proven
+  // pin flip moves it. The before-sign-in half of this card is proven
   // by sso-member.spec.ts's second case plus the lane's own vitest matrix — the
   // ONE thing only a live walk can show is the SIGNED-IN branch under a real
   // per_user roster row, with a real captured session behind it.
@@ -360,28 +359,26 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   page,
   request,
 }) => {
-  // The ONE UI-driven roster save on the walk (every other one is the API PUT,
-  // for speed). It is the console half of the owner's E2E goal: the admin never
-  // touches an API, and what a member then sees is the consequence.
+  // The UI-driven roster save on the walk: the admin narrows the roster in the
+  // console, and what a member then sees is the consequence.
   //
-  // IT IS ALSO THE makeMemberActionable() FLIP. The pair saved here is the
+  // IT IS ALSO THE makeMemberActionable() FLIP. The pair written here is the
   // fixture's OTHER valid one (helpers.ts explains why the other VALID one),
   // so the member's stored capture stops matching the pin, they grade
   // `expired_signin`, and the "Sign in to AWS" CTA comes back — which is what
   // (iii) below and case C both need.
-  const pin = await otherPin(request);
+  //
+  // The per_user row, its start URL and its pin go through the API: the Agents
+  // tab no longer carries them (they live on a Bedrock provider), and this walk
+  // runs on the no-provider-block roster lane until the conversion moves it
+  // onto one. The console Save below round-trips them untouched.
+  const pin = await makeMemberActionable(request);
 
   await dexSignIn(page, ADMIN_EMAIL);
   await gotoAgentsTab(page);
 
   const row = page.getByTestId("agent-row-claude-code");
   await expect(row).toBeVisible();
-  await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-  await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-  // The three ORG SETTINGS the row carries, typed into the console.
-  await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill(SSO_START_URL);
-  await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill(pin.account);
-  await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill(pin.role);
 
   // …and the field report's deployment shape: ONE enabled row.
   for (const display of ["Codex CLI", "Your own tools"]) {
@@ -396,11 +393,12 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
 
-  // The save ROUND-TRIPS: the server holds what the console showed.
+  // The save ROUND-TRIPS: the server still holds the row the console loaded.
   const saved = (await getRoster(request)).find((a) => a.id === "claude-code");
-  expect(saved, "the console save did not reach GET /agent-providers").toMatchObject({
+  expect(saved, "the console save did not keep the per_user row it loaded").toMatchObject({
     mechanism: "bedrock_sso",
     credential_source: "per_user",
+    sso_start_url: SSO_START_URL,
     sso_account_id: pin.account,
     sso_role_name: pin.role,
   });
