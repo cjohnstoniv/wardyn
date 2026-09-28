@@ -233,7 +233,7 @@ func TestSetupStatusPublishesOnlyTheRowFixedResidency(t *testing.T) {
 		{"none — BYOA", agentRosterRow(types.AgentMechanismNone), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tools := setupHarnessTools(agentRoster(tc.row), nil)
+			tools := setupHarnessTools(agentRoster(tc.row), nil, nil)
 			var claude SetupHarnessTool
 			for _, tool := range tools {
 				if tool.ID == "claude-code" {
@@ -248,7 +248,7 @@ func TestSetupStatusPublishesOnlyTheRowFixedResidency(t *testing.T) {
 
 	// Legacy mode — no AgentProviders block at all, the compose default. No row,
 	// so nothing is settled, so nothing is claimed.
-	for _, tool := range setupHarnessTools(types.SiteConfig{}, nil) {
+	for _, tool := range setupHarnessTools(types.SiteConfig{}, nil, nil) {
 		if tool.CredentialResidency != "" {
 			t.Errorf("legacy mode published %+v — there is no row to settle it", tool)
 		}

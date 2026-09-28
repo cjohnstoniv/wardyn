@@ -87,8 +87,46 @@ func TestHandleListIntegrations_NoStoredRowsIsEmptyNot404(t *testing.T) {
 	}
 }
 
+// TestSetupHarnessTools_ProvidersUngranted pins #1052's R5b fact:
+// providers_ungranted is true only for a harness at least one ENABLED
+// provider serves org-wide while this caller's own granted set (the
+// model_providers list setupModelProviderState narrows via
+// capVisible(capModelProvider) — provider_access.go's doc) serves none of
+// them, never for R9 (nothing serves the harness at all) or a disabled-only
+// server (R5c's territory).
+func TestSetupHarnessTools_ProvidersUngranted(t *testing.T) {
+	a := types.ModelProvider{ID: "a", Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+	sc := types.SiteConfig{ModelProviders: providerBlock(a)}
+
+	byID := func(tools []SetupHarnessTool, id string) SetupHarnessTool {
+		for _, tool := range tools {
+			if tool.ID == id {
+				return tool
+			}
+		}
+		return SetupHarnessTool{}
+	}
+
+	if tool := byID(setupHarnessTools(sc, nil, nil), "claude-code"); !tool.ProvidersUngranted {
+		t.Errorf("claude-code = %+v, want providers_ungranted=true (a serves it, nobody is granted)", tool)
+	}
+	granted := []SetupModelProvider{{ID: "a", Harnesses: []string{"claude-code"}}}
+	if tool := byID(setupHarnessTools(sc, nil, granted), "claude-code"); tool.ProvidersUngranted {
+		t.Errorf("claude-code = %+v, want providers_ungranted=false once the caller is granted a", tool)
+	}
+	if tool := byID(setupHarnessTools(sc, nil, nil), "codex-cli"); tool.ProvidersUngranted {
+		t.Errorf("codex-cli = %+v, want providers_ungranted=false — R9 (nothing serves it), not R5b", tool)
+	}
+	off := a
+	off.Disabled = true
+	scOff := types.SiteConfig{ModelProviders: providerBlock(off)}
+	if tool := byID(setupHarnessTools(scOff, nil, nil), "claude-code"); tool.ProvidersUngranted {
+		t.Errorf("claude-code = %+v, want providers_ungranted=false — the only server is disabled (R5c's territory)", tool)
+	}
+}
+
 func TestSetupHarnessTools(t *testing.T) {
-	tools := setupHarnessTools(types.SiteConfig{}, nil)
+	tools := setupHarnessTools(types.SiteConfig{}, nil, nil)
 	if len(tools) != len(harnessCatalog) {
 		t.Fatalf("len = %d, want %d (one per catalog row)", len(tools), len(harnessCatalog))
 	}
@@ -132,7 +170,7 @@ func TestSetupHarnessTools_RosterCustomImageAgentAppended(t *testing.T) {
 	)}
 	images := map[string]string{customID: "registry.corp.internal/agents/refactor-bot:latest"}
 
-	tools := setupHarnessTools(sc, images)
+	tools := setupHarnessTools(sc, images, nil)
 	if want := len(harnessCatalog) + 1; len(tools) != want {
 		t.Fatalf("len = %d, want %d (catalog %d + the one roster-only image-map id)",
 			len(tools), want, len(harnessCatalog))
@@ -161,7 +199,7 @@ func TestSetupHarnessTools_RosterCustomImageAgentAppended(t *testing.T) {
 
 	// A roster id with no AgentImages entry at all is unresolvable and stays
 	// dropped — there is no image to run it with.
-	toolsNoImage := setupHarnessTools(sc, nil)
+	toolsNoImage := setupHarnessTools(sc, nil, nil)
 	if want := len(harnessCatalog); len(toolsNoImage) != want {
 		t.Fatalf("with no AgentImages entry: len = %d, want %d (the unresolvable roster row is dropped)",
 			len(toolsNoImage), want)

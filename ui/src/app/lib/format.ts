@@ -18,6 +18,14 @@ export function relativeTime(iso: string): string {
   return future ? `in ${mo}mo` : `${mo}mo ago`;
 }
 
+/** "3 Sep" — a day-of-month and short month, no year or time. Model
+ *  connections' "Added {date}" meta line (#592): the exact instant is
+ *  already one click away via title=absoluteTime, so the visible stamp stays
+ *  short, the same tradeoff relativeTime/absoluteTime make together. */
+export function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 export function absoluteTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     year: "numeric",

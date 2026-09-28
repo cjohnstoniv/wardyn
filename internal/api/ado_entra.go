@@ -265,8 +265,13 @@ func (c ADOEntraConfig) tokenURL() (string, error) {
 }
 
 // authorizeURL builds the authorization request: authorization code, an S256
-// code challenge, and the scopes this sign-in asks consent for.
-func (c ADOEntraConfig) authorizeURL(state, nonce, challenge string, scopes []string) (string, error) {
+// code challenge, and the scopes this sign-in asks consent for. prompt is
+// Microsoft's own `prompt` parameter, "" for the ordinary sign-in (Microsoft's
+// default: skip straight back to whatever account the browser's SSO session
+// already holds) — #659 Q2's identity_binding retry sends "select_account"
+// instead, so a mismatched-account retry does not silently reproduce itself
+// against the same wrong session.
+func (c ADOEntraConfig) authorizeURL(state, nonce, challenge string, scopes []string, prompt string) (string, error) {
 	base, err := c.authority()
 	if err != nil {
 		return "", err
@@ -281,6 +286,9 @@ func (c ADOEntraConfig) authorizeURL(state, nonce, challenge string, scopes []st
 		"nonce":                 {nonce},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
+	}
+	if prompt != "" {
+		q.Set("prompt", prompt)
 	}
 	return base + "/" + c.TenantID + "/oauth2/v2.0/authorize?" + q.Encode(), nil
 }
@@ -421,6 +429,10 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 // token request naming a subset is ignored and answered with everything
 // consented — so what is asked for HERE is what decides how much reach the
 // captured credential ever has.
+//
+// The optional `prompt` query (#659 Q2, adoRequestedPrompt) is the
+// identity_binding retry's own account picker: everything else about this
+// door is unchanged by it.
 func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	subject := oidcHumanFromContext(r.Context())
 	if subject == "" {
@@ -436,11 +448,16 @@ func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	prompt, err := adoRequestedPrompt(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	verifier := oauth2.GenerateVerifier()
 	state, nonce := adoRandomToken(), adoRandomToken()
 	authURL, err := cfg.authorizeURL(state, nonce, oauth2.S256ChallengeFromVerifier(verifier),
-		append(asked, entraOfflineAccessScope, entraOpenIDScope))
+		append(asked, entraOfflineAccessScope, entraOpenIDScope), prompt)
 	if err != nil {
 		writeServerError(w, r, "composing the Azure DevOps authorization request failed", err)
 		return
@@ -478,6 +495,22 @@ func adoRequestedScopes(q url.Values, ceiling []string) ([]string, error) {
 		}
 	}
 	return asked, nil
+}
+
+// adoRequestedPrompt reads the optional `prompt` query the #659 Q2 retry link
+// sends: "" (the ordinary sign-in — Microsoft's own default) or
+// "select_account" (the identity_binding retry, so the account picker shows
+// rather than skipping straight back to whatever account the browser's
+// Microsoft SSO session already holds). A closed set, not passed through
+// verbatim: this value rides into a query parameter on an authorize request
+// to an external identity provider, so an unrecognised value is refused at
+// the door rather than forwarded on trust.
+func adoRequestedPrompt(q url.Values) (string, error) {
+	prompt := strings.TrimSpace(q.Get("prompt"))
+	if prompt == "" || prompt == "select_account" {
+		return prompt, nil
+	}
+	return "", fmt.Errorf("prompt %q is not a supported value", prompt)
 }
 
 // adoCookie is a short-lived HttpOnly SameSite=Lax cookie. Lax rather than
@@ -602,10 +635,17 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
+		// The refusal SENTENCE stays server-side, logged for whoever reads this
+		// path's own audit/log trail (reason is a security-comparison detail,
+		// never the console's — see bindADOEntraIdentity's own doc). #659 Q2:
+		// redirected the same way as the three code-exchange failures above,
+		// instead of a bare 403 text page outside the console shell.
+		slog.WarnContext(ctx, "wardynd: azure devops sign-in identity binding failed",
+			slog.String("row", cfg.RowID), slog.String("reason", reason))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "identity_binding", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Error(w, reason, http.StatusForbidden)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+"identity_binding", http.StatusFound)
 		return
 	}
 
@@ -614,10 +654,12 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		// No refresh token means nothing to store and nothing to renew; no
 		// granted scope inside the row's ceiling means this credential may do
 		// nothing a run could use. Either way there is no usable capture.
+		// #659 Q2: redirected, not a bare 502 text page — see the identity_binding
+		// arm above.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Error(w, "the identity provider returned no renewable Azure DevOps grant", http.StatusBadGateway)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+"unusable_grant", http.StatusFound)
 		return
 	}
 	blob := adoEntraBlob{
@@ -642,7 +684,9 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
+		// #659 Q2: redirected, not a bare 500 text page — see the
+		// identity_binding arm above.
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+"store_error", http.StatusFound)
 		return
 	}
 	// Stored: this sign-in is now the credential, and the one it replaced is not.

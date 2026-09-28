@@ -85,6 +85,15 @@ func UserViewDroppedFromContext(ctx context.Context) string {
 	return t
 }
 
+// UserViewDroppedNameFromContext returns that same type's cached display name
+// (Session.UserViewDroppedName), or "" when there is none — either no drop is
+// recorded, or the cookie predates this field. Pairs with
+// UserViewDroppedFromContext's id.
+func UserViewDroppedNameFromContext(ctx context.Context) string {
+	n, _ := ctx.Value(userViewDroppedNameCtxKey{}).(string)
+	return n
+}
+
 // viewedUserType is the type a session's controls resolve against: the
 // chosen type while the user view is on, the stamped one otherwise (and for
 // a view entered before a type could be chosen).
@@ -172,6 +181,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, userTypeCtxKey{}, viewedUserType(sess))
 	ctx = context.WithValue(ctx, stampedUserTypeCtxKey{}, sess.UserType)
 	ctx = context.WithValue(ctx, userViewDroppedCtxKey{}, sess.UserViewDropped)
+	ctx = context.WithValue(ctx, userViewDroppedNameCtxKey{}, sess.UserViewDroppedName)
 	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)
 	// ANDed with the mode, not copied: a cookie hand-built with "mmnc" alone
 	// is inert. Identity (sess.Sub) is untouched by both.
@@ -199,6 +209,9 @@ type stampedUserTypeCtxKey struct{}
 
 // userViewDroppedCtxKey is the context key for the dropped view's type; use UserViewDroppedFromContext.
 type userViewDroppedCtxKey struct{}
+
+// userViewDroppedNameCtxKey is the context key for the dropped type's cached name; use UserViewDroppedNameFromContext.
+type userViewDroppedNameCtxKey struct{}
 
 // groupsCtxKey is the context key for the session's login-time group snapshot; use GroupsFromContext.
 type groupsCtxKey struct{}

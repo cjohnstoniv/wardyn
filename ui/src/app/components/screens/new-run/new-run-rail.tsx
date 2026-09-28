@@ -146,13 +146,12 @@ interface RunRailProps {
     /** R7's info line, naming what the last agent switch changed; null every
      *  other state (R1/R2/R6/R8 stay silent — see resolveProviderSelection). */
     changeNote: string | null;
-    /** R5c (#542 rail-gap packet) — model-provider-lane.ts's providerGate,
-     *  undefined for the ordinary R1-R4/R6-R8 shapes, R9, AND R5b (not drawn
-     *  — see providerGate's own doc comment). */
+    /** R5b/R5c (#1052, #542 rail-gap packet) — model-provider-lane.ts's
+     *  providerGate, undefined for the ordinary R1-R4/R6-R8 shapes and R9. */
     gate?: ProviderGate;
     /** The picked agent's human label (wizard-types.ts's agentLabel), for
-     *  DEFAULT_OFF/DEFAULT_OFF_ONLY — the same label CHANGED already names in
-     *  changeNote. */
+     *  NOT_GRANTED/DEFAULT_OFF/DEFAULT_OFF_ONLY — the same label CHANGED
+     *  already names in changeNote. */
     harnessLabel: string;
   };
   /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the
@@ -175,16 +174,18 @@ interface RunRailProps {
   };
 }
 
-/** The exact sentence R5c's gate names — DEFAULT_OFF_ONLY with no other
- *  candidate, DEFAULT_OFF otherwise — shared by ModelProviderSection's own
- *  inline line (new-run-rail-credentials.tsx) and RunRail's launch-problem caption (F4, Opus review
- *  round 2): the caption is suppressed ONLY when launch.problem is exactly
- *  this string, never for some OTHER, higher-priority problem (an empty
- *  title, …) that happens to be showing while a gate is also active.
- *  undefined with no gate (R9's shape, or the ordinary R1-R4/R6-R8 ones). */
+/** The exact sentence R5b/R5c's gate names — NOT_GRANTED for R5b;
+ *  DEFAULT_OFF_ONLY with no other candidate, DEFAULT_OFF otherwise, for R5c —
+ *  shared by ModelProviderSection's own inline line (new-run-rail-credentials.tsx)
+ *  and RunRail's launch-problem caption (F4, Opus review round 2): the caption
+ *  is suppressed ONLY when launch.problem is exactly this string, never for
+ *  some OTHER, higher-priority problem (an empty title, …) that happens to be
+ *  showing while a gate is also active. undefined with no gate (R9's shape, or
+ *  the ordinary R1-R4/R6-R8 ones). */
 function gateSentence(modelProvider: RunRailProps["modelProvider"]): string | undefined {
   const gate = modelProvider?.gate;
-  if (!modelProvider || gate?.kind !== "default_off") return undefined;
+  if (!modelProvider || !gate) return undefined;
+  if (gate.kind === "not_granted") return RAIL_PROVIDER.NOT_GRANTED(modelProvider.harnessLabel);
   const name = gate.provider.name ?? gate.provider.id;
   return modelProvider.candidates.length === 0
     ? RAIL_PROVIDER.DEFAULT_OFF_ONLY(name, modelProvider.harnessLabel)

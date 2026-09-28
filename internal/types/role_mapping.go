@@ -25,11 +25,17 @@ import (
 // 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
 // row, and on a user row written before types existed, which reads as the
 // built-in "standard".
+//
+// MigratedFromMember (migration 0098) marks a row that rewrite rewrote from
+// role='member' rather than one an admin actually saved on the built-in type
+// — the store's UpsertRoleMapping clears it on any write that flips the row
+// in place, since choosing a real type is what the marker exists to prompt.
 type RoleMapping struct {
-	ID        uuid.UUID `json:"id"`
-	Value     string    `json:"value"`
-	Role      string    `json:"role"`
-	UserType  string    `json:"user_type,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by,omitempty"`
+	ID                 uuid.UUID `json:"id"`
+	Value              string    `json:"value"`
+	Role               string    `json:"role"`
+	UserType           string    `json:"user_type,omitempty"`
+	MigratedFromMember bool      `json:"migrated_from_member,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	CreatedBy          string    `json:"created_by,omitempty"`
 }

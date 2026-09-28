@@ -20,7 +20,7 @@
 //  - C11 (the admin-token caller) — that principal never mounts the Member
 //    view at all (model-access-context.tsx's own comment), so this page never
 //    sees it.
-import { absoluteTime } from "./format";
+import { absoluteTime, relativeTime, shortDate } from "./format";
 import { harnessDisplayNames } from "./model-access";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 import { AGENTS } from "./workspace-providers-copy";
@@ -107,6 +107,15 @@ export function legacySummary(status: SetupStatus | null | undefined): Connectio
   // shared credential has expired, and the llmReady fallback below would
   // otherwise read that install as Ready.
   if (state === "shared_expired") return { label: AGENTS.MODEL_ACCESS_SHARED_EXPIRED, tone: "warning" };
+  // #1089 (owner ruling: build it as a chip) — the shared admin-token
+  // principal's own state (#158): real, just never a claim about a
+  // credential that has anything to sign in to. Without this arm it fell
+  // through to the llm_ready fallback below and read as an ordinary "Model
+  // access · Ready", indistinguishable from a genuinely ready session
+  // (#1042's e2e caught this after #541's rewrite dropped the old always-visible
+  // chip). Checked ahead of llm_ready for the same reason shared_expired is:
+  // llm_ready is a deployment fact and would otherwise paint over it.
+  if (state === "not_applicable") return { label: AGENTS.MODEL_ACCESS_NOT_APPLICABLE, tone: "neutral" };
   if (status?.llm_ready === true) return { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
   return { label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" };
 }
@@ -124,6 +133,17 @@ export interface ConnectionRowCopy {
   /** The row's button label; undefined for a state with no button (C4, and a
    *  live Claude sign-in). */
   button?: string;
+  /** #592 (CS-8) — "Added {date} · Last used {when}" / "Added {date} · Not
+   *  used by a run yet", from THIS CALLER's own provider_access row
+   *  (added_at/last_used_at) — never a second lookup. "" when nothing is
+   *  stored for this row (no added_at), same as a row with no credential
+   *  getting no line at all (cs8-credentials-packet.html §2). Independent of
+   *  state/kind: an expired or signed-out row that once held a credential
+   *  still carries it. */
+  meta: string;
+  /** meta's exact-instant hover, mirroring `title` above — the last-used
+   *  stamp only (absoluteTime), "" when meta has no Last-used clause. */
+  metaTitle: string;
 }
 
 /** The server's action line adds nothing when it is byte-identical to the
@@ -134,8 +154,32 @@ function signInAction(access: SetupProviderAccess, name: string): string {
   return access.action && access.action !== AGENTS.SIGN_IN_AWS ? access.action : CONNECTIONS.C6_LINE(name);
 }
 
-/** connectionRowCopy is §5.4's per-row state table (C3-C10), as one function. */
+/** #592 — the meta line's own two fields, split from the per-kind switch
+ *  below because it depends on nothing kind- or state-specific: any row
+ *  carrying an added_at gets it, any row without one (never stored) gets
+ *  neither field at all. */
+function connectionMeta(access: SetupProviderAccess): Pick<ConnectionRowCopy, "meta" | "metaTitle"> {
+  if (!access.added_at) return { meta: "", metaTitle: "" };
+  const added = CONNECTIONS.ADDED(shortDate(access.added_at));
+  if (!access.last_used_at) return { meta: `${added} · ${CONNECTIONS.NOT_USED}`, metaTitle: "" };
+  return {
+    meta: `${added} · ${CONNECTIONS.LAST_USED(relativeTime(access.last_used_at))}`,
+    metaTitle: absoluteTime(access.last_used_at),
+  };
+}
+
+/** connectionRowCopy is §5.4's per-row state table (C3-C10) plus #592's meta
+ *  line, which — unlike the chip/line/button below — depends on nothing
+ *  kind- or state-specific, so it is computed once here rather than repeated
+ *  at every one of connectionRowCopyByKind's return points. */
 export function connectionRowCopy(status: SetupStatus | null | undefined, row: ConnectionRow): ConnectionRowCopy {
+  return { ...connectionRowCopyByKind(status, row), ...connectionMeta(row.access) };
+}
+
+function connectionRowCopyByKind(
+  status: SetupStatus | null | undefined,
+  row: ConnectionRow,
+): Omit<ConnectionRowCopy, "meta" | "metaTitle"> {
   const { provider, access } = row;
   const name = provider.name || provider.id;
   const forLine = CONNECTIONS.FOR(harnessDisplayNames(status, provider.harnesses));

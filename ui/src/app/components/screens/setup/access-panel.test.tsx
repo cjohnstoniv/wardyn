@@ -450,6 +450,78 @@ describe("AccessPanel — add mapping, user type picker (UT-7a)", () => {
   });
 });
 
+describe("AccessPanel — migrated-from-member rows (#913)", () => {
+  function migratedAccess() {
+    return baseAccess({
+      mappings: [
+        {
+          id: "m1",
+          value: "eng-team",
+          role: "user",
+          user_type: "standard",
+          source: "console",
+          shadowed: false,
+          shadow_cause: "",
+          migrated_from_member: true,
+          created_at: aheadByHours(-1),
+          created_by: "admin",
+        },
+      ],
+      user_types: orgTypes,
+    });
+  }
+
+  it("carries the badge, the hint, and a Choose a type action — never a Delete-only row", () => {
+    renderPanel(migratedAccess());
+    expect(screen.getByText(PEOPLE.MIGRATED_FROM_MEMBER_BADGE)).toBeInTheDocument();
+    expect(screen.getByText(PEOPLE.MIGRATED_FROM_MEMBER_HINT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `${PEOPLE.CHOOSE_TYPE} eng-team` })).toBeInTheDocument();
+  });
+
+  it("a freshly saved Standard-user row (no marker) gets neither the badge nor the action", () => {
+    renderPanel(
+      baseAccess({
+        mappings: [
+          {
+            id: "s1",
+            value: "new-hire",
+            role: "user",
+            user_type: "standard",
+            source: "console",
+            shadowed: false,
+            shadow_cause: "",
+            created_at: aheadByHours(-1),
+            created_by: "admin",
+          },
+        ],
+        user_types: orgTypes,
+      }),
+    );
+    expect(screen.queryByText(PEOPLE.MIGRATED_FROM_MEMBER_BADGE)).toBeNull();
+    expect(screen.queryByRole("button", { name: `${PEOPLE.CHOOSE_TYPE} new-hire` })).toBeNull();
+  });
+
+  it("Choose a type prefills the Add form on the User role with the row's value; submitting upserts the picked type", async () => {
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "m1", value: "eng-team", role: "user" }, created: false });
+    renderPanel(migratedAccess());
+
+    await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.CHOOSE_TYPE} eng-team` }));
+    expect(screen.getByLabelText(PEOPLE.FIELD_VALUE)).toHaveValue("eng-team");
+    expect(screen.getByRole("button", { name: PEOPLE.ROLE_USER })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(screen.getByRole("combobox", { name: PEOPLE.FIELD_USER_TYPE }));
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    expect(upsertMappingMock).toHaveBeenCalledWith({
+      value: "eng-team",
+      role: "user",
+      user_type: "portfolio-manager",
+      acknowledge_access_change: undefined,
+    });
+  });
+});
+
 describe("AccessPanel — add mapping error classification", () => {
   const chartAndConsole = baseAccess({
     mappings: [

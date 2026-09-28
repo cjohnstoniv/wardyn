@@ -36,7 +36,9 @@ describe("PreviewAsNewUser (the Permissions header)", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: USER_PREVIEW.MENU_NEW }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(setMode).toHaveBeenCalledWith(true, true);
+    // #912: switchView's third arg (userType) is forwarded through as an
+    // explicit undefined when none is given.
+    expect(setMode).toHaveBeenCalledWith(true, true, undefined);
   });
 
   it("a failed POST says so and does not reload", async () => {
@@ -68,6 +70,8 @@ describe("UserPreviewBanner", () => {
     expect(band.textContent).not.toMatch(/member/i);
     await userEvent.click(screen.getByRole("button", { name: USER_PREVIEW.EXIT }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/admin"));
-    expect(setMode).toHaveBeenCalledWith(false, false);
+    // #912: switchView's third arg (userType) is forwarded through as an
+    // explicit undefined when none is given.
+    expect(setMode).toHaveBeenCalledWith(false, false, undefined);
   });
 });

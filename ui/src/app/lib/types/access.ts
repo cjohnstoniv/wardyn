@@ -35,6 +35,10 @@ export interface AccessMapping {
   source: "chart" | "console";
   shadowed: boolean;
   shadow_cause: "" | "chart" | "operator_allowlist";
+  // Set only on a console row migration 0098 marked: 0074's rename rewrote it
+  // from role='member', and no admin has picked a real type for it since
+  // (#913). Never set on a chart row. Absent/false means "no marker".
+  migrated_from_member?: boolean;
   created_at?: string;
   created_by?: string;
 }

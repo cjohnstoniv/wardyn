@@ -358,10 +358,17 @@ export function NewRunScreen() {
   const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
   const pin = workspaces.find((w) => w.id === primaryWsId)?.llm_cred?.provider_ref;
 
+  // #1052 — this agent's own providers_ungranted fact (SetupHarnessTool),
+  // read off the same `harnesses` state as agentRow below, never a second
+  // fetch: serving > 0 && granted == 0 for this agent, computed server-side
+  // beside chooseModelProvider.
+  const providersUngranted = !!harnesses?.find((h) => h.id === state.agent)?.providers_ungranted;
+
   // #542 rail-gap packet (owner-approved 2026-09-25) — R5b/R5c: undefined for
   // the ordinary R1-R4/R6-R8 shapes and for R9 (model-provider-lane.ts's
   // providerGate).
-  const providerGateState = isAgent && modelProviders ? providerGate(modelProviders, state.agent) : undefined;
+  const providerGateState =
+    isAgent && modelProviders ? providerGate(modelProviders, state.agent, providersUngranted) : undefined;
 
   // Which provider (if any) is preselected, and the person's own pick
   // (use-model-provider-pick.ts).
@@ -422,13 +429,16 @@ export function NewRunScreen() {
         ? RUN.POLICY_GONE
         : useSaved && !state.selectedPolicyId
           ? "Pick a saved policy, or write a custom one."
-          : // R5c (#542 rail-gap packet) — the admin's own default is
-            // disabled. Named regardless of how many other candidates
-            // remain, until an explicit pick lands (same "silent once
-            // chosen" rule as R7's changeNote). R5b ("granted none") is not
-            // drawn — see providerGate's own doc comment (Opus review
-            // round 2): the console has no signal for it.
-            providerGateState?.kind === "default_off" && !state.modelProviderId
+          : // R5b (#1052) — no provider serves this person for this agent at
+            // all, though at least one serves it org-wide. Launch is refused,
+            // never silently left on R9's "nothing to see" shape.
+            providerGateState?.kind === "not_granted"
+            ? RAIL_PROVIDER.NOT_GRANTED(agentName)
+            : // R5c (#542 rail-gap packet) — the admin's own default is
+              // disabled. Named regardless of how many other candidates
+              // remain, until an explicit pick lands (same "silent once
+              // chosen" rule as R7's changeNote).
+              providerGateState?.kind === "default_off" && !state.modelProviderId
             ? providerCandidates.length > 0
               ? RAIL_PROVIDER.DEFAULT_OFF(
                   providerGateState.provider.name ?? providerGateState.provider.id,
