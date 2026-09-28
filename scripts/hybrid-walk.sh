@@ -511,7 +511,9 @@ step "waiting for the laptop's next tick to observe the revocation"
 revoked=""
 for _ in $(seq 1 30); do
   h="$(curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz" 2>/dev/null || true)"
-  [[ "$(jq -r '.org_federation.enrolled // empty' <<<"${h}")" == "false" ]] && { revoked=1; break; }
+  # Not `// empty` here: jq's alternative operator treats false as absent, so
+  # `.enrolled // empty` can never print "false".
+  [[ "$(jq -r '.org_federation.enrolled' <<<"${h}" 2>/dev/null)" == "false" ]] && { revoked=1; break; }
   sleep 2
 done
 [[ -n "${revoked}" ]] || { compose logs wardynd | tail -80; die "the laptop never reported org_federation.enrolled=false after revocation"; }
