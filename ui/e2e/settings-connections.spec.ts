@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 
 // E2E coverage for Settings' Host card and Model provider card
 // (src/app/components/screens/settings/{admin-settings-screen,connection-cards}.tsx)
@@ -25,6 +25,11 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute } fr
 // Admin Settings (/admin/settings), so the tests below are unchanged except
 // the one that used to check /account for a member — Host isn't there at all
 // any more.
+//
+// #1200 compact cards: every card here now collapses to a one-line summary by
+// default and expands on click (collapsible-card.tsx) — every test that reads
+// a card's BODY (a row, a field, a button beyond the header itself) expands
+// it first via fixtures.ts's `expandCard`.
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -44,6 +49,7 @@ test.describe("Settings — Host card", () => {
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Host", level: 3 }) });
     await expect(hostCard).toBeVisible();
+    await expandCard(page, "Host");
 
     // scripts/e2e-backend.sh boots -runner none with no ImageBuilder wired,
     // and WARDYN_AGE_KEY set (a durable recording store).
@@ -95,6 +101,7 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict", () =
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Host");
     await page.getByRole("button", { name: "Corporate proxy & egress" }).click();
 
     // The Admin view's funnel, never plain /setup: that is the User view's
@@ -139,6 +146,7 @@ test.describe("Settings — Model provider Connect / Replace / Disconnect", () =
   }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
 
     await page.getByRole("radio", { name: "API key" }).click();
     const field = page.getByLabel("Anthropic API key");

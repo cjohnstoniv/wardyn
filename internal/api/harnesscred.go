@@ -827,7 +827,7 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 	// awsSSOScopeForAgent reads a missing store the same way.
 	sc, ok := s.siteConfigSnapshot(r.Context())
 	if !ok && s.cfg.Store != nil {
-		writeError(w, http.StatusServiceUnavailable, harnessLoginRosterUnavailable)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessLoginRosterUnavailable, harnessLoginRosterUnavailable)
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}
 	// Once a model-provider block exists every sign-in is a provider's own
@@ -835,7 +835,7 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 	// Decided on this same read, so a blip cannot let one read say "no block"
 	// and another authorize.
 	if sc.ModelProviders != nil {
-		writeError(w, http.StatusConflict, mpsLegacyDoor)
+		writeErrorReason(w, http.StatusConflict, reasonHarnessLoginLegacyDoorClosed, mpsLegacyDoor)
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}
 	// WHOSE credential this may capture, from THIS proved read.
@@ -871,18 +871,18 @@ type harnessCredRequest struct {
 // value is write-only (no API ever returns it) and masked from streams.
 func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Secrets == nil {
-		writeError(w, http.StatusServiceUnavailable, "no secret store configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessCredentialNoSecretStore, "no secret store configured")
 		return
 	}
 	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
 	hl, ok := harnessLoginByProvider(provider)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
+		writeErrorReason(w, http.StatusBadRequest, reasonHarnessCredentialUnknownProvider, "unknown provider: "+provider)
 		return
 	}
 	var req harnessCredRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
 		return
 	}
 	token := strings.TrimSpace(req.Token)
@@ -891,7 +891,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	// over-long token is refused before it reaches the store or the
 	// process-global mask corpus.
 	if msg := harnessPasteRefusal(hl, token); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonHarnessPasteInvalid, msg)
 		return
 	}
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
@@ -939,13 +939,13 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 // THREAT-MODEL residency row, which say so in those words.
 func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Secrets == nil {
-		writeError(w, http.StatusServiceUnavailable, "no secret store configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessCredentialNoSecretStore, "no secret store configured")
 		return
 	}
 	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
 	hl, ok := harnessLoginByProvider(provider)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
+		writeErrorReason(w, http.StatusBadRequest, reasonHarnessCredentialUnknownProvider, "unknown provider: "+provider)
 		return
 	}
 	st, owner := s.cfg.Secrets, ""
@@ -958,7 +958,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		scope, ok := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent,
 			runIdentitySubject(r.Context(), principalFromRequest(r)))
 		if !ok {
-			writeError(w, http.StatusServiceUnavailable, harnessDisconnectRosterUnavailable)
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessLoginRosterUnavailable, harnessDisconnectRosterUnavailable)
 			return
 		}
 		if scope.namespaced() {

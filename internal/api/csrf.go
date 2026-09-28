@@ -52,8 +52,9 @@ const (
 // because a security control that refuses SILENTLY cannot answer either
 // question an operator has at 3am: "is someone attacking this?" and "why did
 // the console stop saving?". Not a closed enum member by accident — it joins
-// the enum the auth.fail row documents.
-const csrfAuditReason = "cross_origin_refused"
+// the enum the auth.fail row documents. Also the wire reason (attach.go,
+// http.go), so it is declared in reasons_routes.go, not here (#656 review
+// round: the docs guard only reads the two reasons files).
 
 // errCrossOriginRefused is the sentinel sameOriginOrRefuse returns. Its text IS
 // the 403 body, so the caller writes err.Error() and no second string exists to

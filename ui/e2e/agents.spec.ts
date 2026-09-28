@@ -7,6 +7,7 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
+  expandCard,
   gotoConsole,
   mockMemberRole,
   navToRoute,
@@ -59,6 +60,7 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 async function gotoAgentsTab(page: Page): Promise<void> {
   await gotoConsole(page);
   await navToRoute(page, "/admin/settings");
+  await expandCard(page, "Workspace providers");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();

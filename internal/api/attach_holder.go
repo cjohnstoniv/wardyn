@@ -573,7 +573,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 
 	prev, promote := s.evictAttachHolderFor(id, principal)
 	if prev == nil {
-		writeError(w, http.StatusConflict, "nobody is attached to this run; nothing to take over")
+		writeErrorReason(w, http.StatusConflict, reasonAttachTakeoverNoHolder, "nobody is attached to this run; nothing to take over")
 		return
 	}
 	// Audit first, displace second. The displaced session's own teardown is what

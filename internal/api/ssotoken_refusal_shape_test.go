@@ -105,7 +105,7 @@ func TestUploadSSOToken_RefusalAfterScopeCarriesOwner(t *testing.T) {
 	if data["credential_source"] != string(types.CredentialSourcePerUser) {
 		t.Errorf("refusal data = %v, want credential_source %q", data, types.CredentialSourcePerUser)
 	}
-	if data["reason"] != refuseReasonAlreadyCaptured {
-		t.Errorf("refusal data = %v, want reason %q", data, refuseReasonAlreadyCaptured)
+	if data["reason"] != reasonCaptureAlreadyCaptured {
+		t.Errorf("refusal data = %v, want reason %q", data, reasonCaptureAlreadyCaptured)
 	}
 }

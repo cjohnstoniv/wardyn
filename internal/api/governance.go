@@ -275,7 +275,7 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 		return
 	}
 	err := s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
-	if notFoundIf(w, err, "governance profile") {
+	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
@@ -395,7 +395,7 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 	saved, err := s.cfg.Store.UpsertGovernanceAssignment(r.Context(), a)
 	// ErrNotFound here is the FK refusing an unknown profile_id — a 404 naming
 	// the profile, not a 500, and not a silent no-op.
-	if notFoundIf(w, err, "governance profile") {
+	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
 		return
 	}
 	if err != nil {
@@ -426,7 +426,7 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 		return
 	}
 	err := s.cfg.Store.DeleteGovernanceAssignment(r.Context(), id)
-	if notFoundIf(w, err, "governance assignment") {
+	if notFoundIf(w, err, "governance assignment", reasonGovernanceAssignmentNotFound) {
 		return
 	}
 	if err != nil {

@@ -58,8 +58,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exposes none of that surface. A local install (loopback `http://` control plane) has no internal
   listener and is unchanged. Every shipped caller already dials the internal listener (compose,
   Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
-  still dials the console and now gets `404` on every call: restart such runs
+  still dials the console and now gets `404` on every call. On Docker, restart such runs
   (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
+  On Kubernetes the restart refuses them (`revive_unsupported`, #1342): stop them and start a new
+  run instead.
 
 ### Added
 
@@ -85,9 +87,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …) now shares `invalid_limit_param`/
   `invalid_offset_param` for a bad `?limit=`/`?offset=`. `client.APIError.Reason` and
   `docs/sdk.md`'s closed reason set (`internal/api/reasons.go`) cover the new routes; the CLI/SDK
-  behavior is otherwise unchanged. Two refusals are deliberately still bare: an unanswered AWS
-  Bedrock SSO renewal (an outage, not an actionable class) and a push-content approval's
-  foreign-owner 404 (must stay byte-identical to a missing approval's).
+  behavior is otherwise unchanged. One refusal is deliberately still bare: an unanswered AWS
+  Bedrock SSO renewal (an outage, not an actionable class). `GET /approvals/{id}/paths`' own
+  foreign-owner 404 DOES carry a reason (`approval_not_found`), byte-identical to a missing
+  approval's — the wire class, not only the body, must not tell the two apart.
 - **`/site-config` (including its probe and egress-redirect routes), `/governance`, `/secrets`,
   `/people`, `/access`, `/permissions`, `/admin/delegates`, `/setup/integrations`,
   `/setup/onboarding-complete`, `/sessions/revoke`, `/ssh-keys` (self-service and admin), and the
@@ -99,6 +102,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
   — a literal in `reasons.go`, not a reference, so the docs⟷reasons.go guard can see it, tied to
   authz's value by a documented `TestNoAdHocAuthz` exception rather than a second copy invented for
   this package. `docs/sdk.md`'s reason table covers the new routes.
+- **Every remaining route — the `run_*.go` per-run actions (revive, the owner-authority re-check,
+  end/wait, title, files, resources, resume, model-provider choice), the UI gateway, device
+  federation, the Azure DevOps sign-in door, branding, the CSRF guard, and the rest of the
+  surface — now sends the same machine-readable `reason` on every refusal, closing #656.**
+  `TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new bare
+  `writeError`/`http.Error` call outside its small, evidence-backed allowlist, and
+  `TestNoAdHocErrorBodyOrReasonLiteral` catches the two shapes that guard cannot — a direct
+  `writeJSON(errorBody{...})` construction with no `Reason` (one reviewed construct-then-assign
+  exception today), and a hand-typed string literal passed to `writeErrorReason` instead of a
+  named constant. `TestReasonDocsMatchReasonsGo` checks
+  `docs/sdk.md`'s reason table against both `internal/api/reasons.go`/`reasons_routes.go` and
+  `internal/authz`'s own registry (every authorization refusal `s.refuse` sends carries its
+  registered reason too, not only the doors this package validates by hand), and nine of the
+  newly-converted reasons are pinned by a literal-string test against a renamed constant slipping
+  past the docs guard unnoticed. The Azure DevOps sign-in callback's own post-exchange failures
+  (a failed code exchange, identity-binding, an unusable grant, a store error) are 302 redirects
+  carrying `?ado_signin_error=<reason>` for the console's own error banner, not an error body —
+  as is the identity provider's own `?error=` redirect, before the exchange even starts. The
+  callback's own pre-exchange 400s (bad state/nonce/pkce cookies, a missing code parameter) do
+  carry `reason` in the body. Three refusals are deliberately still bare, each with its own pinning
+  test: a transient model-provider store failure (no door), an unanswered AWS Bedrock SSO renewal
+  (not a refusal class), and the drive-mount
+  resolver's runner-unavailable/caller-cancelled arms.
 - **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
   rail lists every provider you may use for it, with its kind, your connection state and where
   the credential lives during the run, and the run is sent with the one you pick. The agent's
@@ -222,6 +248,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
   admin" only when the governance ceiling actually did the narrowing; none qualifying names the
   requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
+- **Every card on Admin Settings and Your account now collapses to a one-line summary and expands
+  on click (#1200).** The owner measured Admin Settings at 2625px and Your account at 981px against a 744px viewport
+  with every card already fully open (the Host card's own compact picker above included) — this
+  closes that gap. None of the seven Admin Settings cards or four Your account cards opens by
+  default, which is what keeps both pages under 744px regardless of which of a card's own
+  conditional branches renders. The Azure DevOps card still force-opens (and takes focus) when
+  reached via `/account#azure-devops`, the one deep-linked exception. `ModelProviderCard`,
+  `ProvidersCard` and `UserDrivesCard` also render inside Getting started, which stays fully open
+  unchanged — the collapse is an opt-in prop there, not a new default.
 - **The UI-sandbox gateway's enter hand-off gains a `POST` form, beside the existing `GET` (#1220).**
   `POST <ui-origin>/__wardyn/enter` takes `run`/`app`/`ticket` as an
   `application/x-www-form-urlencoded` body instead of a query string, runs the exact same
@@ -301,6 +336,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
+  substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
+  substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
+  `409` and reason `revive_unsupported`, and each such run's result in
+  `POST /api/v1/admin/runs/restart` now carries the same `reason` beside its `error`
+  (`runner.ErrReviveUnsupported`'s text, unchanged). The upgrade notes for #1263 and #606, the
+  proxy-facing TLS section of OPERATIONS.md and the run-lifetime page promised that a run
+  dispatched before 0.7.12 could be restarted; on Kubernetes they now say to stop it and start a
+  new run.
 - **Docker names the cause when the proxy sidecar exits at config load (#1051).** A proxy that
   refused its rendered config at start used to surface as "proxy has no IP" when the run was
   created. The Docker driver now watches a new proxy until it has stayed up for a second and fails
@@ -477,7 +521,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exactly the standing runs "Restart with current limits" exists for. The config's control-plane
   URL and CA are now set to the deployment's current pair before it is loaded; every other field
   is loaded as rendered, so an unknown field, another run's config or an invalid current hop is
-  still refused before anything is minted or replaced.
+  still refused before anything is minted or replaced. This is Docker only: on Kubernetes revive
+  and the admin restart are refused for every run (`revive_unsupported`, #1342).
 - **An ended run can be extended and revived while its files are kept (#1061).** A run whose
   end passed is stopped and kept for `WARDYN_ENDED_RUN_GRACE`, and the design promised Extend +
   Revive during that grace, but extending it answered 409 and revive refused it. Its owner (or a
@@ -2238,7 +2283,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   applies the proxy's rule, refusing to start on `http://` to a non-loopback host or on `https://`
   without a readable CA file. The chart no longer grants the runs namespace wardynd's `http` port:
   since 0.7.12 proxies use the internal port. **Upgrading:** stop any run dispatched before 0.7.12
-  before you upgrade, because it has no route back afterwards. If you run the ingest outside
+  before you upgrade, because it has no route back afterwards. The admin restart cannot rescue one
+  on the chart (`revive_unsupported`, #1342): a run missed here is stopped and a new run started. If you run the ingest outside
   compose, set `WARDYN_CONTROL_PLANE_URL` to the internal listener and point
   `WARDYN_CONTROL_PLANE_CA_FILE` at the published file. THREAT-MODEL B6 no longer lists a plaintext
   residual for current-version callers.

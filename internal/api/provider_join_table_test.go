@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -360,8 +361,10 @@ func assertJoinEnv(t *testing.T, env, want map[string]string, absent []string) {
 
 // TestProviderJoin_DoorsEveryKind is the create/Review half of the matrix:
 // both doors answer every kind's refusal identically, carrying #532's
-// provider, kind and — only on a credential refusal — reason; an unreadable
-// credential or block answers 503 with the sentence alone.
+// provider and kind, plus a reason (#656 slice 3) — llmRefusalAuditReason
+// only on a credential refusal, else the generic
+// authz.ReasonModelProviderUnavailable; an unreadable credential or block
+// answers 503 with the sentence alone, no reason.
 func TestProviderJoin_DoorsEveryKind(t *testing.T) {
 	for _, k := range joinKinds() {
 		for _, sc := range joinScenarios() {
@@ -391,6 +394,11 @@ func TestProviderJoin_DoorsEveryKind(t *testing.T) {
 					wantCode := http.StatusServiceUnavailable
 					if sc.name != "provider-unreadable" && sc.name != "block-unreadable" {
 						wantCode, wantBody.Provider, wantBody.Kind = http.StatusUnprocessableEntity, want.provider, string(want.kind)
+						// #656 slice 3: writeProviderRefusal's every 422 now
+						// carries a reason — llmRefusalAuditReason only when a
+						// sign-in would repair it, else the generic
+						// authz.ReasonModelProviderUnavailable.
+						wantBody.Reason = string(authz.ReasonModelProviderUnavailable)
 						if want.credential {
 							wantBody.Reason = llmRefusalAuditReason
 						}

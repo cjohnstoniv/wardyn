@@ -109,7 +109,7 @@ func uiBindCookieName(mac string) string { return uiBindCookiePrefix + mac[:16] 
 // decision, and the cookie is worthless without the ticket it was made from.
 func (s *Server) handleUIBind(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeErrorReason(w, http.StatusMethodNotAllowed, reasonUIGatewayMethodNotAllowed, "method not allowed")
 		return
 	}
 	if reason := s.uiBindRefusal(r); reason != "" {
@@ -123,21 +123,24 @@ func (s *Server) handleUIBind(w http.ResponseWriter, r *http.Request) {
 				"origin":         uiAuditHeader(r, "Origin"),
 			})
 		}
-		writeError(w, http.StatusForbidden, "the UI gateway only binds a ticket for the Wardyn console")
+		// reason reaches the wire too (#656 slice 3): harmless even though the
+		// fetch never reads it (no CORS headers on this response), since it is
+		// already the audit row's own value.
+		writeErrorReason(w, http.StatusForbidden, reason, "the UI gateway only binds a ticket for the Wardyn console")
 		return
 	}
 	if r.URL.Query().Has("ticket") {
-		writeError(w, http.StatusBadRequest, "the ticket must be a form field, not a query parameter")
+		writeErrorReason(w, http.StatusBadRequest, reasonUIGatewayTicketQueryOnPost, "the ticket must be a form field, not a query parameter")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUIEnterFormBytes)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid form body")
+		writeErrorReason(w, http.StatusBadRequest, reasonUIGatewayInvalidFormBody, "invalid form body")
 		return
 	}
 	ticket := r.PostForm.Get("ticket")
 	if ticket == "" {
-		writeError(w, http.StatusBadRequest, "missing ticket")
+		writeErrorReason(w, http.StatusBadRequest, reasonUIGatewayBindMissingTicket, "missing ticket")
 		return
 	}
 	mac := s.uiBindMAC(ticket)
@@ -158,13 +161,6 @@ func (s *Server) handleUIBind(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// The reasons a bind is refused, as the ui.authorize/denied row names them:
-// stable identifiers for a SIEM rule, not copy.
-const (
-	uiBindReasonNotSameSite      = "bind_not_same_site"
-	uiBindReasonOriginNotConsole = "bind_origin_not_console"
-)
-
 // uiBindRefusal decides who may bind, returning "" to allow or the audit reason
 // to refuse. The fetch must be labelled "same-site" by the browser: the console
 // and the gateway are two hosts of one site, while an attacker's page is
@@ -183,13 +179,13 @@ const (
 // is one principal and no other user's session to push into a browser.
 func (s *Server) uiBindRefusal(r *http.Request) string {
 	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-site") {
-		return uiBindReasonNotSameSite
+		return reasonUIGatewayBindNotSameSite
 	}
 	if s.cfg.OIDCRedirectURL == "" {
 		return ""
 	}
 	if !uiOriginIsConsole(strings.TrimSpace(r.Header.Get("Origin")), s.cfg.OIDCRedirectURL) {
-		return uiBindReasonOriginNotConsole
+		return reasonUIGatewayBindOriginNotConsole
 	}
 	return ""
 }

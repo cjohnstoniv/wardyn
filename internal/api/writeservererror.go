@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 )
 
@@ -41,14 +42,17 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 	// the one 5xx whose sentence is the remedy, whichever launcher reached it,
 	// and the forwarder already logged the revocation once.
 	if errors.Is(err, errOrgRevoked) {
-		writeError(w, http.StatusServiceUnavailable, orgRevokedMsg)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonOrgRevoked, orgRevokedMsg)
 		return
 	}
 	if writeHostCapacityRefusal(w, r, err) {
 		return
 	}
 	if errors.Is(err, errUserTypeUnknown) {
-		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
+		// The SAME registered reason authz's own ReasonUserTypeUnknown names
+		// (#656 slice 3) — this resolver failure is exactly that cause,
+		// reached through the (bool, error) seam rather than authz.Deny.
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonUserTypeUnknown), userTypeUnknownMsg)
 		return
 	}
 	slog.ErrorContext(r.Context(), "api: "+msg,
@@ -56,7 +60,12 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		slog.String("path", r.URL.Path),
 		slog.Any("err", err),
 	)
-	writeError(w, http.StatusInternalServerError, msg)
+	// #656 slice 3: every OTHERWISE-unclassified 500 this package writes goes
+	// through here, so this is the one place a generic wire reason can cover
+	// all of them at once — never the driver text err carries (that stays in
+	// the log line above), just a class a caller can at least branch on
+	// ("something failed server-side") versus every classified reason above.
+	writeErrorReason(w, http.StatusInternalServerError, reasonInternalError, msg)
 }
 
 // writeHostCapacityRefusal answers a hostcapacity refusal 503 with a

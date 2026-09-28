@@ -66,10 +66,6 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 // beyond the cap cause http.MaxBytesReader to error, which we surface as 413.
 const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 
-// recordingPartLimitReason is recording.upload's reason for a part above
-// types.RecordingMaxParts; nothing of that part is stored.
-const recordingPartLimitReason = "part_limit"
-
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from
 // wardyn-rec running inside the agent container. The caller must hold a valid
 // run token (enforced by internalAuth). The run ID in the path must match the
@@ -93,7 +89,7 @@ func (s *Server) handleUploadRecordingPart(w http.ResponseWriter, r *http.Reques
 	raw := chi.URLParam(r, "part")
 	part, err := strconv.Atoi(raw)
 	if err != nil || part < 2 || strconv.Itoa(part) != raw {
-		writeError(w, http.StatusNotFound, "invalid recording part")
+		writeErrorReason(w, http.StatusNotFound, reasonRecordingInvalidPart, "invalid recording part")
 		return
 	}
 	s.saveRecording(w, r, part)
@@ -108,14 +104,14 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	}
 
 	if s.cfg.RecordingStore == nil {
-		writeError(w, http.StatusNotImplemented, "recording store not configured")
+		writeErrorReason(w, http.StatusNotImplemented, reasonRecordingStoreUnavailable, "recording store not configured")
 		return
 	}
 	if part > types.RecordingMaxParts {
 		runID := claims.RunID
 		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
-			runID.String(), "failure", mustJSON(map[string]any{"part": part, "reason": recordingPartLimitReason})))
-		writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds its part limit")
+			runID.String(), "failure", mustJSON(map[string]any{"part": part, "reason": reasonRecordingPartLimit})))
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingPartLimit, "recording exceeds its part limit")
 		return
 	}
 
@@ -174,7 +170,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		// An over-cap upload surfaces as *http.MaxBytesError through the masker.
 		var maxErr *http.MaxBytesError
 		if errors.As(saveErr, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
+			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingTooLarge, "recording exceeds size limit")
 			return
 		}
 		writeServerError(w, r, "save recording", saveErr)

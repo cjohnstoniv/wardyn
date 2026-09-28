@@ -49,7 +49,7 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 	if raw != "" {
 		var err error
 		if runID, err = uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid run_id")
+			writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidRunID, "invalid run_id")
 			return nil, false
 		}
 	}
@@ -172,7 +172,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	pager, ok := s.cfg.Store.(store.Pager)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "audit export requires a paging store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonAuditExportStoreUnavailable, "audit export requires a paging store backend")
 		return
 	}
 	filter, ok := parseAuditFilter(w, r)
@@ -239,7 +239,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) {
 	v, ok := s.cfg.Store.(store.AuditChainVerifier)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "audit chain verification requires the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonAuditChainVerifyStoreUnavailable, "audit chain verification requires the Postgres store backend")
 		return
 	}
 	// One sweep at a time. The sweep re-hashes every row of a table that can
@@ -256,7 +256,7 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 	// which the single materializing statement it replaced could not.
 	if !s.auditChainSweep.TryLock() {
 		w.Header().Set("Retry-After", "30")
-		writeError(w, http.StatusTooManyRequests, "an audit chain verification is already running; retry when it finishes")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonAuditChainVerifyBusy, "an audit chain verification is already running; retry when it finishes")
 		return
 	}
 	defer s.auditChainSweep.Unlock()
@@ -264,7 +264,7 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 	st, err := v.VerifyAuditChain(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardyn: audit chain sweep failed", slog.Any("err", err))
-		writeError(w, http.StatusInternalServerError, "audit chain sweep failed")
+		writeErrorReason(w, http.StatusInternalServerError, reasonAuditChainSweepFailed, "audit chain sweep failed")
 		return
 	}
 	if !st.OK {
@@ -304,7 +304,7 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		}
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid "+p.name+" (want an RFC3339 timestamp)")
+			writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidTimestampParam, "invalid "+p.name+" (want an RFC3339 timestamp)")
 			return store.AuditFilter{}, false
 		}
 		*p.dst = t
@@ -312,13 +312,13 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 	switch f.ActorType {
 	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem:
 	default:
-		writeError(w, http.StatusBadRequest, "invalid actor_type (want human, agent, or system)")
+		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, or system)")
 		return store.AuditFilter{}, false
 	}
 	switch f.Origin {
 	case "", store.AuditOriginDevice, store.AuditOriginOrganisation:
 	default:
-		writeError(w, http.StatusBadRequest, "invalid origin (want device or organisation)")
+		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidOrigin, "invalid origin (want device or organisation)")
 		return store.AuditFilter{}, false
 	}
 	return f, true

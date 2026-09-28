@@ -499,11 +499,11 @@ func (s *Server) adoDecisionRule(w http.ResponseWriter, r *http.Request, ap type
 		scope = types.ScopeOnce
 	case types.ScopeOnce, types.ScopeRun:
 	default:
-		writeError(w, http.StatusBadRequest, `an Azure DevOps access request is decided "once" or for this "run"`)
+		writeErrorReason(w, http.StatusBadRequest, reasonADODecisionScopeInvalid, `an Azure DevOps access request is decided "once" or for this "run"`)
 		return scope, true, false
 	}
 	if approve && !s.adoEscalationWithinCeiling(r.Context(), sc) {
-		writeError(w, http.StatusForbidden, "this Azure DevOps access is outside what an administrator allows for the organisation")
+		writeErrorReason(w, http.StatusForbidden, reasonADOAccessAboveCeiling, "this Azure DevOps access is outside what an administrator allows for the organisation")
 		return scope, true, false
 	}
 	return scope, true, true

@@ -349,7 +349,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// peer is always the docker gateway and LAN protection is the loopback
 			// PUBLISH (see the Config field doc). The Host gate below still applies.
 			if !s.cfg.LocalTrustForwarder && !isLoopbackRemoteAddr(r.RemoteAddr) {
-				writeError(w, http.StatusForbidden, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
+				writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
 				return
 			}
 			// DNS-rebinding defense: the no-auth local surface must answer
@@ -362,7 +362,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// with 403. Only LocalMode is gated here; SSO/token modes already require a
 			// credential and are unaffected.
 			if !isLoopbackHost(r.Host) {
-				writeError(w, http.StatusForbidden, "local mode: request Host is not loopback (DNS-rebinding guard)")
+				writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "local mode: request Host is not loopback (DNS-rebinding guard)")
 				return
 			}
 			// Blind-CSRF guard: a malicious page can fire a no-cors
@@ -391,7 +391,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				origin := strings.TrimSpace(r.Header.Get("Origin"))
 				if isForeignSiteFetch(r) || (origin != "" && !s.originIsRequestHost(r, origin)) {
 					s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
-					writeError(w, http.StatusForbidden, "local mode: "+csrfRefusedBody)
+					writeErrorReason(w, http.StatusForbidden, csrfAuditReason, "local mode: "+csrfRefusedBody)
 					return
 				}
 			}
@@ -431,7 +431,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				// The session was VALID here, so no SessionRejectedFromContext
 				// reason overrides csrfAuditReason (auditAuthFailedAs).
 				s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
-				writeError(w, http.StatusForbidden, err.Error())
+				writeErrorReason(w, http.StatusForbidden, csrfAuditReason, err.Error())
 				return
 			}
 			// A user view whose type was deleted is refused here, before any
@@ -471,7 +471,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 		// A rejected session cookie answers itself — rejectedSessionAnswer, auth_status.go.
 		if reason, status, msg, ok := rejectedSessionAnswer(r); ok {
 			s.auditRejectedSession(r, reason) // carries the ERROR log + authStoreErrorInc
-			writeError(w, status, msg)
+			writeErrorReason(w, status, reason, msg)
 			return
 		}
 		admin.ServeHTTP(w, r)
@@ -639,18 +639,18 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AdminToken == "" {
 			s.auditAuthFailed(r, "admin_token_not_configured")
-			writeError(w, http.StatusUnauthorized, "admin token not configured; public API disabled")
+			writeErrorReason(w, http.StatusUnauthorized, reasonAdminTokenNotConfigured, "admin token not configured; public API disabled")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
 			s.auditAuthFailed(r, "missing_bearer_token")
-			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonMissingBearerToken, "missing bearer token")
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
 			s.auditAuthFailed(r, "invalid_admin_token")
-			writeError(w, http.StatusUnauthorized, "invalid admin token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -903,14 +903,14 @@ func (s *Server) releaseIdentityExpired(runID uuid.UUID) {
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Identity == nil {
-			s.auditAuthFailedAs(r, internalAuthActor, "identity_provider_not_configured")
-			writeError(w, http.StatusUnauthorized, "identity provider not configured")
+			s.auditAuthFailedAs(r, internalAuthActor, reasonIdentityProviderNotConfigured)
+			writeErrorReason(w, http.StatusUnauthorized, reasonIdentityProviderNotConfigured, "identity provider not configured")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
 			s.auditAuthFailedAs(r, internalAuthActor, "missing_run_token")
-			writeError(w, http.StatusUnauthorized, "missing run token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunToken, "missing run token")
 			return
 		}
 		claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
@@ -921,7 +921,7 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			// refused without telling a brute-forcer which half it got wrong.
 			s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
 			s.auditRunIdentityExpired(r, err)
-			writeError(w, http.StatusUnauthorized, "invalid run token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
 			return
 		}
 		// Claims first, then LIVENESS — see refuseTerminalRun.
@@ -951,14 +951,14 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Identity == nil {
-			s.auditAuthFailedAs(r, groundtruthAuthActor, "identity_provider_not_configured")
-			writeError(w, http.StatusUnauthorized, "identity provider not configured")
+			s.auditAuthFailedAs(r, groundtruthAuthActor, reasonIdentityProviderNotConfigured)
+			writeErrorReason(w, http.StatusUnauthorized, reasonIdentityProviderNotConfigured, "identity provider not configured")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
 			s.auditAuthFailedAs(r, groundtruthAuthActor, "missing_sensor_token")
-			writeError(w, http.StatusUnauthorized, "missing sensor token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonMissingSensorToken, "missing sensor token")
 			return
 		}
 		if _, err := s.cfg.Identity.Verify(r.Context(), tok, groundtruthAudience); err != nil {
@@ -966,7 +966,7 @@ func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 			// wrong-audience vs forged) to the caller; the audit row is equally
 			// coarse for the same reason.
 			s.auditAuthFailedAs(r, groundtruthAuthActor, "invalid_sensor_token")
-			writeError(w, http.StatusUnauthorized, "invalid sensor token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidSensorToken, "invalid sensor token")
 			return
 		}
 		next.ServeHTTP(w, r)

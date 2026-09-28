@@ -132,13 +132,13 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		if !ok {
 			s.auditAuthFailedAs(r, deviceAuthActor, "device_store_unavailable")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
-			writeError(w, http.StatusUnauthorized, "this deployment does not accept device credentials")
+			writeErrorReason(w, http.StatusUnauthorized, reasonDeviceStoreUnavailable, "this deployment does not accept device credentials")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
 			s.auditAuthFailedAs(r, deviceAuthActor, "missing_device_token")
-			writeError(w, http.StatusUnauthorized, "missing device token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonMissingDeviceToken, "missing device token")
 			return
 		}
 		d, err := types.Device{}, store.ErrNotFound
@@ -148,18 +148,20 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		if errors.Is(err, store.ErrNotFound) {
 			s.auditAuthFailedAs(r, deviceAuthActor, "invalid_device_token")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
-			writeError(w, http.StatusUnauthorized, "invalid device token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidDeviceToken, "invalid device token")
 			return
 		}
 		if err != nil {
 			slog.ErrorContext(r.Context(), "api: device lookup failed; this request could not be authenticated",
 				"error", err, "path", r.URL.Path)
 			s.metrics.authStoreErrorInc()
-			writeError(w, http.StatusServiceUnavailable, "device lookup failed")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonDeviceLookupFailed, "device lookup failed")
 			return
 		}
 		if id, perr := uuid.Parse(chi.URLParam(r, "id")); perr != nil || id != d.ID {
-			writeError(w, http.StatusNotFound, "device not found")
+			// The SAME reason notFoundIf's own "device" case uses (helpers.go,
+			// #656 slice 3): byte-identical whether the id exists or not.
+			writeErrorReason(w, http.StatusNotFound, reasonDeviceNotFound, "device not found")
 			return
 		}
 		// Best effort, like TouchAPIToken: last-seen is inventory hygiene, never
@@ -185,13 +187,13 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 	now := s.cfg.Now().UTC()
 	if !s.enrolLimiter.allow(peerKey(r.RemoteAddr), now) {
 		w.Header().Set("Retry-After", "10")
-		writeError(w, http.StatusTooManyRequests, "too many enrolment attempts from this address; retry later")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonDeviceEnrolRateLimited, "too many enrolment attempts from this address; retry later")
 		return
 	}
 	ds, ok := s.cfg.Store.(store.DeviceStore)
 	if !ok {
 		// Content-free: an unauthenticated caller learns nothing about the backend.
-		writeError(w, http.StatusNotImplemented, http.StatusText(http.StatusNotImplemented))
+		writeErrorReason(w, http.StatusNotImplemented, reasonDeviceEnrolmentUnavailable, http.StatusText(http.StatusNotImplemented))
 		return
 	}
 	var req types.DeviceEnrolRequest
@@ -199,7 +201,7 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Token == "" {
-		writeError(w, http.StatusBadRequest, "token is required")
+		writeErrorReason(w, http.StatusBadRequest, reasonDeviceEnrolTokenRequired, "token is required")
 		return
 	}
 	t, ok, err := ds.ConsumeEnrolmentToken(r.Context(), req.Token, now)
@@ -209,7 +211,7 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		s.auditEnrolFailure(r, "invalid_enrolment_token")
-		writeError(w, http.StatusUnauthorized, "enrolment token is not valid: unknown, expired or already used")
+		writeErrorReason(w, http.StatusUnauthorized, reasonInvalidEnrolmentToken, "enrolment token is not valid: unknown, expired or already used")
 		return
 	}
 	raw := newBearer(deviceTokenPrefix)
@@ -267,7 +269,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 	ds, isDS := s.cfg.Store.(store.DeviceStore)
 	if !ok || !isDS {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
-		writeError(w, http.StatusUnauthorized, "invalid device token")
+		writeErrorReason(w, http.StatusUnauthorized, reasonInvalidDeviceToken, "invalid device token")
 		return
 	}
 	// One push per device at a time, taken before the body is read. The hash
@@ -277,7 +279,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 	// meets it; the 429 writes no audit row (nothing was refused on content).
 	if _, busy := s.ingestInFlight.LoadOrStore(d.ID, struct{}{}); busy {
 		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "a push from this device is already in progress; retry after it completes")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonDeviceIngestInFlight, "a push from this device is already in progress; retry after it completes")
 		return
 	}
 	defer s.ingestInFlight.Delete(d.ID)
@@ -291,44 +293,44 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&rows); err != nil {
 		s.auditIngestFailure(r, d, "invalid_body", 0)
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonDeviceIngestInvalidBody, "invalid JSON body: "+err.Error())
 		return
 	}
 	if len(rows) > maxDeviceIngestRows {
 		s.auditIngestFailure(r, d, "batch_too_large", len(rows))
-		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("batch exceeds %d rows", maxDeviceIngestRows))
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonDeviceIngestBatchTooLarge, fmt.Sprintf("batch exceeds %d rows", maxDeviceIngestRows))
 		return
 	}
 	if msg := invalidFederatedRow(rows); msg != "" {
 		s.auditIngestFailure(r, d, "invalid_row", len(rows))
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonDeviceIngestInvalidRow, msg)
 		return
 	}
 	res, err := ds.IngestDeviceAudit(r.Context(), d.ID, r.RemoteAddr, rows)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusUnauthorized, "invalid device token")
+		writeErrorReason(w, http.StatusUnauthorized, reasonInvalidDeviceToken, "invalid device token")
 		return
 	case errors.Is(err, store.ErrDeviceRevoked):
 		// Revoked after deviceAuth admitted this request: the same 401 its
 		// next request gets, recorded as the revocation it is.
 		s.auditIngestFailure(r, d, "revoked", len(rows))
 		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
-		writeError(w, http.StatusUnauthorized, "invalid device token")
+		writeErrorReason(w, http.StatusUnauthorized, reasonInvalidDeviceToken, "invalid device token")
 		return
 	case errors.Is(err, store.ErrFederatedRowInvalid):
 		// A value Postgres cannot represent: the device's fault, so a 4xx the
 		// forwarder stops on, never a 5xx it would retry forever.
 		s.auditIngestFailure(r, d, "invalid_row", len(rows))
-		writeError(w, http.StatusBadRequest, "a row holds a value that cannot be stored as claimed")
+		writeErrorReason(w, http.StatusBadRequest, reasonDeviceIngestInvalidRow, "a row holds a value that cannot be stored as claimed")
 		return
 	case errors.Is(err, store.ErrFederatedOrgRun):
 		s.auditIngestFailure(r, d, "org_run", len(rows))
-		writeError(w, http.StatusUnprocessableEntity, "a row names one of this organisation's own runs")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDeviceIngestOrgRun, "a row names one of this organisation's own runs")
 		return
 	case errors.Is(err, store.ErrConflict):
 		s.auditIngestFailure(r, d, "chain_mismatch", len(rows))
-		writeError(w, http.StatusUnprocessableEntity, "batch does not extend this device's recorded audit chain")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDeviceIngestChainMismatch, "batch does not extend this device's recorded audit chain")
 		return
 	case err != nil:
 		s.auditIngestFailure(r, d, "store_error", len(rows))
@@ -406,7 +408,7 @@ func (s *Server) auditIngestFailure(r *http.Request, d types.Device, reason stri
 func (s *Server) handleDeviceHeartbeat(w http.ResponseWriter, r *http.Request) {
 	d, ok := deviceFromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "invalid device token")
+		writeErrorReason(w, http.StatusUnauthorized, reasonInvalidDeviceToken, "invalid device token")
 		return
 	}
 	writeJSON(w, http.StatusOK, types.DeviceAck{AckedSeq: d.LastSeq})

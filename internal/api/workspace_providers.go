@@ -752,7 +752,12 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedWorkspaceProviders(existing))) {
-		writeErrorReason(w, http.StatusPreconditionFailed, reasonWorkspaceProvidersStale, providers412Stale)
+		// reasonSiteConfigStale, not a workspace-providers-only name (#656 final
+		// review round L2): every If-Match check in this file family reads the
+		// SAME underlying site-config document and refuses the SAME cause — a
+		// stale copy, reload and retry — so one reason names it regardless of
+		// which sub-block the PUT targeted.
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonSiteConfigStale, providers412Stale)
 		return
 	}
 	candidate := existing

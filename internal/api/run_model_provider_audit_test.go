@@ -34,8 +34,10 @@ func deniedRows(t *testing.T, srv *Server) []map[string]any {
 
 // TestRunModelProviderDoors_AuditEachRefusal is #987: every model-provider
 // refusal at create and at Review writes exactly one authz.denied row, while
-// the 422 keeps its envelope (provider, kind and the credential-only reason).
-// A provider the member is not granted stays the one capability row it was,
+// the 422 keeps its envelope (provider, kind and a reason, #656 slice 3 —
+// llmRefusalAuditReason only when the row's own "remedy" detail sets it, else
+// the same generic reason the row itself carries). A provider the member is
+// not granted stays the one capability row it was,
 // and a field-validation refusal writes none.
 func TestRunModelProviderDoors_AuditEachRefusal(t *testing.T) {
 	twoKeys := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider("corp", "claude-code"))}
@@ -132,9 +134,20 @@ func TestRunModelProviderDoors_AuditEachRefusal(t *testing.T) {
 				}
 				var body errorBody
 				_ = json.Unmarshal(w.Body.Bytes(), &body)
+				// #656 slice 3: the wire reason is the row's own "remedy"
+				// detail (llmRefusalAuditReason) when set — the one case a
+				// sign-in repairs — else the SAME generic reason the audit
+				// row's own "reason" already carries (tc.wantReason); every
+				// writeProviderRefusal 422 now carries one or the other,
+				// never none.
+				wantWireReason := tc.wantReason
+				if remedy, ok := tc.wantDetail["remedy"]; ok {
+					wantWireReason = fmt.Sprint(remedy)
+				}
 				if body.Provider != fmt.Sprint(orEmpty(tc.wantDetail["provider"])) || body.Kind != fmt.Sprint(orEmpty(tc.wantDetail["kind"])) ||
-					body.Reason != fmt.Sprint(orEmpty(tc.wantDetail["remedy"])) {
-					t.Errorf("%s: 422 envelope provider/kind/reason = %q/%q/%q, want the row's %v", path, body.Provider, body.Kind, body.Reason, tc.wantDetail)
+					body.Reason != wantWireReason {
+					t.Errorf("%s: 422 envelope provider/kind/reason = %q/%q/%q, want %v/%v/%q", path, body.Provider, body.Kind, body.Reason,
+						orEmpty(tc.wantDetail["provider"]), orEmpty(tc.wantDetail["kind"]), wantWireReason)
 				}
 			}
 		})
