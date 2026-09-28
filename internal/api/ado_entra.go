@@ -520,17 +520,17 @@ func (s *Server) consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonc
 	stateCookie, err := r.Cookie(s.consoleCookieName(adoStateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam == "" ||
 		subtle.ConstantTimeCompare([]byte(stateParam), []byte(stateCookie.Value)) != 1 {
-		http.Error(w, "invalid state parameter", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackCookiesInvalid, "invalid state parameter")
 		return "", "", false
 	}
 	nonceCookie, err := r.Cookie(s.consoleCookieName(adoNonceCookieName))
 	if err != nil || nonceCookie.Value == "" {
-		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackCookiesInvalid, "missing nonce cookie")
 		return "", "", false
 	}
 	pkceCookie, err := r.Cookie(s.consoleCookieName(adoPKCECookieName))
 	if err != nil || pkceCookie.Value == "" {
-		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackCookiesInvalid, "missing pkce cookie")
 		return "", "", false
 	}
 	s.clearADOCookie(w, adoStateCookieName)
@@ -573,7 +573,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, "missing code parameter", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackMissingCode, "missing code parameter")
 		return
 	}
 
@@ -601,11 +601,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
 	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
-	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
+	if bindMsg, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "identity_binding", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": reasonADOCallbackIdentityBinding, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Error(w, reason, http.StatusForbidden)
+		writeErrorReason(w, http.StatusForbidden, reasonADOCallbackIdentityBinding, bindMsg)
 		return
 	}
 
@@ -615,9 +615,9 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		// granted scope inside the row's ceiling means this credential may do
 		// nothing a run could use. Either way there is no usable capture.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": reasonADOCallbackUnusableGrant, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Error(w, "the identity provider returned no renewable Azure DevOps grant", http.StatusBadGateway)
+		writeErrorReason(w, http.StatusBadGateway, reasonADOCallbackUnusableGrant, "the identity provider returned no renewable Azure DevOps grant")
 		return
 	}
 	blob := adoEntraBlob{
@@ -640,9 +640,9 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": reasonStoreError, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
+		writeErrorReason(w, http.StatusInternalServerError, reasonStoreError, "storing the captured Azure DevOps sign-in failed")
 		return
 	}
 	// Stored: this sign-in is now the credential, and the one it replaced is not.

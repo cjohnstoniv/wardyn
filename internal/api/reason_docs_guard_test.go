@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 )
 
 // adoEntraFailureEnumValues is ADOEntraFailure's own closed enum
@@ -31,12 +33,42 @@ var adoEntraFailureEnumValues = []string{
 // added here to silence the guard. Empty today: no such pair exists yet.
 var documentedDuplicateReasonValues = map[string]bool{}
 
-// TestReasonDocsMatchReasonsGo (#656 M2) parses docs/sdk.md's Reason table and
-// internal/api/reasons.go's const block and requires their sets of wire
-// values to be equal, modulo ADOEntraFailure's own documented exception. This
-// is the guard the FINAL review on PR #1299 asked for: without it, renaming a
-// PUBLISHED wire value in reasons.go (a breaking change for any caller
-// matching on it) passes every other test in the package.
+// authzWireReasons returns every registered authz.Reason whose Effect
+// actually reaches the wire — everything except EffectHidden, whose whole
+// point is to answer byte-identical to a missing row and so is never itself
+// a wire value; s.refuse's AsIf is what a Hidden decision actually sends
+// (#656 final review round FIX-1: s.refuse now writes d.Reason/d.WireReason
+// on every OTHER effect, so every one of those 25 names is as wire-visible as
+// a reasons.go literal, and TestReasonDocsMatchReasonsGo must see it as one).
+func authzWireReasons(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, r := range authz.Reasons() {
+		ref, ok := authz.Lookup(r)
+		if !ok {
+			t.Fatalf("authz.Reasons() returned %q, which authz.Lookup does not know — registry inconsistency", r)
+		}
+		if ref.Effect == authz.EffectHidden {
+			continue
+		}
+		out[string(r)] = true
+	}
+	if len(out) < 20 {
+		t.Fatalf("parsed only %d non-Hidden authz reason(s) — the registry shrank, or this guard broke", len(out))
+	}
+	return out
+}
+
+// TestReasonDocsMatchReasonsGo (#656 M2) parses docs/sdk.md's Reason table,
+// internal/api's two reasons.go files, and authz's own registry, and requires
+// the FIRST to be a superset of the union of the other two (every wire value
+// documented), modulo ADOEntraFailure's own documented exception. This is the
+// guard the FINAL review on PR #1299 asked for: without it, renaming a
+// PUBLISHED wire value (a breaking change for any caller matching on it)
+// passes every other test in the package. Extended in #656's final review
+// round (FIX-1) to also read authz.Reasons(): a value that only ever reaches
+// the wire through authz's registry (s.refuse) is just as published as one in
+// reasons.go, and was invisible to this guard before.
 func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	docBytes, err := os.ReadFile("../../docs/sdk.md")
 	if err != nil {
@@ -106,9 +138,15 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 			"documentedDuplicateReasonValues entry: %v", undocumentedDuplicates)
 	}
 
-	// docReasons must equal goReasons ∪ the ADO enum exception, exactly.
+	authzReasons := authzWireReasons(t)
+
+	// docReasons must equal goReasons ∪ authzReasons ∪ the ADO enum exception,
+	// exactly — three sources of wire-visible reasons, one required doc table.
 	want := map[string]bool{}
 	for k := range goReasons {
+		want[k] = true
+	}
+	for k := range authzReasons {
 		want[k] = true
 	}
 	for _, v := range adoEntraFailureEnumValues {
@@ -116,7 +154,7 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	}
 
 	var missingFromDocs, missingFromGo []string
-	for k := range goReasons {
+	for k := range want {
 		if !docReasons[k] {
 			missingFromDocs = append(missingFromDocs, k)
 		}
@@ -129,10 +167,10 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	sort.Strings(missingFromDocs)
 	sort.Strings(missingFromGo)
 	if len(missingFromDocs) > 0 {
-		t.Errorf("reasons.go values with no docs/sdk.md row: %v", missingFromDocs)
+		t.Errorf("wire reason(s) (reasons.go/reasons_routes.go or authz's registry) with no docs/sdk.md row: %v", missingFromDocs)
 	}
 	if len(missingFromGo) > 0 {
-		t.Errorf("docs/sdk.md values with no reasons.go const (and not the ADOEntraFailure exception): %v", missingFromGo)
+		t.Errorf("docs/sdk.md values with no source (not reasons.go, not authz.Reasons(), and not the ADOEntraFailure exception): %v", missingFromGo)
 	}
 }
 

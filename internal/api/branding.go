@@ -43,17 +43,9 @@ const (
 	brandLogoPathFmt = "/api/v1/branding/logo?v=%s"
 )
 
-// The named reasons a refused write carries (errorBody.Reason), one per rule.
-const (
-	brandReasonOrgName    = "invalid_org_name"
-	brandReasonNameFormat = "invalid_name_format"
-	brandReasonColour     = "invalid_colour"
-	brandReasonContrast   = "low_contrast"
-	brandReasonLink       = "link_not_https"
-	brandReasonLinkShape  = "invalid_link"
-	brandReasonLogoSize   = "logo_too_large"
-	brandReasonLogo       = "invalid_logo"
-)
+// The named reasons a refused write carries (errorBody.Reason), one per rule,
+// are declared in reasons_routes.go (brandReason* — #656 review round: the
+// docs guard only reads the two reasons files).
 
 // mountBrandingRoutes: the two reads the sign-in page needs are anonymous (the
 // reader has not signed in), the Support link is for signed-in people, and

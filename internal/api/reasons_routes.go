@@ -563,6 +563,24 @@ const (
 	reasonADOSignInScopeInvalid = "ado_sign_in_scope_invalid"
 )
 
+// The callback half of the same door (consumeADOCookies, handleADOCallback):
+// browser-reachable (the identity provider's own redirect lands here), and
+// previously answered with a bare http.Error — no JSON body, no reason at
+// all (#656 final review round FIX-2). reasonADOCallbackCookiesInvalid covers
+// all three single-use state/nonce/pkce cookie causes as one bucket: the
+// remedy is identical for all three (start the sign-in again from Settings),
+// so there is nothing a caller could do differently by telling them apart.
+// reasonADOCallbackIdentityBinding and reasonADOCallbackUnusableGrant reuse
+// the EXACT strings this callback's own auditADOCapture rows already carried
+// for these two causes, unchanged by this fix; its store-write failure reuses
+// reasonStoreError directly rather than a third name for "a store errored".
+const (
+	reasonADOCallbackCookiesInvalid  = "ado_callback_cookies_invalid"
+	reasonADOCallbackMissingCode     = "ado_callback_missing_code"
+	reasonADOCallbackIdentityBinding = "identity_binding"
+	reasonADOCallbackUnusableGrant   = "unusable_grant"
+)
+
 // POST /api/v1/me/view (user_view.go): the admin/security-admin user-view
 // toggle.
 const (
@@ -674,4 +692,45 @@ const reasonSynthesizedProfileInvalid = "synthesized_profile_invalid"
 const (
 	driveUnavailableUserType    = "user_type_unknown" // the caller's stamped user type no longer exists. 403 at launch.
 	driveUnavailableUnmountable = "unmountable"       // an allocation EXISTS and cannot be mounted — a home name that cannot name a directory, a share that is not there. 422 at launch, and the one state whose remedy is an admin's, not the member's.
+)
+
+// Moved here from beside their own call sites (#656 final review round):
+// each was already a named, wire-reaching const, just declared in a file
+// TestReasonDocsMatchReasonsGo never reads. No call site changes — a Go
+// const's visibility is package-wide regardless of which file declares it.
+
+// PUT /api/v1/branding (branding.go): the named reasons a refused write
+// carries, one per validation rule.
+const (
+	brandReasonOrgName    = "invalid_org_name"
+	brandReasonNameFormat = "invalid_name_format"
+	brandReasonColour     = "invalid_colour"
+	brandReasonContrast   = "low_contrast"
+	brandReasonLink       = "link_not_https"
+	brandReasonLinkShape  = "invalid_link"
+	brandReasonLogoSize   = "logo_too_large"
+	brandReasonLogo       = "invalid_logo"
+)
+
+// The CSRF guard's own refusal (csrf.go, http.go's local-mode arm, attach.go):
+// the SAME reason its auth.fail audit row already carried.
+const csrfAuditReason = "cross_origin_refused"
+
+// llmRefusalAuditReason is POST /runs' model-credential refusal CLASS
+// (runs_dispatch_llm_mechanism.go) — a wire value the console grades an
+// ending by (lib/api/audit.ts's CREDENTIAL_REASON), not ordinary copy.
+const llmRefusalAuditReason = "model_credential"
+
+// gitCredentialRefusalReason is the 422 the New Run rail recognises
+// (scmaccess.go, the 0.7.7 relaunch path).
+const gitCredentialRefusalReason = "git_credential"
+
+// The UI-sandbox relay session's own re-check refusals (uigateway_session.go)
+// that are not already covered by an existing value. The fourth member of
+// this closed set, "run row unreadable", reuses reasonRunUnreadable (above)
+// directly rather than a second name for the same cause.
+const (
+	uiDeniedReasonNotAuthorized         = "not_authorized"
+	uiDeniedReasonRevoked               = "revoked"
+	uiDeniedReasonRevocationUnavailable = "revocation_unavailable"
 )

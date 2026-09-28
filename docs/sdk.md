@@ -192,7 +192,7 @@ means the same thing regardless of which lane sent it:
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO, Bedrock bearer; also `POST /runs`' model-provider mechanism resolve. |
 | `run_unreadable` | The run row itself could not be read. AWS SSO, Bedrock bearer; also `POST /approvals/{id}/{approve,deny}`'s second-human gate (`WARDYN_EGRESS_SECOND_HUMAN`). |
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO, Bedrock bearer. |
-| `store_error` | The credential store read failed. AWS SSO. |
+| `store_error` | The credential store operation failed. AWS SSO (a read); also the Azure DevOps sign-in callback's own captured-credential write (`ado_entra.go`) — the identical "a store errored" fact, not a second name for it. |
 | `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). Azure DevOps. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
 | `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
@@ -287,6 +287,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `inline_policy_xor` / `policy_id_not_found` / `inline_policy_invalid` | `POST /runs` and `POST /runs/preflight`'s policy resolution (`inline_policy.go`): `policy_id` and `inline_policy` were both set, the named policy does not exist, or (`inline_policy_invalid`, the whole resolution chain's bucket — grant filtering, domain-count cap, spec/secret-ref validation) the policy fails validation. |
 | `ui_layout_invalid_preset` / `ui_layout_too_many_widgets` / `ui_layout_unknown_widget` / `ui_layout_invalid_geometry` / `ui_layout_persistence_unavailable` | `GET/PUT /api/v1/ui-layout` (`ui_layout.go`): the console's own saved-layout door. |
 | `ado_sign_in_unconfigured` / `ado_sign_in_foreign_app` / `ado_sign_in_no_session` / `ado_sign_in_scope_invalid` | `/scm/azure-devops/signin` and its callback (`ado_entra.go`): the console's own Azure DevOps per-person sign-in doors, distinct from `ADOEntraFailure`'s own enum above. |
+| `ado_callback_cookies_invalid` / `ado_callback_missing_code` / `identity_binding` / `unusable_grant` | The callback half of the same door (`consumeADOCookies`, `handleADOCallback`): browser-reachable, since the identity provider's own redirect lands here directly. `ado_callback_cookies_invalid` buckets all three single-use state/nonce/pkce cookie causes — the remedy is identical for all three (start the sign-in again). `identity_binding` and `unusable_grant` are the SAME strings this callback's own audit row already carried for those two causes. |
 | `user_view_no_human` / `user_view_invalid_field` / `user_view_type_invalid` / `user_view_no_session` | `POST /api/v1/me/view` (`user_view.go`): the admin/security-admin user-view toggle. |
 | `source_write_invalid` / `source_delete_conflict` / `source_in_use` | `/api/v1/sources` (`sources.go`): the shared source library. `source_write_invalid` is `validateSourceWrite`'s own bucket. |
 | `branding_not_branded` / `branding_store_unavailable` / `branding_body_unreadable` | `/api/v1/admin/branding` (`branding.go`). |
@@ -302,6 +303,70 @@ sending `error` alone — completing the sweep this issue tracks:
 | `scan_facts_invalid` / `scan_upload_superseded` | `/internal/scan-results/{runID}` (`scanresult.go`). |
 | `policy_grade_spec_invalid` | `POST /policies/grade` (`policy_grade.go`): a dry-run grading preview, distinct from the real policy CRUD door (`policy_request_invalid`) even though both run the same spec validator. |
 | `synthesized_profile_invalid` | The AI Run Composer's profile synthesis (`profile.go`, `POST /runs/{id}/profile`): the synthesized policy spec fails validation after clamping to the operator ceiling. |
+
+#656's FINAL review round found a second source of wire reasons this table had
+never covered: `internal/authz/registry.go`'s own closed registry, which
+`s.refuse` (`refusal.go`) now writes onto the wire for every Deny/
+Unprocessable/Conflict-effect reason (a Hidden-effect reason — `not_owner`,
+`attach_ticket_foreign_run` — is deliberately never itself a wire value; a
+door refusing one sends its Hidden twin's reason instead, via `.AsIf(...)`, so
+those two names never appear here). Several registry values are already rows
+above under a *different* refusal that deliberately shares the same string
+(`capability_agent`, `capability_workspace`, `capability_workspace_provider`,
+`capability_policy`, `capability_model_provider`, `groups_snapshot_stale`,
+`run_not_found`, `user_type_unknown`); the rest reach the wire only through
+`s.refuse` itself and are new to this table:
+
+| Reason | Meaning |
+|---|---|
+| `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
+| `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
+| `capability_egress_host` / `capability_feature` / `capability_integration` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, an integration, or a secret the caller's capability grants do not cover. |
+| `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
+| `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
+| `grant_pairing_not_eligible` | The named capability grant is not eligible to pair with the request it was offered against. |
+| `harness_login_mechanism_principal` / `harness_login_not_per_user` | The managed container sign-in launch gate: the acting principal is a mechanism identity (not a human), or the provider's login is not per-user on this deployment. |
+| `model_provider_unavailable` | `POST /runs`' model-provider choice (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
+| `run_kept` | The run is kept (ended or lost); its agent is stopped and nothing may act on it as if it were live. |
+| `run_quota` | The acting principal's governance profile run-count or concurrency limit is at its cap. Not audited on its own (`Audit: false` in the registry): a caller who IS authorized and simply hit a limit should not look like an attacker in the audit trail. |
+| `run_terminal` | The run has already reached a terminal state; the requested action no longer applies. |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN`'s own gate: the deciding principal is the same one who raised the approval. |
+| `user_view_type_deleted` | An admin viewing through a user type that has since been deleted. `admin_view` (below) is the launch-door row this same cause answers with on `POST /runs`/`/runs/preflight`. |
+| `admin_view` | An admin in the user view launched a run after the type the view looks through was deleted — the launch-door twin of `user_view_type_deleted` just above; the underlying cause is audited under that reason, this one is not audited on its own. |
+
+The UI-sandbox relay session's own re-check (`uigateway_session.go`, the
+`ui.authorize`/`denied` audit row) refuses a still-open connection with one of
+its own closed values, distinct from the connect-time reasons above:
+
+| Reason | Meaning |
+|---|---|
+| `not_authorized` / `revoked` / `revocation_unavailable` | An already-open UI relay session's periodic re-check (every 30s): the run is no longer this session's owner's, the session was explicitly revoked, or the revocation store could not be read (fails closed, 503). The re-check's fourth cause, the run itself becoming unreadable, reuses `run_unreadable` (above) rather than a second name for the same fact. |
+
+`PUT /api/v1/branding` (`branding.go`, super-admin only) validates each field
+with its own reason:
+
+| Reason | Meaning |
+|---|---|
+| `invalid_org_name` / `invalid_name_format` | `org_name` is empty or too long, or `name_format` is not `prefix`/`suffix`. |
+| `invalid_colour` / `low_contrast` | A colour field is not a valid `#rrggbb` hex value, or the chosen text/fill pair falls below the minimum contrast ratio. |
+| `link_not_https` / `invalid_link` | `support_url` does not use `https`, or is not a well-formed web address. |
+| `logo_too_large` / `invalid_logo` | The uploaded logo exceeds the size cap, or is not a PNG/SVG Wardyn can use. |
+
+The CSRF guard (`csrf.go`, `http.go`'s local-mode arm, and `attach.go`)
+refuses a cross-origin state-changing request with the same reason its
+`auth.fail` audit row already carries:
+
+| Reason | Meaning |
+|---|---|
+| `cross_origin_refused` | A state-changing request's `Origin`/`Referer` does not match this deployment's own origin (or, in local mode, is not loopback). |
+
+Two more pre-existing values, unrelated to each other, round out the set the
+console depends on for its own sign-in/connect doors (`ui/src/app/lib/api/runs.ts`):
+
+| Reason | Meaning |
+|---|---|
+| `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). |
+| `git_credential` | The New Run rail's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
 
 ## Renamed in 0.8
 
