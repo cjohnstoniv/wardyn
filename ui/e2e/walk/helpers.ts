@@ -367,11 +367,18 @@ export async function openLoginPane(page: Page): Promise<void> {
   const onPage = (p: Page) => opened.push(p);
   page.context().on("page", onPage);
   try {
+    // The dialog renders either its Start button or, already started, its
+    // steps; wait for one before choosing. isVisible() alone does not wait, and
+    // a dialog still mounting read as "no Start button" and left the sign-in
+    // unstarted (recovery E in nightly 36402346113, sso-concurrency A in
+    // 36418109595).
     const start = page.getByRole("button", { name: "Start login" });
+    const progress = page.getByTestId("signin-progress").first();
+    await expect(start.or(progress).first()).toBeVisible({ timeout: 60_000 });
     if (await start.isVisible().catch(() => false)) {
       await start.click();
     }
-    await expect(page.getByTestId("signin-progress").first()).toContainText(SIGNIN_PROGRESS.STEP_START);
+    await expect(progress).toContainText(SIGNIN_PROGRESS.STEP_START);
     expect(opened.map((p) => p.url()), "Start login opened a tab").toEqual([]);
   } finally {
     page.context().off("page", onPage);
