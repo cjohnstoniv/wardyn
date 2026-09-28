@@ -80,7 +80,6 @@ type jtiRevoker interface {
 // and the run was put back to lost (outage).
 type reviveError struct {
 	status int
-	reason string
 	msg    string
 	reason string // errorBody.Reason, and adminRestartResult.Reason in a bulk restart
 	lost   bool
