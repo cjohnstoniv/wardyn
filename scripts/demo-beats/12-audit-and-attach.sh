@@ -130,6 +130,10 @@ RUN_ID_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
 # shellcheck source=../demo-typist.sh
 . "${_HERE}/../demo-typist.sh"
 
+# shellcheck source=../lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"
+# v10's own tag/color differ from common.sh's default — kept as a local
+# override defined AFTER sourcing (common.sh's own contract for this case).
 die() { printf '\n\033[1;31mv10: %s\033[0m\n' "$*" >&2; exit 1; }
 note() { printf '[v10] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
 
@@ -470,11 +474,11 @@ drive() {
   # type THIS string; only the key behind it differs.
   local cmd="ssh ${RUN_ID}@${SSH_HOST} -p ${SSH_PORT}"
   # 0.6: the card also renders the CLI shortcut above the raw string
-  # (run-detail-ssh.tsx:207 "Or skip retyping it: wardyn ssh <run-id>") — the
+  # (run-detail-ssh.tsx "Or skip retyping it: wardyn run ssh <run-id>") — the
   # OWNER pane films the shortcut; keys B/C keep the raw string, because their
   # premise is a bare registered key and no CLI. Falls back to the raw string
   # when wardyn isn't on PATH; the desk-session dry run proves the choice.
-  local cmd_owner="wardyn ssh ${RUN_ID}"
+  local cmd_owner="wardyn run ssh ${RUN_ID}"
   command -v wardyn >/dev/null 2>&1 || cmd_owner="${cmd}"
 
   # --- B1 · the owner attaches --------------------------------------------

@@ -127,7 +127,7 @@ fi
 # env_get returns empty with exit 0 when the key is absent, so the fallback is
 # explicit: without it the var would be set-but-empty and compose would fall
 # back to wardyn/wardynd:local, which --no-build cannot build and no laptop can
-# pull. env_get is already this file's idiom (see the site-config apply below).
+# pull. env_get is already this file's idiom (see the site-config set below).
 WARDYN_WARDYND_IMAGE="$(env_get "${ENV_FILE}" WARDYN_WARDYND_IMAGE)"
 export WARDYN_WARDYND_IMAGE="${WARDYN_WARDYND_IMAGE:-ghcr.io/cjohnstoniv/wardynd:latest}"
 # Same for the egress sidecar, which deploy/desktop/ set NOWHERE: the base
@@ -222,7 +222,7 @@ if ! wait_healthy "${BASE_URL}" 60 1; then
 fi
 log "wardynd healthy"
 
-# Idempotent site-config apply. site-config.json is a full-document REPLACE
+# Idempotent site-config set. site-config.json is a full-document REPLACE
 # (docs/DESKTOP.md "Posture switches are env vars, never site-config"), so
 # re-applying the same file on every tick is a safe no-op, not accumulation.
 # Runs the CLI baked into the image, in-container. This used to be gated on
@@ -251,10 +251,10 @@ log "wardynd healthy"
 # site-config.json is a full-document REPLACE, so re-applying the same file on
 # every tick is a safe no-op, not accumulation.
 if [ -f "${SITE_CONFIG}" ]; then
-  compose exec -T wardynd /usr/local/bin/wardyn site-config apply "${SITE_CONFIG}" \
-    || warn "wardyn-desktop.sh: site-config apply failed (non-fatal — the stack is up; see docker compose -p wardyn-desktop logs wardynd)"
+  compose exec -T wardynd /usr/local/bin/wardyn site-config set "${SITE_CONFIG}" \
+    || warn "wardyn-desktop.sh: site-config set failed (non-fatal — the stack is up; see docker compose -p wardyn-desktop logs wardynd)"
 else
-  log "No ${SITE_CONFIG} delivered yet — skipping site-config apply"
+  log "No ${SITE_CONFIG} delivered yet — skipping site-config set"
 fi
 
 log "wardyn-desktop: up (${BASE_URL})"

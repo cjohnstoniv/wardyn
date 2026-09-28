@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`WARDYN_TLS_KEY` now gets the same secret-file mode rule as every other secret file
+  (#1297).** The console's TLS private key was read by `ListenAndServeTLS` with no file-mode
+  check, so a group- or world-readable key was accepted silently. Loading it now goes through
+  the shared `_FILE` mode rule (`cliutil.ReadSecretFile`) before the certificate is built, and a
+  group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
+  refused with the same message as every other secret-file setting. `WARDYN_TLS_CERT` is public
+  and is not mode-checked.
 - **`git_pat`/`ssh_key` grants refuse a `wardyn-provider-*` secret name at write time (#1048).**
   Those two kinds return a stored secret's raw value into the sandbox, so they need the same
   wider reserved-name guard `env_secret`/`llm_inspection` already used (`nameSinkReservedSecret`)
@@ -60,17 +67,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reasons now show consistently everywhere: the workspace picker's own advisory line, a workspace's
   own page ("Start a run"), and the Workspaces list (both the Workspace and Model columns) — each
   reason renders in exactly one place, never twice on the same screen.
-  **Known gap, disclosed rather than silently shipped:** a workspace's own PER-VALUE "Available to:
-  Only these" restriction (set from its own admin editor) is invisible to a member's console —
-  `GET /me/capabilities` carries the caller's own allow rows but no per-value restricted bit, so a
-  workspace restricted that way (with the kind-wide switch left off, the common case) reads as
-  available here and Launch stays enabled; the server still refuses it at launch. Tracked in #1267
-  (a per-value signal the caller's own console can safely read).
-  The git-provider-pinned case (`Uses Azure DevOps (contoso), which isn't available to you.`) is not
-  built either — `GET /me/scm-access` only covers per-user Azure DevOps rows, so absence there is
-  ambiguous for a shared-PAT row or a GitHub App; tracked in #1250.
-  A repo-kind workspace's own server-side handling (it drops the repo silently and proceeds, rather
-  than refusing the way this console now blocks Launch) is tracked separately in #1259.
+  **Known gap, disclosed rather than silently shipped:** a repo-kind workspace's own server-side
+  handling (it drops the repo silently and proceeds, rather than refusing the way this console now
+  blocks Launch) is tracked separately in #1259.
+
+- **A member-safe `available_to_you` on every workspace closes the two gaps #922's own disclosure
+  named (#1267, closing #1250's design note too).** Each row of `GET /workspaces` and
+  `GET /workspaces/{id}` now carries `available_to_you`: a boolean computed by the SAME decide step
+  the launch path runs, over the two values that apply to EVERY run type — the workspace's own
+  capability, and the git-provider row its repo sources resolve to (the identical derivation the
+  launch door's `denyUserWorkspaceProviders` uses). It deliberately excludes the model-provider pin,
+  which the server itself only ever checks for a run that actually needs a model — that arm stays
+  exactly where #1249 already put it, client-side and isAgent-gated. It is always `true` for an
+  operator, and it carries no restriction contents and no other caller's grants — one derived bit,
+  never the "Only..." list itself. The New Run picker card, New Run's own Launch gate, the
+  Workspaces list and a workspace's own "Start a run" now read it when present, falling back to the
+  #922 client-only check against an older server. This makes visible, for the first time, a
+  workspace restricted by its own "Available to: Only these" control with the kind-wide switch left
+  off (the common case), and a workspace pinned to a git-provider row the caller isn't granted —
+  both previously invisible until the server refused the launch.
 
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
@@ -326,6 +341,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
   refused; root-owned Secret-volume and CSI files, and the 0644 file Vault Agent writes as its own
   uid, are still read.
+- **The Azure federated token file and the platform key file now get the same `_FILE` mode rule
+  (#1116).** `WARDYN_AZURE_FEDERATED_TOKEN_FILE` and `WARDYN_PLATFORM_KEY_FILE` were two more
+  secret-file reads that bypassed it after #980's follow-ups; a group- or world-writable file at
+  either setting now refuses to boot with the same message as every other `_FILE` setting.
+  `WARDYN_TLS_KEY` still bypasses it — Refs #1297.
+- **A boot WARN whenever `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` is set, not only when it suppresses a
+  refusal (#1050).** With no unknown migration present, the downgrade break-glass previously logged
+  nothing, so a var left in an env file (or a chart's `values.yaml`) after one break-glass boot
+  silently disarmed the refusal for the next real downgrade too, with no signal at any boot in
+  between. Same volume and posture as the `WARDYN_ALLOW_SHARED_SUBSCRIPTION` warn.
 - **Session revocation also removes registered SSH keys (#154).** Admins and security admins
   can remove a person's keys through `DELETE /people/{principal}/ssh-keys`. Deleted or changed
   keys cannot open new SSH channels on an existing connection; already-open channels continue
@@ -1355,6 +1380,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
+- **`wardyn sessions list` (#206).** `sessions revoke` had no companion read: an operator deciding
+  whether to cut a human's access had no CLI way to see what is actually live. An OIDC session
+  cookie itself is a stateless signed value with no server-side row (see `sessions revoke`'s own
+  doc comment), so there is nothing to enumerate there — but `revoke --all`'s own text already
+  treats a `wdn_` API token as "a human's session in another form", and `GET /api/v1/tokens` is
+  the one place that population is actually listable. `list` prints principal/role/name/created/
+  last-used/state (`--json` for the raw array).
 
 - **Settings → Model providers lists the org's model providers (#536).** In the Admin view,
   `/admin/settings` shows one row per provider: its name, its kind, what each person provides,
@@ -3289,6 +3321,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   its default JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
   script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
+- **The CLI's noun-verb tree lands: `attach`/`ssh` move under `run`, and `secret`/`policy`/
+  `site-config` share one upsert verb (#206), clean break, no alias period.** Wardyn has no users
+  yet (owner ruling on #206: "no alias commands"), so these land directly. Renamed:
+  `wardyn attach <run-id>` → `wardyn run attach <run-id>`; `wardyn ssh <run-id>` →
+  `wardyn run ssh <run-id>` (`--print`/`--config`/`--json` unchanged). `wardyn policy create -f`
+  and `wardyn policy update <id> -f` collapse into one upsert verb, `wardyn policy set [id] -f`:
+  no positional id creates (the old `create`'s POST), a `<policy-id>` replaces it (the old
+  `update`'s PUT). `wardyn site-config apply <file>` → `wardyn site-config set <file>` (`secret
+  set` already used this verb, so all three upsert doors now read alike). A script or alias keyed
+  on any of the old spellings fails at the CLI's own "unknown command" refusal, not a server
+  error — there is no dual-emission window to catch it during.
 - **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
   (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
   a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to

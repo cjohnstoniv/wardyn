@@ -227,7 +227,7 @@ fi
 # nothing joined them: that seam is what this asserts.
 for f in "${ENV_EXAMPLES[@]}"; do
   grep -qE '^WARDYN_SSH_LISTEN=' "${f}" \
-    || fail "$(basename "${f}") sets no WARDYN_SSH_LISTEN — compose still publishes 2222, so the tier ships a port that refuses every connection and `wardyn ssh` does not answer"
+    || fail "$(basename "${f}") sets no WARDYN_SSH_LISTEN — compose still publishes 2222, so the tier ships a port that refuses every connection and `wardyn run ssh` does not answer"
   grep -qE '^WARDYN_SSH_ADVERTISE=' "${f}" \
     || fail "$(basename "${f}") sets no WARDYN_SSH_ADVERTISE — the console's 'Attach from your terminal' pane then prints no usable ssh command"
 done

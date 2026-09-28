@@ -321,7 +321,7 @@ job is to host an interactive
 `aws sso login --sso-session wardyn --no-browser --use-device-code` session
 (device-code flow). The image RUNS that login itself: `agent-run --idle` starts
 it in a `wardyn` tmux session before its own prep, and every attach path — the
-console's sign-in pane, the Runs list, `wardyn attach`, ssh — joins that one
+console's sign-in pane, the Runs list, `wardyn run attach`, ssh — joins that one
 session rather than landing on a bare prompt with nothing typed. It also ships
 `claude`/`codex` shims that say what the box is and exit non-zero. The `[sso-session wardyn]`
 block that command reads (`sso_start_url` from the setup UI + `sso_region`
@@ -414,7 +414,7 @@ of hanging. Requires wardynd built with `-tags docker` and
 
 What the wrap does NOT add — your base must still provide:
 
-- **A shell.** `agent-run` is `bash`; `wardyn attach` falls back through
+- **A shell.** `agent-run` is `bash`; `wardyn run attach` falls back through
   `tmux → bash → /bin/sh`. A fully distroless/shell-less base fails the selftest.
 - **The harness CLI**, for a *task* (autonomous) run — e.g. `claude` for a
   `claude-code` task. Interactive/BYOI login boxes don't need it. Wardyn installs
@@ -473,7 +473,7 @@ apparmor, userns-remap) still holds, but the non-root defense-in-depth the
 convention images provide is waived, and a run carrying managed files is refused
 on Docker; prefer a non-root base. (2) The combined CA
 bundle concatenates the base's own system trust store, so an interactive
-`wardyn attach` shell trusts whatever CAs the base ships — only relevant if you
+`wardyn run attach` shell trusts whatever CAs the base ships — only relevant if you
 attach a shell to an untrusted image on a non-MITM'd allowed host.
 
 **Raw (deploy-time).** If you build an image that already satisfies the contract

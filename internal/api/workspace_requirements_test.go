@@ -281,6 +281,34 @@ func TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract(t *testing.T)
 	}
 }
 
+// TestSetWorkspaceRequirements_ResponseOmitsAvailableToYou is F1: this write
+// response never goes through either GET stamper (availabilityStamper), so it
+// must not carry an "available_to_you" key at all — a plain bool field would
+// serialize the zero value "false" here on every write, which the console
+// then stores straight into state and reads as an authoritative refusal (see
+// types.Workspace.AvailableToYou's own doc comment). Decoding into a raw
+// map, not a typed struct, is deliberate: a typed decode into *bool would
+// silently accept an absent key by leaving it nil, hiding exactly the
+// regression this pins (a present `"available_to_you":false`).
+func TestSetWorkspaceRequirements_ResponseOmitsAvailableToYou(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	fake := &requirementsStoreFake{ws: types.Workspace{ID: id, Name: "w"}}
+	srv := New(baseTestConfig(h, fake))
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken,
+		`{"requirements":{"secret:acme-key":{"level":"required","provenance":"operator_set"}}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, present := raw["available_to_you"]; present {
+		t.Errorf("response carries \"available_to_you\" = %s, want the key absent entirely", raw["available_to_you"])
+	}
+}
+
 func TestSetWorkspaceRequirements_UnknownWorkspaceIs404(t *testing.T) {
 	h := newHarness(t)
 	fake := &requirementsStoreFake{}

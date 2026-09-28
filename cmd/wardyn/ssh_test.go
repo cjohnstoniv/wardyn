@@ -133,7 +133,7 @@ func TestRunSSH_EnabledBracketedIPv6(t *testing.T) {
 // --------------------------------------------------------------------------
 // runSSH --json: the target (host, port, username, fingerprint, command) for
 // a script or an external tool that dials the sandbox itself, rather than
-// shelling out to the local ssh(1) the way plain `wardyn ssh` does.
+// shelling out to the local ssh(1) the way plain `wardyn run ssh` does.
 // --------------------------------------------------------------------------
 
 func runSSHJSON(t *testing.T, healthzBody, runID string) (sshTarget, error) {
@@ -295,7 +295,7 @@ func TestRunSSH_EnabledButNoAdvertiseAddr(t *testing.T) {
 // The run-id is argv
 // --------------------------------------------------------------------------
 //
-// `wardyn ssh <run-id>` splices its argument into ssh(1)'s argv as
+// `wardyn run ssh <run-id>` splices its argument into ssh(1)'s argv as
 // "<run-id>@<host>", and into --print/--json/--config output an operator
 // pastes into a shell or an ssh_config. Unvalidated, a leading "-o..." became
 // an ssh OPTION rather than a username (ProxyCommand = arbitrary execution), a

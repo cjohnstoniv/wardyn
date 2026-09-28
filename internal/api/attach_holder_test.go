@@ -983,7 +983,7 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 // deadline of its own. The slot would be bounded only by whatever the OS/proxy
 // eventually notices about the dead TCP connection — in the worst case (a
 // genuine network black hole, no FIN, no RST), never — and every other
-// attacher (a second browser tab, `wardyn attach`, the SSH gateway) would read
+// attacher (a second browser tab, `wardyn run attach`, the SSH gateway) would read
 // that run as permanently "held" until the daemon restarts.
 //
 // SIMULATING "dead" without a real dead socket: coder/websocket only answers

@@ -50,7 +50,7 @@ directory readable inside the sandbox — and print that directory.
 A run with a repo waits until the clone has landed (a git work tree exists);
 pass --expect-git to require that for a workspace-sourced run too. A terminal
 state (COMPLETED/FAILED/KILLED/STOPPED) before then exits non-zero at once;
---timeout exits 124. Pair with 'wardyn ssh <run-id> --json' to hand the
+--timeout exits 124. Pair with 'wardyn run ssh <run-id> --json' to hand the
 sandbox to an external tool over the SSH gateway.
 `,
 		Args: cobra.ExactArgs(1),

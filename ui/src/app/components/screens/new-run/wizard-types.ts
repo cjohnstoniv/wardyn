@@ -153,34 +153,41 @@ export function resolvedModelProviders(
   return status.model_providers;
 }
 
-// #922: the STRONGER answer New Run's own Launch button needs, folding both
-// person-side "isn't available to you" reasons into one boolean — an
-// ungranted workspace (capabilityAllowed's existing "workspace" narrowing) or
-// one pinned to a model provider the caller's own filtered list doesn't carry
-// (workspaceModelProviderUnavailable, above). Both arms answer DENIED.WORKSPACE_NOT_AVAILABLE
-// wherever this is read (workspace-card.tsx's own advisory line, the rail's
-// own `workspaceUnavailable` prop, workspace-detail.tsx, workspaces.tsx) —
-// one sentence, never two different ones for the same reason.
+// #922 (widened by #1267, which also closes #1250): the STRONGER answer New
+// Run's own Launch button needs, folding every person-side "isn't available
+// to you" reason into one boolean. Every arm answers
+// DENIED.WORKSPACE_NOT_AVAILABLE wherever this is read (workspace-card.tsx's
+// own advisory line, the rail's own `workspaceUnavailable` prop,
+// workspace-detail.tsx, workspaces.tsx) — one sentence, never two different
+// ones for the same reason.
 //
-// KNOWN GAP, disclosed rather than silently shipped (see the PR body and
-// CHANGELOG for tracking): capabilityAllowed only answers "denied" when the
-// WORKSPACE KIND's enforcement switch is on (a caller with no matching allow,
-// `caps.enforcement.workspace`). A single workspace individually restricted
-// via its own "Available to: Only these" control (the per-VALUE bit
-// AvailabilityControl writes) with the kind switch left off — the common
-// case — is invisible here: GET /me/capabilities carries the caller's own
-// allow rows but no per-value restricted signal, so this reads "available"
-// and Launch stays enabled; the server still refuses it at launch
-// (capBatch.decide's step 3 treats a restricted value as enforced regardless
-// of the switch). No member-safe carrier exists for this today — see the PR
-// body and CHANGELOG for what's tracked to fix it, and #1018 for the
-// adjacent existence-oracle gap.
+// `ws.available_to_you` (#1267) is the SAME decide path launch runs, over the
+// TWO arms that apply to EVERY run type: the workspace's own capability, and
+// the git-provider row its repo sources resolve to. That is strictly more
+// than this function used to see on its own: the per-VALUE "Available to:
+// Only these" restriction (the kind-wide switch left off, the common case
+// #1249's own review found invisible) and a git-provider pin the caller lacks
+// (#1250), neither of which `capabilityAllowed` alone could ever answer for.
+// It deliberately excludes the model-provider pin — server-side, a Shell/exec
+// run never asks that door either (createDoorIsModelRun/needsModel) — so
+// `available_to_you` means the same thing for every run type and needs no
+// isAgent recombination here.
+//
+// The model-provider arm stays exactly where #1249 put it: local,
+// isAgent-gated (`workspaceModelProviderUnavailable`, undefined for a
+// non-agent run so it never flashes on for one).
+//
+// Absent `available_to_you` (an older server) falls back to the pre-#1267
+// answer: a plain ungranted workspace, via `capabilityAllowed`.
 export function workspaceUnavailableToCaller(
   ws: Workspace,
   caps: MeCapabilities | null,
   modelProviders: { id: string }[] | undefined,
+  isAgent: boolean,
 ): boolean {
-  return !capabilityAllowed(caps, "workspace", ws.id) || workspaceModelProviderUnavailable(ws, modelProviders);
+  const workspaceOrProviderUnavailable =
+    ws.available_to_you !== undefined ? !ws.available_to_you : !capabilityAllowed(caps, "workspace", ws.id);
+  return workspaceOrProviderUnavailable || workspaceModelProviderUnavailable(ws, isAgent ? modelProviders : undefined);
 }
 
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
@@ -753,7 +760,7 @@ export function resolveWorkspaceMounts(
       mounts.push({
         source: src.path,
         // Mount at the agent's working dir (~/work = /home/agent/work) by
-        // convention — that's where `claude` and the `wardyn attach` shell
+        // convention — that's where `claude` and the `wardyn run attach` shell
         // start. A source's own target, or a per-run override, takes
         // precedence.
         target: override || src.target?.trim() || "/home/agent/work",

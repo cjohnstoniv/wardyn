@@ -13,7 +13,7 @@ import (
 
 // cliutil.ScrubChildEnv calls itself "the one env denylist shared by every
 // host-exec'd third-party CLI child" (internal/cliutil/cliutil.go's package
-// doc). It was not: NO exec site in cmd/wardyn assigned it, so `wardyn ssh`
+// doc). It was not: NO exec site in cmd/wardyn assigned it, so `wardyn run ssh`
 // handed ssh(1) — a third-party binary that runs the operator's own
 // ProxyCommand/LocalCommand children and can SendEnv to a remote host — the
 // live WARDYN_ADMIN_TOKEN, the WARDYN_AGE_KEY secret-store master key and

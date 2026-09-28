@@ -13,8 +13,9 @@ import {
   hasSourceNotAdmitted,
   resolvedModelProviders,
   workspaceModelProviderUnavailable,
+  workspaceUnavailableToCaller,
 } from "./new-run/wizard-types";
-import { capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
+import { useMyCapabilities } from "../../lib/capabilities";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
@@ -254,12 +255,17 @@ export function WorkspacesScreen() {
                 // precedent's shape. No base URL, no row id: the server
                 // already withholds both from PROVIDERS.CARD_NOT_ADMITTED.
                 const notAdmitted = hasSourceNotAdmitted(w);
-                // review F5: the SECOND person-side "isn't available to you"
-                // reason (a plain ungranted workspace, no provider pin
-                // involved) — the list previously showed only the provider
-                // arm below, leaving this one unannotated here while the
-                // workspace's own detail page and New Run both already named it.
-                const workspaceUngranted = !operator && !capabilityAllowed(caps, "workspace", w.id);
+                // review F5 (widened by #1267): the SECOND person-side "isn't
+                // available to you" reason — a plain ungranted workspace, a
+                // per-value "Available to" restriction, or a git-provider pin
+                // the caller lacks, none of them the model-provider pin the
+                // Model column already names below. `isAgent=false` here asks
+                // workspaceUnavailableToCaller to leave the model-provider arm
+                // out entirely (it's local and isAgent-gated regardless of
+                // available_to_you, which never carries that arm either); an
+                // absent field (an older server) degrades to the plain
+                // capability check this line always ran.
+                const workspaceUngranted = !operator && workspaceUnavailableToCaller(w, caps, modelProviders, false);
                 const providerUnavailable = workspaceModelProviderUnavailable(w, modelProviders);
                 return (
                   <TableRow
