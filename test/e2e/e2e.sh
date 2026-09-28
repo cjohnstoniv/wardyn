@@ -206,6 +206,16 @@ fi
 log "Building fixture agent image (${FIXTURE_IMAGE})"
 docker build -q -t "${FIXTURE_IMAGE}" "${FIXTURE_DIR}" >/dev/null || die "fixture build failed"
 
+# #1181: WARDYN_OIDC_ISSUER defaults to empty (docker-compose.yaml), which
+# leaves /auth/login unmounted (routes.go) — section 6 below then gets no
+# Location header at all and "curl -L ''" reads as a bare "blank argument"
+# error instead of a real OIDC failure. dex.yaml's issuer is the literal
+# http://localhost:5556 (discovery still resolves http://dex:5556 inside the
+# compose network); WARDYN_OIDC_OPERATOR_EMAILS names the account oidc.sh
+# signs in as below.
+export WARDYN_OIDC_ISSUER="${WARDYN_OIDC_ISSUER:-http://localhost:5556}"
+export WARDYN_OIDC_OPERATOR_EMAILS="${WARDYN_OIDC_OPERATOR_EMAILS:-demo@wardyn.local}"
+
 log "Starting postgres + dex + wardynd"
 "${COMPOSE[@]}" up -d postgres dex wardynd >/dev/null || die "compose up failed"
 
@@ -391,8 +401,18 @@ cat > "${WORKDIR}/oidc.sh" <<'SH'
 set -u
 JAR=/tmp/cj.txt; rm -f "$JAR"
 BASE="http://wardynd:8080"; DEX="http://dex:5556"
-C="curl -sS -c $JAR -b $JAR"
+# Dex's own discovery advertises authorization_endpoint as
+# http://localhost:5556/auth (dex.yaml's public issuer, read by wardynd's
+# oidc.go) — nothing inside this throwaway curl container listens on ITS OWN
+# localhost:5556, so a follow of that URL would otherwise fail outright.
+# --connect-to routes the TCP connection to the real dex service while
+# leaving the URL (and Host header) exactly as Dex handed it back.
+C="curl -sS --connect-to localhost:5556:dex:5556 -c $JAR -b $JAR"
 AU=$($C -D - -o /dev/null "$BASE/auth/login" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
+if [ -z "$AU" ]; then
+  echo "login_redirect_pkce_s256=0 reason=no-location"
+  exit 0
+fi
 echo "login_redirect_pkce_s256=$(echo "$AU" | grep -c 'code_challenge_method=S256') nonce=$(echo "$AU" | grep -c nonce) state=$(echo "$AU" | grep -c state)"
 PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')

@@ -20,6 +20,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   up front. `env_secret`'s `secret_name` and `llm_inspection.workspace_secret_names` now also
   refuse a name that does not match the secret-name format (`secretNameRE`) at write time, instead
   of silently resolving one fewer value at dispatch.
+- **Once the control-plane hop is TLS, the console listener refuses `/api/v1/internal/*` (#1263).**
+  The proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), pinned to wardynd's internal CA, is now
+  the only way in: the console listener (`WARDYN_LISTEN`) answers every internal route with the same
+  `404` the internal listener gives a console route, under `WARDYN_BASE_PATH` too, so a run token or
+  the ground-truth bearer is never accepted in plaintext and an Ingress in front of the console
+  exposes none of that surface. A local install (loopback `http://` control plane) has no internal
+  listener and is unchanged. Every shipped caller already dials the internal listener (compose,
+  Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
+  still dials the console and now gets `404` on every call: restart such runs
+  (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
 
 ### Added
 
@@ -228,6 +238,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shows Your model connections' own lede. The expiring row's own line
   (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
   text, instead of a relative offset.
+- **Open works again on a compose stack whose console is at `http://127.0.0.1:<port>` (#1241).**
+  Compose always sets `WARDYN_OIDC_REDIRECT_URL` (`http://localhost:<port>/auth/callback`, SSO or
+  not), and the UI gateway's bind compared the console's `Origin` to that URL's host, so a console
+  opened at `127.0.0.1` (the address the installer prints) got a `403` from the bind and every
+  **Open** failed. The bind now also accepts the console under another loopback name
+  (`localhost`, `127.0.0.1`, `[::1]`) when the configured console URL is on loopback, at the same
+  scheme and port; any other port, address or site is still refused.
 - **Launching with an ungranted repo-kind workspace now refuses, instead of launching without it
   (#1259).** A `workspace_repos` entry naming an onboarded workspace the caller does not hold the
   `workspace` capability for used to be silently dropped, launching a smaller run; it now refuses

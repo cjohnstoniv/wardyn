@@ -274,6 +274,7 @@ helm upgrade --install "${RELEASE}" ./deploy/helm/wardyn \
   --set k8s.enabled=true \
   --set k8s.proxyImage="${TIP_PROXY_IMAGE}" \
   --set k8s.runsNamespace=wardyn-runs \
+  --set serviceAccount.automount=true \
   || die "helm upgrade to tip failed"
 kubectl -n "${NS}" patch service "${RELEASE}" -p \
   "{\"spec\":{\"ports\":[{\"port\":${HTTP_PORT},\"nodePort\":${NODE_HTTP_PORT}}]}}"
