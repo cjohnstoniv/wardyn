@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 )
 
@@ -107,10 +108,11 @@ func publishHopCA(hop *hopTLS, gtFile string) error {
 
 // internalRoutesOnly narrows the listener to what a proxy calls: the
 // run-token-authenticated /api/v1/internal/ surface, plus /healthz for probes.
-// The console and the rest of the API stay on -listen.
+// The console and the rest of the API stay on -listen, which refuses this
+// surface while this listener runs (api.Server.Handler).
 func internalRoutesOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" && !strings.HasPrefix(r.URL.Path, "/api/v1/internal/") {
+		if r.URL.Path != "/healthz" && !strings.HasPrefix(r.URL.Path, api.InternalPathPrefix) {
 			http.NotFound(w, r)
 			return
 		}

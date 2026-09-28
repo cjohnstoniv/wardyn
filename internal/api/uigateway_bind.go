@@ -22,8 +22,9 @@
 //
 // What stops an attacker's page doing the same bind in the victim's browser:
 //   - uiBindRefusal: the bind must be a same-site fetch (Fetch Metadata, which
-//     page script cannot write) and, when SSO is configured, carry the console's
-//     own Origin. An attacker's page is cross-site, so it gets no cookie.
+//     page script cannot write) and, when the console's URL is configured, carry
+//     the console's own Origin. An attacker's page is cross-site, so it gets no
+//     cookie.
 //   - SameSite=Strict: even a binding planted by a cross-site top-level
 //     navigation is never sent on an enter that a cross-site page started.
 //   - The cookie value is an HMAC under the gateway's session key, so it is
@@ -39,6 +40,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -170,13 +172,15 @@ const (
 // "same-origin". A missing label refuses — every browser the console supports
 // sends it, and this check fails closed.
 //
-// With SSO the Origin must also be the console's own origin, read off the OIDC
-// redirect URL: scheme and host (csrf.go's originHost, so a default port
-// compares equal). That narrows "same-site" to the console alone: not a
-// sibling host on the same domain, and not another run's host in host mode.
-// Unlike csrf.go's r.Host rule, both sides here are the browser's own view, so
-// the scheme is compared. Without SSO there is one principal and no other
-// user's session to push into a browser, so same-site is the rule.
+// Whenever the console's URL is configured (WARDYN_OIDC_REDIRECT_URL, which
+// compose sets with or without SSO) the Origin must also be the console's: see
+// uiOriginIsConsole. That narrows "same-site" to the console alone: not a
+// sibling host on the same domain, not another run's host in host mode, and not
+// another local server on a different loopback port. With no console URL there
+// is nothing to compare against — r.Host here is the GATEWAY, and an Origin
+// equal to it is the sandbox's own code — so same-site is the rule; that
+// happens only without SSO (oidc.New refuses an empty redirect URL), where there
+// is one principal and no other user's session to push into a browser.
 func (s *Server) uiBindRefusal(r *http.Request) string {
 	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-site") {
 		return uiBindReasonNotSameSite
@@ -184,15 +188,55 @@ func (s *Server) uiBindRefusal(r *http.Request) string {
 	if s.cfg.OIDCRedirectURL == "" {
 		return ""
 	}
-	origin, console := strings.TrimSpace(r.Header.Get("Origin")), s.cfg.OIDCRedirectURL
-	oHost, ok := originHost(origin)
-	cHost, ok2 := originHost(console)
-	oURL, err := url.Parse(origin)
-	cURL, err2 := url.Parse(strings.TrimSpace(console))
-	if !ok || !ok2 || err != nil || err2 != nil || !asciiEqualFold(oHost, cHost) || !asciiEqualFold(oURL.Scheme, cURL.Scheme) {
+	if !uiOriginIsConsole(strings.TrimSpace(r.Header.Get("Origin")), s.cfg.OIDCRedirectURL) {
 		return uiBindReasonOriginNotConsole
 	}
 	return ""
+}
+
+// uiOriginIsConsole reports whether origin is the console at consoleURL: the
+// same scheme and host (csrf.go's originHost, so a default port compares
+// equal). Unlike csrf.go's r.Host rule, both sides are the browser's own view,
+// so the scheme is compared.
+//
+// One alias is accepted: when the console URL names a loopback host
+// (localhost, 127.0.0.1, [::1]), an Origin naming another of those three at the
+// SAME port and scheme is the same console. A console published on loopback
+// answers on each name, and an operator opens whichever the installer printed
+// (compose writes a localhost redirect URL; README and the installer print
+// 127.0.0.1). The port is what keeps this tight: another loopback port is
+// another process, which is same-site with a loopback gateway, and stays
+// refused. A cross-site page never gets here (Sec-Fetch-Site).
+func uiOriginIsConsole(origin, consoleURL string) bool {
+	oHost, ok := originHost(origin)
+	cHost, ok2 := originHost(consoleURL)
+	oURL, err := url.Parse(origin)
+	cURL, err2 := url.Parse(strings.TrimSpace(consoleURL))
+	if !ok || !ok2 || err != nil || err2 != nil || !asciiEqualFold(oURL.Scheme, cURL.Scheme) {
+		return false
+	}
+	if asciiEqualFold(oHost, cHost) {
+		return true
+	}
+	return uiLoopbackName(oURL.Hostname()) && uiLoopbackName(cURL.Hostname()) && uiPort(oURL) == uiPort(cURL)
+}
+
+// uiLoopbackName is exactly localhost, 127.0.0.1 or ::1 — not the rest of
+// 127.0.0.0/8, which another process can bind at the console's port.
+func uiLoopbackName(h string) bool {
+	ip := net.ParseIP(h)
+	return strings.EqualFold(h, "localhost") || ip.Equal(net.IPv4(127, 0, 0, 1)) || ip.Equal(net.IPv6loopback)
+}
+
+// uiPort is u's port with the scheme's default filled in.
+func uiPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // uiAuditHeader is a request header as an audit value: attacker-supplied, so

@@ -391,3 +391,56 @@ func TestUIGateway_RelayConfinesServiceWorkerScope(t *testing.T) {
 		})
 	}
 }
+
+// TestUIGateway_BindAcceptsTheConsoleUnderEitherLoopbackName: compose sets
+// WARDYN_OIDC_REDIRECT_URL to http://localhost:<port>/auth/callback with or
+// without SSO, and the installer prints the console as http://127.0.0.1:<port>.
+// Either loopback name for the console's own port and scheme binds. Another
+// loopback port (another local server, same-site with a loopback gateway),
+// another scheme, another 127/8 address and a cross-site page do not; with SSO
+// on a real hostname nothing changes.
+func TestUIGateway_BindAcceptsTheConsoleUnderEitherLoopbackName(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	const composeDefault = "http://localhost:18081/auth/callback"
+	for _, tc := range []struct {
+		name, redirect, origin, site string
+		sso                          bool
+		want                         int
+	}{
+		{"no SSO, console at 127.0.0.1", composeDefault, "http://127.0.0.1:18081", "same-site", false, http.StatusNoContent},
+		{"no SSO, console at localhost", composeDefault, "http://localhost:18081", "same-site", false, http.StatusNoContent},
+		{"no SSO, console at [::1]", composeDefault, "http://[::1]:18081", "same-site", false, http.StatusNoContent},
+		{"a 127.0.0.1 redirect URL, console at localhost", "http://127.0.0.1:8080/auth/callback", "http://localhost:8080", "same-site", false, http.StatusNoContent},
+		{"no SSO, cross-site page", composeDefault, "http://evil.example", "cross-site", false, http.StatusForbidden},
+		{"no SSO, a non-console Origin", composeDefault, "http://evil.example", "same-site", false, http.StatusForbidden},
+		{"no SSO, another localhost port", composeDefault, "http://localhost:3000", "same-site", false, http.StatusForbidden},
+		{"no SSO, another 127.0.0.1 port", composeDefault, "http://127.0.0.1:3000", "same-site", false, http.StatusForbidden},
+		{"no SSO, another 127/8 address", composeDefault, "http://127.0.0.2:18081", "same-site", false, http.StatusForbidden},
+		{"no SSO, the console port over https", composeDefault, "https://127.0.0.1:18081", "same-site", false, http.StatusForbidden},
+		{"SSO, the console", "https://console.example.com/auth/callback", "https://console.example.com", "same-site", true, http.StatusNoContent},
+		{"SSO, a sibling host", "https://console.example.com/auth/callback", "https://blog.example.com", "same-site", true, http.StatusForbidden},
+		{"SSO, a loopback Origin", "https://console.example.com/auth/callback", "https://localhost", "same-site", true, http.StatusForbidden},
+		{"SSO, cross-site page", "https://console.example.com/auth/callback", "https://evil.example", "cross-site", true, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h.srv.cfg.OIDCRedirectURL = tc.redirect
+			h.srv.cfg.OIDC = nil
+			if tc.sso {
+				h.srv.cfg.OIDC = &oidc.Authenticator{}
+			}
+			ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+			rec := httptest.NewRecorder()
+			h.gateway.ServeHTTP(rec, bindRequest(ticket, map[string]string{"Sec-Fetch-Site": tc.site, "Origin": tc.origin}))
+			if rec.Code != tc.want {
+				t.Fatalf("Origin %s: %d %s, want %d", tc.origin, rec.Code, rec.Body.String(), tc.want)
+			}
+			bound := len(rec.Result().Cookies()) == 1 && strings.HasPrefix(rec.Result().Cookies()[0].Name, uiBindCookiePrefix)
+			if (tc.want == http.StatusNoContent) != bound {
+				t.Fatalf("Origin %s: cookies %v, want a binding cookie only on 204", tc.origin, rec.Header().Values("Set-Cookie"))
+			}
+			if acao := rec.Header().Get("Access-Control-Allow-Origin"); (tc.want == http.StatusNoContent) != (acao == tc.origin) {
+				t.Fatalf("Origin %s: ACAO %q", tc.origin, acao)
+			}
+		})
+	}
+}

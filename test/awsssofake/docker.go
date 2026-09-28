@@ -82,15 +82,22 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", append(append([]string{"run", "--rm",
-		"--network", "host"}, hostUserArgs()...),
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"--network", "host",
+		// The image's agent user is a fixed uid 1000, but the bind-mounted
+		// awsDir (t.TempDir(), 0700) belongs to whatever uid is running the
+		// test — matching that here is what let the CLI read/write it on a
+		// GitHub-hosted runner (uid 1001), not just on a dev box that happens
+		// to be uid 1000.
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-e", "AWS_ENDPOINT_URL_SSO_OIDC="+s.URL(),
 		"-e", "AWS_ENDPOINT_URL_SSO="+s.URL(),
 		"-e", "AWS_PAGER=",
+		"-e", "HOME=/home/agent",
 		"-v", awsDir+":/home/agent/.aws",
 		DefaultImage,
 		"aws", "sso", "login", "--profile", profileName, "--no-browser", "--use-device-code",
-	)...)
+	)
 	// Buffer stdout+stderr (aws CLI writes the verification prompt to stdout);
 	// exec copies into the buffer itself, so nothing can block on a full pipe.
 	// Only read logBuf.Bytes() after cmd.Wait().
@@ -102,21 +109,25 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 	}
 
 	// Wait for the CLI to hit StartDeviceAuthorization, then approve. Poll
-	// briefly rather than sleeping a fixed guess, and stop at once if the CLI
-	// exits first: it has said why, and waiting out the deadline hides it.
+	// briefly rather than sleeping a fixed guess. Wait() runs in its own
+	// goroutine so a container that exits immediately (e.g. a uid/HOME
+	// mismatch) fails fast with its output instead of spinning for the
+	// full 30s only to time out on StartURLSeen().
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	deadline := time.After(30 * time.Second)
+
+	deadline := time.Now().Add(30 * time.Second)
 	for s.StartURLSeen() == "" {
 		select {
-		case err := <-exited:
-			t.Fatalf("aws sso login exited (%v) before StartDeviceAuthorization\n--- container output ---\n%s", err, logBuf.Bytes())
-		case <-deadline:
-			_ = cmd.Process.Kill()
-			<-exited
-			t.Fatalf("aws sso login never reached StartDeviceAuthorization within 30s\n--- container output ---\n%s", logBuf.Bytes())
-		case <-time.After(50 * time.Millisecond):
+		case waitErr := <-exited:
+			t.Fatalf("aws sso login exited before StartDeviceAuthorization: %v\n--- container output ---\n%s", waitErr, logBuf.Bytes())
+		default:
 		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("aws sso login never reached StartDeviceAuthorization within 30s")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	s.Approve()
 
@@ -196,28 +207,21 @@ func RunAWSCommand(t *testing.T, s *Server, homeFiles map[string]string, args ..
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dockerArgs := append(append([]string{
+	dockerArgs := append([]string{
 		"run", "--rm",
-		"--network", "host"}, hostUserArgs()...),
-		"-e", "AWS_ENDPOINT_URL_SSO_OIDC="+s.URL(),
-		"-e", "AWS_ENDPOINT_URL_SSO="+s.URL(),
+		"--network", "host",
+		// See RunDeviceCodeLogin: match the bind-mounted TempDir's owning uid,
+		// not the image's fixed uid 1000.
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-e", "AWS_ENDPOINT_URL_SSO_OIDC=" + s.URL(),
+		"-e", "AWS_ENDPOINT_URL_SSO=" + s.URL(),
 		"-e", "AWS_PAGER=",
-		"-v", home+":/home/agent",
+		"-e", "HOME=/home/agent",
+		"-v", home + ":/home/agent",
 		DefaultImage,
-	)
-	dockerArgs = append(dockerArgs, args...)
+	}, args...)
 	out, cmdErr := exec.CommandContext(ctx, "docker", dockerArgs...).CombinedOutput()
 	return string(out), cmdErr
-}
-
-// hostUserArgs runs the CLI as the test's own uid, with the image's HOME. The
-// directories these helpers bind-mount are the test's t.TempDir (0700) and the
-// files in them 0600: as the image's agent user (uid 1000) the CLI cannot read
-// its config wherever the host uid differs, a hosted runner's included, and
-// answers "The config profile could not be found" at once. As the host uid it
-// reads them, and what it writes back is the host's to read.
-func hostUserArgs() []string {
-	return []string{"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "-e", "HOME=/home/agent"}
 }
 
 func requireDockerBinary(t *testing.T) {

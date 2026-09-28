@@ -38,10 +38,14 @@ fail() { note "[FAIL]" "$1"; FAILED=1; }
 # devcontainer-build registry sidecar too (a wardynd dependency), so leaving it
 # at its fixed default collides the two concurrent stacks on that bind —
 # mirrors ci-run.sh's identical WARDYN_UP_PORT/WARDYN_PG_PORT/WARDYN_REGISTRY_PORT trio.
+# WARDYN_SSH_PORT/WARDYN_UI_SANDBOX_PORT included too: both stacks otherwise
+# publish the same fixed 127.0.0.1:2222 and :8081, so the second `up` loses
+# that port race.
 compose_ns() {
   local proj="$1"; shift
   COMPOSE_PROJECT_NAME="${proj}" WARDYN_NS="${proj}" \
     WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 WARDYN_REGISTRY_PORT=0 \
+    WARDYN_SSH_PORT=0 WARDYN_UI_SANDBOX_PORT=0 \
     docker compose -p "${proj}" -f "${COMPOSE_FILE}" "$@"
 }
 
@@ -57,15 +61,20 @@ docker image inspect wardyn/wardynd:local >/dev/null 2>&1 \
 # Clean any stragglers from a prior aborted run.
 teardown
 
+REPORT_DIR="${REPO_ROOT}/test/reports/e2e"
+mkdir -p "${REPORT_DIR}"
+UP_LOG_A="${REPORT_DIR}/test-concurrent-a-up.log"
+UP_LOG_B="${REPORT_DIR}/test-concurrent-b-up.log"
+
 log "Bringing up two stacks concurrently: ${A} and ${B}"
-compose_ns "${A}" up -d postgres wardynd >/dev/null 2>&1 &
+compose_ns "${A}" up -d postgres wardynd >"${UP_LOG_A}" 2>&1 &
 pid_a=$!
-compose_ns "${B}" up -d postgres wardynd >/dev/null 2>&1 &
+compose_ns "${B}" up -d postgres wardynd >"${UP_LOG_B}" 2>&1 &
 pid_b=$!
 wait "${pid_a}"; rc_a=$?
 wait "${pid_b}"; rc_b=$?
-[ "${rc_a}" = 0 ] && pass "stack ${A} came up" || fail "stack ${A} up failed (rc=${rc_a})"
-[ "${rc_b}" = 0 ] && pass "stack ${B} came up" || fail "stack ${B} up failed (rc=${rc_b})"
+[ "${rc_a}" = 0 ] && pass "stack ${A} came up" || { fail "stack ${A} up failed (rc=${rc_a}); see ${UP_LOG_A}"; cat "${UP_LOG_A}" >&2; }
+[ "${rc_b}" = 0 ] && pass "stack ${B} came up" || { fail "stack ${B} up failed (rc=${rc_b}); see ${UP_LOG_B}"; cat "${UP_LOG_B}" >&2; }
 
 # Wait for both wardynd containers to report healthy (container health, no host port).
 wait_health() {

@@ -161,12 +161,15 @@ func TestEndedRun_OldTokenRefusedAndReviveMintsAFreshOne(t *testing.T) {
 	if f.rs.cfg, err = json.Marshal(kept); err != nil {
 		t.Fatal(err)
 	}
+	// The kept proxy dials the internal listener: this fixture's hop is TLS,
+	// so the console listener refuses both doors (#1263).
+	internal := func(tb testing.TB, _ http.Handler) http.Handler { return panicFails(tb, f.srv.InternalHandler()) }
 	mint := func(tok string) (int, string) {
-		w := do(t, f.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, `{"grant_id":"`+uuid.NewString()+`"}`)
+		w := doVia(t, internal, f.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, `{"grant_id":"`+uuid.NewString()+`"}`)
 		return w.Code, w.Body.String()
 	}
 	inject := func(tok string) (int, string) {
-		w := do(t, f.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), tok, "")
+		w := doVia(t, internal, f.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), tok, "")
 		return w.Code, w.Body.String()
 	}
 	for name, door := range map[string]func(string) (int, string){"mint": mint, "injection": inject} {
