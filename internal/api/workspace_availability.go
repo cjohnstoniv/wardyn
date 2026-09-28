@@ -21,24 +21,27 @@ import (
 // the identical decide path a launch runs.
 
 // workspaceAvailableToCaller is available_to_you: would the launch path admit
-// this workspace for the calling principal, over exactly the values it
-// checks —
+// this workspace for the calling principal, over exactly the two values that
+// apply to EVERY run type —
 //
 //   - capWorkspace on the row's own id (denyUserRequest's own field);
 //   - the git-provider row every repo source's derived clone URL resolves to
 //     (workspace_providers.go's admitRepoURL — the SAME derivation
 //     denyUserWorkspaceProviders uses, including its "key on Provider, never
-//     Admitted" rule and its legacy-open-mode no-op);
-//   - the workspace's own model-provider pin (WorkspaceLLMCred.ProviderRef),
-//     ONLY when a model-provider block exists (sc.ModelProviders != nil) —
-//     the same gate enforceRunModelProvider applies before it ever asks
-//     capModelProvider, whose gatesAdminPins bit is what makes an admin's own
-//     pin, not only a member's free-text choice, capability-bound.
+//     Admitted" rule and its legacy-open-mode no-op).
 //
-// decide's own step 1 exempts an operator before any of the above ever reads
-// a row, so this is always true for one. It carries no restriction contents
-// and no other caller's grants — a single derived bit, never the "Only..."
-// list itself.
+// DELIBERATELY excludes the model-provider pin: enforceRunModelProvider only
+// ever asks capModelProvider for a run that actually needs a model
+// (createDoorIsModelRun/needsModel), so a Shell/exec launch never reaches
+// that check — a flag that folded it in unconditionally would read
+// "unavailable" for a run type the real launch door would happily admit.
+// The model-provider arm stays exactly where #1249 already puts it: client
+// side, gated on isAgent (workspaceModelProviderUnavailable, wizard-types.ts).
+//
+// decide's own step 1 exempts an operator before either of the above ever
+// reads a row, so this is always true for one. It carries no restriction
+// contents and no other caller's grants — a single derived bit, never the
+// "Only..." list itself.
 //
 // A resolution error answers false, never true: an error is never allowed to
 // read as availability, capAllowed's own rule. GetSiteConfig itself is the
@@ -75,24 +78,14 @@ func (s *Server) workspaceAvailableToCaller(ctx context.Context, sc types.SiteCo
 			}
 		}
 	}
-	if ws.LLMCred != nil && ws.LLMCred.ProviderRef != "" && sc.ModelProviders != nil {
-		ok, err := b.allowed(ctx, capModelProvider, ws.LLMCred.ProviderRef)
-		if err != nil {
-			slog.ErrorContext(ctx, "api: resolve workspace model-provider availability", "err", err, "workspace", ws.ID)
-			return false
-		}
-		if !ok {
-			return false
-		}
-	}
 	return true
 }
 
 // workspaceAvailabilitySiteConfig reads the site config ONCE for the whole
 // stamping pass, exactly as admissionStamper does for its own question. A nil
-// Store or a read failure answers the zero value — no provider block, no
-// model-provider block — so workspaceAvailableToCaller falls back to asking
-// only the one check every deployment always has, capWorkspace.
+// Store or a read failure answers the zero value — no git-provider block — so
+// workspaceAvailableToCaller falls back to asking only the one check every
+// deployment always has, capWorkspace.
 func (s *Server) workspaceAvailabilitySiteConfig(ctx context.Context) types.SiteConfig {
 	if s.cfg.Store == nil {
 		return types.SiteConfig{}

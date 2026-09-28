@@ -250,9 +250,9 @@ export function WorkspaceCard({
   // git-provider pin the caller lacks, or one pinned to a model provider the
   // caller's own filtered list doesn't carry. `modelProviders` is a PROP (see
   // this component's own doc comment above) — never a second read of its
-  // own. See workspaceUnavailableToCaller's own doc comment for how the
-  // model-provider arm stays isAgent-gated even when the server's combined
-  // available_to_you bit is present.
+  // own. The model-provider arm stays isAgent-gated, locally
+  // (workspaceUnavailableToCaller's own doc comment) — #1267's
+  // available_to_you never carries it.
   const isAgent = state.runType === "agent";
   const selectedWorkspaceUnavailable =
     !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);

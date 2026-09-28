@@ -43,9 +43,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A member-safe `available_to_you` on every workspace closes the two gaps #922's own disclosure
   named (#1267, closing #1250's design note too).** Each row of `GET /workspaces` and
   `GET /workspaces/{id}` now carries `available_to_you`: a boolean computed by the SAME decide step
-  the launch path runs, over the workspace's own capability, the git-provider row its repo sources
-  resolve to (the identical derivation the launch door's `denyUserWorkspaceProviders` uses), and,
-  only when a model-provider block exists, its model-provider pin. It is always `true` for an
+  the launch path runs, over the two values that apply to EVERY run type — the workspace's own
+  capability, and the git-provider row its repo sources resolve to (the identical derivation the
+  launch door's `denyUserWorkspaceProviders` uses). It deliberately excludes the model-provider pin,
+  which the server itself only ever checks for a run that actually needs a model — that arm stays
+  exactly where #922 already put it, client-side and isAgent-gated. It is always `true` for an
   operator, and it carries no restriction contents and no other caller's grants — one derived bit,
   never the "Only..." list itself. The New Run picker card, New Run's own Launch gate, the
   Workspaces list and a workspace's own "Start a run" now read it when present, falling back to the

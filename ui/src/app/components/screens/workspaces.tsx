@@ -260,11 +260,11 @@ export function WorkspacesScreen() {
                 // per-value "Available to" restriction, or a git-provider pin
                 // the caller lacks, none of them the model-provider pin the
                 // Model column already names below. `isAgent=false` here asks
-                // workspaceUnavailableToCaller for exactly that: when
-                // available_to_you is present it excludes the model-provider
-                // arm (see its own doc comment); when absent (an older
-                // server) it degrades to the plain capability check this line
-                // always ran.
+                // workspaceUnavailableToCaller to leave the model-provider arm
+                // out entirely (it's local and isAgent-gated regardless of
+                // available_to_you, which never carries that arm either); an
+                // absent field (an older server) degrades to the plain
+                // capability check this line always ran.
                 const workspaceUngranted = !operator && workspaceUnavailableToCaller(w, caps, modelProviders, false);
                 const providerUnavailable = workspaceModelProviderUnavailable(w, modelProviders);
                 return (

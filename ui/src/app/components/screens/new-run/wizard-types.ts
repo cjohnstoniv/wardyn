@@ -155,58 +155,39 @@ export function resolvedModelProviders(
 
 // #922 (widened by #1267, which also closes #1250): the STRONGER answer New
 // Run's own Launch button needs, folding every person-side "isn't available
-// to you" reason into one boolean. Both arms answer
+// to you" reason into one boolean. Every arm answers
 // DENIED.WORKSPACE_NOT_AVAILABLE wherever this is read (workspace-card.tsx's
 // own advisory line, the rail's own `workspaceUnavailable` prop,
 // workspace-detail.tsx, workspaces.tsx) — one sentence, never two different
 // ones for the same reason.
 //
-// When the server sends `ws.available_to_you` (#1267), it is the SAME decide
-// path launch runs, over the workspace's own capability, the git-provider row
-// its repo sources resolve to, and — only when a model-provider block
-// exists — its model-provider pin. That folds in strictly more than this
-// function used to see: the per-VALUE "Available to: Only these" restriction
-// (the kind-wide switch left off, the common case #1249's own review found
-// invisible) and a git-provider pin the caller lacks (#1250), neither of
-// which `capabilityAllowed`/`workspaceModelProviderUnavailable` alone could
-// ever answer for.
+// `ws.available_to_you` (#1267) is the SAME decide path launch runs, over the
+// TWO arms that apply to EVERY run type: the workspace's own capability, and
+// the git-provider row its repo sources resolve to. That is strictly more
+// than this function used to see on its own: the per-VALUE "Available to:
+// Only these" restriction (the kind-wide switch left off, the common case
+// #1249's own review found invisible) and a git-provider pin the caller lacks
+// (#1250), neither of which `capabilityAllowed` alone could ever answer for.
+// It deliberately excludes the model-provider pin — server-side, a Shell/exec
+// run never asks that door either (createDoorIsModelRun/needsModel) — so
+// `available_to_you` means the same thing for every run type and needs no
+// isAgent recombination here.
 //
-// isAgent RECOMBINES it rather than trusting it outright: available_to_you
-// folds the model-provider arm in whenever a block exists, full stop, but a
-// Shell/exec run never asks the server's model-provider door either (#1249
-// review F2 — createDoorIsModelRun/needsModel), so a model-only pin must not
-// gate one. There is no per-arm breakdown on the wire to read instead, so a
-// non-agent run recombines: the workspace's OWN capability (still directly
-// checkable) settles it on its own when it fails; otherwise, when the local
-// run-type-independent model check already explains a `false`, this run type
-// treats it as available; when it does not, only a git-provider pin — which
-// DOES apply to every run type (runs.go's denyUserWorkspaceProviders) — can
-// be the reason, so it stays unavailable. Residual, disclosed rather than
-// silently shipped: a workspace restricted on BOTH a git-provider pin and a
-// model-provider pin at once, for a non-agent run, is under-restricted here
-// (it reads available) — a rare compound admin configuration; the server's
-// own launch gate still refuses the git-provider pin regardless of what New
-// Run shows.
+// The model-provider arm stays exactly where #1249 put it: local,
+// isAgent-gated (`workspaceModelProviderUnavailable`, undefined for a
+// non-agent run so it never flashes on for one).
 //
 // Absent `available_to_you` (an older server) falls back to the pre-#1267
-// answer verbatim: a plain ungranted workspace, or a model-provider pin,
-// isAgent-gated as it always was.
+// answer: a plain ungranted workspace, via `capabilityAllowed`.
 export function workspaceUnavailableToCaller(
   ws: Workspace,
   caps: MeCapabilities | null,
   modelProviders: { id: string }[] | undefined,
   isAgent: boolean,
 ): boolean {
-  if (ws.available_to_you === undefined) {
-    return (
-      !capabilityAllowed(caps, "workspace", ws.id) ||
-      workspaceModelProviderUnavailable(ws, isAgent ? modelProviders : undefined)
-    );
-  }
-  if (ws.available_to_you) return false;
-  if (isAgent) return true;
-  if (!capabilityAllowed(caps, "workspace", ws.id)) return true;
-  return !workspaceModelProviderUnavailable(ws, modelProviders);
+  const workspaceOrProviderUnavailable =
+    ws.available_to_you !== undefined ? !ws.available_to_you : !capabilityAllowed(caps, "workspace", ws.id);
+  return workspaceOrProviderUnavailable || workspaceModelProviderUnavailable(ws, isAgent ? modelProviders : undefined);
 }
 
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
