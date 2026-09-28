@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -194,7 +194,10 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
 // #922 (UT-7c): a workspace pinned to a model provider the caller's own
 // filtered /setup/status.model_providers doesn't carry.
 describe("WorkspacesScreen — a workspace is pinned to an unavailable model provider (#922)", () => {
-  function renderWithStatus(modelProviders: SetupModelProvider[]) {
+  // undefined means "no provider block at all" (setup.go's `omitzero` key
+  // absent) — never pass `[]` for that state; `[]` means a block exists and
+  // this caller is granted none of it, a different, LOADED answer.
+  function renderWithStatus(modelProviders?: SetupModelProvider[]) {
     return render(
       <MemoryRouter>
         <ModelAccessProvider status={baseStatus({ model_providers: modelProviders })} onRefresh={() => {}}>
@@ -225,6 +228,40 @@ describe("WorkspacesScreen — a workspace is pinned to an unavailable model pro
     const w = ws({});
     listWorkspacesMock.mockResolvedValue([w]);
     renderWithStatus([]);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+
+  // review round 3, R3-1: undefined (no provider block at all) says nothing
+  // even for a PINNED workspace — distinct from `[]` (a block exists, granted
+  // none), which names the consequence just above.
+  it("says nothing for a pinned workspace when there is no provider block at all", async () => {
+    const w = ws({}, { llm_cred: { provider_ref: "bloomberg-gateway" } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus(undefined);
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+});
+
+// review round 3, R3-5 ("list-admin"): the list's capability-arm check is
+// gated `!operator && ...` (workspaces.tsx) — unpinned until now. A DENYING
+// caps answer proves the operator guard itself, not merely that the default
+// null caps happens to fail open.
+describe("WorkspacesScreen — the capability arm is operator-exempt (#922)", () => {
+  afterEach(() => {
+    myCapabilitiesMock.mockReset();
+  });
+
+  it("an admin sees no consequence even when caps would deny this exact workspace", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1" })]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderScreen();
     await screen.findByText("payments");
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });

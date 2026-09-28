@@ -308,10 +308,9 @@ export const DENIED = {
   // rule the grant must not appear to have lifted.
   ALWAYS_STILL_ADMIN: "Always is admin-only, even for a host you're granted.",
 
-  // New Run: workspace picker annotations. The list is NOT narrowed — visibility
-  // is not capability — so the ungranted rows say why they'll refuse.
+  // New Run: workspace picker annotation. The list is NOT narrowed — visibility
+  // is not capability — so every ungranted row still carries this chip.
   WORKSPACE_CHIP: "Not granted",
-  WORKSPACE_BODY: "A run against this workspace is refused at launch. Ask an admin to grant it to you.",
 
   // #922 (UT-7c), the person side: an org workspace pinned to a model
   // provider this caller's own filtered `/setup/status.model_providers` does

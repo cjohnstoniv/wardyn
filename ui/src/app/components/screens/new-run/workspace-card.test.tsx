@@ -19,7 +19,7 @@ import type { MeUserDrive } from "../../../lib/api/health";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DENIED } from "../../../lib/permissions-copy";
 import { baseMeDrive } from "../../../lib/test-fixtures";
-import type { SetupModelProvider, Workspace } from "../../../lib/types";
+import type { MeCapabilities, SetupModelProvider, Workspace } from "../../../lib/types";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { WorkspaceCard } from "./workspace-card";
@@ -44,6 +44,9 @@ function renderCard(opts: {
   // Context this card reads on its own — undefined is "not loaded yet", the
   // same fail-open default every case but the ones below exercises.
   modelProviders?: SetupModelProvider[];
+  // null (the default every case but the capability-arm ones below uses) is
+  // the fail-open answer capabilityAllowed gives with nothing to check against.
+  caps?: MeCapabilities | null;
 } = {}) {
   const patch = vi.fn();
   const state = { ...initialWizardState(), ...opts.state };
@@ -52,7 +55,7 @@ function renderCard(opts: {
       state={state}
       patch={patch}
       workspaces={opts.workspaces ?? []}
-      caps={null}
+      caps={opts.caps ?? null}
       modelProviders={opts.modelProviders}
       onAddWorkspace={() => {}}
       drive={opts.drive ?? null}
@@ -339,6 +342,19 @@ describe("WorkspaceCard — a selected workspace is pinned to an unavailable mod
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
 
+  // review round 3, R3-1: `[]` is a REAL, loaded answer (a provider block
+  // exists; the caller is granted none of it) — distinct from the case just
+  // above (no prop at all — not loaded, or no block), which says nothing.
+  it("names the consequence when a provider block exists but the caller is granted none of it", () => {
+    const ws = pinnedWorkspace("bloomberg-gateway");
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      modelProviders: [],
+    });
+    expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+  });
+
   // review F2: a Shell command never asks the server's model-provider door
   // (run_model_provider.go's needsModel/createDoorIsModelRun), so applying
   // this line to one would be a false advisory for a run the server admits.
@@ -359,6 +375,58 @@ describe("WorkspaceCard — a selected workspace is pinned to an unavailable mod
       workspaces: [ws],
       state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
       modelProviders: [],
+    });
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
+});
+
+// review round 3, R3-5 ("card-cap"): the capability arm (a plain ungranted
+// workspace, no provider pin involved) had no vitest coverage on the card at
+// all — e2e only (member-console.spec.ts, available-to-person.spec.ts).
+describe("WorkspaceCard — a selected workspace carries no allow for the caller (#922)", () => {
+  function ungrantedWorkspace(): Workspace {
+    return {
+      id: "ws-ungranted",
+      name: "trading-desk",
+      kind: "repo",
+      source: "acme/trading-desk",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+    };
+  }
+
+  it("names the consequence when the caller holds no allow and the kind is enforced", () => {
+    const ws = ungrantedWorkspace();
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false },
+    });
+    expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+  });
+
+  it("says nothing once an allow names the caller", () => {
+    const ws = ungrantedWorkspace();
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      caps: {
+        grants: [
+          {
+            id: "g1",
+            subject_type: "user_type",
+            subject: "standard",
+            capability: "workspace",
+            value: ws.id,
+            effect: "allow",
+            created_at: "",
+          },
+        ],
+        enforcement: { workspace: true },
+        session_groups: [],
+        groups_snapshot_stale: false,
+      },
     });
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });

@@ -430,13 +430,13 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
   });
 
-  // review F3: SetupStatus.model_providers is `omitempty`, so a caller
-  // granted no provider AT ALL is, on the wire, indistinguishable from "not
-  // loaded yet" unless the console tells the two apart itself. baseStatus()'s
-  // own default carries no model_providers key and no `unreachable` bit — a
-  // genuinely LOADED, empty answer, the exact case the old code silently
-  // treated as "haven't checked" and left Launch enabled for.
-  it("disables Launch when the caller is granted no model provider at all (a loaded, empty list — not 'unloaded')", async () => {
+  // review F3 (round 3, R3-1): SetupStatus.model_providers is `omitzero`
+  // (setup.go), so the wire itself tells "no provider block at all" (the key
+  // absent) apart from "a block exists, this caller is granted nothing from
+  // it" (the key present as `[]`) — the console reads that distinction
+  // rather than re-deriving it. baseStatus()'s own default carries no
+  // model_providers key at all, matching "no block".
+  it("stays enabled when there is no provider block at all", async () => {
     listWorkspacesMock.mockResolvedValue([
       {
         id: "ws-pinned",
@@ -450,6 +450,30 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
       },
     ]);
     getSetupStatusMock.mockResolvedValue(baseStatus());
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
+  it("disables Launch when a provider block exists but the caller is granted none of it", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-pinned",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        llm_cred: { provider_ref: "bloomberg-gateway" },
+      },
+    ]);
+    getSetupStatusMock.mockResolvedValue(baseStatus({ model_providers: [] }));
     renderScreen();
 
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
