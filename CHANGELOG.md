@@ -31,7 +31,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   disabled is named rather than silently replaced. An install with no provider block keeps
   today's rail.
 - **Your account ▸ Your model connections (#541).** Every person — admins included, by switching to
-  Member view — now connects their own credential for each model provider their admin enabled for
+  User view — now connects their own credential for each model provider their admin enabled for
   them, one row per provider: an AWS or Claude sign-in, or an API key/token, each with its own
   live/expiring/signed-out state and a "Ready" / "Needs you" / "Not set up by your admin" summary
   chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
