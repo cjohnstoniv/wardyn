@@ -380,28 +380,22 @@ export async function openLoginPane(page: Page): Promise<void> {
  * fresh tag every walk (never `kind load`ed any more), so the kubelet has
  * never seen this manifest and must actually pull it. On a warm node
  * (`kind load`, or a tag it already holds) the step goes start -> wait with no
- * "download" li ever rendered, so this assertion is not vacuous — dropping
- * the runner Role's `events: list` (the fail-closed path the k8s runner reads
- * pod Events through, #881) reproduces that same skip, which is how this was
- * proven non-vacuous by hand rather than asserted from a guess.
+ * "download" li ever rendered, so this assertion is expected to be
+ * non-vacuous rather than asserted from a guess: dropping the runner Role's
+ * `events: list` (the fail-closed path the k8s runner reads pod Events
+ * through, #881) should reproduce that same skip. Not run by hand — this
+ * walk has not executed against a real kind cluster in this lane — so that
+ * stays unproven until the next `kind-sso-walk` nightly run.
  *
- * Polls from the moment "Start login" is clicked, before signInThroughPane's
- * race to capture — the download li can be gone within seconds on a small
- * image, so this must not wait for openLoginPane's own return (which only
- * guarantees STEP_START, not that a caller saw everything after it).
+ * Reuses openLoginPane for the click through STEP_START, which keeps its
+ * "no tab opened" assertion (#628) on this sign-in too. Then keeps polling
+ * past that point for the download li: it can be gone within seconds on a
+ * small image, so the poll starts right after STEP_START rather than
+ * waiting on anything else (signInThroughPane's own race to capture).
  */
 export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> {
-  await page.goto("/setup");
-  const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
-  await expect(cta).toBeVisible({ timeout: 60_000 });
-  await cta.click();
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) {
-    await start.click();
-  }
+  await openLoginPane(page);
   const progress = page.getByTestId("signin-progress").first();
-  await expect(progress).toContainText(SIGNIN_PROGRESS.STEP_START);
-
   const downloadStep = progress.getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE });
   await expect(
     downloadStep,

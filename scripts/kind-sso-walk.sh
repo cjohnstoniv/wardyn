@@ -285,15 +285,28 @@ docker image inspect "${AWS_SSO_IMAGE}" >/dev/null 2>&1 \
 docker network inspect "${KIND_NETWORK}" >/dev/null 2>&1 \
   || die "docker network '${KIND_NETWORK}' not found — is ${CLUSTER} a kind cluster on this daemon?"
 if ! docker inspect "${REGISTRY_NAME}" >/dev/null 2>&1; then
-  # --restart=always: this is long-lived test infra, like the cluster itself —
-  # this script never tears it down, the same posture as the cluster it serves.
+  # --restart=always so a crash mid-walk leaves it reachable for a retry; the
+  # EXIT trap below (cleanup_walk) still removes it at the end of THIS walk,
+  # so a fresh one is created next time rather than accumulating one more
+  # cold-<epoch> tag per walk forever.
   docker run -d --restart=always -p 127.0.0.1:"${REGISTRY_PORT}":5000 --name "${REGISTRY_NAME}" registry:2 \
     >/dev/null || die "could not start the local registry ${REGISTRY_NAME}"
 fi
-docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" >/dev/null 2>&1 || true
+# The only non-error outcome `|| true` may swallow is "already connected" (the
+# registry survives a re-run of this step, or was left by a killed walk); any
+# other failure here must not be silently ignored.
+connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)" \
+  || { [[ "${connect_err}" == *"already exists in network"* ]] || die "docker network connect ${REGISTRY_NAME} ${KIND_NETWORK} failed: ${connect_err}"; }
 # Node -> registry, by the registry's CONTAINER name on the shared kind network
 # (never localhost: the node is a different network namespace). Idempotent:
 # the file's content is identical every walk.
+#
+# Requires containerd >= 2.2 on the node: that's the version certs.d's
+# `/etc/containerd/certs.d:/etc/docker/certs.d` default config_path shipped in
+# (containerd's cri/images plugin.go); kind's own v0.33.0 node image ships
+# 2.3.4, but an older kind version or a pre-2.2 node image ignores this file
+# entirely and pulls "localhost:${REGISTRY_PORT}/..." from the node's own
+# loopback instead, which fails closed (ImagePullBackOff), not silently.
 docker exec "${KIND_NODE}" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}" \
   || die "could not create containerd certs.d on ${KIND_NODE}"
 printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
@@ -340,6 +353,12 @@ node_digest() { # <repo:tag> -> the node's manifest digest, or ""
 node_digest_registry() { # <exact ref as ctr recorded it> -> the node's digest
   printf '%s\n' "${NODE_IMAGES}" | awk -v r="$1" '$1==r {print $3}' | head -1
 }
+# `.Id` equals `ctr`'s manifest digest only under the containerd image store
+# (`docker info`'s Driver Type io.containerd.snapshotter.v1). On the classic
+# (graphdriver) image store a pushed manifest digest is never the local image
+# ID, so `agree` below reads "NO" on every walk regardless of whether the node
+# actually holds what this daemon holds. That only degrades this record and
+# the WARNING it can print — nothing in this script GATES on IMAGES_AGREE.
 host_digest() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null; }
 # The one indirection the loops below need: aws-sso's NODE-side lookup key is
 # the registry ref, not the local build tag the "image" column still shows.
@@ -753,12 +772,15 @@ seen_pf_pid=""
 pod_watch_pid=""
 # ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
-# a leftover one causes on the NEXT walk).
+# a leftover one causes on the NEXT walk). ALSO the registry (step 1c): removed
+# here rather than left running, so a fresh, empty one is created next walk
+# instead of one more cold-<epoch> tag piling up in it forever.
 cleanup_walk() {
   [[ -n "${SSO_ONLY_APPLIED:-}" ]] && set_render sso
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
+  docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1
   return 0
 }
 trap cleanup_walk EXIT
