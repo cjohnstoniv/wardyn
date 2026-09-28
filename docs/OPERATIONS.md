@@ -4178,13 +4178,16 @@ residual #45 before setting either var anywhere that holds a real credential:
 an operator who sets both has pointed a real sign-in at a server that can hand
 back credentials of its choosing, and Wardyn cannot tell that server from AWS.
 
-The same acknowledgement unlocks one more thing, and the walk needs it: a plain
-`http://` `WARDYN_BEDROCK_BASE_URL`. The Bedrock stub serves no TLS, and this is
-the SigV4 lane — no per-run TLS-MITM terminates for it — so without the
-acknowledgement wardynd refuses to boot on rule 1 (`must be https://`) before
-the SSO hatch is even reached. That relaxation is rule 1 and nothing else: an
-embedded credential, an empty host, a metadata literal, the public host itself,
-a query or a fragment all still refuse boot exactly as they do in production.
+The same acknowledgement unlocks one more thing: a plain `http://`
+`WARDYN_BEDROCK_BASE_URL`. This is the SigV4 lane — no per-run TLS-MITM
+terminates for it — so without the acknowledgement wardynd refuses a plain one
+on rule 1 (`must be https://`) before the SSO hatch is even reached. That
+relaxation is rule 1 and nothing else: an embedded credential, an empty host, a
+metadata literal, the public host itself, a query or a fragment all still refuse
+boot exactly as they do in production. The walk itself no longer needs it: it
+serves the fake over HTTPS under a throwaway CA it mints each run and installs
+as the chart's `trustedCA`, so wardynd, every run's proxy and every sandbox
+trust the fake the way they would trust a corporate CA.
 
 **Reaching the fake from a sandbox — the step that fails first if you skip it.**
 The fake is addressed by its **Service** name, never a pod IP, and site-config
