@@ -289,6 +289,9 @@ func TestPreflight_IntegrationIDRefused(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), mpRunNoIntegration) {
 			t.Errorf("preflight with integration_id %q: %d %s, want 422 %q", id, w.Code, w.Body.String(), mpRunNoIntegration)
 		}
+		if got := errorReason(w); got != reasonIntegrationIDRetired {
+			t.Errorf("preflight with integration_id %q: reason = %q, want %q", id, got, reasonIntegrationIDRetired)
+		}
 	}
 }
 

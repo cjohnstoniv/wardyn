@@ -281,7 +281,11 @@ func TestPG_AuditDDL_Protected(t *testing.T) {
 func TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 	// ticket: F11
 	testfloor.Mark(t, "pg")
-	pool := pgPool(t)
+	// Isolated (#1301's own trap class): this probe DROPs the chain trigger on
+	// its connection with no rollback available (DDL autocommits), so on the
+	// shared pool any row another test wrote before the cleanup restores it
+	// would carry no hash.
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 
 	triggerPresent := func() bool {
@@ -312,9 +316,8 @@ func TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 		// EVERY migration that defines the chain trigger, in order — not 0047
 		// alone. 0056 redefines audit_events_chain() to serialize inserts, so
 		// re-applying only 0047 would put the trigger back attached to the
-		// SUPERSEDED function and silently un-serialize the shared database for
-		// every later test in the run (the store package's chain probes run
-		// against this same database).
+		// SUPERSEDED function and silently un-serialize inserts on this
+		// database for the rest of this test's own assertions below.
 		for _, name := range chainMigrationFiles(t) {
 			sql, err := migrationFS.ReadFile("migrations/" + name)
 			if err != nil {
@@ -327,7 +330,7 @@ func TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 			}
 		}
 		if !triggerPresent() {
-			t.Errorf("audit_events_chain trigger is STILL missing after re-applying the chain migrations — later chain tests in this run will see unchained rows")
+			t.Errorf("audit_events_chain trigger is STILL missing after re-applying the chain migrations")
 		}
 	})
 

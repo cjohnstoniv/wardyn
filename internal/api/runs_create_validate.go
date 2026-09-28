@@ -78,7 +78,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// when run.Repo is blank), so an empty repo simply runs in the mounted
 	// workspace (or an empty one).
 	if msg := agentRequirementError(req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonAgentRequired, msg)
 		return req, noCeiling, "", "", false
 	}
 	// …and, once an AgentProviders block exists, that the agent NAMED is one this
@@ -96,7 +96,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeServerError(w, r, "get site config", err)
 		return req, noCeiling, "", "", false
 	} else if msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
 		return req, noCeiling, "", "", false
 	}
 
@@ -112,7 +112,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// every downstream consumer at once, rather than relying on each one to
 	// independently defend itself.
 	if reservedRunTasks[req.Task] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
+		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return req, noCeiling, "", "", false
 	}
 
@@ -159,8 +159,8 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// convention one). seedRequestWorkspace's caller re-runs this SAME check after
 	// workspace_id is resolved — a workspace's base_image can ALSO set req.Image,
 	// after this ran, and must clear the identical gate (see validateImageBuildRequest).
-	if msg := s.validateImageBuildRequest(req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+	if msg, reason := s.validateImageBuildRequest(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return req, noCeiling, "", "", false
 	}
 
@@ -169,14 +169,14 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// value is rejected with 400.
 	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
 	if !ccOK {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
+		writeErrorReason(w, http.StatusBadRequest, reasonConfinementClassUnknown, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
 		return req, noCeiling, "", "", false
 	}
 
 	// task_mode is a tiny closed enum; reject anything else up front (fail
 	// closed, same shape as confinement_class above).
 	if req.TaskMode != "" && req.TaskMode != "harness" && req.TaskMode != "exec" {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown task_mode %q (want harness or exec)", req.TaskMode))
+		writeErrorReason(w, http.StatusBadRequest, reasonTaskModeUnknown, fmt.Sprintf("unknown task_mode %q (want harness or exec)", req.TaskMode))
 		return req, noCeiling, "", "", false
 	}
 
@@ -187,7 +187,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// so a 400 would break every one of them. Title is a display field; the
 	// console is where it is required.
 	if req.InteractiveStart != "" && req.InteractiveStart != "shell" && req.InteractiveStart != "agent" {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown interactive_start %q (want shell or agent)", req.InteractiveStart))
+		writeErrorReason(w, http.StatusBadRequest, reasonInteractiveStartUnknown, fmt.Sprintf("unknown interactive_start %q (want shell or agent)", req.InteractiveStart))
 		return req, noCeiling, "", "", false
 	}
 
@@ -196,7 +196,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// unsupervised — same closed-enum treatment as task_mode/interactive_start
 	// above.
 	if req.ToolApprovals != "" && req.ToolApprovals != "auto" && req.ToolApprovals != "hold" {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown tool_approvals %q (want auto or hold)", req.ToolApprovals))
+		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsUnknown, fmt.Sprintf("unknown tool_approvals %q (want auto or hold)", req.ToolApprovals))
 		return req, noCeiling, "", "", false
 	}
 	// codex-cli has no external tool-approval contract (Part C's spike verified
@@ -204,7 +204,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// rather than silently falling back to today's unsupervised skip-permissions,
 	// which would contradict the "hold" the caller explicitly asked for.
 	if req.ToolApprovals == "hold" && req.Agent == "codex-cli" {
-		writeError(w, http.StatusBadRequest, "tool_approvals=hold is not supported for codex-cli (no external tool-approval contract)")
+		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldUnsupportedAgent, "tool_approvals=hold is not supported for codex-cli (no external tool-approval contract)")
 		return req, noCeiling, "", "", false
 	}
 
@@ -223,7 +223,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// No integration credentials a run's model any more — its model provider
 	// does — so naming one is refused, not ignored.
 	if req.IntegrationID != "" {
-		writeError(w, http.StatusUnprocessableEntity, mpRunNoIntegration)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
 		return req, noCeiling, "", "", false
 	}
 
@@ -237,7 +237,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn run attach <run-id>` or pass a task"
 	}
 	if msg := interactiveToolApprovalsError(req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)
 		return req, noCeiling, "", "", false
 	}
 	// Last, after the coercion above and after every refusal: a governance
@@ -650,16 +650,19 @@ func (s *Server) denyUserSeededImage(w http.ResponseWriter, r *http.Request, see
 // or a workspace's base_image would bypass a check an explicit --image must
 // pass (e.g. silently pairing with a --devcontainer-repo the user set, or
 // reaching FinalizeBase with no ImageBuilder wired).
-func (s *Server) validateImageBuildRequest(req createRunRequest) string {
+// The two refusals are different causes (#656 M1) — the first is the
+// caller's own request shape, the second a deployment capability the caller
+// cannot fix by changing the request — so each gets its own reason.
+func (s *Server) validateImageBuildRequest(req createRunRequest) (msg, reason string) {
 	if req.Image == "" {
-		return ""
+		return "", ""
 	}
 	if req.DevcontainerRepo != "" {
-		return "image and devcontainer_repo are mutually exclusive"
+		return "image and devcontainer_repo are mutually exclusive", reasonImageDevcontainerExclusive
 	}
 	if s.cfg.ImageBuilder == nil {
 		return "a custom sandbox image was requested but this control plane has no image builder wired " +
-			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)"
+			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)", reasonImageBuilderUnavailable
 	}
-	return ""
+	return "", ""
 }

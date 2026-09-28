@@ -811,6 +811,9 @@ func TestAIKindIntegration_GrantsNoModelCredential(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), mpRunNoIntegration) {
 			t.Fatalf("create = %d %s, want 422 %q", w.Code, w.Body.String(), mpRunNoIntegration)
 		}
+		if got := errorReason(w); got != reasonIntegrationIDRetired {
+			t.Errorf("reason = %q, want %q", got, reasonIntegrationIDRetired)
+		}
 	})
 
 	t.Run("a workspace pin and the site default inject nothing", func(t *testing.T) {

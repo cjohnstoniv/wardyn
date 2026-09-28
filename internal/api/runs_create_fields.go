@@ -86,11 +86,11 @@ func (s *Server) validateRunTextFields(w http.ResponseWriter, req createRunReque
 		{name: "agent", value: req.Agent, max: maxRunAgentLen},
 	} {
 		if n := utf8.RuneCountInString(f.value); n > f.max {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(runFieldTooLongRefusal, f.name, n, f.max))
+			writeErrorReason(w, http.StatusBadRequest, reasonRunFieldTooLong, fmt.Sprintf(runFieldTooLongRefusal, f.name, n, f.max))
 			return false
 		}
 		if !runFieldCharsAllowed(f.value, f.multiline) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(runFieldControlCharRefusal, f.name))
+			writeErrorReason(w, http.StatusBadRequest, reasonRunFieldControlChar, fmt.Sprintf(runFieldControlCharRefusal, f.name))
 			return false
 		}
 	}

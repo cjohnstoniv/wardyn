@@ -42,7 +42,7 @@ func parseListPage(w http.ResponseWriter, r *http.Request, defaultLimit int) (st
 	if v := r.URL.Query().Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, "invalid limit")
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidLimitParam, "invalid limit")
 			return store.Page{}, false
 		}
 		limit = n
@@ -54,7 +54,7 @@ func parseListPage(w http.ResponseWriter, r *http.Request, defaultLimit int) (st
 	if v := r.URL.Query().Get("offset"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, "invalid offset")
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidOffsetParam, "invalid offset")
 			return store.Page{}, false
 		}
 		offset = n
@@ -162,7 +162,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			// Fail CLOSED (never fall back to the unscoped admin listing below —
 			// that would serve every run to a member): a store that cannot scope
 			// by creator cannot safely answer this request at all.
-			writeError(w, http.StatusInternalServerError, "run listing is not scoped for members on this store backend")
+			writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "run listing is not scoped for members on this store backend")
 			return
 		}
 		principal := principalFromRequest(r)

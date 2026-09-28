@@ -186,7 +186,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Same integration_id refusal launch runs (decodeAndValidateCreateRun), so
 	// Review never previews a request launch refuses.
 	if req.IntegrationID != "" {
-		writeError(w, http.StatusUnprocessableEntity, mpRunNoIntegration)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
 		return
 	}
 
