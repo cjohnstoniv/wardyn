@@ -147,17 +147,20 @@ func ceilingUnavailableReason(err error) string {
 // The closed reason set. `user_drive_unavailable` carries exactly one of these,
 // and "" is the ordinary answer: /me could answer, and user_drive says what it
 // answered (an allocation, or null for none).
+//
+// driveUnavailableUserType and driveUnavailableUnmountable also reach
+// writeDriveError's wire body below, so THEIR literals live in reasons.go
+// (#656 slice 2 review round: TestReasonDocsMatchReasonsGo only reads that
+// file). driveUnavailableUnknown and driveUnavailableGovernance never leave
+// this GET /me field — only writeServerError's generic path answers a store
+// failure or an unresolved ceiling on the wire, carrying no reason at all —
+// so they stay local and undocumented in the Reason table on purpose
+// (dropping a doc row for a value nothing ever sends beats documenting one
+// that collides with ADOEntraFailure's own `unavailable`).
 const (
 	// driveUnavailableGroups: the caller's group snapshot cannot answer the
 	// group tier, so an allocation may exist and be invisible. 403 at launch.
 	driveUnavailableGroups = "groups_snapshot_stale"
-	// driveUnavailableUserType: the caller's stamped user type no longer
-	// exists, so nothing a type names can be resolved. 403 at launch.
-	driveUnavailableUserType = "user_type_unknown"
-	// driveUnavailableUnmountable: an allocation EXISTS and cannot be mounted —
-	// a home name that cannot name a directory, a share that is not there. 422
-	// at launch, and the one state whose remedy is an admin's, not the member's.
-	driveUnavailableUnmountable = "unmountable"
 	// driveUnavailableUnknown: the allocation could not be READ. 500 at launch.
 	driveUnavailableUnknown = "unavailable"
 	// driveUnavailableGovernance: the caller's CEILING could not be resolved, so

@@ -273,13 +273,13 @@ func (s *Server) personMintRefusal(ctx context.Context, d oidc.Derivation) (stat
 	elevated := s.isSecurityOperator(roleSnapshotCtx(d.Role))
 	switch {
 	case !d.OK():
-		return http.StatusConflict, "no_sign_in",
+		return http.StatusConflict, reasonPersonMintNoSignIn,
 			"this person's email derives no sign-in on this deployment (" + d.Denial + "), so there is no role to mint a token under"
 	case elevated && slices.ContainsFunc(d.Matches, func(m oidc.Match) bool { return m.Source == oidc.MatchSourceDefaultRole }):
-		return http.StatusConflict, "default_role_unknown_groups",
+		return http.StatusConflict, reasonPersonMintDefaultRoleUnknownGroups,
 			"this person's role would come from the elevated default role, which their groups could narrow once known — they must sign in once first"
 	case elevated && !s.isOperator(ctx):
-		return http.StatusForbidden, "elevated_target",
+		return http.StatusForbidden, reasonPersonMintElevatedTarget,
 			"only a super admin may mint a token for an admin or a security admin"
 	}
 	return 0, "", ""

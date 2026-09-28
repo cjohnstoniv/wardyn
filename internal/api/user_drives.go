@@ -285,18 +285,22 @@ func (s *Server) userDriveProvider(ctx context.Context) (types.UserDriveProvider
 // the PROVIDER's only: a grant naming a group or everyone has no single
 // principal, so the per-principal governance ceiling cannot be resolved here at
 // all (it is clamped at resolve, newResolvedDrive).
-func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (int, string) {
+// Three distinct causes (#656 slice 2 review round: they used to share one
+// reason, user_drive_size_refused) — a site-config read failure, the org
+// switch (shares driveRefusalDrivesDisabled with the launch-time door: same
+// cause), and the ceiling itself.
+func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (status int, reason, msg string) {
 	provider, err := s.userDriveProvider(ctx)
 	if err != nil {
-		return http.StatusInternalServerError, loggedMsg(ctx, "get site config", err)
+		return http.StatusInternalServerError, reasonUserDriveCeilingUnavailable, loggedMsg(ctx, "get site config", err)
 	}
 	if provider.Disabled {
-		return http.StatusUnprocessableEntity, driveDisabledMsg
+		return http.StatusUnprocessableEntity, driveRefusalDrivesDisabled, driveDisabledMsg
 	}
 	if provider.MaxSizeMiB > 0 && sizeMiB > provider.MaxSizeMiB {
-		return http.StatusUnprocessableEntity, fmt.Sprintf(driveCeilingMsg, sizeMiB, provider.MaxSizeMiB)
+		return http.StatusUnprocessableEntity, reasonUserDriveSizeRefused, fmt.Sprintf(driveCeilingMsg, sizeMiB, provider.MaxSizeMiB)
 	}
-	return 0, ""
+	return 0, "", ""
 }
 
 // drive writes
@@ -357,7 +361,7 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 	// DEPLOYMENT, so both are 422s. Before the host_path gates, because they apply
 	// to every backend and neither costs a store read the switch has already
 	// settled.
-	if code, msg := s.userDriveWriteRefusal(r.Context(), d.SizeMiB); msg != "" {
+	if code, _, msg := s.userDriveWriteRefusal(r.Context(), d.SizeMiB); msg != "" {
 		return types.UserDrive{}, code, msg
 	}
 	if d.Backend == types.DriveBackendHostPath {
@@ -389,9 +393,9 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		writeErrorReason(w, code, reasonUserDriveRequestInvalid, msg)
 		return
 	}
-	code, msg, rehome, refuseIfAllocated := s.driveRehomeGuard(r, d)
+	code, reason, msg, rehome, refuseIfAllocated := s.driveRehomeGuard(r, d)
 	if msg != "" {
-		writeErrorReason(w, code, reasonUserDriveRehomeInvalid, msg)
+		writeErrorReason(w, code, reason, msg)
 		return
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d, refuseIfAllocated)
@@ -586,10 +590,13 @@ const driveRehomeConfirm = "rehome"
 // RULE stays here, where the request that asked for it is; only the precondition
 // travels. handleDeleteUserDrive's 409 is still enforced by a constraint rather
 // than by a statement, and that remains the stronger of the two.
-func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehome driveRehome, refuseIfAllocated bool) {
+// Two distinct causes (#656 slice 2 review round: they used to share
+// user_drive_rehome_invalid) — a store read failure, and the guard actually
+// refusing an unconfirmed identity-field change on an allocated drive.
+func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, reason, msg string, rehome driveRehome, refuseIfAllocated bool) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		return http.StatusInternalServerError, loggedMsg(r.Context(), "list user drives", err), driveRehome{}, false
+		return http.StatusInternalServerError, reasonUserDriveRehomeListUnavailable, loggedMsg(r.Context(), "list user drives", err), driveRehome{}, false
 	}
 	var before *types.UserDriveListItem
 	for i := range drives {
@@ -602,16 +609,16 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	// at a drive that does not exist yet (the FK), so there is nothing for the
 	// precondition to assert either.
 	if before == nil {
-		return 0, "", driveRehome{}, false
+		return 0, "", "", driveRehome{}, false
 	}
 	changes := driveIdentityFields(before.UserDrive, d)
 	if len(changes) == 0 {
-		return 0, "", driveRehome{}, false
+		return 0, "", "", driveRehome{}, false
 	}
 	// Nothing is allocated as of this read — so the write proceeds, GUARDED on
 	// that still being true when it lands. This is the arm the race lived in.
 	if before.GrantCount == 0 {
-		return 0, "", driveRehome{}, true
+		return 0, "", "", driveRehome{}, true
 	}
 	// Confirmed, and the audit row has to say so: `drive.write` covers a
 	// cosmetic edit and one that moved every allocated member's storage, and
@@ -619,7 +626,7 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
 		// The refusal this confirmation overrode named both facts; the audit row
 		// now carries them, so the log can answer which objects were orphaned.
-		return 0, "", driveRehome{confirmed: true, fields: changes, subjects: before.GrantCount}, false
+		return 0, "", "", driveRehome{confirmed: true, fields: changes, subjects: before.GrantCount}, false
 	}
 	them := "it"
 	if before.GrantCount > 1 {
@@ -633,7 +640,7 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	// is an API act. The console affordance is a mock round's (CONSOLE-RULES
 	// §12): a confirm dialog is new UI and new copy, and the frozen module has
 	// neither.
-	return http.StatusConflict, fmt.Sprintf(
+	return http.StatusConflict, reasonUserDriveRehomeInvalid, fmt.Sprintf(
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
 			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
@@ -781,8 +788,8 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// meets, against the OVERRIDE — which is the only size this row carries. The
 	// drive's own size was held to the ceiling when it was authored; a grant that
 	// states no override inherits it and has no number of its own to refuse.
-	if code, msg := s.userDriveWriteRefusal(r.Context(), g.SizeMiBOverride); msg != "" {
-		writeErrorReason(w, code, reasonUserDriveSizeRefused, msg)
+	if code, reason, msg := s.userDriveWriteRefusal(r.Context(), g.SizeMiBOverride); msg != "" {
+		writeErrorReason(w, code, reason, msg)
 		return
 	}
 	// The group subject, held to the SAME rule as the other two tables written

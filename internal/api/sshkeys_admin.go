@@ -28,32 +28,29 @@ func (s *Server) handleAdminDeleteSSHKeys(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusBadRequest, reasonSSHKeyAdminPrincipalRequired, "name the person whose SSH keys to remove")
 		return
 	}
-	count, _, refusal, err := s.deleteSSHKeysFor(r, raw)
+	count, _, refusal, reason, err := s.deleteSSHKeysFor(r, raw)
 	if err != nil {
 		writeServerError(w, r, "delete ssh keys", err)
 		return
 	}
 	if refusal != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyOwnerUnresolved, refusal)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reason, refusal)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
 }
 
-func (s *Server) deleteSSHKeysFor(r *http.Request, principal string) (int, string, string, error) {
+func (s *Server) deleteSSHKeysFor(r *http.Request, principal string) (count int, resolvedPrincipal, refusal, reason string, err error) {
 	target, scope := principal, "sub"
-	var refusal string
-	var err error
 	if principal == "" {
 		target, scope = "*", "all"
 	} else {
 		var resolved string
-		resolved, refusal, err = s.resolveSSHKeyOwner(r.Context(), principal)
+		resolved, refusal, reason, err = s.resolveSSHKeyOwner(r.Context(), principal)
 		if err == nil && refusal == "" {
 			principal, target = resolved, resolved
 		}
 	}
-	count := 0
 	if err == nil && refusal == "" {
 		count, err = s.cfg.Store.DeleteSSHKeys(r.Context(), principal)
 	}
@@ -67,26 +64,32 @@ func (s *Server) deleteSSHKeysFor(r *http.Request, principal string) (int, strin
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"ssh_key.delete", target, outcome, mustJSON(data)))
-	return count, principal, refusal, err
+	return count, principal, refusal, reason, err
 }
 
-func (s *Server) resolveSSHKeyOwner(ctx context.Context, raw string) (string, string, error) {
+// Two distinct causes (#656 slice 2 review round: they used to share
+// ssh_key_owner_unresolved) — no principal matches, or more than one does.
+// The same resolver shape as secretOwnerParam's (secrets.go), which already
+// splits these into reasonOwnerUnresolved/reasonOwnerAmbiguous via
+// ownerRefusalReason; reused here rather than inventing a second vocabulary
+// for the same two causes.
+func (s *Server) resolveSSHKeyOwner(ctx context.Context, raw string) (principal, refusal, reason string, err error) {
 	keys, err := s.cfg.Store.ListSSHKeysByPrincipal(ctx, raw)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve SSH principal keys: %w", err)
+		return "", "", "", fmt.Errorf("resolve SSH principal keys: %w", err)
 	}
 	if len(keys) > 0 {
-		return raw, "", nil
+		return raw, "", "", nil
 	}
 	// A partial directory could make an ambiguous name look unique, or mistake
 	// an email for an unrelated subject. Removal must not guess after a failed read.
 	tokens, err := s.cfg.Store.ListAPITokens(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve SSH principal tokens: %w", err)
+		return "", "", "", fmt.Errorf("resolve SSH principal tokens: %w", err)
 	}
 	workspaces, err := s.cfg.Store.ListWorkspaces(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve SSH principal workspaces: %w", err)
+		return "", "", "", fmt.Errorf("resolve SSH principal workspaces: %w", err)
 	}
 	var directory []principalIdentity
 	for _, token := range tokens {
@@ -99,12 +102,15 @@ func (s *Server) resolveSSHKeyOwner(ctx context.Context, raw string) (string, st
 			directory = append(directory, principalIdentity{principal: ws.OwnedBy})
 		}
 	}
-	principal, _, refusal := resolvePrincipal(directory, raw)
+	principal, _, refusal = resolvePrincipal(directory, raw)
+	if refusal != "" {
+		reason = ownerRefusalReason(refusal)
+	}
 	switch refusal {
 	case secretOwnerUnresolvedMsg:
 		refusal = "no known principal matches that email address; name the subject exactly"
 	case secretOwnerAmbiguousMsg:
 		refusal = "more than one known principal matches; name the subject exactly"
 	}
-	return principal, refusal, nil
+	return principal, refusal, reason, nil
 }

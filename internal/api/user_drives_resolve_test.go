@@ -1794,4 +1794,13 @@ func TestPreviewUnmountableDriveCountsNoRefusal(t *testing.T) {
 		t.Errorf("the preview and the launch door disagree on the sentence:\n preview = %q\n launch  = %q\n"+
 			"an admin diagnosing a member's drive must read the sentence that member reads, not a paraphrase", previewBody, got)
 	}
+	// #656 slice 2 review round S4: pin the preview's f.reason LITERALLY, and
+	// that it matches the launch door's — the class, not only the sentence,
+	// must be the SAME answer to the SAME question.
+	if got := errorReason(w); got != "home_missing" {
+		t.Errorf("preview reason = %q, want the literal \"home_missing\"; body=%s", got, w.Body.String())
+	}
+	if pr, lr := errorReason(w), errorReason(lw); pr != lr {
+		t.Errorf("preview and launch reasons disagree: preview=%q launch=%q", pr, lr)
+	}
 }

@@ -122,7 +122,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	// Each credential lane still runs if the other fails. The cutoff has already
 	// committed, so the audit records the completed work before returning failure.
 	tokens, tokenErr := s.revokeAPITokensFor(r, body.Sub)
-	keys, keyPrincipal, refusal, keyErr := s.deleteSSHKeysFor(r, body.Sub)
+	keys, keyPrincipal, refusal, keyReason, keyErr := s.deleteSSHKeysFor(r, body.Sub)
 	// SSH keys have no email column. Preserve the named cutoff for sessions and
 	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
 	if body.Sub != "" && keyPrincipal != "" && keyPrincipal != body.Sub {
@@ -148,7 +148,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		// (the cutoff already committed, so the responder needs the remedy, not
 		// just the log line).
 		if refusal != "" {
-			writeErrorReason(w, http.StatusInternalServerError, reasonSSHKeyOwnerUnresolved, refusal)
+			writeErrorReason(w, http.StatusInternalServerError, keyReason, refusal)
 			return
 		}
 		writeServerError(w, r, "revoke credentials", err)

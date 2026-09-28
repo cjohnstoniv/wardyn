@@ -5,7 +5,11 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestSlice2_QueryAndBodyReasons (#656 slice 2) pins the machine-readable
@@ -53,5 +57,25 @@ func TestSlice2_QueryAndBodyReasons(t *testing.T) {
 				t.Errorf("reason = %q, want %q; body=%s", got, tc.wantReason, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestCreateAPIToken_FromAPIToken_ReasonLiteral (#656 slice 2 review round
+// S4) pins the LITERAL wire reason for apitokens.go:270 — an API token
+// cannot mint another — not just the Go constant. Calls the handler directly
+// (bypassing the auth middleware) with a context carrying both a signed-in
+// human AND a stamped API-token id, the exact shape apiTokenAuth leaves an
+// API-token-authenticated request in.
+func TestCreateAPIToken_FromAPIToken_ReasonLiteral(t *testing.T) {
+	h := newHarness(t)
+	ctx := withAPITokenID(withOIDCHuman(t.Context(), "alice"), uuid.New())
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tokens", strings.NewReader(`{"name":"n"}`)).WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.srv.handleCreateAPIToken(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("an API token minting another: status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "api_token_from_api_token" {
+		t.Errorf("reason = %q, want the literal \"api_token_from_api_token\"; body=%s", got, w.Body.String())
 	}
 }

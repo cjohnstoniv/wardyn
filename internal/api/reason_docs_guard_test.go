@@ -68,7 +68,11 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read reasons.go: %v", err)
 	}
-	constValue := regexp.MustCompile(`(?m)^\s*reason[A-Za-z0-9]*\s*=\s*"([a-z][a-z0-9_]*)"`)
+	// Any string-literal const in this file counts, not only ones named
+	// reasonXxx: driveRefusal*/driveUnavailable* (#656 slice 2 review round)
+	// moved here BECAUSE this guard only reads this one file, and a naming
+	// prefix is not what makes a value wire-visible.
+	constValue := regexp.MustCompile(`(?m)^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*"([a-z][a-z0-9_]*)"`)
 	goReasons := map[string]bool{}
 	for _, m := range constValue.FindAllStringSubmatch(string(reasonsGoBytes), -1) {
 		goReasons[m[1]] = true

@@ -3,8 +3,6 @@
 
 package api
 
-import "github.com/cjohnstoniv/wardyn/internal/authz"
-
 // The machine-readable refusal reasons the credential-injection lanes (Azure
 // DevOps, AWS SSO, Bedrock bearer) send on the wire alongside their human
 // sentence — internal/api's half of client.APIError.Reason (#204, #656).
@@ -188,10 +186,15 @@ const (
 	// sign-in, so a group-keyed governance profile cannot be resolved. Same cause,
 	// three routes (PUT/POST governance, the drive resolver) — one reason.
 	//
-	// The value is authz's OWN registered reason (internal/authz/registry.go),
-	// not a second copy of the string: TestNoAdHocAuthz refuses a raw literal
-	// that already names a registered authz.Reason.
-	reasonGroupsSnapshotStale = string(authz.ReasonGroupsSnapshotStale)
+	// This is a literal, not a reference to authz.ReasonGroupsSnapshotStale
+	// (internal/authz/registry.go), so TestReasonDocsMatchReasonsGo (which
+	// only reads string literals in this file) can see it — the tradeoff
+	// #656 slice 2's review round chose over an unreadable-by-regex
+	// reference. It is the SAME registered reason string, deliberately, not
+	// a second copy invented for this package: see
+	// adHocReasonLiterals["reasons.go:groups_snapshot_stale"]
+	// (refusal_test.go) for TestNoAdHocAuthz's matching exception.
+	reasonGroupsSnapshotStale = "groups_snapshot_stale"
 
 	// GET/PUT /site-config.
 	reasonSiteConfigRequestInvalid          = "site_config_request_invalid"            // the PUT body did not decode
@@ -253,7 +256,6 @@ const (
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
 	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
 	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
-	reasonSSHKeyOwnerUnresolved      = "ssh_key_owner_unresolved"       // resolveSSHKeyOwner could not resolve principal to a unique directory entry
 
 	// /api/v1/access (role-mapping admin).
 	reasonSSONotConfigured             = "sso_not_configured"               // the route needs OIDC, and this deployment has none configured
@@ -317,4 +319,33 @@ const (
 	reasonUserDriveReclaimConflict         = "user_drive_reclaim_conflict"          // the reclaim was refused at the storage layer
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
 	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
+
+	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"
+	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"
+	reasonUserDriveReclaimNoDirectoryName = "user_drive_reclaim_no_directory_name"
+
+	reasonOwnerAmbiguous  = "owner_ambiguous"
+	reasonOwnerUnresolved = "owner_unresolved"
+
+	reasonPersonMintNoSignIn                 = "no_sign_in"
+	reasonPersonMintDefaultRoleUnknownGroups = "default_role_unknown_groups"
+	reasonPersonMintElevatedTarget           = "elevated_target"
+)
+
+const (
+	driveRefusalNoAllocation      = "no_allocation"
+	driveRefusalPaused            = "paused"
+	driveRefusalRunnerCannotMount = "runner_cannot_mount"
+	driveRefusalBackendElsewhere  = "backend_elsewhere"
+	driveRefusalCeilingMoved      = "ceiling_moved"
+	driveRefusalHomeMissing       = "home_missing"
+	driveRefusalHomeUnreadable    = "home_unreadable"
+	driveRefusalShareUnreachable  = "share_unreachable"
+	driveRefusalReadOnly          = "read_only"
+	driveRefusalDrivesDisabled    = "drives_disabled"
+)
+
+const (
+	driveUnavailableUserType    = "user_type_unknown"
+	driveUnavailableUnmountable = "unmountable"
 )

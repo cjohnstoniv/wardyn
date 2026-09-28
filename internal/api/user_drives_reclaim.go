@@ -174,9 +174,9 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, code, reasonUserDriveNotReclaimable, msg)
 		return
 	}
-	object, code, msg := s.driveReclaimObject(r.Context(), d, g)
+	object, code, reason, msg := s.driveReclaimObject(r.Context(), d, g)
 	if msg != "" {
-		writeErrorReason(w, code, reasonUserDriveReclaimFailed, msg)
+		writeErrorReason(w, code, reason, msg)
 		return
 	}
 	reclaimer, ok := s.cfg.Runner.(runner.DriveReclaimer)
@@ -273,10 +273,13 @@ func driveReclaimableHere(d types.UserDrive, runnerTarget string) (int, string) 
 // template's. docs/OPERATIONS.md's runbook says to reclaim BEFORE deleting the
 // allocation for exactly that reason, and the object name the response and the
 // audit row carry is what an operator checks against the preview.
-func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant) (string, int, string) {
+// Two distinct causes (#656 slice 2 review round: they used to share
+// user_drive_reclaim_failed) — a store read failure, and the home name
+// itself failing to resolve.
+func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant) (object string, code int, reason, msg string) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
-		return "", http.StatusInternalServerError, loggedMsg(ctx, "list user drive allocations", err)
+		return "", http.StatusInternalServerError, reasonUserDriveReclaimFailed, loggedMsg(ctx, "list user drive allocations", err)
 	}
 	override := ""
 	for _, existing := range grants {
@@ -287,9 +290,9 @@ func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g ty
 	}
 	home, err := types.DriveHomeName(d, g.Subject, override)
 	if err != nil {
-		return "", http.StatusBadRequest, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
+		return "", http.StatusBadRequest, reasonUserDriveReclaimNoDirectoryName, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
 	}
-	return types.DriveObjectName(d, home), 0, ""
+	return types.DriveObjectName(d, home), 0, "", ""
 }
 
 // driveHomeOf recovers the home segment from an object name for the mount the

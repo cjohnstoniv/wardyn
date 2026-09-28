@@ -401,12 +401,13 @@ func (s *Server) auditOwnerRefusal(r *http.Request, action, target, reason strin
 }
 
 // ownerRefusalReason is the audit reason for one of resolveSecretOwner's
-// refusals.
+// refusals — also reused verbatim by resolveSSHKeyOwner (sshkeys_admin.go),
+// the same two-cause shape (#656 slice 2 review round).
 func ownerRefusalReason(refusal string) string {
 	if refusal == secretOwnerAmbiguousMsg {
-		return "owner_ambiguous"
+		return reasonOwnerAmbiguous
 	}
-	return "owner_unresolved"
+	return reasonOwnerUnresolved
 }
 
 // denyMemberOwnerParam answers a non-operator naming ?owner=: a constant 403,
