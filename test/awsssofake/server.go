@@ -26,6 +26,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -70,6 +73,53 @@ type Account struct {
 	Roles     []string
 }
 
+// session is one sign-in: its current token pair, and who spent it. Its role
+// credentials carry its number in their access key id (sessionAccessKeyID),
+// which is how a SigV4-signed bedrock call is traced back to it. The caller
+// maps are keyed by the calling peer's IP: on a cluster that is the run's own
+// proxy pod, so a walk can tell which run used which session.
+type session struct {
+	n               int
+	access, refresh string
+	roleCredCallers map[string]int
+	bedrockCallers  map[string]int
+	// roleCredPairs counts the account/role pairs its GetRoleCredentials asked
+	// for, so a walk can see which identity each session was spent as.
+	roleCredPairs map[string]int
+}
+
+func (s *Server) newSessionLocked() *session {
+	ss := &session{
+		n:               len(s.sessions),
+		access:          "fake-access-token-" + randHex(8),
+		refresh:         "fake-refresh-token-" + randHex(8),
+		roleCredCallers: map[string]int{},
+		bedrockCallers:  map[string]int{},
+		roleCredPairs:   map[string]int{},
+	}
+	s.sessions = append(s.sessions, ss)
+	return ss
+}
+
+// rotateLocked issues ss a new token pair; its previous pair stops working.
+func (s *Server) rotateLocked(ss *session) (access, refresh string) {
+	ss.access = "fake-access-token-" + randHex(8)
+	ss.refresh = "fake-refresh-token-" + randHex(8)
+	s.accessToken = ss.access
+	return ss.access, ss.refresh
+}
+
+// sessionAccessKeyID is the access key id of session n's role credentials.
+func sessionAccessKeyID(n int) string { return fmt.Sprintf("ASIAFAKE%012d", n) }
+
+func peerIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // Server is the fake sso-oidc + sso portal. Zero value is not usable; use New.
 type Server struct {
 	httpSrv *httptest.Server
@@ -80,15 +130,19 @@ type Server struct {
 	clientID     string
 	clientSecret string
 
-	// Device-authorization-flow state.
-	deviceCode string
-	userCode   string
-	approved   bool
+	// Device-authorization-flow state. Every StartDeviceAuthorization opens its
+	// own session (devices, keyed by its device code), so two people signing in
+	// at once each hold a token the other's sign-in never rotates away.
+	devices  map[string]*session
+	userCode string
+	approved bool
 
-	// Tokens. accessToken rotates on every successful CreateToken so a test
-	// can assert the LATEST token is what's expected.
-	accessToken  string
-	refreshToken string
+	// sessions is every session in issue order; sessions[0] is the one New()
+	// seeds, so a caller that never signs in still holds a working token.
+	// accessToken is the LATEST token issued to any session, so a test can
+	// assert what the last sign-in or refresh handed out.
+	sessions    []*session
+	accessToken string
 
 	// Fixtures for the account/role + role-credentials lookups. accounts is a
 	// LIST because a real SSO session commonly reaches several accounts, and
@@ -144,6 +198,9 @@ type Server struct {
 	// run makes calls for more than one model, so it cannot answer "did the
 	// configured ARN reach the data plane".
 	bedrockModels []string
+	// bedrockUnattributed counts the bedrock calls no session could be traced
+	// to, by authShape.
+	bedrockUnattributed map[string]int
 	// bedrockThrottled counts the 429s a `throttle:N` fault has served, so the
 	// (N+1)th call through succeeds (bedrock.go).
 	bedrockThrottled int
@@ -173,11 +230,11 @@ func NewHandler() (*Server, http.Handler) {
 	s := &Server{
 		clientID:     randHex(8),
 		clientSecret: randHex(16),
-		deviceCode:   randHex(16),
-		userCode:     "WXYZ-1234",
-		accessToken:  "fake-access-token-" + randHex(8),
-		refreshToken: "fake-refresh-token-" + randHex(8),
-		accounts:     []Account{{AccountID: "111111111111", Roles: []string{"AdministratorAccess"}}},
+		devices:      map[string]*session{},
+
+		bedrockUnattributed: map[string]int{},
+		userCode:            "WXYZ-1234",
+		accounts:            []Account{{AccountID: "111111111111", Roles: []string{"AdministratorAccess"}}},
 		roleCred: RoleCredentials{
 			AccessKeyID:     "ASIAFAKEFAKEFAKEFAKE",
 			SecretAccessKey: "fakeSecretAccessKeyFakeSecretAccessKeyFake",
@@ -185,6 +242,7 @@ func NewHandler() (*Server, http.Handler) {
 			Expiration:      time.Now().Add(1 * time.Hour),
 		},
 	}
+	s.accessToken = s.newSessionLocked().access
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/client/register", s.handleRegisterClient)
@@ -433,9 +491,11 @@ func (s *Server) handleStartDeviceAuthorization(w http.ResponseWriter, r *http.R
 		writeOIDCError(w, "InvalidClientException", "invalid_client", "unknown client")
 		return
 	}
+	deviceCode := randHex(16)
 	s.mu.Lock()
 	s.startURLSeen = req.StartURL
-	deviceCode, userCode := s.deviceCode, s.userCode
+	s.devices[deviceCode] = s.newSessionLocked()
+	userCode := s.userCode
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -485,7 +545,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	switch req.GrantType {
 	case deviceGrantType:
 		s.mu.Lock()
-		if req.DeviceCode != s.deviceCode {
+		ss := s.devices[req.DeviceCode]
+		if ss == nil {
 			s.mu.Unlock()
 			writeOIDCError(w, "InvalidGrantException", "invalid_grant", "unknown device code")
 			return
@@ -496,17 +557,13 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Rotate on issuance so checkBearer only accepts the token this
-		// login just handed out.
-		s.accessToken = "fake-access-token-" + randHex(8)
-		// BOTH tokens rotate on a device-flow redemption too, as on a refresh
-		// (the refresh arm below says why): the real service issues a fresh
-		// refresh token per sign-in, and wardynd keys its spent-mark by the
-		// refresh token's fingerprint — a fake that hands out ONE refresh token
-		// for its whole life makes every re-sign-in after a spent mark read as
-		// still spent (walk-6 FINDING-fake-refresh-token.txt).
-		s.refreshToken = "fake-refresh-token-" + randHex(8)
-		access := s.accessToken
-		refresh := s.refreshToken
+		// login just handed out. BOTH tokens rotate on a device-flow redemption
+		// too, as on a refresh (the refresh arm below says why): the real
+		// service issues a fresh refresh token per sign-in, and wardynd keys its
+		// spent-mark by the refresh token's fingerprint — a fake that hands out
+		// ONE refresh token for its whole life makes every re-sign-in after a
+		// spent mark read as still spent (walk-6 FINDING-fake-refresh-token.txt).
+		access, refresh := s.rotateLocked(ss)
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"accessToken":  access,
@@ -529,7 +586,13 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 			writeOIDCError(w, "InvalidGrantException", "invalid_grant", "this fake was told to retire the session (AWSSSOFAKE_REAUTH_AFTER)")
 			return
 		}
-		if req.RefreshToken == "" || req.RefreshToken != s.refreshToken {
+		var ss *session
+		for _, c := range s.sessions {
+			if req.RefreshToken != "" && c.refresh == req.RefreshToken {
+				ss = c
+			}
+		}
+		if ss == nil {
 			s.mu.Unlock()
 			// invalid_grant, which is exactly what a CONSUMED or unknown refresh
 			// token gets from the real service — and the code Wardyn classifies as
@@ -543,9 +606,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		// store-the-new-pair path are only exercised when the token actually
 		// moves — a fake that returned the same refreshToken would leave the half
 		// that persists the rotation untested.
-		s.accessToken = "fake-access-token-" + randHex(8)
-		s.refreshToken = "fake-refresh-token-" + randHex(8)
-		access, refresh := s.accessToken, s.refreshToken
+		access, refresh := s.rotateLocked(ss)
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"accessToken":  access,
@@ -580,13 +641,25 @@ func (s *Server) handleSeen(w http.ResponseWriter, r *http.Request) {
 	if len(s.roleCredsSeen.Roles) > 0 {
 		role = s.roleCredsSeen.Roles[0]
 	}
+	sessions := make([]map[string]any, 0, len(s.sessions))
+	for _, ss := range s.sessions {
+		sessions = append(sessions, map[string]any{
+			"session":           ss.n,
+			"role_cred_callers": maps.Clone(ss.roleCredCallers),
+			"bedrock_callers":   maps.Clone(ss.bedrockCallers),
+			"role_cred_pairs":   maps.Clone(ss.roleCredPairs),
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions":       sessions,
 		"account_id":     s.roleCredsSeen.AccountID,
 		"role_name":      role,
 		"start_url":      s.startURLSeen,
 		"bedrock_calls":  s.bedrockCalls,
 		"bedrock_model":  s.bedrockModel,
 		"bedrock_models": append([]string{}, s.bedrockModels...),
+
+		"bedrock_unattributed": maps.Clone(s.bedrockUnattributed),
 	})
 }
 
@@ -603,10 +676,13 @@ func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request
 	s.mu.Lock()
 	s.roleCredCalls = append(s.roleCredCalls, time.Now())
 	s.mu.Unlock()
-	if !s.checkBearer(w, r) {
+	ss, ok := s.checkBearer(w, r)
+	if !ok {
 		return
 	}
 	s.mu.Lock()
+	ss.roleCredCallers[peerIP(r)]++
+	ss.roleCredPairs[r.URL.Query().Get("account_id")+"/"+r.URL.Query().Get("role_name")]++
 	s.roleCredsSeen = Account{
 		AccountID: r.URL.Query().Get("account_id"),
 		Roles:     []string{r.URL.Query().Get("role_name")},
@@ -634,6 +710,7 @@ func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request
 	// T+3/T+6/T+9 cadence a walk budgets for. With no TTL set the construction
 	// value is echoed exactly as before.
 	cred := s.roleCred
+	cred.AccessKeyID = sessionAccessKeyID(ss.n)
 	if s.roleCredTTL > 0 {
 		cred.Expiration = time.Now().Add(s.roleCredTTL)
 	}
@@ -653,7 +730,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !s.checkBearer(w, r) {
+	if _, ok := s.checkBearer(w, r); !ok {
 		return
 	}
 	list := []map[string]any{}
@@ -672,7 +749,7 @@ func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
-	if !s.checkBearer(w, r) {
+	if _, ok := s.checkBearer(w, r); !ok {
 		return
 	}
 	// SCOPED TO THE REQUESTED ACCOUNT, and an error for one this session does
@@ -714,17 +791,26 @@ func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) 
 // currently-issued access token — the exact contract Phase B's proxy
 // injection (runs_bedrock.go doc comment) will need to satisfy. Writes a 401
 // modeled UnauthorizedException and returns false on mismatch/absence.
-func (s *Server) checkBearer(w http.ResponseWriter, r *http.Request) bool {
-	got := r.Header.Get(bearerHeader)
+// sessionForBearerLocked is the session whose current access token is token, or nil.
+func (s *Server) sessionForBearerLocked(token string) *session {
+	for _, c := range s.sessions {
+		if token != "" && c.access == token {
+			return c
+		}
+	}
+	return nil
+}
+
+func (s *Server) checkBearer(w http.ResponseWriter, r *http.Request) (*session, bool) {
 	s.mu.Lock()
-	want := s.accessToken
+	ss := s.sessionForBearerLocked(r.Header.Get(bearerHeader))
 	s.mu.Unlock()
-	if got == "" || got != want {
+	if ss == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("x-amzn-errortype", "UnauthorizedException")
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": "missing or invalid " + bearerHeader})
-		return false
+		return nil, false
 	}
-	return true
+	return ss, true
 }

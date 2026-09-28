@@ -50,6 +50,12 @@ func main() {
 	tlsCert := flag.String("tls-cert", envOr("AWSSSOFAKE_TLS_CERT", ""),
 		"serve HTTPS with this certificate (PEM). With -tls-key, it makes the fake's lane PRODUCTION-SHAPED: a TLS CONNECT the proxy terminates, so header injection, CA trust and the timeout body are exercised instead of simulated")
 	tlsKey := flag.String("tls-key", envOr("AWSSSOFAKE_TLS_KEY", ""), "private key (PEM) for -tls-cert")
+	// The bedrock-runtime stub on a port of its own, so a walk can put it behind
+	// a Service of its own: sharing the portal's host and port, its calls ride
+	// the tunnel the proxy terminates for the SSO bearer, never the SigV4
+	// passthrough real Bedrock gets.
+	bedrockAddr := flag.String("bedrock-addr", envOr("AWSSSOFAKE_BEDROCK_ADDR", ""),
+		"also serve on this address (the same handler, TLS alike), for the bedrock-runtime stub's own Service (empty = only -addr)")
 	flag.Parse()
 
 	s, h := awsssofake.NewHandler()
@@ -83,33 +89,33 @@ func main() {
 	s.SetRoleCredTTL(*roleCredTTL)
 	s.SetReauthAfter(*reauthAfter)
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           h,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
 	// TLS when the operator supplied a pair, for a client that speaks TLS inside
 	// its tunnel; a client that speaks plain HTTP inside the tunnel (the real SDK)
 	// is served by the terminator either way. On the un-terminated plain forward
 	// lane injection errors are swallowed (that client sees the fake's own 401), so the timeout's 401
 	// UnauthorizedException body and the MITM path that writes it are only
 	// exercised over a TLS CONNECT the proxy terminates.
-	if *tlsCert != "" || *tlsKey != "" {
-		if *tlsCert == "" || *tlsKey == "" {
-			log.Fatalf("awsssofake: -tls-cert and -tls-key must be given together")
-		}
-		logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, true)
-		log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub over TLS on %s", *addr)
-		if err := srv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
-			log.Fatalf("awsssofake: %v", err)
-		}
-		return
+	tls := *tlsCert != "" || *tlsKey != ""
+	if tls && (*tlsCert == "" || *tlsKey == "") {
+		log.Fatalf("awsssofake: -tls-cert and -tls-key must be given together")
 	}
-	logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, false)
-	log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub on %s", *addr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("awsssofake: %v", err)
+	serve := func(a string) {
+		srv := &http.Server{Addr: a, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+		var err error
+		if tls {
+			err = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		log.Fatalf("awsssofake: %s: %v", a, err)
 	}
+	logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, tls)
+	if *bedrockAddr != "" {
+		log.Printf("awsssofake: also serving on %s (tls=%t) for the bedrock-runtime stub", *bedrockAddr, tls)
+		go serve(*bedrockAddr)
+	}
+	log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub on %s (tls=%t)", *addr, tls)
+	serve(*addr)
 }
 
 // envDuration reads a duration knob. An ABSENT one is 0 (the default); a

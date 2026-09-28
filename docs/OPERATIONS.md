@@ -4165,8 +4165,10 @@ make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
 The overlay adds Dex with one static principal per role path —
 `admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
-(`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
-in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
+(`sso-oidc` and the `sso` portal) on one in-cluster Service, and a
+bedrock-runtime stub on a second (`wardyn-awsssofake-bedrock`, port 8091), so a
+model call takes the SigV4 passthrough real Bedrock gets rather than the portal's
+terminated tunnel. `make kind-sso-down` removes the overlay; the cluster itself
 belongs to `make kind-down`.
 
 **The knobs.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO
@@ -4183,13 +4185,16 @@ residual #45 before setting either var anywhere that holds a real credential:
 an operator who sets both has pointed a real sign-in at a server that can hand
 back credentials of its choosing, and Wardyn cannot tell that server from AWS.
 
-The same acknowledgement unlocks one more thing, and the walk needs it: a plain
-`http://` `WARDYN_BEDROCK_BASE_URL`. The Bedrock stub serves no TLS, and this is
-the SigV4 lane — no per-run TLS-MITM terminates for it — so without the
-acknowledgement wardynd refuses to boot on rule 1 (`must be https://`) before
-the SSO hatch is even reached. That relaxation is rule 1 and nothing else: an
-embedded credential, an empty host, a metadata literal, the public host itself,
-a query or a fragment all still refuse boot exactly as they do in production.
+The same acknowledgement unlocks one more thing: a plain `http://`
+`WARDYN_BEDROCK_BASE_URL`. This is the SigV4 lane — no per-run TLS-MITM
+terminates for it — so without the acknowledgement wardynd refuses a plain one
+on rule 1 (`must be https://`) before the SSO hatch is even reached. That
+relaxation is rule 1 and nothing else: an embedded credential, an empty host, a
+metadata literal, the public host itself, a query or a fragment all still refuse
+boot exactly as they do in production. The walk itself no longer needs it: it
+serves the fake over HTTPS under a throwaway CA it mints each run and installs
+as the chart's `trustedCA`, so wardynd, every run's proxy and every sandbox
+trust the fake the way they would trust a corporate CA.
 
 **Reaching the fake from a sandbox — the step that fails first if you skip it.**
 The fake is addressed by its **Service** name, never a pod IP, and site-config
