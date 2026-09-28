@@ -12,7 +12,7 @@
 //
 // What it pins, in three layers:
 //   A. runWireBody (runs.ts:70-116) forwards every field of the Go DTO
-//      pkg/client.CreateRunRequest (client.go:178-300) that the console can
+//      pkg/client.CreateRunRequest (runs_create.go) that the console can
 //      set, on both createRun and preflightRun, and omits the key when the
 //      input has no value for it. runs.wire.test.ts:42-64 covers only
 //      workspaces[] and integration_id; the eleven other forwarded fields
@@ -66,7 +66,7 @@ const sentBody = (): Record<string, unknown> =>
 const sentPath = (): string => String(fetchMock.mock.calls[0][0]);
 
 // Every field the console can put on the wire, with a NON-default value.
-// One entry per Go DTO field the UI forwards (client.go:178-300 ∩ runs.ts:70-116).
+// One entry per Go DTO field the UI forwards (CreateRunRequest ∩ runWireBody).
 const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> } = {
   agent: "claude-code",
   repo: "acme/payments",
@@ -280,7 +280,9 @@ function tsInterfaceKeys(src: string, name: string): string[] {
 describe("source parity — Go wire tags vs the TS mirror", () => {
   // ticket: F8
   const root = repoRoot();
-  const clientGo = readFileSync(join(root, "pkg/client/client.go"), "utf8");
+  // CreateRunRequest and WorkspaceSelection live in runs_create.go; read the
+  // package's two DTO files together so a later move within pkg/client is not a false red.
+  const clientGo = ["client.go", "runs_create.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
 
