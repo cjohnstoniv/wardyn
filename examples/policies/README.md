@@ -5,7 +5,7 @@ Every field these files can set is listed in
 examples — `RunPolicySpec` JSON has no comment field (`LoadPolicySpec` uses
 `DisallowUnknownFields`), so they live here instead.
 
-**JSON or YAML.** `wardyn run --policy-file` and `wardyn policy create/update -f`
+**JSON or YAML.** `wardyn run --policy-file` and `wardyn policy set -f`
 accept either — YAML is decoded to the same schema, so it also lets you keep
 inline comments the JSON files can't have (see `sandbox.yaml` below).
 `wardyn policy render -f <file>` converts either to canonical JSON and fails on a

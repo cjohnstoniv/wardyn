@@ -192,11 +192,13 @@ func emitRekeyAudit(ctx context.Context, rec audit.Recorder, count int, recipien
 }
 
 // readAgeKeyFile returns the age identity held in path, or "" when the file does
-// not exist (a first rotation may create it). Comment and blank lines are
-// skipped so `age-keygen` output — which leads with `# created:` / `# public
-// key:` — is accepted verbatim. Anything else is an error rather than a silent
-// overwrite, which is what makes the caller's "must match WARDYN_AGE_KEY" guard
-// able to refuse an env file instead of destroying it.
+// not exist (a first rotation may create it). This is -rotate-age-key's OWN
+// target-file check (the file this mode is about to overwrite), read with a
+// plain os.ReadFile rather than cliutil.ReadSecretFile: unlike a boot-time
+// _FILE setting, a not-yet-existing target is the expected first-rotation
+// case, not a refusal. parseAgeKeyFileContent does the shared parsing;
+// readPlatformKey (secret_store.go) reads WARDYN_PLATFORM_KEY_FILE itself,
+// through the mode-checked cliutil.ReadSecretFile, and calls that directly.
 func readAgeKeyFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -205,6 +207,16 @@ func readAgeKeyFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read the age key file %s: %w", path, err)
 	}
+	return parseAgeKeyFileContent(path, b)
+}
+
+// parseAgeKeyFileContent extracts the age identity from already-read file
+// content. Comment and blank lines are skipped so `age-keygen` output — which
+// leads with `# created:` / `# public key:` — is accepted verbatim. Anything
+// else is an error rather than a silent overwrite, which is what makes the
+// caller's "must match WARDYN_AGE_KEY" guard able to refuse an env file
+// instead of destroying it.
+func parseAgeKeyFileContent(path string, b []byte) (string, error) {
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {

@@ -239,7 +239,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	var warning string
 	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
 		req.Interactive = true
-		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn attach <run-id>` or pass a task"
+		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn run attach <run-id>` or pass a task"
 	}
 	if msg := interactiveToolApprovalsError(req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)

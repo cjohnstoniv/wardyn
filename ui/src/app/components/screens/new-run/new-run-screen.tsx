@@ -395,12 +395,12 @@ export function NewRunScreen() {
   // for a model run (run_model_provider.go's `needsModel`/`createDoorIsModelRun`,
   // runs_dispatch_llm.go's `taskMode != "exec"`); applying it to every run type
   // was a false-disable for a command the server would happily admit. The
-  // WORKSPACE capability arm is NOT gated — a plain ungranted workspace refuses
-  // regardless of run type.
+  // WORKSPACE and git-provider arms (#1267's `available_to_you`) are NOT
+  // gated — they refuse regardless of run type, because the server excludes
+  // the model-provider pin from that flag for the identical reason.
   const pickedWorkspace = workspaces.find((w) => w.id === state.workspaces[0]?.workspaceId);
   const workspaceUnavailable =
-    !!pickedWorkspace &&
-    workspaceUnavailableToCaller(pickedWorkspace, caps, isAgent ? modelProviders : undefined);
+    !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);
   // #1197 L2: Title dropped out of this chain — the server never required
   // one (runs_create_validate.go's own doc comment), only the console did,
   // and the console default now derives one from the task instead of asking.

@@ -119,7 +119,7 @@ wardyn approve <approval-id> --reason "reviewed scope, looks correct"
 # exclusive with --wait). The idle reaper still applies: sandbox.yaml stops the
 # run after 900s idle — set auto_stop_after_sec <= 0 for a never-reap session.
 wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml
-wardyn attach <id>
+wardyn run attach <id>
 ```
 
 Prefer clicking? The demos on the User view's Getting Started page
@@ -204,7 +204,7 @@ wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel
 proxy injects `x-api-key` and logs every model call as a `brokered:llm`
 decision in the audit trail (an operator can re-point that brokered dial at
 an internal gateway — `WARDYN_ANTHROPIC_BASE_URL`, see OPERATIONS.md — with
-no sandbox-visible change at all). Watch the session live via Attach (`wardyn attach
+no sandbox-visible change at all). Watch the session live via Attach (`wardyn run attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the
 captured cast only after the fact, it has no live view.
 
@@ -348,7 +348,7 @@ single named session — `task-key` is a free-form name you choose ("build &
 test", "agent dev loop", anything), not picked from a derived taxonomy —
 in an OPEN (allow-all egress) sandbox, so you can learn exactly what that
 session actually uses.
-The session idles for `wardyn attach`; when it ends, the capture lands on the
+The session idles for `wardyn run attach`; when it ends, the capture lands on the
 workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
 profile (or promote the observed egress from the workspace page's
 recorded-session pane — **Approve N observed hosts**).

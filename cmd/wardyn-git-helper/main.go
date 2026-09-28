@@ -49,7 +49,7 @@
 //
 //	The sandbox shares one kernel and one uid (agent). Without a check, ANY
 //	in-sandbox process that speaks git's credential protocol — a sub-process, a
-//	snooping `wardyn attach` shell, a careless tool — could invoke this helper
+//	snooping `wardyn run attach` shell, a careless tool — could invoke this helper
 //	and have a LIVE GitHub token streamed to it on stdout. To raise the bar, the
 //	helper requires the caller to PRESENT a per-run secret before it emits a
 //	token:
@@ -94,7 +94,7 @@
 //	main process is agent-run too, and its --idle path calls
 //	provision_git_helper_secret exactly as task mode does (see
 //	deploy/images/common/agent-run-lib.sh). What differs is inheritance —
-//	`wardyn attach` is a FRESH exec, not a descendant of that process tree,
+//	`wardyn run attach` is a FRESH exec, not a descendant of that process tree,
 //	so it never inherits WARDYN_GIT_HELPER_SECRET and this helper refuses it
 //	until the human presents the secret themselves. That refusal is a real
 //	gate, not a wall: the 0400 file is agent-readable, which is the same

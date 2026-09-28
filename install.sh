@@ -467,7 +467,7 @@ fi
 
 # The CLI. Without it this install has NO host binary at all: the only command
 # path is `docker compose exec`, which is in-container and root-only, so
-# `wardyn ssh <run-id>` — the whole point of the SSH listener above — has no
+# `wardyn run ssh <run-id>` — the whole point of the SSH listener above — has no
 # client on the machine that just enabled it.
 #
 # Release assets are per os/arch and listed in SHA256SUMS, so hash-check before
@@ -549,7 +549,7 @@ if [ -n "${CLI_PATH}" ]; then
     *":$(dirname "${CLI_PATH}"):"*) ;;
     *) echo "                (not on your PATH — add: export PATH=\"$(dirname "${CLI_PATH}"):\$PATH\")" ;;
   esac
-  echo "  Attach:       wardyn ssh <run-id>"
+  echo "  Attach:       wardyn run ssh <run-id>"
 fi
 # OUTSIDE the CLI block on purpose. This is the disclosure of a network listener
 # this installer turned on, and install_cli returns without setting CLI_PATH on

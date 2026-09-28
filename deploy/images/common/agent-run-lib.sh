@@ -288,7 +288,7 @@ materialize_aws_sso_config() {
 # The secret is written to a 0400 file OWNED BY the agent uid (this script runs as
 # agent) so it is not group/other-readable, and exported as WARDYN_GIT_HELPER_SECRET
 # for THIS process tree only — the subsequent `git clone` and the exec'd agent
-# inherit it, but a separate `wardyn attach` exec (a fresh docker exec, not a
+# inherit it, but a separate `wardyn run attach` exec (a fresh docker exec, not a
 # descendant of this script) does NOT.  The credential helper compares the
 # presented env value against the file before emitting a credential.
 #

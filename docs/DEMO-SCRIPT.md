@@ -138,7 +138,7 @@ Three videos of the series have no page to film. **V11 (CI & headless)** is a
 policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
 and its artifacts; **V12 (audit & attach)** is three terminals each holding
 `ssh <run-uuid>@127.0.0.1 -p 2222` with a different key; **V13 (your terminal,
-our cluster)** is `kubectl`, `wardyn ssh` and one `ssh` session against a
+our cluster)** is `kubectl`, `wardyn run ssh` and one `ssh` session against a
 Kubernetes sandbox. Playwright cannot drive any of them.
 
 ```sh
@@ -207,7 +207,7 @@ Two things to know before rolling:
 
 | | |
 |---|---|
-| **Beats** | `kubectl get pods -n wardyn` → `wardyn ssh --print <run-id>` → `ssh <run-id>@127.0.0.1 -p 2222 hostname` → `'exit 37'` and `echo $?` → `wardyn audit <run-id> --action-prefix ssh.` |
+| **Beats** | `kubectl get pods -n wardyn` → `wardyn run ssh --print <run-id>` → `ssh <run-id>@127.0.0.1 -p 2222 hostname` → `'exit 37'` and `echo $?` → `wardyn audit <run-id> --action-prefix ssh.` |
 | **Script** | [`scripts/demo-beats/13-terminal-to-the-cluster.sh`](../scripts/demo-beats/13-terminal-to-the-cluster.sh) — terminal-only, one pane, no tmux (V12 needs three because its subject is three identities; this one's is one operator and one cluster) |
 | **Stack** | the `make kind-quickstart` cluster, **not** `make setup`'s compose stack. Preflight asserts `/healthz` reports `runner=k8s`, because both publish `127.0.0.1:8080` and a 200 says nothing about who answered |
 | **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |

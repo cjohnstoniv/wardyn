@@ -3,7 +3,11 @@
 
 // Live probes for the audit hash chain (migration 0047) and the append-only
 // claim behind it. Guarded by WARDYN_TEST_PG like every *_pg_test.go here, and
-// reusing this package's helpers (runsPGPool, appendChained, auditSeq).
+// reusing this package's helpers (runsPGPoolIsolated, appendChained, auditSeq).
+// runsPGPoolIsolated rather than runsPGPool -- see its own doc comment
+// (#983 part 3): these probes deliberately disable/rewrite the append-only
+// trigger mid-test, and a whole-chain verifier elsewhere reading the SHARED
+// database during that window sees a torn chain.
 //
 // The tamper steps need a role that can bypass the 0001/0004 triggers — the
 // exact residual 0007 documents (table owner / superuser). CI's pg lane and
@@ -11,8 +15,9 @@
 // bypass is `SET LOCAL session_replication_role = replica`; a role that cannot
 // do that SKIPS the tamper probes instead of failing them.
 //
-// Every probe restores the table before it returns: audit_events is shared by
-// every test in the package and "a break is permanent" (docs/OPERATIONS.md).
+// Every probe restores the table before it returns anyway: "a break is
+// permanent" (docs/OPERATIONS.md), and leaving one would misrepresent what
+// each probe proves even on its own throwaway database.
 //
 // All four are pins; a red here is a broken invariant:
 //
@@ -77,8 +82,9 @@ func triggersOff(t *testing.T, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) {
 }
 
 // requireTriggerBypass skips up front when the cleanup would not be able to
-// undo what the probe does — leaving the shared table broken for every later
-// sweep in the run is worse than skipping.
+// undo what the probe does — leaving the table broken would misrepresent
+// what this probe proves, even on its own throwaway database, so skipping is
+// better than a false result.
 func requireTriggerBypass(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	var super bool
@@ -87,7 +93,7 @@ func requireTriggerBypass(t *testing.T, pool *pgxpool.Pool) {
 		t.Fatalf("read role: %v", err)
 	}
 	if !super {
-		storeSkipOrFatal(t, pool, "WARDYN_TEST_PG role is not a superuser, so the probe could not restore the shared audit_events table afterwards")
+		storeSkipOrFatal(t, pool, "WARDYN_TEST_PG role is not a superuser, so the probe could not restore audit_events afterwards")
 	}
 }
 
@@ -112,7 +118,7 @@ func sweep(t *testing.T, pool *pgxpool.Pool) store.AuditChainStatus {
 func TestPG_AuditChain_RewrittenRowReportsExactSeq(t *testing.T) {
 	// ticket: F11
 	testfloor.Mark(t, "pg")
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	requireTriggerBypass(t, pool)
 	ctx := context.Background()
 
@@ -195,11 +201,11 @@ func TestPG_AuditChain_RewrittenRowReportsExactSeq(t *testing.T) {
 // at the SUCCESSOR's seq with the deleted/reordered reason, and it is a finding
 // rather than an error. The row is parked in a temp table and put back
 // byte-for-byte (OVERRIDING SYSTEM VALUE, triggers off so 0047 does not
-// re-chain it) so the shared table is whole again afterwards.
+// re-chain it) so the table is whole again afterwards.
 func TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 	// ticket: F11
 	testfloor.Mark(t, "pg")
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	requireTriggerBypass(t, pool)
 	ctx := context.Background()
 
@@ -290,7 +296,7 @@ func TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 func TestPG_AuditChain_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	// ticket: F11
 	testfloor.Mark(t, "pg")
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	requireTriggerBypass(t, pool)
 	ctx := context.Background()
 
@@ -350,7 +356,7 @@ func TestPG_AuditChain_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 func TestPG_AuditChain_UnlockedWriterDoesNotForkChain(t *testing.T) {
 	// ticket: F11
 	testfloor.Mark(t, "pg")
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	requireTriggerBypass(t, pool) // only for the cleanup delete
 	ctx := context.Background()
 

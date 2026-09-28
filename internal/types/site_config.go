@@ -64,7 +64,7 @@ type SiteConfig struct {
 	//
 	// Deprecated: superseded by EgressRedirects, which generalizes this from
 	// package registries to any outbound URL/host. Kept ONLY so PUT
-	// /site-config and `wardyn site-config apply` keep accepting a document
+	// /site-config and `wardyn site-config set` keep accepting a document
 	// saved before this release (decodeStrict rejects unknown fields, so
 	// removing this would 400 every legacy body instead of folding it).
 	// handlePutSiteConfig folds a non-empty value into EgressRedirects
@@ -151,7 +151,7 @@ type SiteConfig struct {
 	// base URLs.
 	//
 	// A real field rather than a response-wrapper key because `wardyn
-	// site-config get > f && wardyn site-config apply f` decodes with
+	// site-config get > f && wardyn site-config set f` decodes with
 	// DisallowUnknownFields — a wrapper-only key would 400 that round trip.
 	// PUT /site-config IGNORES a submitted value (cleared before the write,
 	// like Integrations) and the console strips it from every GET-spread
@@ -173,7 +173,7 @@ type SiteConfig struct {
 	// key, so the documented capture/apply round-trip echoes it back, and the
 	// carry-forward already makes a submitted value inert. A dropped value is
 	// reported instead (onboarding_completed_at_ignored in PUT's response,
-	// which `wardyn site-config apply` prints as a warning).
+	// which `wardyn site-config set` prints as a warning).
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
 }
 

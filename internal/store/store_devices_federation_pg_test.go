@@ -32,7 +32,7 @@ import (
 // rows, never run records — so a laptop cannot file "ceo@corp.example
 // approved" into an org run's evidence trail.
 func TestPG_Devices_IngestRefusesARowUnderAnOrgRun(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
@@ -74,7 +74,7 @@ func TestPG_Devices_IngestRefusesARowUnderAnOrgRun(t *testing.T) {
 // data.device_origin. Both chains still verify: the device's claim recomputes
 // from the stored row, and the organisation's own chain links through it.
 func TestPG_Devices_IngestRecordsTheObservedPeerAndBothChainsVerify(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	d, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "laptop"}, "wdd_"+uuid.NewString())
@@ -154,7 +154,7 @@ func TestPG_Devices_IngestRecordsTheObservedPeerAndBothChainsVerify(t *testing.T
 // while the organisation writes its own rows (WARDYN_TEST_INGEST_WORKERS,
 // default 16).
 func TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	d, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "laptop"}, "wdd_"+uuid.NewString())
@@ -235,7 +235,7 @@ func TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters(t *testing.T)
 // A device revoked after its request was authenticated is ErrDeviceRevoked —
 // never ErrConflict, which the handler records as a broken chain.
 func TestPG_Devices_IngestForARevokedDeviceIsErrDeviceRevoked(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	d, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "laptop"}, "wdd_"+uuid.NewString())
@@ -313,7 +313,7 @@ func federationRow(t *testing.T, pool *pgxpool.Pool, d types.Device, prev string
 // no data) and an absent value (the boot canary's insert names no data column)
 // included, which is what device_origin.data_null exists for.
 func TestPG_Devices_EveryAcceptedRowReChecksFromTheStoredRow(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	laptopCapped := strings.Repeat("t", store.MaxAuditTargetLen) + store.AuditTargetTruncatedMarker
 	for _, c := range []struct {
@@ -354,7 +354,7 @@ func TestPG_Devices_EveryAcceptedRowReChecksFromTheStoredRow(t *testing.T) {
 // database work: another device_origin (this organisation's marker), data that
 // is not an object, a target no laptop's own insert could have produced.
 func TestPG_Devices_UnreCheckableClaimsAreRefused(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	for _, c := range []struct {
 		name, target string
@@ -385,7 +385,7 @@ func TestPG_Devices_UnreCheckableClaimsAreRefused(t *testing.T) {
 // in text — is the device's fault. ErrFederatedRowInvalid (a 4xx the
 // forwarder stops on), never a store error it would retry forever.
 func TestPG_Devices_UnstorableClaimedValueIsErrFederatedRowInvalid(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	for _, c := range []struct {
 		name  string
@@ -411,7 +411,7 @@ func TestPG_Devices_UnstorableClaimedValueIsErrFederatedRowInvalid(t *testing.T)
 // recomputed hash covers the row's own claimed prev_hash, and the link to the
 // recorded head is checked under the device row's lock.
 func TestPG_Devices_RowChainedOnASupersededHeadIsRefused(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
 	d := federationDevice(t, st)
@@ -435,7 +435,7 @@ func TestPG_Devices_RowChainedOnASupersededHeadIsRefused(t *testing.T) {
 // re-send is still a no-op; and a rewrite of held history is refused even when
 // every hash in it verifies.
 func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
 	d := federationDevice(t, st)
@@ -497,7 +497,7 @@ func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testin
 // PrevHash), so the foreign splice is caught solely by the intra-batch chain
 // check: refused whole, the device's cursor unchanged, nothing accepted.
 func TestPG_Devices_IngestBatchSpliceRefused(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
 
@@ -542,7 +542,7 @@ func TestPG_Devices_IngestBatchSpliceRefused(t *testing.T) {
 // seqs included. This is why the forwarder resends from genesis when the row
 // at its cursor no longer carries the hash it had acknowledged.
 func TestPG_Devices_AResetPastTheOldCursorIsAcceptedFromItsGenesis(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
 	d := federationDevice(t, st)
@@ -578,7 +578,7 @@ func TestPG_Devices_AResetPastTheOldCursorIsAcceptedFromItsGenesis(t *testing.T)
 // A retry whose already-ingested prefix was edited is refused: every claimed
 // hash is recomputed, the skipped prefix included.
 func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
 	d := federationDevice(t, st)
@@ -599,7 +599,7 @@ func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
 // always taken before the chain lock, and no chain-lock holder touches a
 // device row), and the chain verifies afterwards.
 func TestPG_Devices_ConcurrentPushesNeitherDeadlockNorBreakTheChain(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
 	d := federationDevice(t, st)
@@ -664,7 +664,7 @@ func TestPG_Devices_ConcurrentPushesNeitherDeadlockNorBreakTheChain(t *testing.T
 // cursor advance, cleared only by ResetFederation (a re-enrolment), which also
 // returns the cursor and its row hash to 0 and "".
 func TestPG_Devices_FederationRevokedMark(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	if _, err := pool.Exec(ctx, `DELETE FROM org_federation`); err != nil {

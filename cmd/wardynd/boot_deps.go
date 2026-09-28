@@ -59,6 +59,7 @@ import (
 // allowUnknownMigrations is the WARDYN_ALLOW_UNKNOWN_MIGRATIONS break-glass: it
 // turns db.Migrate's refusal of a database a newer wardynd migrated into a WARN.
 func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration, allowUnknownMigrations bool) (*pgxpool.Pool, error) {
+	warnAllowUnknownMigrations(allowUnknownMigrations)
 	migrate := db.Migrate
 	if allowUnknownMigrations {
 		migrate = db.MigrateAllowingUnknown
@@ -129,6 +130,23 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 	}
 	slog.InfoContext(rootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
 	return pool, nil
+}
+
+// warnAllowUnknownMigrations is the #1050 follow-up: WARN whenever the
+// break-glass is SET, not only when it actually suppresses a refusal. With no
+// unknown migration present, db.MigrateAllowingUnknown itself logs nothing —
+// so a var left in an env file (or a chart values.yaml) after the break-glass
+// boot it was meant for silently disarms the downgrade refusal for the NEXT
+// real downgrade too, with no signal at any boot in between. Same volume and
+// posture as the WARDYN_ALLOW_SHARED_SUBSCRIPTION warn in run(): an operator
+// waiving a safety refusal should see that stated on every boot it applies to.
+// Kept out of run() itself (a single call, no branch) to hold its cyclomatic
+// complexity, matching warnMissingGatewayHosts.
+func warnAllowUnknownMigrations(allow bool) {
+	if !allow {
+		return
+	}
+	slog.Warn("wardynd: WARDYN_ALLOW_UNKNOWN_MIGRATIONS is set — this boot will proceed even if the database records migrations this binary does not ship (i.e. a downgrade). Left set after the break-glass boot it was meant for, it silently disarms the refusal for the next one too; unset it once this boot is done.")
 }
 
 // buildAuditChain assembles the audit recorder chain:

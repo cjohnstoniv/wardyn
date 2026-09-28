@@ -95,14 +95,14 @@ grep -qE '^WARDYN_SSH_LISTEN=' "$INSTALL" \
 grep -qE '^WARDYN_SSH_ADVERTISE=' "$INSTALL" \
   || fail "$INSTALL writes no WARDYN_SSH_ADVERTISE — the console's attach pane then prints no usable ssh command"
 
-# It also installed NO host binary, so `wardyn ssh <run-id>` had no client on
+# It also installed NO host binary, so `wardyn run ssh <run-id>` had no client on
 # the very machine that enables the gateway: the only command path was
 # `docker compose exec`, which is in-container and root-only.
 # Anchored, and BOTH halves: a bare substring match on "install_cli" is
 # satisfied by a renamed-out `_disabled_install_cli`, and defining the function
 # without calling it installs nothing.
 grep -qE '^install_cli\(\) \{' "$INSTALL" \
-  || fail "$INSTALL defines no install_cli function — 'wardyn ssh' then has no client on a no-clone box"
+  || fail "$INSTALL defines no install_cli function — 'wardyn run ssh' then has no client on a no-clone box"
 grep -qE '^install_cli$' "$INSTALL" \
   || fail "$INSTALL defines install_cli but never calls it — the CLI is never installed"
 

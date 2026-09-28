@@ -111,7 +111,7 @@ describe("ConnectSSHCard — visibility", () => {
     // jsdom's origin is not the CLI's default, so the block also carries a
     // WARDYN_URL= prefix — match on the command within it.
     expect(
-      screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`)),
+      screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`)),
     ).toBeInTheDocument();
     // Both SSH and the UI-apps lane are off with an empty healthz response,
     // so match SSH's off text specifically rather than the shared "Off on
@@ -167,8 +167,8 @@ describe("ConnectSSHCard — content", () => {
 
     await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`)).toBeInTheDocument();
-    // C3.2b: the wardyn ssh <run-id> shortcut line sits above "ssh config".
-    expect(screen.getByText((t) => t.includes(`wardyn ssh ${baseRun.id}`))).toBeInTheDocument();
+    // C3.2b: the wardyn run ssh <run-id> shortcut line sits above "ssh config".
+    expect(screen.getByText((t) => t.includes(`wardyn run ssh ${baseRun.id}`))).toBeInTheDocument();
     expect(screen.getByText(/ED25519 SHA256:abc123/)).toBeInTheDocument();
     expect(screen.getByText("ssh config")).toBeInTheDocument();
     expect(screen.getByText("VS Code Remote-SSH")).toBeInTheDocument();
