@@ -427,6 +427,14 @@ const ConfinementPostureBanner = React.lazy(() =>
 const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
+// #659 Q2 — same lazy rationale; mounted FIRST in the stack, ahead of every
+// deployment-wide band: it answers what the person just did (a redirect they
+// are actively watching for), one time, then clears itself from the URL —
+// distinct from the others, which restate a standing condition on every
+// visit.
+const AdoSignInBanner = React.lazy(() =>
+  import("../wardyn/ado-signin-banner").then((m) => ({ default: m.AdoSignInBanner })),
+);
 
 // #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
 // same entry-budget reason; the shell warms the chunk on mount, because by the
@@ -747,6 +755,12 @@ export function AppShell({
           that arrives WITH its first sentence (as a lazy chunk does) announces
           nothing. The wrapper is here from the first paint; the chunk fills it. */}
             <div role="status">
+              {/* #659 Q2 — first in the stack: a one-time answer to a redirect
+              the person is actively watching for, not a standing deployment
+              condition like the bands below it. */}
+              <React.Suspense fallback={null}>
+                <AdoSignInBanner />
+              </React.Suspense>
               {/* §4.2 (M-3): each band is passed the session's resolved view
               (useShellView, not the raw URL) so a clamped admin who types an
               /admin/* path while still in the User view — the interstitial

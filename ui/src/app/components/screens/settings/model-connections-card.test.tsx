@@ -24,6 +24,7 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { WithDoor } from "../../../../test/door-harness";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
 import { CONNECTIONS, KEY_DOOR } from "../../wardyn/copy/door";
+import { aheadByHours } from "../../../lib/test-clock";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -103,4 +104,19 @@ it("a key row's Replace button opens the key door with the stored state", async 
   expect(
     await screen.findByRole("dialog", { name: KEY_DOOR.TITLE_REPLACE(false, MODEL_PROVIDERS.anthropicKey.name) }),
   ).toBeInTheDocument();
+});
+
+// #592 (CS-8) — the meta line renders on the card when this caller's own row
+// carries an added_at, and stays absent for a row with nothing stored.
+it("shows the Added/Last used meta line only for a row that holds a credential", async () => {
+  const s = providerStatus([
+    { provider: MODEL_PROVIDERS.anthropicKey, state: "live", addedAt: aheadByHours(-24 * 10) },
+    { provider: MODEL_PROVIDERS.gateway, state: "not_configured" },
+  ]);
+  renderCard(s);
+  const card = await screen.findByTestId("model-connections-card");
+  expect(within(card).getByText(/^Added /)).toBeInTheDocument();
+  // The unconnected row (nothing ever stored) gets no meta line at all —
+  // its own "Your key goes to …" line is the only second line it renders.
+  expect(within(card).getAllByText(/^Added /)).toHaveLength(1);
 });

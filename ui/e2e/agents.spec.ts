@@ -390,20 +390,14 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
   // reading an ENABLED per_user row (model-key-state.ts's own comment: "not
   // a rare skew case ... reached in real traffic"). #541 retired the
   // dedicated MODEL_ACCESS_NOT_APPLICABLE chip this test used to pin at the
-  // top of "What's set up for you": legacySummary has no not_applicable
-  // branch, so it falls to the llm_ready fallback — READY here, since this
-  // e2e daemon's Bedrock lane makes computeLLMReady's AI-provider fallback
-  // deterministically true (same reasoning the original comment gave).
-  // FINDING (flagged, not fixed — out of this round's scope): unlike every
-  // other state, not_applicable now leaves NO trace anywhere on the page
-  // that this is a shared/admin-token reading rather than an ordinary ready
-  // per_user session — the top chip reads plain "Ready", and the "Your
-  // model key" card (modelKeyState's per_user band maps not_applicable to
-  // "unknown", whose body is PER_PERSON_NA_BODY) is the one place that still
-  // names it. This test now pins exactly that: the top-level chip no longer
-  // distinguishes the state, but the card still says so in words, and no
-  // stale AGENTS.MODEL_ACCESS_* label or the sign-in CTA ever appears.
-  test("model_access.state=not_applicable reads Ready up top; the model key card is the one place that still names it", async ({
+  // top of "What's set up for you", and legacySummary had no not_applicable
+  // branch for a while — it fell to the llm_ready fallback and read plain
+  // "Ready", indistinguishable from a genuine per-person ready session
+  // (flagged by #1042's e2e, tracked as #1052... no — #1089). #1089 (owner
+  // ruling: build it as a chip) restored a not_applicable arm to
+  // legacySummary: this test now pins the RESTORED chip up top, and that the
+  // "Your model key" card still names the state in words underneath it.
+  test("model_access.state=not_applicable shows its own chip up top (#1089), and the model key card also names it", async ({
     page,
   }) => {
     await mockMemberRole(page);
@@ -442,11 +436,13 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Your model key" }) });
     await expect(setupSummarySection).toBeVisible();
-    await expect(setupSummarySection.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
+    await expect(setupSummarySection.getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeVisible();
     await expect(modelKeySection.getByText(YOUR_MODEL_KEY.PER_PERSON_NA_BODY)).toBeVisible();
-    // Never one of the OTHER five server-driven AGENTS.MODEL_ACCESS_* labels,
-    // and the retired dedicated chip is gone for good, not just relabelled.
-    for (const label of Object.values(MODEL_ACCESS_CHIP_LABEL)) {
+    // Never one of the OTHER five server-driven AGENTS.MODEL_ACCESS_* labels —
+    // not_applicable's own label above is the only one of the six that
+    // legitimately appears now that #1089 restored it.
+    for (const [state, label] of Object.entries(MODEL_ACCESS_CHIP_LABEL)) {
+      if (state === "not_applicable") continue;
       await expect(page.getByText(label)).toHaveCount(0);
     }
     await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toHaveCount(0);
