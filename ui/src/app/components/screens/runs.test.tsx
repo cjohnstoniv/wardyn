@@ -164,8 +164,13 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
   });
 
   it("a lease-ended row shows the square glyph and reads 'ended … · ran …', not 'started …'", async () => {
-    const startedAt = new Date(Date.now() - 3600_000).toISOString();
-    const lostAt = new Date(Date.now() - 1800_000).toISOString();
+    // Ended within today's calendar day at any local clock time, so the row
+    // lands in "Ended today" even in the first half hour after midnight.
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const lostMs = Math.max(Date.now() - 1800_000, midnight.getTime() + 1000);
+    const startedAt = new Date(lostMs - 1800_000).toISOString();
+    const lostAt = new Date(lostMs).toISOString();
     listRunsFilteredMock.mockResolvedValue({
       runs: [
         run({
