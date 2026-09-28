@@ -983,6 +983,13 @@ const reasonCredentialInventoryNoMeta = "credential_inventory_no_meta"
 const (
 	reasonRecordingStoreUnavailable = "recording_store_unavailable"
 	reasonRecordingTooLarge         = "recording_too_large"
+	reasonRecordingInvalidPart      = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
+	// reasonRecordingPartLimit is the SAME value as recordingPartLimitReason
+	// (recording.go), the nested audit-detail field this refusal's own
+	// recording.upload row already carried — a literal here, not a reference,
+	// so TestReasonDocsMatchReasonsGo (which only reads this file) can see it
+	// (#656 slice 3).
+	reasonRecordingPartLimit = "part_limit"
 )
 
 // The Azure DevOps escalation's decision rule (injection_ado_capability.go).

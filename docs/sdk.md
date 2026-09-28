@@ -296,7 +296,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `credential_erase_principal_required` / `credential_erase_operator_namespace` | `DELETE /people/{principal}/credentials` (`credential_erase.go`). |
 | `explain_principal_invalid` | `GET /permissions/explain` (`capabilities_explain.go`). |
 | `credential_inventory_no_meta` | `GET /admin/credentials/inventory` (`credential_inventory.go`). |
-| `recording_store_unavailable` / `recording_too_large` | `PUT /internal/recordings/{runID}` (`recording.go`). |
+| `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the same value the refusal's own `recording.upload` audit row already carries in its nested `reason` detail field, now also on the wire. |
 | `ado_decision_scope_invalid` / `ado_access_above_ceiling` | The Azure DevOps escalation's decision rule (`injection_ado_capability.go`). |
 | `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. |
 | `scan_facts_invalid` / `scan_upload_superseded` | `/internal/scan-results/{runID}` (`scanresult.go`). |

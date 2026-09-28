@@ -93,7 +93,7 @@ func (s *Server) handleUploadRecordingPart(w http.ResponseWriter, r *http.Reques
 	raw := chi.URLParam(r, "part")
 	part, err := strconv.Atoi(raw)
 	if err != nil || part < 2 || strconv.Itoa(part) != raw {
-		writeError(w, http.StatusNotFound, "invalid recording part")
+		writeErrorReason(w, http.StatusNotFound, reasonRecordingInvalidPart, "invalid recording part")
 		return
 	}
 	s.saveRecording(w, r, part)
@@ -115,7 +115,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		runID := claims.RunID
 		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
 			runID.String(), "failure", mustJSON(map[string]any{"part": part, "reason": recordingPartLimitReason})))
-		writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds its part limit")
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingPartLimit, "recording exceeds its part limit")
 		return
 	}
 
