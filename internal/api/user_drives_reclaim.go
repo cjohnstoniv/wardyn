@@ -163,7 +163,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	d, err := s.cfg.Store.GetUserDrive(r.Context(), id)
-	if notFoundIf(w, err, "user drive") {
+	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
 		return
 	}
 	if err != nil {

@@ -239,7 +239,7 @@ func (s *Server) handlePutPreset(w http.ResponseWriter, r *http.Request) {
 // preset and preset_version.
 func (s *Server) handleDeletePreset(w http.ResponseWriter, r *http.Request) {
 	p, err := s.cfg.Store.DeleteLaunchPreset(r.Context(), chi.URLParam(r, "name"))
-	if notFoundIf(w, err, "preset") {
+	if notFoundIf(w, err, "preset", reasonPresetNotFound) {
 		return
 	}
 	if err != nil {

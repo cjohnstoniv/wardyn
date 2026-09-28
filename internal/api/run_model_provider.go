@@ -157,6 +157,12 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 	if credential {
 		body.Reason = llmRefusalAuditReason
 		d = d.With("remedy", llmRefusalAuditReason)
+	} else {
+		// #656 slice 3: the non-credential states (off, not serving, not
+		// granted, no such provider) had no wire reason at all — the SAME
+		// audit reason d already carries, so a caller can at least tell
+		// "this is a model-provider refusal" even without the specific state.
+		body.Reason = string(authz.ReasonModelProviderUnavailable)
 	}
 	s.recordRefusal(r.Context(), r, d)
 	writeJSON(w, http.StatusUnprocessableEntity, body)

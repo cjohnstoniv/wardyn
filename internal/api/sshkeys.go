@@ -224,7 +224,7 @@ func (s *Server) handleDeleteSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	principal := principalFromRequest(r)
 	err = s.cfg.Store.DeleteSSHKey(r.Context(), fp, principal)
-	if notFoundIf(w, err, "ssh key") {
+	if notFoundIf(w, err, "ssh key", reasonSSHKeyNotFoundEntity) {
 		return
 	}
 	if err != nil {

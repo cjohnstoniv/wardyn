@@ -145,7 +145,7 @@ func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := ds.RevokeDevice(r.Context(), id, s.cfg.Now().UTC())
-	if notFoundIf(w, err, "device") {
+	if notFoundIf(w, err, "device", reasonDeviceNotFound) {
 		return
 	}
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *Server) handleRevokeEnrolmentToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	t, err := ds.RevokeEnrolmentToken(r.Context(), id, s.cfg.Now().UTC())
-	if notFoundIf(w, err, "enrolment token") {
+	if notFoundIf(w, err, "enrolment token", reasonEnrolmentTokenNotFound) {
 		return
 	}
 	if err != nil {

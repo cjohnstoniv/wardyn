@@ -81,11 +81,36 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 			return nil, err
 		}
 		if !allowed {
-			return &ownerRefusal{status: http.StatusForbidden, reason: "capability_" + d.kind, msg: fmt.Sprintf(
+			return &ownerRefusal{status: http.StatusForbidden, reason: capabilityLostReason(d.kind), msg: fmt.Sprintf(
 				"the run's owner no longer holds the %s capability for %s; start a new run", d.kind, d.label)}, nil
 		}
 	}
 	return nil, nil
+}
+
+// capabilityLostReason is ownerCapabilityRefusal's wire reason for a closed
+// launch-door capability, kept as a lookup rather than string-concatenating
+// "capability_"+kind (#656 slice 3): the five kinds persistedLaunchDoors can
+// ever produce are capabilities.go's own cap* consts, a closed set, so the
+// reason is one of reasons.go's own reasonOwnerCapability* literals — visible
+// to TestReasonDocsMatchReasonsGo, which only reads string literals, not a
+// runtime concatenation. reasonOwnerCapabilityUnknown is defensive only: none
+// of the five known kinds falls through to it today.
+func capabilityLostReason(kind string) string {
+	switch kind {
+	case capAgent:
+		return reasonOwnerCapabilityAgent
+	case capWorkspace:
+		return reasonOwnerCapabilityWorkspace
+	case capModelProvider:
+		return reasonOwnerCapabilityModelProvider
+	case capPolicy:
+		return reasonOwnerCapabilityPolicy
+	case capWorkspaceProvider:
+		return reasonOwnerCapabilityWorkspaceProvider
+	default:
+		return reasonOwnerCapabilityUnknown
+	}
 }
 
 // door is one launch capability a run was admitted through. label is what a
@@ -211,12 +236,12 @@ func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*types.G
 	}
 	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
 	if err != nil {
-		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: "profile_unreadable",
+		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerProfileUnreadable,
 			msg: "resolve the owner's governance profile: " + err.Error()}
 	}
 	i := slices.IndexFunc(profiles, func(p types.GovernanceProfile) bool { return p.ID == *run.GovernanceProfileID })
 	if i < 0 {
-		return nil, &ownerRefusal{status: http.StatusConflict, reason: "profile_gone",
+		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerProfileGone,
 			msg: "the governance profile this run was created under no longer exists; start a new run"}
 	}
 	return &profiles[i], nil
@@ -256,7 +281,7 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 			return nil, err
 		}
 		if !present {
-			return &ownerRefusal{status: http.StatusConflict, reason: "model_credential_erased", msg: fmt.Sprintf(
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelCredentialErased, msg: fmt.Sprintf(
 				"the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)}, nil
 		}
 		if sc == nil {
@@ -267,7 +292,7 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 			sc = &got
 		}
 		if name, off := integrationDisabledFor(*sc, scope.SecretName); off {
-			return &ownerRefusal{status: http.StatusConflict, reason: "model_provider_disabled", msg: fmt.Sprintf(
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderDisabled, msg: fmt.Sprintf(
 				"the integration %s that supplies this run's credential for %s is disabled; start a new run", name, in.Host)}, nil
 		}
 	}
@@ -355,12 +380,12 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		err = s.refreshDeploymentConfig(ctx, run, cfg)
 	}
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, "re-check the run owner's authority: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, "re-check the run owner's authority: "+err.Error())
 	}
 	if ref != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": ref.reason})))
-		return reviveRefused(ref.status, ref.msg)
+		return reviveRefused(ref.status, ref.reason, ref.msg)
 	}
 	return nil
 }
@@ -393,17 +418,17 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
 	case err != nil:
-		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: "owner_unverifiable",
+		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
 			msg: "read the run's proxy config to re-check its owner's authority: " + err.Error()}
 	default:
 		if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
-			return &ownerRefusal{status: http.StatusConflict, reason: "owner_unverifiable",
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerUnverifiable,
 				msg: "the run's proxy config does not load: " + err.Error()}
 		}
 	}
 	ref, err := s.ownerCapabilityRefusal(ctx, run, principalFromRequest(r) == run.CreatedBy, runRepos(run, cfg))
 	if err != nil {
-		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: "owner_unverifiable",
+		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
 			msg: "re-check the run owner's authority: " + err.Error()}
 	}
 	return ref

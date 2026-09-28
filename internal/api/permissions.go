@@ -394,7 +394,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := s.cfg.Store.DeleteCapabilityGrant(r.Context(), id); err != nil {
-		if notFoundIf(w, err, "capability grant") {
+		if notFoundIf(w, err, "capability grant", reasonCapabilityGrantNotFound) {
 			return
 		}
 		writeServerError(w, r, "delete capability grant", err)

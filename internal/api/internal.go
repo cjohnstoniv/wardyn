@@ -515,7 +515,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ap, err := s.cfg.Approvals.Get(r.Context(), id)
-	if notFoundIf(w, err, "approval") {
+	if notFoundIf(w, err, "approval", reasonApprovalNotFound) {
 		return
 	}
 	if err != nil {
@@ -569,7 +569,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 		return
 	}
 	ap, err := s.cfg.Approvals.Get(r.Context(), id)
-	if notFoundIf(w, err, "approval") {
+	if notFoundIf(w, err, "approval", reasonApprovalNotFound) {
 		return
 	}
 	if err != nil {
@@ -908,9 +908,12 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		if errors.Is(err, store.ErrNotFound) {
 			// 403, not 404: same reason as refuseTerminalRun — the caller's own
 			// presented token names claims.RunID, so a missing run is that
-			// token's authority gone, not a path a member could probe.
-			s.auditRenewDenied(r, claims, "run_not_found")
-			writeError(w, http.StatusForbidden, "run not found")
+			// token's authority gone, not a path a member could probe. The SAME
+			// wire reason notFoundIf's own "run" case uses (helpers.go, #656
+			// slice 3) — the identical cause, a different status for a
+			// different audience.
+			s.auditRenewDenied(r, claims, reasonRunNotFound)
+			writeErrorReason(w, http.StatusForbidden, reasonRunNotFound, "run not found")
 			return
 		}
 		// Transient store failure: refuse (fail closed) but signal retryable, so a

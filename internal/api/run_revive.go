@@ -74,18 +74,21 @@ type jtiRevoker interface {
 	RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error
 }
 
-// reviveError is a revive refusal: status is the HTTP answer, and lost says
-// the proxy is gone and the run was put back to lost (outage).
+// reviveError is a revive refusal: status is the HTTP answer, reason the
+// machine-readable wire reason (#656 slice 3 — the same one recordAudit
+// already wrote for every refusal below), and lost says the proxy is gone
+// and the run was put back to lost (outage).
 type reviveError struct {
 	status int
+	reason string
 	msg    string
 	lost   bool
 }
 
 func (e *reviveError) Error() string { return e.msg }
 
-func reviveRefused(status int, msg string) *reviveError {
-	return &reviveError{status: status, msg: msg}
+func reviveRefused(status int, reason, msg string) *reviveError {
+	return &reviveError{status: status, reason: reason, msg: msg}
 }
 
 // reviveResult is what a revive or restart reports.
@@ -110,7 +113,7 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.reviveFromRequest(r, run, true)
 	if err != nil {
-		writeError(w, err.status, err.msg)
+		writeErrorReason(w, err.status, err.reason, err.msg)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -125,8 +128,8 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 	if localPrincipalFromContext(r.Context()) != "" && actor != run.CreatedBy {
 		// O4: audited like every other revive refusal, never silent.
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(),
-			"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": "local_mode_not_owner"})))
-		return reviveResult{}, reviveRefused(http.StatusForbidden, "in local mode only the run's owner can revive it")
+			"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonReviveLocalModeNotOwner})))
+		return reviveResult{}, reviveRefused(http.StatusForbidden, reasonReviveLocalModeNotOwner, "in local mode only the run's owner can revive it")
 	}
 	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent)
 }
@@ -141,11 +144,11 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool) (reviveResult, *reviveError) {
 	reviver, ok := s.cfg.Store.(store.RunReviver)
 	if !ok || s.cfg.Runner == nil {
-		return reviveResult{}, reviveRefused(http.StatusNotImplemented, "this deployment cannot revive a run")
+		return reviveResult{}, reviveRefused(http.StatusNotImplemented, reasonReviveUnsupportedDeployment, "this deployment cannot revive a run")
 	}
 	rv, ok := s.cfg.Runner.(runner.ProxyReviver)
 	if !ok {
-		return reviveResult{}, reviveRefused(http.StatusConflict, runner.ErrReviveUnsupported.Error())
+		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveUnsupportedRunner, runner.ErrReviveUnsupported.Error())
 	}
 	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
 		return reviveResult{}, rerr
@@ -156,14 +159,14 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
 	if rebooted && !canStart {
-		return reviveResult{}, reviveRefused(http.StatusConflict, runner.ErrReviveUnsupported.Error())
+		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveUnsupportedRunner, runner.ErrReviveUnsupported.Error())
 	}
 	if rebooted && !startAgent {
-		return reviveResult{}, reviveRefused(http.StatusConflict,
+		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
 			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
 	if _, busy := s.reviving.LoadOrStore(run.ID, struct{}{}); busy {
-		return reviveResult{}, reviveRefused(http.StatusConflict, "a revive of this run is already in progress")
+		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveAlreadyInProgress, "a revive of this run is already in progress")
 	}
 	defer s.reviving.Delete(run.ID)
 
@@ -185,12 +188,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	retiring := cfg.RunToken
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
 	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "mint run identity: "+err.Error())
+		return reviveResult{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "mint run identity: "+err.Error())
 	}
 	cfg.RunToken = id.Token
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())
+		return reviveResult{}, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, "encode proxy config: "+err.Error())
 	}
 
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
@@ -199,7 +202,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// run IS claimed), so the window it opens must cover only a fast
 	// docker create+start, not an image pull.
 	if err := rv.EnsureProxyImage(ctx); err != nil {
-		return reviveResult{}, reviveRefused(http.StatusBadGateway, "pull the proxy image: "+err.Error())
+		return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonRevivePullImageFailed, "pull the proxy image: "+err.Error())
 	}
 
 	// The claim comes BEFORE the new proxy starts: once the run is no longer
@@ -210,10 +213,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// a rebooted agent not yet started and lose the run again.
 	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()))
 	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, "claim the run for revive: "+err.Error())
+		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
 	}
 	if !claimed {
-		return reviveResult{}, reviveRefused(http.StatusConflict, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
 	}
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
@@ -237,7 +240,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			// while its allowlisted egress keeps flowing audit-dark for up to
 			// the lapsed-token sweep's ~1h05m window.
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-			return reviveResult{}, reviveRefused(http.StatusBadGateway,
+			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 				"the run's proxy was not replaced, and the run keeps its current proxy: "+err.Error())
 		}
 		// The old proxy is, or may be, gone: nothing is left to serve on the
@@ -246,7 +249,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		s.revokeRetiringToken(ctx, retiring, run.ID)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 		s.reloseRun(ctx, run)
-		return reviveResult{}, &reviveError{status: http.StatusBadGateway, lost: true,
+		return reviveResult{}, &reviveError{status: http.StatusBadGateway, reason: reasonReviveProxyReplaceFailedLost, lost: true,
 			msg: "the run's proxy could not be replaced, so the run has no egress and is lost until revived: " + err.Error()}
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no
@@ -278,7 +281,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			data["error"], data["lost_again"] = "start agent: "+err.Error(), true
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			s.reloseRun(ctx, run)
-			return reviveResult{}, &reviveError{status: http.StatusBadGateway, lost: true,
+			return reviveResult{}, &reviveError{status: http.StatusBadGateway, reason: reasonReviveAgentStartFailedLost, lost: true,
 				msg: "the run's agent could not be started, so the run is stopped and lost until revived: " + err.Error()}
 		}
 		data["agent_started"] = true
@@ -300,21 +303,21 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun) (*proxy.Config, *reviveError) {
 	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
 		if errors.Is(err, runner.ErrReviveUnsupported) {
-			return nil, reviveRefused(http.StatusConflict, err.Error())
+			return nil, reviveRefused(http.StatusConflict, reasonReviveUnsupportedRunner, err.Error())
 		}
-		return nil, reviveRefused(http.StatusBadGateway, "resolve the run's substrate: "+err.Error())
+		return nil, reviveRefused(http.StatusBadGateway, reasonReviveSubstrateUnreadable, "resolve the run's substrate: "+err.Error())
 	}
 	old, err := s.loadRunProxyConfig(ctx, run.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
-		return nil, reviveRefused(http.StatusConflict,
+		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigNotStored,
 			"the run's proxy config is not stored (it started before this release, or this deployment keeps none); start a new run")
 	case err != nil:
-		return nil, reviveRefused(http.StatusServiceUnavailable, "read the run's proxy config: "+err.Error())
+		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, "read the run's proxy config: "+err.Error())
 	}
 	cfg, err := s.loadRenderedProxyConfig(old)
 	if err != nil {
-		return nil, reviveRefused(http.StatusConflict, "the run's proxy config does not load: "+err.Error())
+		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
 	return cfg, nil
 }
@@ -329,23 +332,23 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 	ended := run.LostReason == types.LostEnded
 	switch {
 	case run.State != types.RunRunning || run.SandboxRef == "":
-		return reviveRefused(http.StatusConflict, "run is not running (state="+string(run.State)+")")
+		return reviveRefused(http.StatusConflict, reasonReviveNotRunning, "run is not running (state="+string(run.State)+")")
 	case ended && !s.endedFilesKept(run, now):
-		return reviveRefused(http.StatusConflict, "run has ended and its files are no longer kept; start a new run")
+		return reviveRefused(http.StatusConflict, reasonReviveEndedFilesGone, "run has ended and its files are no longer kept; start a new run")
 	case run.EndsAt != nil && !now.Before(*run.EndsAt):
-		return reviveRefused(http.StatusConflict, "run has passed its end; extend it first")
+		return reviveRefused(http.StatusConflict, reasonRevivePastEnd, "run has passed its end; extend it first")
 	case ended && !run.Interactive:
 		// A task run's agent is the task, started once by dispatch: starting
 		// its container again brings back the files and no agent.
-		return reviveRefused(http.StatusConflict, "run has ended and a task run's agent cannot be started again; start a new run")
+		return reviveRefused(http.StatusConflict, reasonReviveEndedTaskRun, "run has ended and a task run's agent cannot be started again; start a new run")
 	case run.LostAt == nil, run.LostReason == types.LostOutage:
 	case (run.LostReason == types.LostReboot || ended) && startAgent:
 	case run.LostReason == types.LostReboot:
-		return reviveRefused(http.StatusConflict, "run was lost to a reboot and its agent is stopped; revive it from the run's page")
+		return reviveRefused(http.StatusConflict, reasonReviveRebootAgentStopped, "run was lost to a reboot and its agent is stopped; revive it from the run's page")
 	case ended:
-		return reviveRefused(http.StatusConflict, "run has ended and its agent is stopped; revive it from the run's page")
+		return reviveRefused(http.StatusConflict, reasonReviveEndedAgentStopped, "run has ended and its agent is stopped; revive it from the run's page")
 	default:
-		return reviveRefused(http.StatusConflict, "run was lost ("+string(run.LostReason)+") and cannot be revived")
+		return reviveRefused(http.StatusConflict, reasonReviveUnknownLostReason, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
 	return nil
 }
@@ -377,7 +380,7 @@ func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) 
 	}
 	st, err := s.cfg.Runner.Status(ctx, run.SandboxRef)
 	if err != nil {
-		return false, reviveRefused(http.StatusServiceUnavailable, "check the run's agent status: "+err.Error())
+		return false, reviveRefused(http.StatusServiceUnavailable, reasonReviveAgentStatusUnreadable, "check the run's agent status: "+err.Error())
 	}
 	return st.State != types.RunRunning, nil
 }
@@ -439,7 +442,7 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCe
 	p, ref := s.ownerProfile(ctx, run)
 	switch {
 	case ref != nil:
-		return ownerCeiling{}, reviveRefused(ref.status, ref.msg)
+		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)
 	case p == nil:
 		return ownerCeiling{}, nil
 	}
@@ -464,14 +467,14 @@ type reasserted struct {
 // request. A revive whose ceiling denies a broker-managed host is refused.
 func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
-		return reasserted{}, reviveRefused(http.StatusConflict, "the run's proxy config names another run")
+		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
 	}
 	var re reasserted
 	if len(c.deny) == 0 {
 		return re, nil
 	}
 	if len(cfg.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
-		return re, reviveRefused(http.StatusConflict,
+		return re, reviveRefused(http.StatusConflict, reasonReviveCeilingDeniesGitBroker,
 			"the owner's governance profile now denies GitHub, which this run's git broker needs; start a new run")
 	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
@@ -572,7 +575,7 @@ func (s *Server) handleAdminRestartRuns(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if len(req.RunIDs) == 0 || len(req.RunIDs) > reviveBulkMax {
-		writeError(w, http.StatusBadRequest, "run_ids must name 1 to "+strconv.Itoa(reviveBulkMax)+" runs")
+		writeErrorReason(w, http.StatusBadRequest, reasonReviveAdminRestartCountInvalid, "run_ids must name 1 to "+strconv.Itoa(reviveBulkMax)+" runs")
 		return
 	}
 	results := make([]adminRestartResult, 0, len(req.RunIDs))
@@ -604,7 +607,7 @@ func (s *Server) handleAdminRestartRuns(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleAdminProxyWindow(w http.ResponseWriter, r *http.Request) {
 	reviver, ok := s.cfg.Store.(store.RunReviver)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "this store cannot list proxy releases")
+		writeErrorReason(w, http.StatusNotImplemented, reasonReviveProxyWindowStoreUnavailable, "this store cannot list proxy releases")
 		return
 	}
 	runs, err := reviver.ListRunProxyReleases(r.Context())

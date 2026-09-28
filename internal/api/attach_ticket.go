@@ -160,11 +160,12 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	//
 	// 404, byte-identical to the foreign-member deny getRunAuthorized writes —
 	// same no-existence-oracle rule, so probing run ids through this route
-	// still learns nothing. Audited under its OWN reason, not "not_owner": an
-	// auditor should be able to see a security admin refused a foreign PTY
-	// without inferring it from the path.
+	// still learns nothing, including its wire reason (AsIf, #656 slice 3).
+	// Audited under its OWN reason, not "not_owner": an auditor should be able
+	// to see a security admin refused a foreign PTY without inferring it from
+	// the path.
 	if !s.isOperator(r.Context()) && run.CreatedBy != principalFromRequest(r) {
-		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID))
+		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run

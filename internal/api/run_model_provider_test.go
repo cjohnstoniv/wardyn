@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -173,6 +174,11 @@ func TestRunModelProviderDoors(t *testing.T) {
 		wantProvider string // #532: the 422's provider and kind; "" when the refusal names no provider
 		wantKind     types.ModelProviderKind
 		credential   bool // #532: reason model_credential — only a refusal the caller's own stored credential repairs
+		// noProviderReason marks the two 422s writeProviderRefusal never
+		// writes (mpRunNoBlock, mpRunNoIntegration) — a bare writeError,
+		// #656 slice 3 leaves untouched here since they carry no provider
+		// choice at all to attach a reason to.
+		noProviderReason bool
 	}{
 		{name: "a requested provider the member is not granted", site: twoKeys, cs: &capStore{enf: enforced},
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
@@ -207,7 +213,7 @@ func TestRunModelProviderDoors(t *testing.T) {
 			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
 		{name: "integration_id under a provider block", site: withIntegration, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","integration_id":"corp-anthropic","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration},
+			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration, noProviderReason: true},
 		{name: "a disabled default with one other candidate", cs: &capStore{}, operator: true,
 			site: types.SiteConfig{
 				ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), func() types.ModelProvider {
@@ -225,7 +231,7 @@ func TestRunModelProviderDoors(t *testing.T) {
 			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
 		{name: "model_provider with no provider block", cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNoBlock, "corp")},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNoBlock, "corp"), noProviderReason: true},
 		{name: "model_provider on a run that calls no model", site: twoKeys, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"echo hi","task_mode":"exec","model_provider":"corp"}`,
 			want: http.StatusBadRequest, wantBody: mpRunNoModel},
@@ -255,14 +261,23 @@ func TestRunModelProviderDoors(t *testing.T) {
 					t.Errorf("%s = %d %s\nwant %d carrying %q", path, w.Code, w.Body.String(), tc.want, tc.wantBody)
 				}
 				// #532: every 422 refusing a NAMED provider carries `provider`
-				// and `kind`; `reason` rides only on a credential refusal, since
-				// the console answers it with a sign-in and a relaunch. Absent
-				// on the 403s (denyMemberField), the field-validation 4xxs
-				// (mpRunNoIntegration/mpRunNoBlock/mpRunNoModel/mpRunBadID) and
-				// the no-provider-named refusals (mpRunChoose).
+				// and `kind`. `reason` is llmRefusalAuditReason only on a
+				// credential refusal, since the console answers THAT one with
+				// a sign-in and a relaunch; every other writeProviderRefusal
+				// 422 (including the no-provider-named mpRunChoose) carries
+				// the generic authz.ReasonModelProviderUnavailable instead
+				// (#656 slice 3) — absent only on the 403s (denyMemberField
+				// writes capability_model_provider instead, checked below)
+				// and the two field-validation 422s/400s writeProviderRefusal
+				// never reaches (noProviderReason, mpRunNoModel, mpRunBadID).
 				wantReason := ""
-				if tc.credential {
+				switch {
+				case tc.denied:
+					wantReason = string(authz.ReasonCapabilityModelProvider)
+				case tc.credential:
 					wantReason = llmRefusalAuditReason
+				case tc.want == http.StatusUnprocessableEntity && !tc.noProviderReason:
+					wantReason = string(authz.ReasonModelProviderUnavailable)
 				}
 				if body.Reason != wantReason || body.Provider != tc.wantProvider || body.Kind != string(tc.wantKind) {
 					t.Errorf("%s: reason/provider/kind = %q/%q/%q, want %q/%q/%q",

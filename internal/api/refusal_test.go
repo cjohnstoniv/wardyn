@@ -120,12 +120,22 @@ func TestEveryRegisteredReasonIsEmitted(t *testing.T) {
 // adHocReasonLiterals are the places a registered reason's STRING appears in
 // this package's code as some other vocabulary's value. May only shrink.
 var adHocReasonLiterals = map[string]string{
-	"internal.go:run_not_found":                    "identity.renew's own reason, not an authz.denied row",
 	"user_drives_resolve.go:governance_profile":    "a drive's bound_by value on /me",
 	"user_drives_resolve.go:groups_snapshot_stale": "a drive's unavailable reason on /me",
 	"reasons.go:user_type_unknown":                 "moved from user_drives_resolve.go (#656 slice 2): a drive's unavailable reason on /me, also writeDriveError's wire reason",
 	"reasons.go:groups_snapshot_stale":             "#656 slice 2: the wire reason for PUT/POST governance and the drive resolver, deliberately the SAME string as authz's own registered reason, not a second vocabulary",
 	"user_view.go:admin_view":                      "the answered detail on the user_view_type_deleted row, not a second authz.denied row",
+	// #656 slice 3: notFoundIf's "run" case and ownerCapabilityRefusal's
+	// closed set share their VALUE with a registered authz.Reason by design
+	// (capabilityLostReason, reasons.go) — neither is an authz.Deny door, so
+	// the guard cannot see the real reference the way it sees Deny's own
+	// argument, same tradeoff as groups_snapshot_stale above.
+	"reasons.go:run_not_found":                 "notFoundIf's \"run\" case (helpers.go) and identity.renew's own audit reason (internal.go) — not an authz.denied row",
+	"reasons.go:capability_agent":              "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
+	"reasons.go:capability_workspace":          "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
+	"reasons.go:capability_model_provider":     "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
+	"reasons.go:capability_policy":             "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
+	"reasons.go:capability_workspace_provider": "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
 }
 
 // roleComparisons counts the == / != comparisons against a stamped admin role

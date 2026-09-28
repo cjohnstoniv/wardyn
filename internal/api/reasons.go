@@ -365,6 +365,163 @@ const (
 	driveRefusalDrivesDisabled = "drives_disabled"
 )
 
+// POST /runs/{id}/revive and the admin bulk restart (run_revive.go):
+// reviveError's own status+reason+msg replaces its former bare (status, msg)
+// pair, so the SAME reason recordAudit already wrote to the audit row for a
+// revive refusal (#656 slice 3) now also reaches the wire. One reason per
+// distinct revive-refusal cause; a few call sites answer the SAME cause two
+// ways (the runner substrate cannot revive at all) and share one on purpose.
+const (
+	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
+	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
+	// reasonReviveUnsupportedRunner covers three arms that all answer the
+	// identical runner.ErrReviveUnsupported fact: the runner does not
+	// implement ProxyReviver, a rebooted run's runner does not also implement
+	// SandboxStarter, and the run's own CanReplaceProxy check refused with
+	// this same sentinel.
+	reasonReviveUnsupportedRunner           = "revive_unsupported_runner"
+	reasonReviveBulkCannotStartAgent        = "revive_bulk_cannot_start_agent"        // a bulk restart cannot start a stopped agent; only the run's own page can
+	reasonReviveAlreadyInProgress           = "revive_already_in_progress"            // another revive of this run is already running
+	reasonReviveMintIdentityFailed          = "revive_mint_identity_failed"           // minting the fresh run token failed
+	reasonReviveEncodeConfigFailed          = "revive_encode_config_failed"           // the rewritten proxy config would not marshal to JSON
+	reasonRevivePullImageFailed             = "revive_pull_image_failed"              // the proxy image could not be pulled
+	reasonReviveClaimFailed                 = "revive_claim_failed"                   // the claim that marks the run revived failed
+	reasonReviveRunChanged                  = "revive_run_changed"                    // the run ended, was lost again, or was revived elsewhere mid-request
+	reasonReviveProxyKeptCurrent            = "revive_proxy_kept_current"             // the old proxy was never touched; a still-live run keeps it after a failed replace
+	reasonReviveProxyReplaceFailedLost      = "revive_proxy_replace_failed_lost"      // the proxy could not be replaced, so the run has no egress and is lost again
+	reasonReviveAgentStartFailedLost        = "revive_agent_start_failed_lost"        // the agent could not be started behind the new proxy, so the run is lost again
+	reasonReviveSubstrateUnreadable         = "revive_substrate_unreadable"           // the run's substrate could not answer whether it can replace a proxy
+	reasonReviveConfigNotStored             = "revive_config_not_stored"              // no proxy config is stored for this run (it predates this release, or none is kept)
+	reasonReviveConfigUnreadable            = "revive_config_unreadable"              // the stored proxy config could not be read
+	reasonReviveConfigDoesNotLoad           = "revive_config_does_not_load"           // the stored proxy config failed to parse or validate
+	reasonReviveNotRunning                  = "revive_not_running"                    // the run is not in the RUNNING state, or has no sandbox
+	reasonReviveEndedFilesGone              = "revive_ended_files_gone"               // the run ended and its files are no longer kept
+	reasonRevivePastEnd                     = "revive_past_end"                       // the run has passed its scheduled end; extend it first
+	reasonReviveEndedTaskRun                = "revive_ended_task_run"                 // a task run's agent cannot be started again once it has ended
+	reasonReviveRebootAgentStopped          = "revive_reboot_agent_stopped"           // the run was lost to a reboot; only its own page can start its agent again
+	reasonReviveEndedAgentStopped           = "revive_ended_agent_stopped"            // the run has ended and its agent is stopped; only its own page can start it again
+	reasonReviveUnknownLostReason           = "revive_unknown_lost_reason"            // the run's lost_reason is not one revive recognizes
+	reasonReviveAgentStatusUnreadable       = "revive_agent_status_unreadable"        // the run's agent status could not be probed
+	reasonReviveConfigRunMismatch           = "revive_config_run_mismatch"            // the stored proxy config names a different run than the one being revived
+	reasonReviveCeilingDeniesGitBroker      = "revive_ceiling_denies_git_broker"      // the owner's current governance profile now denies GitHub, which the run's git broker needs
+	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check could not be completed
+	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
+	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
+)
+
+// ownerRefusal's own reason values (run_owner_authority.go): a revive's and a
+// run-end-extension's shared re-check of the owner's launch-door capabilities,
+// governance profile and model credential. Already used for the audit row
+// before #656 slice 3; declared here, not beside ownerRefusal, for the same
+// reason the driveRefusal* set is declared here rather than beside refuseDrive.
+const (
+	reasonOwnerProfileUnreadable = "profile_unreadable" // the owner's captured governance profile could not be read back
+	reasonOwnerProfileGone       = "profile_gone"       // the governance profile captured at launch no longer exists
+	// reasonOwnerCapability* names the launch door persistedLaunchDoors found
+	// closed: the SAME five capability kinds capabilities.go's own cap* consts
+	// enumerate, so the reason names the kind rather than repeating a run's
+	// specific agent/workspace/policy id (never on the wire).
+	reasonOwnerCapabilityAgent             = "capability_agent"
+	reasonOwnerCapabilityWorkspace         = "capability_workspace"
+	reasonOwnerCapabilityModelProvider     = "capability_model_provider"
+	reasonOwnerCapabilityPolicy            = "capability_policy"
+	reasonOwnerCapabilityWorkspaceProvider = "capability_workspace_provider"
+	// reasonOwnerCapabilityUnknown is defensive only: capabilityLostReason's
+	// (run_owner_authority.go) fallback for a capability kind outside the five
+	// above, which persistedLaunchDoors cannot produce today.
+	reasonOwnerCapabilityUnknown     = "capability_unknown"
+	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
+	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential was disabled
+	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
+	// three arms (proxy config unreadable, config does not load, capability
+	// re-check itself failed) that all answer the identical client-facing fact —
+	// the owner's authority to extend this run could not be confirmed right now.
+	reasonOwnerUnverifiable = "owner_unverifiable"
+)
+
+// PATCH /runs/{id} (run_end_wait.go): the run's end and wait budget.
+const (
+	reasonRunEndWaitNeitherField     = "run_end_wait_neither_field"     // the body set neither ends_at nor wait_budget_sec
+	reasonRunWaitBudgetNotANumber    = "run_wait_budget_not_a_number"   // wait_budget_sec was present but null
+	reasonRunEndWaitAlreadyFinished  = "run_end_wait_already_finished"  // the run is already in a terminal state
+	reasonRunEndWaitFilesGone        = "run_end_wait_files_gone"        // the run ended and its files are no longer kept
+	reasonRunEndWaitStoreUnavailable = "run_end_wait_store_unavailable" // this store cannot change a run's end
+	// reasonRunLimitsGateDenied is planRunEndWait's own shared cause: the
+	// user_changes_limits gate refused this change, for any of the 4 fields
+	// gateRefusal names — the SAME gate regardless of which field it blocked.
+	reasonRunLimitsGateDenied   = "run_limits_gate_denied"
+	reasonRunEndNoEndNotAllowed = "run_end_no_end_not_allowed" // the deployment's run-limits do not allow No end at all, gate or no gate
+	reasonRunEndMustBeFuture    = "run_end_must_be_future"     // ends_at is not after now
+	reasonRunWaitBudgetTooSmall = "run_wait_budget_too_small"  // wait_budget_sec is below 1
+	reasonRunEndWaitChanged     = "run_end_wait_changed"       // the run changed while the PATCH was being decided
+)
+
+// notFoundIf's (helpers.go) own reasons: one per resource kind its ~27
+// call sites name (#656 slice 3). notFoundIf itself cannot tell one kind
+// from another, so each caller supplies its own; declared together here so
+// TestReasonDocsMatchReasonsGo sees the whole set in one place. A kind
+// already exercised for a DIFFERENT shape entirely (reasonApprovalNotFound,
+// #656 slice 1) is reused rather than duplicated — same cause, same const.
+// reasonRunNotFound is likewise the SAME literal auditRenewDenied
+// (internal.go) already wrote for a renewal on a run that no longer exists.
+const (
+	reasonWorkspaceNotFound             = "workspace_not_found"
+	reasonUserDriveNotFound             = "user_drive_not_found"
+	reasonUserDriveAllocationNotFound   = "user_drive_allocation_not_found"
+	reasonSSHKeyNotFoundEntity          = "ssh_key_not_found"
+	reasonPresetNotFound                = "preset_not_found" // the admin preset-management route named no such preset — reasonPresetUnknown covers a RUN naming one instead
+	reasonPolicyNotFound                = "policy_not_found"
+	reasonCapabilityGrantNotFound       = "capability_grant_not_found"
+	reasonRunNotFound                   = "run_not_found"
+	reasonGovernanceAssignmentNotFound  = "governance_assignment_not_found"
+	reasonGovernanceProfileNotFoundByID = "governance_profile_not_found" // governance.go's own by-id GET/PUT/DELETE — distinct from reviveCeiling's reasonOwnerProfileGone (a run's CAPTURED profile going missing later)
+	reasonEnrolmentTokenNotFound        = "enrolment_token_not_found"
+	reasonDeviceNotFound                = "device_not_found"
+	reasonDelegateNotFound              = "delegate_not_found"
+	reasonAPITokenNotFoundEntity        = "api_token_not_found"
+	reasonRoleMappingNotFound           = "role_mapping_not_found"
+)
+
+// helpers.go's own shared foundational refusals (#656 slice 3): one path
+// param parse failure, one auth-middleware claims failure, one body-decode
+// failure, all reused by dozens of call sites across the package, since the
+// cause really is identical regardless of which handler hit it.
+const (
+	reasonInvalidIDParam            = "invalid_id_param"            // a {param} path segment does not parse as a UUID
+	reasonMissingRunClaims          = "missing_run_claims"          // the internal run token's claims could not be read
+	reasonRunIDMismatch             = "run_id_mismatch"             // the token's run id does not match the path's {runID}
+	reasonWorkspaceStoreUnavailable = "workspace_store_unavailable" // this build has no store configured at all (harness-only; wardynd always wires one)
+	// scan-upload's own 3-arm refusal (authSandboxRunUpload's sole caller today,
+	// scanresult.go): the same shape a future verify-result/recording caller
+	// would reuse the HELPER for for, but not these three specific reasons.
+	reasonScanUploadRunNotFound = "scan_upload_run_not_found"
+	reasonScanUploadNotGoverned = "scan_upload_not_governed"
+	reasonScanUploadWrongTask   = "scan_upload_wrong_task"
+	// scopedWorkspaceWrite's 4 callers (#656 slice 3): each validator's whole
+	// failure set is one cause bucket, the same grain as reasonSiteConfigInvalid
+	// above — a caller already knows which route it called, so the reason need
+	// only say "the body failed this route's validation", not which check.
+	reasonWorkspaceRequirementsInvalid   = "workspace_requirements_invalid"
+	reasonWorkspaceApprovedEgressInvalid = "workspace_approved_egress_invalid"
+	// reasonWorkspaceApprovedEgressDeadHost is its own reason, not folded into
+	// the bucket above: the remedy is different (use the git-broker/control-plane
+	// door this host is already routed through, not fix a malformed domain).
+	reasonWorkspaceApprovedEgressDeadHost = "workspace_approved_egress_dead_host"
+	reasonWorkspaceDeniedEgressInvalid    = "workspace_denied_egress_invalid"
+	reasonWorkspaceLLMCredInvalid         = "workspace_llm_cred_invalid"
+	// readCappedBody's own two shapes (helpers.go): shared by every caller that
+	// reads a request body under a cap, not only decodeStrictKeys's.
+	reasonRequestBodyTooLarge   = "request_body_too_large"
+	reasonRequestBodyUnreadable = "request_body_unreadable"
+)
+
+// /api/v1/policies (policies.go).
+const (
+	reasonPolicyRequestInvalid    = "policy_request_invalid"     // the create/update body fails decodePolicyRequest
+	reasonPolicySecretRefsInvalid = "policy_secret_refs_invalid" // a secret reference in the spec fails shape validation
+	reasonPolicyNameConflict      = "policy_name_conflict"       // a policy by that name already exists
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
