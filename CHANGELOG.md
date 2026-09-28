@@ -1826,6 +1826,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **The UI-sandbox enter ticket is bound to the browser that minted it, and a relayed app can no
+  longer register a service worker outside its own path (#1241).** Before, any user could mint an
+  enter ticket for their own run and push another person's browser through the hand-off with a
+  link or an auto-submitted form, landing it in their app; in path mode that app then shared an
+  origin with the victim's own apps. The console's **Open** now makes one credentialed fetch to
+  the new `POST <ui-origin>/__wardyn/bind` first, which sets an `HttpOnly`, `SameSite=Strict`
+  binding cookie on the UI origin, and `GET` and `POST` enter both refuse a ticket that arrives
+  without it (the bad-ticket `403`, plus a `ui.authorize` / `denied` row with reason
+  `ticket not bound to this browser`). The bind answers only a same-site fetch and, with SSO, only
+  the console's own origin (scheme and host); a refused bind is audited with its reason. The one-site
+  rule means the relay can no longer sit on a registrable domain of its own, so a relayed page can
+  plant `Domain=` cookies the console reads (#1258). `/healthz`'s `ui_sandbox` block gains `bind_url`, and the console's CSP
+  `connect-src` names that one URL. **Breaking:** the console and the UI origin must now be the
+  same site (one registrable domain, one scheme; `localhost` and `127.0.0.1` differ), and a script
+  that drives enter must bind first (docs/UI-SANDBOXES.md §3). The relay also removes
+  `Service-Worker-Allowed` from every app response and sets it to the app's own
+  `/r/<run>/<app>/` prefix on a worker-script fetch. docs/OPERATIONS.md now recommends host mode
+  (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) for any install with more than one user, and the threat
+  model's shared-origin residual no longer claims it was confined to one person's browser.
+
 - **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
   Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
   operator's and a device's, so an identity provider that let a user pick their `sub` could
@@ -1860,9 +1880,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   With the gateway on, boot refuses a malformed value and an `allow:` entry naming a `wardyn_*`
   cookie, which is never forwarded. Both controls act on headers only: the relayed page's own
   JavaScript can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies through
-  `document.cookie`, so a relay host must not share a registrable domain with anything whose
-  non-HttpOnly cookies matter — host mode on a registrable domain of its own is the answer. See
-  docs/UI-SANDBOXES.md, "Header hygiene".
+  `document.cookie`. The relay shares its registrable domain with the console (#1241 requires one
+  site), so keep anything else whose non-HttpOnly cookies matter off that domain; the console's own
+  cookies are the open case (#1258). See docs/UI-SANDBOXES.md, "Header hygiene".
 
 - **A kept run's token is refused at every `/internal` door the moment the run is kept (#1176).**
   A run its lease ended, or one lost to a reboot or an outage, stays `RUNNING` with its identity

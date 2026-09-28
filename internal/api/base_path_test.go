@@ -203,7 +203,9 @@ func TestBasePathUIGatewayPathMode(t *testing.T) {
 	if rec := get(t, gw, uiEnterPath+"?"+q.Encode()); rec.Code != http.StatusNotFound {
 		t.Fatalf("enter at the root = %d, want 404", rec.Code)
 	}
-	enter := get(t, gw, "/wardyn"+uiEnterPath+"?"+q.Encode())
+	enterReq := h.bound(httptest.NewRequest(http.MethodGet, "/wardyn"+uiEnterPath+"?"+q.Encode(), nil), q)
+	enter := httptest.NewRecorder()
+	gw.ServeHTTP(enter, enterReq)
 	relay := "/wardyn" + uiRelayPrefix(h.run.ID, "code")
 	if enter.Code != http.StatusFound || enter.Header().Get("Location") != relay+"/ide" {
 		t.Fatalf("enter = %d Location %q, want 302 to %s/ide", enter.Code, enter.Header().Get("Location"), relay)

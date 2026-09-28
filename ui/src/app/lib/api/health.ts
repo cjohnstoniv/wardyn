@@ -350,6 +350,9 @@ export const health = {
       enabled?: boolean;
       enter_url_template?: string;
       enter_post_url?: string;
+      // bind_url: the console's pre-enter fetch that ties the ticket to this
+      // browser (#1241); the gateway refuses an enter without it.
+      bind_url?: string;
       host_mode?: boolean;
     };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam

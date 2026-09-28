@@ -22,7 +22,9 @@
 // through to the console's session cookie or admin bearer:
 //
 //	POST /runs/{id}/attach/ticket  (existing, owner-or-admin, single-use, 30s)
-//	  → GET <ui-origin>/__wardyn/enter?run=&app=&ticket=
+//	  → POST <ui-origin>/__wardyn/bind (console fetch; binds the ticket to
+//	    this browser, uigateway_bind.go)
+//	  → POST <ui-origin>/__wardyn/enter (form: run, app, ticket; or the GET form)
 //	  → cookie wardyn_ui_sess (HttpOnly, SameSite=Lax, Path=/r/<run-id>/<app>/)
 //	  → 302 /r/<run-id>/<app>/<app path>  … every later request rides the cookie
 //
@@ -148,6 +150,10 @@ func (s *Server) uiSandboxHealthz() map[string]any {
 		// (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) or every run shares one — the
 		// residual an operator has to know about, published rather than buried.
 		"host_mode": s.cfg.UIOriginTemplate != "",
+		// bind_url is the console's pre-enter fetch (uigateway_bind.go): enter
+		// refuses a ticket this browser did not bind first. Same {run}
+		// placeholder rule as enter_post_url in host mode.
+		"bind_url": s.uiBindURL(),
 	}
 }
 
@@ -199,6 +205,8 @@ func (s *Server) UIGatewayHandler() http.Handler {
 		switch {
 		case r.URL.Path == uiEnterPath:
 			s.handleUIEnter(w, r)
+		case r.URL.Path == uiBindPath:
+			s.handleUIBind(w, r)
 		case strings.HasPrefix(r.URL.Path, uiRunPrefix):
 			s.handleUIRelay(w, r)
 		default:
@@ -225,27 +233,19 @@ func (s *Server) UIGatewayHandler() http.Handler {
 // the redirect status (302 for GET, 303 for POST — a POST must not be
 // silently retried as a GET against the relay path).
 //
-// CSRF: neither form needs an extra token, and POST adds no risk GET did not
-// already have. What the ticket stops: a page that does not hold a
-// freshly-minted, still-valid ticket for THIS run cannot forge a session for
-// someone ELSE's run — the ticket is single-use, ~30s-TTL, bound to one run
-// and one principal, and mintable only by an already-authenticated
-// owner-or-admin call to POST /runs/{id}/attach/ticket (behind the console's
-// own CSRF guard). csrf.go (this package) says explicitly that its
-// same-origin guard does not, and is not meant to, cover this listener.
+// CSRF, in two halves. The ticket stops a page that does not hold a
+// freshly-minted, still-valid ticket for THIS run from forging a session for
+// someone ELSE's run — it is single-use, ~30s-TTL, bound to one run and one
+// principal, and mintable only by an already-authenticated owner-or-admin call
+// to POST /runs/{id}/attach/ticket (behind the console's own CSRF guard).
+// csrf.go (this package) says explicitly that its same-origin guard does not,
+// and is not meant to, cover this listener.
 //
-// What the ticket does NOT stop: any Wardyn user can mint a ticket for their
-// OWN run and drive a victim's browser to redeem it here — by a POST exactly
-// like this one, or, unchanged, by a plain GET link — landing the victim's
-// browser on a session for the ATTACKER's app (login CSRF / session
-// fixation). uiEnterCommon only checks that the ticket's principal owns the
-// run it names; it has no idea who the browser actually belongs to. Host mode
-// bounds this to the attacker's own origin (a phishing risk, not a same-origin
-// one); the pre-existing shared-origin (path mode) chain — the victim's
-// browser then shares an origin with the victim's OWN other relayed apps, plus
-// what an attacker service worker registered on that shared origin can see of
-// later navigations — is tracked in #1241, not introduced or widened by this
-// PR.
+// The ticket alone does NOT stop login CSRF: a user minting a ticket for their
+// OWN run and driving a victim's browser through this hand-off, by a link or
+// an auto-submitted form, onto a session for the attacker's app. The browser
+// binding does (uigateway_bind.go): both forms refuse a ticket this browser
+// did not bind from the console first, before the ticket is spent.
 func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -291,6 +291,15 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
+	// Checked before the ticket is consumed, so an unbound hand-off never
+	// reaches the store or spends a ticket. The refusal is the bad-ticket one,
+	// byte for byte; only the audit reason says which it was.
+	if !s.uiTicketBound(w, r, ticket) {
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
+			map[string]any{"reason": "ticket not bound to this browser"})
+		writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
+		return
+	}
 	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, ticket, runID, s.cfg.Now())
 	if err != nil {
 		// A store failure is not a bad ticket (attach_ticket.go's own rule):
@@ -459,7 +468,7 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 	s.uiProxyOnce.Do(func() {
 		s.uiProxy = &httputil.ReverseProxy{
 			Rewrite:        s.uiRewrite,
-			ModifyResponse: uiStripOutbound,
+			ModifyResponse: s.uiStripOutbound,
 			ErrorHandler:   uiErrorHandler,
 			// Flush immediately: the relayed apps are interactive (an editor's
 			// long-poll, a dev server's HMR stream), and a buffered write on a
@@ -555,10 +564,42 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 // able to set, overwrite or delete a wardyn_* cookie in the operator's browser
 // (cookie tossing — a sandbox-set wardyn_ui_sess or console session cookie
 // would be an authentication attack, not a rendering quirk), nor set one that
-// escapes its own host (uiSetCookieAllowed).
-func uiStripOutbound(resp *http.Response) error {
+// escapes its own host (uiSetCookieAllowed), nor register a service worker
+// that controls more than its own app (uiConfineServiceWorker).
+func (s *Server) uiStripOutbound(resp *http.Response) error {
 	uiFilterSetCookie(resp.Header)
+	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
+		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
+	} else {
+		resp.Header.Del("Service-Worker-Allowed")
+	}
 	return nil
+}
+
+// uiConfineServiceWorker caps the scope of any service worker an app registers
+// at the app's own relay prefix. In path mode every run shares one origin, and
+// a worker registered at "/" would see every later request to it: other runs'
+// apps and the enter hand-off itself.
+//
+// The browser caps a registration's scope at the script's own directory, which
+// through this relay is always inside the app's prefix, unless the script's
+// response carries Service-Worker-Allowed. So the header is the one way out,
+// and the relay owns it: it is removed from every response, and on the
+// worker-script fetch itself (Service-Worker: script, sent by the browser) it
+// is set to the app's own prefix. That keeps an app that registers its worker
+// at its own root working (editors do), and nothing it sends can widen it. The
+// browser enforces the cap on the script response, so it holds whatever the
+// app's pages do.
+//
+// Rejected: refusing worker scripts outright, which breaks editors whose
+// webviews need one; and a CSP worker-src on the app's pages, which rides a
+// document the app writes, also governs the dedicated workers editors depend
+// on, and does not see the scope a registration asks for.
+func uiConfineServiceWorker(req *http.Request, h http.Header, prefix string) {
+	h.Del("Service-Worker-Allowed")
+	if req.Header.Get("Service-Worker") == "script" {
+		h.Set("Service-Worker-Allowed", prefix)
+	}
 }
 
 // uiFilterSetCookie keeps only the Set-Cookie values uiSetCookieAllowed passes.

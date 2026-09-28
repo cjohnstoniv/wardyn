@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, sql } from "./fixtures";
+import { test, expect, sql, consoleAPI } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 // ============================================================================
@@ -49,6 +49,33 @@ async function openRunDetail(page: Page, task: string): Promise<void> {
   await page.getByText("UI apps", { exact: true }).scrollIntoViewIfNeeded();
 }
 
+// submitEnter drives the enter hand-off from page as a real form navigation
+// (what the console's Open does), and returns the gateway's status for it.
+async function submitEnter(page: Page, action: string, fields: Record<string, string>): Promise<number> {
+  const response = page
+    .context()
+    .waitForEvent("response", (r) => r.url() === action && r.request().method() === "POST");
+  await page.evaluate(
+    ({ action, fields }) => {
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = action;
+      form.target = "_blank";
+      for (const [name, value] of Object.entries(fields)) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    },
+    { action, fields },
+  );
+  return (await response).status();
+}
+
 test.describe("Run detail — UI apps lane", () => {
   test("a declared app renders its row, its address and both honesty notices", async ({ page }) => {
     await openRunDetail(page, RUN_TASK);
@@ -72,9 +99,10 @@ test.describe("Run detail — UI apps lane", () => {
     await openRunDetail(page, RUN_TASK);
     const runId = runIdByTask(RUN_TASK);
 
-    let captured: { url: string; postData: string | null } | null = null;
+    let captured: { url: string; postData: string | null; cookie: string } | null = null;
     await context.route("**/__wardyn/enter", async (route) => {
-      captured = { url: route.request().url(), postData: route.request().postData() };
+      const headers = await route.request().allHeaders();
+      captured = { url: route.request().url(), postData: route.request().postData(), cookie: headers["cookie"] ?? "" };
       await route.fulfill({ status: 200, contentType: "text/plain", body: "stopped for the test" });
     });
 
@@ -85,7 +113,7 @@ test.describe("Run detail — UI apps lane", () => {
     await popup.waitForLoadState("domcontentloaded").catch(() => {});
 
     expect(captured).not.toBeNull();
-    const { url: openedURL, postData } = captured!;
+    const { url: openedURL, postData, cookie } = captured!;
     const url = new URL(openedURL);
     // A DIFFERENT origin than the console's — the server's advertised one,
     // never one the console built from window.location.
@@ -100,7 +128,40 @@ test.describe("Run detail — UI apps lane", () => {
     // placeholder the template left behind, and it travels in the form body.
     expect(form.get("ticket") ?? "").not.toBe("{ticket}");
     expect((form.get("ticket") ?? "").length).toBeGreaterThan(16);
+    // #1241: Open bound the ticket first, and the new tab's POST carries that
+    // HttpOnly binding cookie on the gateway's origin.
+    expect(cookie).toMatch(/wardyn_ui_bind_[0-9a-f]{16}=[0-9a-f]{64}/);
     await popup.close();
+  });
+
+  // #1241: a ticket minted and bound in one browser is refused in another — a
+  // page pushing someone else's browser through the hand-off gets a 403 — and
+  // that refusal does not spend it. The browser that bound it gets past the
+  // ticket check: 409 here, because the `none` runner has no sandbox.
+  test("a ticket is refused in a browser that did not bind it, and accepted in the one that did", async ({ page, browser }) => {
+    await openRunDetail(page, RUN_TASK);
+    const runId = runIdByTask(RUN_TASK);
+    const health = JSON.parse((await consoleAPI(page, "GET", "/healthz")).text);
+    const enterURL: string = health.ui_sandbox.enter_post_url;
+    const bindURL: string = health.ui_sandbox.bind_url;
+    const mint = await consoleAPI(page, "POST", `/api/v1/runs/${runId}/attach/ticket`);
+    expect(mint.status, mint.text).toBe(200);
+    const ticket: string = JSON.parse(mint.text).ticket;
+    const fields = { run: runId, app: "vscode", ticket };
+
+    const other = await browser.newContext();
+    const victim = await other.newPage();
+    await victim.setContent("<html><body></body></html>");
+    expect(await submitEnter(victim, enterURL, fields)).toBe(403);
+    await other.close();
+
+    const bound = await page.evaluate(
+      async ({ url, ticket }) =>
+        (await fetch(url, { method: "POST", credentials: "include", body: new URLSearchParams({ ticket }) })).status,
+      { url: bindURL, ticket },
+    );
+    expect(bound).toBe(204);
+    expect(await submitEnter(page, enterURL, fields)).toBe(409);
   });
 
   test("a run that declares nothing says so, and names the policy field", async ({ page }) => {

@@ -505,9 +505,12 @@ services:
       # empty WARDYN_UI_SANDBOX_LISTEN means no listener and no relay cookie
       # key, whatever the port mapping above publishes. Turn it on with
       # WARDYN_UI_SANDBOX_LISTEN=:8081 (matching that mapping) and
-      # WARDYN_UI_SANDBOX_ADVERTISE=http://localhost:8081 — the second value is
+      # WARDYN_UI_SANDBOX_ADVERTISE=http://127.0.0.1:8081 — the second value is
       # what the console's Open button uses, and it must NOT be the console's
-      # own origin: the relay serves the sandbox's own pages. The per-run
+      # own origin: the relay serves the sandbox's own pages. Use the SAME host
+      # name you open the console at (the installer prints http://127.0.0.1:8080;
+      # with the sso profile it is localhost, the redirect URL's host):
+      # localhost and 127.0.0.1 are different sites, and Open then fails. The per-run
       # origin template is not usable here (it needs wildcard DNS), so a
       # compose stack runs the shared-origin mode this documents as a residual
       # (threatmodel/THREAT-MODEL.md §5 #18).

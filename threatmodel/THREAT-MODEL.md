@@ -302,7 +302,7 @@ fail-closed gate".
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap. | B9 |
 | Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine runs through one shared `sshGo` wrapper with `recover()` — a bug in one session never reaches the process. Distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode). | B1, B9 |
 | SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason — and the sandbox has no OTHER route to forward to regardless (L0, invariant 3; the primitive is `socat` inside the existing netns). `-R` and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets "request denied by peer") and never accepts either channel type. | B1, B9 |
-| Sandbox-authored page reading the console session (UI-sandbox relay) | **[v0.6 shipped]** The relayed app is code from inside B1 running in the operator's browser, treated as hostile page content: served on a SEPARATE ORIGIN, with boot REFUSING a listen address equal to `-listen` (`validateUISandboxConfig`, `cmd/wardynd`). Cookies are not port-scoped, so a shared *hostname* would still leak: every forwarded request has ALL `wardyn_*` cookies plus `Authorization`/`Proxy-Authorization` and any `?ticket` STRIPPED, and every response has `Set-Cookie: wardyn_*` DROPPED (a sandbox-set `wardyn_ui_sess` would be an authentication attack, not a rendering quirk) — both pinned by `internal/api/uigateway_test.go`. Every `Set-Cookie` carrying a `Domain` attribute, or with no name, is also DROPPED — on a `1xx` (Early Hints) as well as the final response — so the app's SERVER cannot plant a cookie on sibling hosts under a shared parent domain, nor smuggle a nameless one whose value the browser sends back as `wardyn_ui_sess`; inbound, `WARDYN_UI_SANDBOX_STRIP_COOKIES` (`allow:`/`deny:` cookie names, unset = every non-`wardyn_*` cookie forwarded; `allow:__Host-*` is the browser-guaranteed host-only choice) keeps a sibling host's **HttpOnly** `Domain=` cookies away from the app — pinned by `internal/api/uigateway_cookies_test.go` in both gateway modes. **Residual:** both controls are header-only; the relayed page's own `document.cookie` can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies. The bound is the relay host's registrable domain — host mode on a registrable domain of its own is the answer. `Referrer-Policy: no-referrer` keeps the enter URL's ticket out of outbound links; `X-Forwarded-*` is removed and deliberately not re-added. The console never iframes a relayed app. | B10, B1 |
+| Sandbox-authored page reading the console session (UI-sandbox relay) | **[v0.6 shipped]** The relayed app is code from inside B1 running in the operator's browser, treated as hostile page content: served on a SEPARATE ORIGIN, with boot REFUSING a listen address equal to `-listen` (`validateUISandboxConfig`, `cmd/wardynd`). Cookies are not port-scoped, so a shared *hostname* would still leak: every forwarded request has ALL `wardyn_*` cookies plus `Authorization`/`Proxy-Authorization` and any `?ticket` STRIPPED, and every response has `Set-Cookie: wardyn_*` DROPPED (a sandbox-set `wardyn_ui_sess` would be an authentication attack, not a rendering quirk) — both pinned by `internal/api/uigateway_test.go`. Every `Set-Cookie` carrying a `Domain` attribute, or with no name, is also DROPPED — on a `1xx` (Early Hints) as well as the final response — so the app's SERVER cannot plant a cookie on sibling hosts under a shared parent domain, nor smuggle a nameless one whose value the browser sends back as `wardyn_ui_sess`; inbound, `WARDYN_UI_SANDBOX_STRIP_COOKIES` (`allow:`/`deny:` cookie names, unset = every non-`wardyn_*` cookie forwarded; `allow:__Host-*` is the browser-guaranteed host-only choice) keeps a sibling host's **HttpOnly** `Domain=` cookies away from the app — pinned by `internal/api/uigateway_cookies_test.go` in both gateway modes. **Residual:** both controls are header-only; the relayed page's own `document.cookie` can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies. The bound is the relay host's registrable domain, which since #1241 is also the console's (the enter binding needs one site): keep nothing else whose non-HttpOnly cookies matter on it, and see residual 18 for what a planted `Domain=` cookie means for the console's own cookies (#1258). `Referrer-Policy: no-referrer` keeps the enter URL's ticket out of outbound links; `X-Forwarded-*` is removed and deliberately not re-added. `Service-Worker-Allowed` is removed from every relayed response and set to the app's own `/r/<run-id>/<app>/` on the worker-script fetch (`uiConfineServiceWorker`), so a relayed service worker never controls more than its own app — pinned by `TestUIGateway_RelayConfinesServiceWorkerScope`. The console never iframes a relayed app. | B10, B1 |
 | Unauthenticated / cross-run access to a relayed UI app | **[v0.6 shipped]** EXACTLY ONE authentication mechanism, never falling through to the console session cookie or admin bearer: a single-use, 30s, owner-or-admin attach ticket (the SAME `POST /runs/{id}/attach/ticket` the browser terminal mints) redeemed at `/__wardyn/enter`, which RE-CHECKS against fresh state what the ticket cannot prove — owner-or-admin for THIS run, run still `RUNNING` with a sandbox, app declared in the run's EFFECTIVE policy (from the `run.policy.resolve` envelope, never `policy_id`, so an inline-policy run cannot inherit the default policy's apps). Only then is an HMAC-signed cookie issued: `HttpOnly`, `SameSite=Lax`, `Path=/r/<run-id>/<app>/` — scoped to the ONE app its ticket named, so a run's several declared `ui_apps` hold a session each instead of the newest replacing the rest. Every cookie failure answers one indistinguishable 403: no fallback, no oracle. The cookie carries its own issued-at, bounded by `WARDYN_UI_SANDBOX_SESSION_TTL`, and owner-or-admin is re-asserted against the freshly-loaded run — plus the session revoke cutoff — on every NEW connection and at least every 30s on a reused (pooled) one, each refusal audited as `ui.authorize`/`denied` with its reason; an off-boarded or revoked human therefore loses the app within 30s. A role demotion and a revoke naming the human's email are NOT caught (the cookie's role is a login-time snapshot and the relay principal is the OIDC `sub`); `WARDYN_UI_SANDBOX_SESSION_TTL` — or `all: true` — is the bound on those. Every enter is audited (`ui.authorize`). | B10, AU |
 | Relay reaching a port the operator never declared | **[v0.6 shipped]** Only ports in the policy's `ui_apps` — operator-authored, at most 8, validated wherever a policy enters (stored, inline, `WARDYN_DEFAULT_POLICY`). The port is captured from the effective policy AT TICKET REDEMPTION into the signed cookie, so no later request can name a different one, and the dial target is re-verified per connection. Policy names an app, never a command string: what starts is the image's own `/usr/local/bin/wardyn-ui-<name>` launcher. `ssh -L` remains the undeclared-port escape hatch, bounded by its own owner-or-admin gate. | B1, B10 |
 | Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec, bounded per-run at 8 concurrent (`maxUIConnsPerRun`, vs the gateway's `maxSSHSessionsPerRun = 4`), pooled idle connections closed after 90s. That bounds connections, NOT the execs behind them: neither substrate offers "kill this exec", so a `socat` whose app-side half is still held lingers until the sandbox stops. Published, not hidden — `docs/UI-SANDBOXES.md` "Resource bounds", `uiIdleConnTimeout`'s own comment (`internal/api/uigateway.go`), and `scripts/run-e2e-ui-sandbox.sh`, which asserts what this promises (20 relayed requests must not become 20 execs). A run reload per connection means a stopped run stops serving (409). | B10, B1 |
@@ -1133,16 +1133,66 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` unset) every run's relayed apps are served
     from one origin under `/r/<run-id>/<app>/`, separated only by the relay cookie's
     `Path` scope. That stops the browser ATTACHING run A's cookie to a request for
-    run B — it is not an origin boundary: two runs' apps open at once are
-    same-origin, so run A's page can script run B's tab where it holds a window
-    handle, and origin-scoped storage (`localStorage`, `IndexedDB`, service
-    workers) is shared. The console is out of reach either way (§4, B10), so the
-    blast radius is one run's UI app influencing another's inside the SAME human's
-    browser profile. Closing it needs infrastructure Wardyn cannot supply: set
-    `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS + wildcard
-    certificate) and each run gets its own origin, with an enter served on any other
-    host refused outright. Which mode is running is published, not inferred — boot
-    logs the shared-origin mode as a warning and `/healthz` carries
+    run B — it is not an origin boundary: two apps open at once are same-origin, so
+    one app's page can script the other's tab where it holds a window handle, and
+    origin-scoped storage (`localStorage`, `IndexedDB`) is shared. The console is out
+    of reach either way (§4, B10).
+
+    **Who can put an app into that origin.** Before 0.8 the answer was "anyone":
+    the enter hand-off checked only that the ticket's principal owned the run, so
+    any user could mint a ticket for their OWN run and push a victim's browser
+    through it by a link or an auto-submitted form (login CSRF), landing their app
+    same-origin with the victim's own. A service worker that app registered could
+    also have claimed the whole origin with `Service-Worker-Allowed: /`. Two
+    controls close that:
+    - **The enter ticket is bound to the browser that minted it**
+      (`Server.handleUIBind`, `Server.uiTicketBound`). Before the enter, the console
+      fetches `/__wardyn/bind`, which sets an `HttpOnly`, `SameSite=Strict`,
+      enter-scoped cookie holding an HMAC of the ticket; enter refuses a ticket
+      without it, GET and POST alike, with the bad-ticket 403 and a
+      `ui.authorize` / `denied` row, before the ticket is spent. The bind answers
+      only a fetch the browser labels `Sec-Fetch-Site: same-site` and, with SSO, one
+      whose `Origin` is the scheme and host of `WARDYN_OIDC_REDIRECT_URL` — an
+      attacker's page gets no binding; a refused bind is audited as
+      `ui.authorize` / `denied` with its reason. It needs the console and the
+      gateway on one site.
+    - **A relayed service worker is capped at its own app's prefix**
+      (`uiConfineServiceWorker`): the relay removes `Service-Worker-Allowed` from
+      every response and sets it to `/r/<run-id>/<app>/` on the worker-script fetch,
+      so no worker can control `/`, the enter path, or another run's or app's
+      prefix.
+
+    So an app now reaches a browser only through an enter that browser bound from
+    its own console session: the human's own runs, or a run an admin chose to open.
+    The residual is what those apps can do to EACH OTHER inside that one browser
+    profile. **Bounds of the binding, stated:** it is a cookie, so code already
+    running on the gateway's registrable domain (a relayed app in path mode, a
+    sibling host) could plant one with `document.cookie` for a ticket whose binding
+    it learned in its own browser — which needs that code already in the victim's
+    browser, the very residual above. Without SSO there is one principal, and the
+    bind accepts any same-site fetch.
+
+    **What the one-site rule costs the console.** The binding forces the console
+    and the relay onto one registrable domain, so the old answer to the
+    header-only cookie residual (§4, "Sandbox-authored page reading the console
+    session": give the relay a registrable domain of its own) is gone. A relayed
+    page's `document.cookie` can set a `Domain=<registrable domain>` cookie, and
+    the browser sends it to the console. The console's cookies (`wardyn_session`,
+    `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-`
+    prefix, so nothing rejects a planted one of the same name, and the console
+    reads it whenever the browser holds no live cookie of that name (signed out,
+    expired, or mid-login): login CSRF onto the CONSOLE, reachable from any relayed
+    page — in host mode too, e.g. after an admin opens a user's run. The candidate
+    fix is the `__Host-` prefix on the console's session and login cookies, which
+    makes the browser refuse any `Domain` attribute; it needs `Secure` and
+    `Path=/`, which collide with plain-http `localhost` and with
+    `WARDYN_BASE_PATH`. Tracked as #1258. Closing the residual itself needs
+    infrastructure Wardyn cannot supply: set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to
+    a per-run host (wildcard DNS + wildcard certificate) and each run gets its own
+    origin, with an enter served on any other host refused outright — the
+    recommendation for any install with more than one user (docs/OPERATIONS.md,
+    "UI apps with more than one user"). Which mode is running is published, not
+    inferred — boot logs the shared-origin mode as a warning and `/healthz` carries
     `ui_sandbox.host_mode`.
 
 19. **A UI-app session is not recorded — only that it happened.** Session recording

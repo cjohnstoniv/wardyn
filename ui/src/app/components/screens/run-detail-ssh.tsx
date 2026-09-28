@@ -66,6 +66,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     enabled?: boolean;
     enter_url_template?: string;
     enter_post_url?: string;
+    bind_url?: string;
   } | null>(null);
   // Did /healthz actually ANSWER? `ssh`/`uiSandbox` being null conflates two
   // facts — "not loaded yet" and "loaded, and the deployment has it off" — and
@@ -162,6 +163,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     setOpeningApp(app.name);
     try {
       const ticket = await runsApi.attachTicket(run.id);
+      // #1241: the gateway refuses a ticket this browser did not bind first,
+      // so a ticket minted elsewhere cannot be pushed into this browser.
+      if (uiSandbox?.bind_url) {
+        await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(run.id)), ticket);
+      }
       // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
       // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
       // __wardyn/enter", no query) — split/join replaces every occurrence
@@ -390,6 +396,30 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
     );
   }
   return parts;
+}
+
+// bindTicket is the pre-enter step (#1241): one credentialed fetch to the
+// gateway, which sets an HttpOnly cookie on ITS origin tying the ticket to
+// this browser. A plain fetch, never the api client: nothing of the console's
+// own session may travel to the gateway. It fails when the console and the
+// gateway are not the same site, since the gateway cannot then set that cookie.
+async function bindTicket(url: string, ticket: string) {
+  let ok = false;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      body: new URLSearchParams({ ticket }),
+    });
+    ok = res.ok;
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    throw new Error(
+      "The UI-sandbox gateway did not accept this browser. The console and the gateway must be served from the same site; an admin finds the exact reason in the audit log (ui.authorize).",
+    );
+  }
 }
 
 // submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
