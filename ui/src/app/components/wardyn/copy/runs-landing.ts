@@ -11,6 +11,8 @@
 export const RUNS_SECTION = {
   NEEDS: "Needs you",
   NEEDS_ADMIN: "Needs a decision",
+  // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
+  OWNER: "Waiting on the owner",
   RUNNING: "Running",
   ENDED_TODAY: "Ended today",
   EARLIER: "Earlier this week",
@@ -69,7 +71,42 @@ export const RUNS_FILTERS = {
   ENDED_ALL: "All time",
   WORKSPACE_LABEL: "Workspace",
   WORKSPACE_ALL: "Workspace · All",
+  // H-4, Admin view only.
+  WHOSE_RUNS_LABEL: "Whose runs",
+  EVERYONE: "Everyone",
+  MINE: "Mine",
+  // H-6.
+  GROUP_LABEL: "Group by",
+  GROUP_SECTIONS: "Group · Sections",
+  GROUP_WORKSPACE: "Group · Workspace",
+  GROUP_TITLE: "Group · Title",
+  // H-8.
+  SAVED_VIEW_LABEL: "Saved view",
 } as const;
+
+// H-8: saved views (localStorage, up to 10). "Save view" names the current
+// URL. SAVED is a function (name interpolates) so it stays one string, not
+// a template the caller reassembles.
+export const RUNS_SAVE_VIEW = "Save view";
+export const RUNS_SAVE_VIEW_NAME_LABEL = "Name this view";
+export function runsViewSaved(name: string): string {
+  return `Saved “${name}” in this browser. The link in the address bar shares it.`;
+}
+
+// The Saved view select's own option text, and the one shown when the
+// current URL matches no saved view — the mock never leaves that select
+// blank (home-runs-1197-packet.html:615).
+export function runsSavedViewOption(name: string): string {
+  return `View · ${name}`;
+}
+export const RUNS_SAVED_VIEW_CUSTOM = "View · Custom";
+
+// The save-view form's own literals (home-runs-1197-packet.html:617): a
+// prefilled name, and "Save" — distinct from the "Save view" button that
+// opens the form.
+export const RUNS_SAVE_VIEW_DEFAULT_NAME = "My view";
+export const RUNS_SAVE_VIEW_SUBMIT = "Save";
+export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 
 // Row-state words that are NEW for this page (design.md §2.2). Reused words
 // (Completed/Failed/Killed/Stopped/Archived) are literals directly in

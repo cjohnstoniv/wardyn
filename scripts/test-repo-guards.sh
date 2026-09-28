@@ -72,8 +72,16 @@ ok()  { echo "ok: $*"; }
 # first time it actually meets a hosted runner's docker/compose. Add it back to
 # notify-new-lanes' needs: once it has gone green on a real nightly (same
 # posture PR #1245 used for daemon-proxy-secret-kind).
+# kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
+# are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
+# of the three has ever run on a real nightly yet, so watching them from day
+# one would block every release on a job that might fail deterministically
+# for an environment reason this authoring pass could not see (no kind cluster
+# or Docker execution was available to prove them here — see each script's
+# own header). Add all three back to notify-new-lanes' needs (and drop them
+# from here) once each has gone green on a real scheduled run.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check daemon-proxy-secret-kind test-e2e-concurrent"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check daemon-proxy-secret-kind test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
