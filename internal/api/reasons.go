@@ -768,6 +768,18 @@ const (
 // record.go), since it is the identical cause regardless of which door hit it.
 const reasonRecordCeilingLimit = "record_ceiling_limit"
 
+// /internal/injection/{grantID} (injection.go): the proxy's own api_key
+// resolve door. Most values here are already the exact strings each site's
+// own secret.read audit row wrote.
+const (
+	reasonInjectionGrantNotAPIKey            = "injection_grant_not_api_key"
+	reasonInjectionReservedSecretName        = "reserved_secret_name"
+	reasonInjectionInvalidHeaderName         = "invalid_header_name"
+	reasonInjectionOAuthHostNotAnthropic     = "oauth_host_not_anthropic"
+	reasonInjectionSharedSubscriptionPosture = "shared_subscription_posture"
+	reasonInjectionNoOAuthProvider           = "no_oauth_provider"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

@@ -139,11 +139,11 @@ func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
 func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*identity.Claims, uuid.UUID, broker.Minted, bool) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 	if s.cfg.Broker == nil {
-		writeError(w, http.StatusServiceUnavailable, "broker not configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonBrokerNotConfigured, "broker not configured")
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 	grantID, ok := parseIDParam(w, r, "grantID", "grant")
@@ -161,7 +161,7 @@ func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*id
 		// Only api_key grants resolve here: github/cloud credentials are
 		// minted via the regular mint endpoint and never resolved to raw
 		// platform secrets.
-		writeError(w, http.StatusUnprocessableEntity, "grant is not an api_key injection grant")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonInjectionGrantNotAPIKey, "grant is not an api_key injection grant")
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 	return claims, grantID, minted, true
@@ -226,8 +226,8 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if sinkReservedSecret(minted.Injection.SecretName) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(map[string]any{"reason": "reserved_secret_name", "grant_id": grantID})))
-		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
+			mustJSON(map[string]any{"reason": reasonInjectionReservedSecretName, "grant_id": grantID})))
+		writeErrorReason(w, http.StatusForbidden, reasonInjectionReservedSecretName, "secret name is reserved for platform internals")
 		return
 	}
 
@@ -241,8 +241,8 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if !egress.ValidHeaderName(minted.Injection.Header) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(map[string]any{"reason": "invalid_header_name", "grant_id": grantID})))
-		writeError(w, http.StatusForbidden, "injection header name is not a valid HTTP header")
+			mustJSON(map[string]any{"reason": reasonInjectionInvalidHeaderName, "grant_id": grantID})))
+		writeErrorReason(w, http.StatusForbidden, reasonInjectionInvalidHeaderName, "injection header name is not a valid HTTP header")
 		return
 	}
 
@@ -395,7 +395,7 @@ func (s *Server) resolveSubscriptionSentinelInjection(w http.ResponseWriter, r *
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", sentinel, "failure",
 			mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": source})))
-		writeError(w, status, body)
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 	// Host pin: fail closed unless the grant targets Anthropic. An
@@ -408,8 +408,8 @@ func (s *Server) resolveSubscriptionSentinelInjection(w http.ResponseWriter, r *
 	if !s.subscriptionInjectionHostAllowed(minted.Injection.Host) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", sentinel, "failure",
-			mustJSON(map[string]any{"reason": "oauth_host_not_anthropic", "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
-		writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+s.subscriptionInjectionHostDesc())
+			mustJSON(map[string]any{"reason": reasonInjectionOAuthHostNotAnthropic, "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
+		writeErrorReason(w, http.StatusForbidden, reasonInjectionOAuthHostNotAnthropic, "the subscription OAuth token may only be injected to "+s.subscriptionInjectionHostDesc())
 		return true
 	}
 	// Posture pin: refuse to resolve a SHARED subscription credential unless this
@@ -430,15 +430,15 @@ func (s *Server) resolveSubscriptionSentinelInjection(w http.ResponseWriter, r *
 	if !s.cfg.SubscriptionPostureOK {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", sentinel, "failure",
-			mustJSON(map[string]any{"reason": "shared_subscription_posture", "grant_id": grantID, "source": source, "detail": s.cfg.SubscriptionPostureReason})))
-		writeError(w, http.StatusForbidden, "shared subscription credentials are not available in this deployment: "+s.cfg.SubscriptionPostureReason)
+			mustJSON(map[string]any{"reason": reasonInjectionSharedSubscriptionPosture, "grant_id": grantID, "source": source, "detail": s.cfg.SubscriptionPostureReason})))
+		writeErrorReason(w, http.StatusForbidden, reasonInjectionSharedSubscriptionPosture, "shared subscription credentials are not available in this deployment: "+s.cfg.SubscriptionPostureReason)
 		return true
 	}
 	if provider == nil {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", sentinel, "failure",
-			mustJSON(map[string]any{"reason": "no_oauth_provider", "grant_id": grantID, "source": source})))
-		writeError(w, http.StatusFailedDependency, source+" token provider is not configured")
+			mustJSON(map[string]any{"reason": reasonInjectionNoOAuthProvider, "grant_id": grantID, "source": source})))
+		writeErrorReason(w, http.StatusFailedDependency, reasonInjectionNoOAuthProvider, source+" token provider is not configured")
 		return true
 	}
 	tok, terr := provider.Current(r.Context())
