@@ -288,6 +288,11 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
   // switches this dialog into guard mode, using ITS before/after.
   const [reactiveGuard, setReactiveGuard] = React.useState<{ before: string; after: string } | null>(null);
   const showDeleteGuard = !!reactiveGuard;
+  // #913: a migrated row's "Choose a type" action hands its value to the Add
+  // form below, pre-filled on the User role — submitting it there is the SAME
+  // upsert-in-place a re-added value always was, and the server clears the
+  // migrated marker the moment that write lands.
+  const [prefillValue, setPrefillValue] = React.useState<string | null>(null);
 
   const openDelete = (m: AccessMapping) => {
     setToDelete(m);
@@ -342,6 +347,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
               allowEmailMappings={access.allow_email_mappings}
               emailDomainsConfigured={access.email_domains_configured}
               onDelete={() => openDelete(m)}
+              onChooseType={m.migrated_from_member ? () => setPrefillValue(m.value) : undefined}
             />
           ))
         )}
@@ -384,7 +390,12 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
         </dl>
       </div>
 
-      <AddMappingForm access={access} onReload={onReload} />
+      <AddMappingForm
+        access={access}
+        onReload={onReload}
+        prefillValue={prefillValue}
+        onPrefillConsumed={() => setPrefillValue(null)}
+      />
 
       <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && closeDelete()}>
         <AlertDialogContent>
@@ -444,6 +455,7 @@ function MappingCard({
   allowEmailMappings,
   emailDomainsConfigured,
   onDelete,
+  onChooseType,
 }: {
   mapping: AccessMapping;
   // The chip: targetLabel() of the row, computed where the type list is.
@@ -451,6 +463,9 @@ function MappingCard({
   allowEmailMappings: boolean;
   emailDomainsConfigured: boolean;
   onDelete: () => void;
+  // Set only for a migrated row (#913) — opens the type picker below,
+  // pre-filled to this row's value.
+  onChooseType?: () => void;
 }) {
   const isEmail = m.value.includes("@");
   const showEmailBadge = m.source === "console" && isEmail && allowEmailMappings;
@@ -460,6 +475,7 @@ function MappingCard({
   else if (m.shadowed && m.shadow_cause === "chart") note = withMono(PEOPLE.SHADOWED_BODY);
   else if (m.shadowed && m.shadow_cause === "operator_allowlist") note = withMono(PEOPLE.SHADOWED_OPERATOR_BODY);
   else if (showEmailBadge) note = withMono(PEOPLE.EMAIL_KEY_BODY(emailDomainsConfigured));
+  else if (m.migrated_from_member) note = PEOPLE.MIGRATED_FROM_MEMBER_HINT;
   // Amber-tint a mapping that carries a caution (a shadowed row, or an
   // unverified email key) so the whole card reads as "look here", not just its
   // chip. Chart/plain console rows stay neutral.
@@ -482,10 +498,16 @@ function MappingCard({
           <Chip tone="warning">{PEOPLE.SHADOWED_OPERATOR_BADGE}</Chip>
         )}
         {showEmailBadge && <Chip tone="warning">{PEOPLE.EMAIL_KEY_BADGE}</Chip>}
+        {m.migrated_from_member && <Chip tone="warning">{PEOPLE.MIGRATED_FROM_MEMBER_BADGE}</Chip>}
         <div className="ml-auto flex items-center gap-3">
           <span className="whitespace-nowrap text-meta text-muted-foreground">
             {m.source === "chart" ? PEOPLE.ADDED_CHART_NA : m.created_at ? relativeTime(m.created_at) : PEOPLE.ADDED_CHART_NA}
           </span>
+          {onChooseType && (
+            <Button variant="ghost" size="sm" onClick={onChooseType} aria-label={`${PEOPLE.CHOOSE_TYPE} ${m.value}`}>
+              {PEOPLE.CHOOSE_TYPE}
+            </Button>
+          )}
           {m.source === "console" && (
             <Button variant="ghost" size="sm" onClick={onDelete} aria-label={`${PEOPLE.DELETE} ${m.value}`}>
               {PEOPLE.DELETE}
@@ -505,9 +527,16 @@ function MappingCard({
 function AddMappingForm({
   access,
   onReload,
+  prefillValue,
+  onPrefillConsumed,
 }: {
   access: AccessResponse;
   onReload: () => void;
+  // #913: a migrated row's "Choose a type" action sets this to that row's
+  // value; consumed once (below) so a second click can prefill the same
+  // value again.
+  prefillValue?: string | null;
+  onPrefillConsumed?: () => void;
 }) {
   const [value, setValue] = React.useState("");
   const [role, setRole] = React.useState<AccessRole>("admin");
@@ -525,6 +554,18 @@ function AddMappingForm({
   // R1-F112: a demotion revokes outstanding tokens SILENTLY on the wire —
   // this is the one-line receipt for it, cleared on the next attempt.
   const [tokensRevoked, setTokensRevoked] = React.useState<number | null>(null);
+
+  // #913: adopt a "Choose a type" prefill once, then tell the table it was
+  // consumed — the same value re-submitted here is the natural upsert-in-place
+  // (the store's ON CONFLICT), which is what clears the migrated marker.
+  React.useEffect(() => {
+    if (!prefillValue) return;
+    setValue(prefillValue);
+    setRole("user");
+    setUserType("");
+    onPrefillConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onPrefillConsumed is re-created per render; prefillValue is the trigger
+  }, [prefillValue]);
 
   const wouldFlipPosture = access.posture.map_empty && access.posture.changes;
 

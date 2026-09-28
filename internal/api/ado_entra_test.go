@@ -229,6 +229,41 @@ func TestADOSignIn_NarrowsToARequestedSubset(t *testing.T) {
 	}
 }
 
+// TestADOSignIn_PromptSelectAccount is #659 Q2's identity_binding retry: the
+// one extra query parameter that asks Microsoft for the account picker rather
+// than skipping straight back to whatever account the browser's SSO session
+// already holds. The ordinary sign-in (no `prompt`) must not carry it at all —
+// Microsoft's own default applies, exactly as it did before #659.
+func TestADOSignIn_PromptSelectAccount(t *testing.T) {
+	f := newADOFixture(t)
+
+	authURL, _ := f.signIn(t, f.fake.Subject(), "?prompt=select_account")
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("parse the authorization URL: %v", err)
+	}
+	if got := u.Query().Get("prompt"); got != "select_account" {
+		t.Errorf("prompt = %q; want select_account", got)
+	}
+
+	authURL, _ = f.signIn(t, f.fake.Subject(), "")
+	u, err = url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("parse the authorization URL: %v", err)
+	}
+	if u.Query().Has("prompt") {
+		t.Errorf("the ordinary sign-in carries a prompt parameter: %q", u.Query().Get("prompt"))
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/scm/azure-devops/signin?prompt=none", nil)
+	r = r.WithContext(withOIDCHuman(r.Context(), f.fake.Subject()))
+	w := httptest.NewRecorder()
+	f.srv.handleADOSignIn(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("an unrecognised prompt value: status %d; want 400", w.Code)
+	}
+}
+
 // TestADOCapture_StoresUnderTheCallersOwnPrincipal is the happy path: the
 // credential lands in the caller's OWN namespace, carries the granted scopes
 // the authority reported, holds no access token, and the capture is audited.
@@ -295,20 +330,24 @@ func TestADOCapture_StoresUnderTheCallersOwnPrincipal(t *testing.T) {
 // The tenant signs an identity token for somebody else — the shape a mixed-up
 // browser session, a second tab or a deliberately replayed redirect produces —
 // and the capture must refuse it and store NOTHING. Without the subject
-// comparison in bindADOEntraIdentity this test's 403 becomes a 302 to the
-// success page and one person's Azure DevOps reach lands in another person's
-// namespace.
+// comparison in bindADOEntraIdentity this test's redirect to the ERROR path
+// becomes a redirect to the SUCCESS page and one person's Azure DevOps reach
+// lands in another person's namespace — the property this test pins is which
+// of those two redirects fires, not the status code (#659 Q2 moved this arm
+// off a bare 403 text page onto the same adoSignInErrorPath redirect the other
+// five reasons already use; bindADOEntraIdentity's own refusal sentence is
+// still logged server-side, just never put on the wire).
 func TestADOCapture_RefusesASubjectMismatch(t *testing.T) {
 	f := newADOFixture(t)
 	const sessionSubject = "the-person-at-the-keyboard"
 	f.fake.SetSubject("a-completely-different-person")
 
 	w := f.capture(t, sessionSubject)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status %d body %q; want 403 — the capture must be refused", w.Code, w.Body.String())
+	if w.Code != http.StatusFound {
+		t.Fatalf("status %d body %q; want a 302 back to the console's error path", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), adoSignInSubjectMismatchRefusal) {
-		t.Errorf("the refusal does not name its reason: %q", w.Body.String())
+	if got, want := w.Header().Get("Location"), adoSignInErrorPath+"identity_binding"; got != want {
+		t.Errorf("Location = %q; want %q — the error path, never the success one", got, want)
 	}
 	if _, found := f.stored(t, sessionSubject); found {
 		t.Fatal("a credential was stored under the session subject despite the mismatch")
@@ -886,8 +925,14 @@ func TestADOCapture_StoreErrorRowCarriesNoErrorText(t *testing.T) {
 	t.Run("the dedicated callback", func(t *testing.T) {
 		f := newADOFixture(t)
 		f.srv.cfg.Secrets = wedgedOwnerSecrets{&memSecrets{m: map[string][]byte{}}}
-		if w := f.capture(t, f.fake.Subject()); w.Code != http.StatusInternalServerError {
-			t.Fatalf("capture: status %d body %q; want 500", w.Code, w.Body.String())
+		// #659 Q2: a store failure now redirects to the console's error path
+		// like every other capture failure, rather than a bare 500 text page.
+		w := f.capture(t, f.fake.Subject())
+		if w.Code != http.StatusFound {
+			t.Fatalf("capture: status %d body %q; want a 302 back to the console", w.Code, w.Body.String())
+		}
+		if got, want := w.Header().Get("Location"), adoSignInErrorPath+"store_error"; got != want {
+			t.Errorf("Location = %q; want %q", got, want)
 		}
 		check(t, f)
 	})

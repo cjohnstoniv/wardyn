@@ -86,7 +86,16 @@ export function TopBar({
       </Link>
       {/* Beside the wordmark (packet M-A QM-1): which console you are in is the
           first thing read on every page. Below sm it moves into the nav sheet. */}
-      {hasSwitch && <ViewSwitch access={access} view={view} className="hidden sm:flex" />}
+      {hasSwitch && (
+        <ViewSwitch
+          access={access}
+          view={view}
+          className="hidden sm:flex"
+          currentUserType={meta.userType}
+          preselectType={meta.userViewPreselectType}
+          userTypes={meta.userViewTypes}
+        />
+      )}
 
       {/* Shown ONLY when non-default. A default install is always
           wardyn.local / embedded, so these chips would be four constants nobody

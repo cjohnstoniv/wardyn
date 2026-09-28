@@ -657,7 +657,7 @@ func TestSetupHarnessToolsCarryTheRoster(t *testing.T) {
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 	})}
-	tools := setupHarnessTools(sc, nil)
+	tools := setupHarnessTools(sc, nil, nil)
 	if len(tools) != len(harnessCatalog) {
 		t.Fatalf("len = %d, want %d — the server never filters this list by the roster",
 			len(tools), len(harnessCatalog))
@@ -698,7 +698,7 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 		}),
-	}, nil)}
+	}, nil, nil)}
 	got := redactSetupStatusForUser(st, false, false)
 	if len(got.Harnesses) != len(harnessCatalog) {
 		t.Fatalf("a member sees %d harness rows, want all %d", len(got.Harnesses), len(harnessCatalog))

@@ -255,6 +255,13 @@ export interface SetupHarnessTool {
   // above: that is the DECLARED lane, and under a `shared` row it is satisfied by
   // a chain that fell through to a different, resident one.
   credential_residency?: ModelCredentialResidency;
+  // #1052: true when at least one model provider serves this harness (enabled,
+  // on the roster) but this caller is granted none of them — canon.md's R5b,
+  // "no provider serves this person for this harness at all". Absent/false
+  // otherwise, including "nothing serves this harness at all" (R9): the console
+  // cannot tell those two apart without this fact (setupModelProviderState's
+  // capVisible already narrows model_providers to granted ones before the wire).
+  providers_ungranted?: boolean;
 }
 
 // THIS PRINCIPAL's model-access state (internal/api.SetupModelAccess) — the

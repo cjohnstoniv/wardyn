@@ -380,9 +380,19 @@ type Session struct {
 	// It chooses which type's rows bind, never the tier: the view clamps the
 	// tier to user whatever the type.
 	UserViewType string `json:"uvt,omitempty"`
+	// UserViewTypeName caches that type's display name from the instant the
+	// view entered it (SetUserView). Meaningful only with MemberMode, same as
+	// UserViewType. It exists ONLY so DropUserView can still name the type in
+	// UserViewDroppedName after its row is gone — the row's deletion is WHY
+	// the drop fires, so nothing can look the name up again at that point.
+	UserViewTypeName string `json:"uvtn,omitempty"`
 	// UserViewDropped names the type whose deletion turned the view off
 	// (DropUserView), so GET /me can say why until the next switch clears it.
 	UserViewDropped string `json:"uvd,omitempty"`
+	// UserViewDroppedName is that same type's display name, copied from
+	// UserViewTypeName the instant DropUserView fires, before it is cleared —
+	// see UserViewTypeName's doc for why this is the only chance to record it.
+	UserViewDroppedName string `json:"uvdn,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.

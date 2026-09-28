@@ -91,6 +91,9 @@ func (s *roleMapStore) UpsertRoleMapping(_ context.Context, m types.RoleMapping)
 			s.rows[i].Role = m.Role
 			s.rows[i].UserType = m.UserType
 			s.rows[i].CreatedBy = m.CreatedBy
+			// Mirrors the real store's ON CONFLICT clause: any write that flips
+			// an existing row in place clears the migrated marker.
+			s.rows[i].MigratedFromMember = false
 			return s.rows[i], nil
 		}
 	}

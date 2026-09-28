@@ -97,11 +97,13 @@ func reSigned(t *testing.T, w *httptest.ResponseRecorder) (*http.Cookie, oidc.Se
 }
 
 type uvMe struct {
-	Role            string            `json:"role"`
-	Operator        bool              `json:"operator"`
-	MemberMode      bool              `json:"user_view"`
-	UserType        *meUserTypeView   `json:"user_type"`
-	UserViewDropped map[string]string `json:"user_view_dropped"`
+	Role              string            `json:"role"`
+	Operator          bool              `json:"operator"`
+	MemberMode        bool              `json:"user_view"`
+	UserType          *meUserTypeView   `json:"user_type"`
+	UserViewDropped   map[string]string `json:"user_view_dropped"`
+	UserViewPreselect string            `json:"user_view_preselect_type"`
+	UserViewTypes     []meUserTypeView  `json:"user_view_types"`
 }
 
 func uvGetMe(t *testing.T, srv *Server, c *http.Cookie) (uvMe, *httptest.ResponseRecorder) {
@@ -303,5 +305,243 @@ func TestRunCreateCarriesTheViewedType(t *testing.T) {
 	}
 	if d := withRunUserType(ctx, utPM, map[string]any{}); d["user_type"] != utPM || d["user_view"] != nil {
 		t.Fatalf("outside the view = %v", d)
+	}
+}
+
+// TestMeUserViewPreselectType (#912): /me's user_view_preselect_type is the
+// same resolution POST /me/view applies with no type named — the remembered
+// choice, else the admin's own stamped type, else the built-in one — computed
+// BEFORE the view is entered so the switch's dropdown has a first value to
+// show. It answers "" once the view is already on and for a real user, since
+// neither ever renders the picker.
+func TestMeUserViewPreselectType(t *testing.T) {
+	srv, st, _ := uvServer(t)
+
+	// No remembered choice yet: the admin's own stamped type.
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, "")
+	me, _ := uvGetMe(t, srv, admin)
+	if me.UserViewPreselect != utDev {
+		t.Fatalf("preselect with no remembered choice = %q, want the stamped type %q", me.UserViewPreselect, utDev)
+	}
+
+	// Remember a different choice; a NEW session of the same principal, still
+	// outside the view, preselects it over the stamped type.
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","user_type":"`+utPM+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("choose %q: %d %s", utPM, w.Code, w.Body.String())
+	}
+	fresh := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, "")
+	me, _ = uvGetMe(t, srv, fresh)
+	if me.UserViewPreselect != utPM {
+		t.Fatalf("preselect with a remembered choice = %q, want %q", me.UserViewPreselect, utPM)
+	}
+
+	// Already in the view: /me's own user_type field answers this, so the
+	// preselect is blank.
+	inView := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, utPM)
+	me, _ = uvGetMe(t, srv, inView)
+	if me.UserViewPreselect != "" {
+		t.Fatalf("preselect while already in the view = %q, want empty", me.UserViewPreselect)
+	}
+
+	// A real user never renders the picker either.
+	st.userTypes = utKnown
+	user := uvSession(t, "sub-uv-preselect-user", oidc.RoleUser, types.UserTypeStandard, "")
+	me, _ = uvGetMe(t, srv, user)
+	if me.UserViewPreselect != "" {
+		t.Fatalf("preselect for a real user = %q, want empty", me.UserViewPreselect)
+	}
+}
+
+// TestMeUserViewTypes (#912, H2): GET /user-types is securityOps and 403s a
+// session CLAMPED to user by the view — this is what /me's user_view_types
+// is for instead. An admin gets the org's types whether or not they have
+// entered the view yet (their STAMPED role decides, never the clamped one);
+// a real user — who has no stamped role above user to underlie any clamp —
+// never gets the list, which is what keeps the org's type roster off a
+// member's own /me.
+func TestMeUserViewTypes(t *testing.T) {
+	srv, _, _ := uvServer(t)
+
+	// An admin outside the view: the picker's own pre-entry data source.
+	// (uvServer's fake store answers ListUserTypes with the one built-in
+	// type regardless of seeding — this test is about WHO gets the list, not
+	// how many rows are in it; a real store's row count is store_user_types's
+	// own concern.)
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+	me, _ := uvGetMe(t, srv, admin)
+	if len(me.UserViewTypes) != 1 || me.UserViewTypes[0].ID != types.UserTypeStandard {
+		t.Fatalf("admin outside the view: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+
+	// The SAME admin, now clamped INSIDE the view: GET /user-types itself
+	// would 403 here (securityOps, clamped role); /me must still answer.
+	inView := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, utPM)
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/user-types", inView, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("GET /user-types inside the view = %d, want 403 (the clamp this field exists to work around)", w.Code)
+	}
+	me, _ = uvGetMe(t, srv, inView)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("admin inside the view: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+
+	// A security admin gets it too — the same tier GET /user-types itself
+	// admits outside any view.
+	secAdmin := uvSession(t, "sub-uv-secadmin", oidc.RoleSecurityAdmin, types.UserTypeStandard, "")
+	me, _ = uvGetMe(t, srv, secAdmin)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("security admin: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+
+	// A real member: never the org's type roster, on any request shape.
+	user := uvSession(t, "sub-uv-types-user", oidc.RoleUser, types.UserTypeStandard, "")
+	me, _ = uvGetMe(t, srv, user)
+	if me.UserViewTypes != nil {
+		t.Fatalf("real user: user_view_types = %+v, want nil — never expose the org's types to a member", me.UserViewTypes)
+	}
+}
+
+// TestUserViewDroppedCarriesTheCachedName (M4): the drop notice must name the
+// removed type, not just its id — but the type's row is gone by the time the
+// drop fires, so the only way to answer with a name is one cached at the
+// switch that entered it. This proves the cache survives the round trip:
+// choose a real type (POST /me/view resolves and caches its name), delete
+// it, trip the drop, and read the name back off /me.
+func TestUserViewDroppedCarriesTheCachedName(t *testing.T) {
+	srv, st, _ := uvServer(t)
+	st.userTypes = []types.UserType{{ID: utPM, Name: "Portfolio manager"}}
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","user_type":"`+utPM+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("choose %q: %d %s", utPM, w.Code, w.Body.String())
+	}
+	chosen, sess := reSigned(t, w)
+	if sess.UserViewTypeName != "Portfolio manager" {
+		t.Fatalf("cached name after choosing = %q, want %q", sess.UserViewTypeName, "Portfolio manager")
+	}
+
+	// The row is gone: the next request trips the drop.
+	st.userTypes = nil
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/me/capabilities", chosen, "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("request after the delete = %d %s, want 403", w.Code, w.Body.String())
+	}
+	dropped, sess := reSigned(t, w)
+	if sess.UserViewDroppedName != "Portfolio manager" {
+		t.Fatalf("cached name after the drop = %q, want %q", sess.UserViewDroppedName, "Portfolio manager")
+	}
+
+	me, _ := uvGetMe(t, srv, dropped)
+	if me.UserViewDropped["user_type"] != utPM || me.UserViewDropped["user_type_name"] != "Portfolio manager" {
+		t.Fatalf("/me user_view_dropped = %+v, want user_type %q and user_type_name %q", me.UserViewDropped, utPM, "Portfolio manager")
+	}
+}
+
+// TestMeUserViewTypes_SecurityAdminInsideTheView (round-2 review P-C): the
+// builder's own TestMeUserViewTypes checked this tier only OUTSIDE the view;
+// a security_admin looking through a chosen type must get the roster too,
+// for the identical reason an admin does.
+func TestMeUserViewTypes_SecurityAdminInsideTheView(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	inView := uvSession(t, "sub-uv-secadmin-inview", oidc.RoleSecurityAdmin, types.UserTypeStandard, utDev)
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/user-types", inView, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("GET /user-types inside the view (security_admin) = %d, want 403", w.Code)
+	}
+	me, _ := uvGetMe(t, srv, inView)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("security_admin inside the view: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+}
+
+// TestMeUserViewTypes_MemberModeCookieOnAnExistingTypeGetsTheRoster (round-3
+// review, F1): meUserViewTypes's own gate does NOT distinguish "a real admin
+// looking through a type" from "a cookie that hand-builds the same shape on
+// a stamped user" — both have MemberMode true and a type that exists, so
+// both get the roster, by design (round 2's own remediation (b): MemberMode
+// implies the stamped operator tier BY CONSTRUCTION, so the gate does not
+// need to re-check it). What actually keeps a real member from ever reaching
+// this state is NOT this function and is NOT tested here — it is:
+//   - SetUserView (the mode's ONE writer) refusing to turn it on for a
+//     stamped user, pinned by oidc's own
+//     TestMemberMode_RealMemberTurningItOnWritesNoCookie and by this
+//     package's TestUserViewSwitchValidatesAndRemembersTheType ("a real user
+//     is already in the user view: nothing is written or remembered");
+//   - the cookie's HMAC signature, which makes this exact shape unforgeable
+//     without the server's key, pinned by
+//     TestMeUserViewTypes_ForgedCookieIs401 above.
+// (A previous version of this test named a type that does not exist, so
+// userViewGate dropped the view before /me ever ran — it passed for a reason
+// that had nothing to do with meUserViewTypes, and its own comment wrongly
+// credited that drop as a "defence in depth" for this field. There is no
+// such defence here; the two tests named above are the real ones.)
+func TestMeUserViewTypes_MemberModeCookieOnAnExistingTypeGetsTheRoster(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	handBuilt := uvSession(t, "sub-uv-handbuilt-member", oidc.RoleUser, types.UserTypeStandard, utPM)
+	// GET /me answers straight from this cookie and sets no new one — the
+	// named type exists, so userViewGate has nothing to drop, and this
+	// request itself changes no state.
+	me, w := uvGetMe(t, srv, handBuilt)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /me = %d %s", w.Code, w.Body.String())
+	}
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("MemberMode on an existing type: user_view_types = %+v, want the built-in type (the gate reads MemberMode, not who is stamped)", me.UserViewTypes)
+	}
+	if !me.MemberMode {
+		t.Errorf("me.user_view = %v, want true — this state is never dropped", me.MemberMode)
+	}
+}
+
+// TestMeUserViewTypes_ForgedCookieIs401 (round-2 review): a session cookie
+// whose signature no longer verifies must never reach any handler logic —
+// GET /me answers 401, not a resolved (or even a nil) user_view_types.
+func TestMeUserViewTypes_ForgedCookieIs401(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	good := uvSession(t, "sub-uv-forged", oidc.RoleAdmin, types.UserTypeStandard, "")
+	forged := *good
+	// Flips the base64 payload's first character to a different one from the
+	// SAME alphabet (RawURLEncoding never emits '_' first, so this is always
+	// a change) — corrupts the signed payload while staying a byte the
+	// cookie wire format accepts, unlike an arbitrary XOR'd byte.
+	if forged.Value[0] == '_' {
+		forged.Value = "-" + forged.Value[1:]
+	} else {
+		forged.Value = "_" + forged.Value[1:]
+	}
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/me", &forged, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /me with a forged cookie = %d, want 401", w.Code)
+	}
+}
+
+// TestMeUserViewTypes_TokenLaneMemberGetsNil (round-2 review): the wdn_ token
+// lane publishes identity through the SAME withHumanIdentity the SSO branch
+// uses (apitokens.go), never through oidc.contextWithPrincipal — so
+// oidc.MemberModeFromContext is always false there (the user view is a
+// cookie-only concept; SetUserView needs one to write to). A member's own
+// token must still never see the org's type roster.
+func TestMeUserViewTypes_TokenLaneMemberGetsNil(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	ctx := withHumanIdentity(req.Context(), "sub-uv-token-member", "member@corp.example", oidc.RoleUser, types.UserTypeStandard, nil, false)
+	if got := srv.meUserViewTypes(req.WithContext(ctx)); got != nil {
+		t.Fatalf("token-lane member: user_view_types = %+v, want nil", got)
+	}
+}
+
+// TestMeUserViewTypes_BareAdminTokenGetsNil: the bare admin token (env-var
+// bootstrap credential, no per-human identity) is exempt in isSecurityOperator
+// itself ("no verified OIDC human" arm, http.go), which would otherwise make
+// it look like a security operator here too. The explicit human check is
+// what keeps this lane at nil — it already reaches GET /user-types directly
+// (isOperator's own exemption), so /me owes it nothing extra.
+func TestMeUserViewTypes_BareAdminTokenGetsNil(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	w := do(t, srv, http.MethodGet, "/api/v1/me", adminToken, "")
+	var got uvMe
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("GET /me with the bare admin token = %d %s", w.Code, w.Body.String())
+	}
+	if got.UserViewTypes != nil {
+		t.Fatalf("bare admin token: user_view_types = %+v, want nil", got.UserViewTypes)
 	}
 }

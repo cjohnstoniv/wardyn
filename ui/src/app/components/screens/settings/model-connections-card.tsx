@@ -54,6 +54,13 @@ function ConnectionRowView({
             {copy.line}
           </p>
         )}
+        {/* #592 — Added/Last used, from THIS caller's own provider_access
+            row; absent whenever nothing is stored for it (copy.meta === ""). */}
+        {copy.meta && (
+          <p className="text-meta text-muted-foreground" title={copy.metaTitle || undefined}>
+            {copy.meta}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Chip tone={copy.chip.tone}>{copy.chip.label}</Chip>

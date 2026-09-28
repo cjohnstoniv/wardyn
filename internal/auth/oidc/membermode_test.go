@@ -52,7 +52,7 @@ func setMemberMode(t *testing.T, a *writoidc.Authenticator, in *http.Cookie, on 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	stamped, err := a.SetUserView(w, r, on, "", len(noCredential) > 0 && noCredential[0])
+	stamped, err := a.SetUserView(w, r, on, "", "", len(noCredential) > 0 && noCredential[0])
 	if err != nil {
 		t.Fatalf("SetUserView(%v): %v", on, err)
 	}
@@ -268,7 +268,7 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	stamped, err := a.SetUserView(w, r, true, "", false)
+	stamped, err := a.SetUserView(w, r, true, "", "", false)
 	if err != nil {
 		t.Fatalf("SetUserView: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
-	if _, err := a.SetUserView(w, r, false, "", false); err != nil {
+	if _, err := a.SetUserView(w, r, false, "", "", false); err != nil {
 		t.Fatalf("SetUserView(false): %v", err)
 	}
 	if got := w.Result().Cookies(); len(got) != 1 {

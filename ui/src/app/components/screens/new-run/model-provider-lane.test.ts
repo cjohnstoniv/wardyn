@@ -302,33 +302,37 @@ describe("resolveProviderSelection — R2/R6/R7/R8", () => {
   });
 });
 
-describe("providerGate — R5b/R5c (#542 rail-gap packet)", () => {
+describe("providerGate — R5b/R5c (#1052, #542 rail-gap packet)", () => {
   const CLAUDE_CODE = "claude-code";
 
-  it("is undefined when nothing serves this agent at all (R9)", () => {
-    expect(providerGate([], CLAUDE_CODE)).toBeUndefined();
-    expect(providerGate([{ ...gateway, harnesses: ["codex-cli"] }], CLAUDE_CODE)).toBeUndefined();
+  it("is undefined when nothing serves this agent at all (R9), providersUngranted false", () => {
+    expect(providerGate([], CLAUDE_CODE, false)).toBeUndefined();
+    expect(providerGate([{ ...gateway, harnesses: ["codex-cli"] }], CLAUDE_CODE, false)).toBeUndefined();
+  });
+
+  it("names R5b when the server reports providers_ungranted for this agent", () => {
+    // model_providers is already narrowed to granted providers (capVisible),
+    // so `serving` here is empty regardless of the org's own roster — the
+    // server's providers_ungranted fact is the only signal.
+    expect(providerGate([], CLAUDE_CODE, true)).toEqual({ kind: "not_granted" });
   });
 
   it("is undefined with an ordinary, non-disabled candidate set", () => {
-    expect(providerGate([gateway, claude], CLAUDE_CODE)).toBeUndefined();
+    expect(providerGate([gateway, claude], CLAUDE_CODE, false)).toBeUndefined();
   });
 
   it("names the disabled default (R5c), even with other candidates surviving", () => {
     const disabledDefault = { ...gateway, disabled: true, default_for: [CLAUDE_CODE] };
-    expect(providerGate([disabledDefault, claude], CLAUDE_CODE)).toEqual({
+    expect(providerGate([disabledDefault, claude], CLAUDE_CODE, false)).toEqual({
       kind: "default_off",
       provider: disabledDefault,
     });
   });
 
-  // Opus review round 2 — R5b is NOT drawn: an all-disabled roster with no
-  // NAMED default is R9's shape (undefined), same as the server's own
-  // chooseModelProvider (len(serving)==0 launches on the silent advisory,
-  // never a refusal) — see providerGate's own doc comment for why the console
-  // has no "granted none" signal to read in the first place.
   it("an all-disabled roster with no named default is R9's shape, not a gate", () => {
-    expect(providerGate([{ ...gateway, disabled: true }], CLAUDE_CODE)).toBeUndefined();
-    expect(providerGate([{ ...gateway, disabled: true }, { ...anthropicKey, disabled: true }], CLAUDE_CODE)).toBeUndefined();
+    expect(providerGate([{ ...gateway, disabled: true }], CLAUDE_CODE, false)).toBeUndefined();
+    expect(
+      providerGate([{ ...gateway, disabled: true }, { ...anthropicKey, disabled: true }], CLAUDE_CODE, false),
+    ).toBeUndefined();
   });
 });

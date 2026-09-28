@@ -223,12 +223,16 @@ export function ModelProviderSection({
   onChange: (id: string) => void;
   changeNote: string | null;
   onSignIn: (provider: SetupModelProvider) => void;
-  /** R5c — model-provider-lane.ts's providerGate. R5b is NOT drawn (Opus
-   *  review round 2 — see providerGate's own doc comment): the console has no
-   *  signal for "granted none" today, so `gate` is never "not_granted". */
+  /** R5b/R5c (#1052, #542 rail-gap packet) — model-provider-lane.ts's
+   *  providerGate. */
   gate?: ProviderGate;
   harnessLabel: string;
 }) {
+  // R5b — no provider serves this person for this agent at all: no select
+  // renders, Launch stays refused via RunRail's `problem`.
+  if (gate?.kind === "not_granted") {
+    return <p className="text-xs text-warning">{RAIL_PROVIDER.NOT_GRANTED(harnessLabel)}</p>;
+  }
   // R5c, no other candidate: no select renders at all, naming the disabled
   // default (Launch stays refused via RunRail's `problem`).
   if (gate?.kind === "default_off" && candidates.length === 0) {

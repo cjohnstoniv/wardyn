@@ -551,6 +551,15 @@ type SetupHarnessTool struct {
 	// presses Preflight, which answers for the exact run. Member-safe for the same
 	// reason the two fields above are.
 	CredentialResidency string `json:"credential_residency,omitempty"`
+	// ProvidersUngranted (#1052) is true when at least one enabled model
+	// provider serves this harness but this caller's own granted set
+	// (setupModelProviderState's capVisible-narrowed model_providers) serves
+	// none of them — canon.md's R5b, "no provider serves this person for this
+	// harness at all". Distinct from R9 (nothing serves the harness at all,
+	// which leaves this false): /setup/status's model_providers list is
+	// already narrowed to granted providers before the wire, so without this
+	// fact the two states were indistinguishable to the console.
+	ProvidersUngranted bool `json:"providers_ungranted,omitempty"`
 }
 
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
@@ -581,8 +590,33 @@ type SetupHarnessTool struct {
 // AgentProviders block is never stored — agentProvidersConfigured's doc).
 // That is the conservative direction here — it claims nothing unavailable on
 // a blip.
-func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string) []SetupHarnessTool {
+//
+// granted is setupModelProviderState's own model-providers list (already
+// narrowed to what THIS CALLER may see and is granted, capVisible(capModelProvider)
+// — provider_access.go's doc) — reused rather than re-derived, so this fact and
+// the picker's own candidate set can never disagree about who is granted what.
+// providers_ungranted (#1052) is true for a harness at least one ENABLED
+// provider serves org-wide but none of granted's rows serve — canon.md's R5b.
+func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, granted []SetupModelProvider) []SetupHarnessTool {
 	configured := agentProvidersConfigured(sc)
+	serving := map[string]bool{}
+	for _, p := range modelProviderRows(sc) {
+		if p.Disabled {
+			continue
+		}
+		for _, h := range p.Harnesses {
+			serving[h.Harness] = true
+		}
+	}
+	grantedFor := map[string]bool{}
+	for _, p := range granted {
+		if p.Disabled {
+			continue
+		}
+		for _, h := range p.Harnesses {
+			grantedFor[h] = true
+		}
+	}
 	out := make([]SetupHarnessTool, len(harnessCatalog))
 	inCatalog := make(map[string]bool, len(harnessCatalog))
 	for i, d := range harnessCatalog {
@@ -590,8 +624,9 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string) []Set
 		tool := SetupHarnessTool{
 			ID: d.ID, Display: d.Display,
 			HasGateway: d.Gateway != nil, HasLogin: d.Login != nil,
-			NoManagedAuth: d.NoManagedAuth,
-			Enabled:       true,
+			NoManagedAuth:      d.NoManagedAuth,
+			Enabled:            true,
+			ProvidersUngranted: serving[d.ID] && !grantedFor[d.ID],
 		}
 		if configured {
 			row, ok := agentProviderFor(sc, d.ID)
@@ -615,6 +650,7 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string) []Set
 				Mechanism:           string(row.Mechanism),
 				CredentialSource:    string(row.CredentialSource),
 				CredentialResidency: rowFixedResidency(row),
+				ProvidersUngranted:  serving[row.ID] && !grantedFor[row.ID],
 			})
 		}
 	}
