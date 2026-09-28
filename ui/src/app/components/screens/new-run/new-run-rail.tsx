@@ -89,6 +89,12 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** #922 review F5: an ADDITIONAL disable with no text of its own — the
+     *  workspace picker's own advisory line (workspace-card.tsx) already
+     *  names the reason, so Launch disables without the rail repeating the
+     *  same sentence a second time. Optional so every other caller (this
+     *  type's only other use is new-run-screen.tsx) is unaffected. */
+    workspaceUnavailable?: boolean;
     error: string | null;
     /** Bumped on every failed launch (see use-launch.ts) so a repeated,
      *  identical failure remounts the alert region and is re-announced (#459). */
@@ -658,7 +664,7 @@ export function RunRail({
           ref={launchRef}
           type="button"
           className="flex-1"
-          disabled={launch.disabled || !!launch.problem}
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable}
           onClick={() => {
             autoOpened.current = false;
             void launch.onLaunch();

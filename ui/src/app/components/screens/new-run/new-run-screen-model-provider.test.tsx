@@ -346,12 +346,12 @@ describe("NewRunScreen — a command run never carries a model provider", () => 
   });
 });
 
-// #1042 sends `"model_providers": null` for an install with no provider block
-// (omitempty dropped). null must read like absent: no picker, no gate, and
-// Launch still works.
-describe("NewRunScreen — a legacy install's null model_providers", () => {
+// An install with no provider block carries no model_providers key at all
+// (omitzero). That must read as no block: no picker, no gate, and Launch
+// still works.
+describe("NewRunScreen — a legacy install's absent model_providers", () => {
   it("renders and launches with no model_provider on the wire", async () => {
-    getSetupStatusMock.mockResolvedValue({ ...baseStatus(), model_providers: null });
+    getSetupStatusMock.mockResolvedValue({ ...baseStatus(), model_providers: undefined });
     renderScreen();
     await user.type(await screen.findByLabelText("Title"), "Legacy null block");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));

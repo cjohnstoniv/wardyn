@@ -75,7 +75,16 @@ import {
   savedPolicyGone,
 } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
-import { agentLabel, initialWizardState, primaryWorkspaceId, titleFromTask, type RunPrefill, type WizardState } from "./wizard-types";
+import {
+  agentLabel,
+  initialWizardState,
+  primaryWorkspaceId,
+  resolvedModelProviders,
+  titleFromTask,
+  workspaceUnavailableToCaller,
+  type RunPrefill,
+  type WizardState,
+} from "./wizard-types";
 import { useLaunch } from "./use-launch";
 import {
   providerCandidates as candidatesForAgent,
@@ -158,11 +167,14 @@ export function NewRunScreen() {
   // SetupStatus.harnesses — absent while unfetched or failed, same "unknown
   // stays unknown" rule as llmReady above (AgentPicker's own fallback).
   const [harnesses, setHarnesses] = React.useState<SetupHarnessTool[] | undefined>(undefined);
-  // #542 — this person's own model providers and their connection state
-  // (/setup/status, already filtered to what they may use — #1015). Same
-  // "unknown stays unknown" rule as harnesses above: undefined until the read
-  // lands, which is also what keeps the rail's provider picker from rendering
-  // (and forcing a preselection) before there is anything to pick from.
+  // #542/#922 — this person's own model providers (/setup/status, already
+  // filtered to what they may use — capVisible(capModelProvider), #832/#1015)
+  // and their connection state. Same "unknown stays unknown" rule as
+  // harnesses above: undefined until the read lands, which is also what keeps
+  // the rail's provider picker from rendering (and forcing a preselection)
+  // before there is anything to pick from. It is also the one member-safe
+  // signal for "is the chosen workspace's pinned model provider available to
+  // me" (#922). Read off the SAME /setup/status fetch above, never a second one.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
   // R7's info line — cleared the moment the person makes their OWN choice
@@ -243,7 +255,11 @@ export function NewRunScreen() {
         if (!alive) return;
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
-        setModelProviders(st.unreachable ? undefined : st.model_providers ?? undefined);
+        // An absent model_providers key means no provider block (nothing to
+        // enforce); a present `[]` means a block that grants this caller
+        // nothing. resolvedModelProviders keeps that distinction and folds an
+        // unreachable read to undefined, off the same bit this effect reads.
+        setModelProviders(resolvedModelProviders(st));
         setProviderAccess(st.unreachable ? undefined : st.provider_access);
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
@@ -416,9 +432,31 @@ export function NewRunScreen() {
   // this screen's question, and a second general-purpose answer living
   // elsewhere is what drifts out of sync with the form it describes.
   const needsTask = !isAgent || state.mode === "batch";
+  // #922: the CHOSEN workspace, resolved the same way workspace-card.tsx's own
+  // per-reason advisory lines resolve it (state.workspaces[0] is the primary
+  // selection) — folded into ONE generic reason via workspaceUnavailableToCaller,
+  // never the picker's own more specific copy (that stays put, unchanged).
+  //
+  // review F2: the model-provider arm is gated on `isAgent` — a Shell/exec run
+  // sends no `agent`, and the server's own model-provider door only ever asks
+  // for a model run (run_model_provider.go's `needsModel`/`createDoorIsModelRun`,
+  // runs_dispatch_llm.go's `taskMode != "exec"`); applying it to every run type
+  // was a false-disable for a command the server would happily admit. The
+  // WORKSPACE capability arm is NOT gated — a plain ungranted workspace refuses
+  // regardless of run type.
+  const pickedWorkspace = workspaces.find((w) => w.id === state.workspaces[0]?.workspaceId);
+  const workspaceUnavailable =
+    !!pickedWorkspace &&
+    workspaceUnavailableToCaller(pickedWorkspace, caps, isAgent ? modelProviders : undefined);
   // #1197 L2: Title dropped out of this chain — the server never required
   // one (runs_create_validate.go's own doc comment), only the console did,
   // and the console default now derives one from the task instead of asking.
+  //
+  // review F5: `workspaceUnavailable` is NOT a clause here — it disables
+  // Launch through the rail's own `workspaceUnavailable` prop instead (below),
+  // so the sentence renders exactly once, on the workspace picker's own
+  // advisory line (workspace-card.tsx), never a second time in the rail's
+  // problem slot.
   const problem = needsTask && !state.task.trim()
     ? isAgent
       ? "An autonomous run needs a task to perform."
@@ -732,6 +770,7 @@ export function NewRunScreen() {
             patch={patch}
             workspaces={workspaces}
             caps={caps}
+            modelProviders={modelProviders}
             onAddWorkspace={() => setAddWsOpen(true)}
             drive={userDrive}
             driveDeniedBy={driveDeniedBy}
@@ -921,6 +960,10 @@ export function NewRunScreen() {
             spinning: launchSpinning,
             inFlight: launching,
             problem,
+            // review F5: disables Launch WITHOUT a second rendering of the
+            // sentence — workspace-card.tsx's own advisory line is the one
+            // place it's shown.
+            workspaceUnavailable,
             error,
             errorSeq,
             credentialRefused,

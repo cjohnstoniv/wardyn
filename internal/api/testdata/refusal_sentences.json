@@ -120,6 +120,11 @@
     "sentence": "choice.refusal"
   },
   {
+    "reason": "capability_workspace",
+    "target": "\"runs.workspace\"",
+    "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
+  },
+  {
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"

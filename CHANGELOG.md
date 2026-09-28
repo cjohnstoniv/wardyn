@@ -30,6 +30,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
   additive: an install with no per-provider model records (#551) at all is unaffected, and keeps
   "Your model key" on Getting Started as its own credential door until #548 converts it.
+- **The person side of "Available to" disables Launch, in the console, before the server ever has to
+  refuse (#922).** New Run's own Launch button is now disabled with
+  `This workspace isn't available to you.` when the chosen workspace itself carries no allow for
+  the caller (the kind-wide "workspace" enforcement switch), or is pinned to a model provider the
+  caller's own filtered `/setup/status.model_providers` doesn't carry — checked only for an agent
+  run, since a Shell command asks the server for neither. `GET /setup/status`'s `model_providers`
+  field now carries `[]` for a caller granted no provider under an existing block, distinct from the
+  field being absent entirely for a deployment with no provider block at all — previously both read
+  as an absent key, which the console could not tell apart. The sentence never names the resource,
+  since the console has no member-safe way to learn a restricted value's own name. The same two
+  reasons now show consistently everywhere: the workspace picker's own advisory line, a workspace's
+  own page ("Start a run"), and the Workspaces list (both the Workspace and Model columns) — each
+  reason renders in exactly one place, never twice on the same screen.
+  **Known gap, disclosed rather than silently shipped:** a workspace's own PER-VALUE "Available to:
+  Only these" restriction (set from its own admin editor) is invisible to a member's console —
+  `GET /me/capabilities` carries the caller's own allow rows but no per-value restricted bit, so a
+  workspace restricted that way (with the kind-wide switch left off, the common case) reads as
+  available here and Launch stays enabled; the server still refuses it at launch. Tracked in #1267
+  (a per-value signal the caller's own console can safely read).
+  The git-provider-pinned case (`Uses Azure DevOps (contoso), which isn't available to you.`) is not
+  built either — `GET /me/scm-access` only covers per-user Azure DevOps rows, so absence there is
+  ambiguous for a shared-PAT row or a GitHub App; tracked in #1250.
+  A repo-kind workspace's own server-side handling (it drops the repo silently and proceeds, rather
+  than refusing the way this console now blocks Launch) is tracked separately in #1259.
+
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
   group); the portal then trades the person's own live identity-provider token for a ten-minute,
@@ -62,11 +87,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
-  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and is absent only
-  when there is no provider block at all — the two are different facts, and collapsing them into the
-  same missing key made a real "not connected to anything" grant indistinguishable from an admin who
-  has not started setting providers up.
 - **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
   matrix (#1200).** A new shared `TierPicker` component lists only the tiers this host has installed,
   each with a one-line strength and an info popover, plus a "Compare barriers" dialog holding the full
@@ -138,6 +158,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   status word, and at most one action button (Review / Sign in), reading the server's own projected
   `attention` field instead of a client-side approvals join. An ageing note ("Showing the last 7
   days. N older runs are hidden.") links to widen the window or include killed runs.
+- **The Admin view of the Runs page gets its own sections, an Everyone/Mine switch, saved views and
+  grouping (#1197).** "Waiting on the owner" sits beside "Needs a decision" for a run only its owner
+  can act on (a sign-in hold or a lost sandbox) — an admin can decide an approval, never someone
+  else's sign-in. A "Whose runs" filter narrows the Admin view to the caller's own runs via the
+  server's existing `owner=me`, defaulting to Everyone. "Save view" names the current URL in the
+  browser's own storage (up to 10), alongside four built-in views (Default, Failed this week,
+  Killed, By workspace); picking one never changes Everyone/Mine, which is who's asking, not
+  something a view remembers. "Group by" (Sections / Workspace / Title) replaces the time sections
+  with one section per workspace or title, both saved in the URL like every other filter.
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
@@ -175,6 +204,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shows Your model connections' own lede. The expiring row's own line
   (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
   text, instead of a relative offset.
+- **Launching with an ungranted repo-kind workspace now refuses, instead of launching without it
+  (#1259).** A `workspace_repos` entry naming an onboarded workspace the caller does not hold the
+  `workspace` capability for used to be silently dropped, launching a smaller run; it now refuses
+  with the same named 403 `req.workspace_id` already gives for the identical workspace, audited
+  under the same `capability_workspace` reason.
 - **`WARDYN_BEDROCK_BASE_URL` on a wardyn-proxy sidecar's own subnet now refuses boot instead of
   denying every model call (#1198).** The proxy's SSRF guard never lifts an address on any subnet
   its own interfaces sit on, so a Bedrock PrivateLink endpoint resolving onto the docker

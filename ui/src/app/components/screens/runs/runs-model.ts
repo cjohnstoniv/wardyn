@@ -146,10 +146,34 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
 
 export interface RunSections {
   decide: AgentRun[];
+  // Admin view only (H-3): an owner's own sign-in hold or lost run — nobody
+  // but the owner can act, so this section never carries a button (rowPresentation
+  // already answers `action: null` for by=owner; this is only the section
+  // placement half of that same fact).
+  waitingOwner: AgentRun[];
   running: AgentRun[];
   endedToday: AgentRun[];
   earlier: AgentRun[];
   older: { label: string; runs: AgentRun[] }[];
+}
+
+// Which of the two attention sections (if either) a run belongs in. `by ===
+// "admin"` (H-3a: a member's run held on an admin-only approval) answers
+// null here — it stays in the ordinary running/ended flow, unchanged from L3.
+function attentionSection(run: AgentRun): "decide" | "waitingOwner" | null {
+  const by = run.attention?.by;
+  if (by === "you") return "decide";
+  if (by === "owner") return "waitingOwner";
+  return null;
+}
+
+// The flat, non-attention run list — running/starting/ended, in the server's
+// own order — that "Group by Workspace/Title" (H-6, runs-groups.ts) buckets
+// instead of the fixed time sections. Needs-you and Waiting-on-the-owner
+// always render as their own sections regardless of the group-by option
+// (design.md §6's own mock: only the "everything else" portion regroups).
+export function nonAttentionRuns(runs: readonly AgentRun[]): AgentRun[] {
+  return runs.filter((r) => attentionSection(r) === null);
 }
 
 function endedAtMs(run: AgentRun): number {
@@ -177,11 +201,15 @@ function isSameCalendarDay(aMs: number, bMs: number): boolean {
  */
 export function sectionRuns(runs: readonly AgentRun[], now: number = Date.now()): RunSections {
   const decide: AgentRun[] = [];
+  const waitingOwner: AgentRun[] = [];
   const running: AgentRun[] = [];
   const over: AgentRun[] = [];
   for (const run of runs) {
-    if (run.attention?.by === "you") {
+    const section = attentionSection(run);
+    if (section === "decide") {
       decide.push(run);
+    } else if (section === "waitingOwner") {
+      waitingOwner.push(run);
     } else if (run.lost_reason === "ended") {
       // over, even though `state` is still RUNNING (see
       // rowPresentation's own note above).
@@ -208,12 +236,14 @@ export function sectionRuns(runs: readonly AgentRun[], now: number = Date.now())
   const olderBuckets: { label: string; runs: AgentRun[] }[] = [];
   if (month.length) olderBuckets.push({ label: "Earlier this month", runs: month });
   if (older.length) olderBuckets.push({ label: "Older", runs: older });
-  return { decide, running, endedToday, earlier, older: olderBuckets };
+  return { decide, waitingOwner, running, endedToday, earlier, older: olderBuckets };
 }
 
 // "All quiet" (design.md §2.1) is a fact about the TOP of the page only —
 // nothing needs you and nothing is running. Ended sections still render
 // below the dashed line, so this deliberately ignores endedToday/earlier/older.
+// waitingOwner counts too (Admin view): a page with only owner sign-in holds
+// showing is not quiet, even though nothing on it is THIS viewer's to clear.
 export function isTopQuiet(sections: RunSections): boolean {
-  return sections.decide.length === 0 && sections.running.length === 0;
+  return sections.decide.length === 0 && sections.waitingOwner.length === 0 && sections.running.length === 0;
 }

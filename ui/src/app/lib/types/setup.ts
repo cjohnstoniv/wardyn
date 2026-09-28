@@ -402,14 +402,9 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
-  // The model providers the caller may use. Absent with NO provider block at
-  // all — an admin who has not started; `[]` when a block exists but grants
-  // this caller nothing — an admin who set providers up, just not for them.
-  // #541 fix review: the two are different facts, and the wire's `omitzero`
-  // keeps them apart — the console's own providerMode read (`!= null`, which
-  // also folds a `null`) depends on the distinction (a real block retires
-  // the legacy BYOK door, an absent one does not).
-  model_providers?: SetupModelProvider[] | null;
+  // The model providers the caller may use. Absent only when no provider
+  // block exists; a block that grants this caller nothing is `[]`.
+  model_providers?: SetupModelProvider[];
   // THIS PRINCIPAL's own connection state for each provider in
   // `model_providers` (MP-12) — one row per provider, graded against the
   // caller's own credential. Absent with no provider block, or when it lists
