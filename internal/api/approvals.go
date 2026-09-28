@@ -82,14 +82,14 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	case "", types.ApprovalPending, types.ApprovalApproved, types.ApprovalDenied, types.ApprovalExpired,
 		types.ApprovalCancelled:
 	default:
-		writeError(w, http.StatusBadRequest, "invalid state filter")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidApprovalState, "invalid state filter")
 		return
 	}
 	var runID uuid.UUID
 	if raw := r.URL.Query().Get("run_id"); raw != "" {
 		var err error
 		if runID, err = uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid run_id")
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRunIDParam, "invalid run_id")
 			return
 		}
 	}
@@ -106,7 +106,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		if runID == uuid.Nil {
 			pager, capable := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
 			if !capable {
-				writeError(w, http.StatusInternalServerError, "approval listing is not scoped for members on this backend")
+				writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "approval listing is not scoped for members on this backend")
 				return
 			}
 			principal := principalFromRequest(r)
@@ -232,7 +232,7 @@ func (s *Server) refuseIfRunEnded(
 	if !haveAP {
 		var err error
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
-			writeError(w, http.StatusNotFound, "approval not found")
+			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 			return ap, run, haveAP, haveRun, false
 		}
 		haveAP = true
@@ -244,7 +244,7 @@ func (s *Server) refuseIfRunEnded(
 	}
 	if haveRun && isTerminalRunState(run.State) {
 		s.cancelRunApprovals(r.Context(), ap.RunID)
-		writeError(w, http.StatusConflict, approvalRunEndedBody)
+		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
 		return ap, run, haveAP, haveRun, false
 	}
 	return ap, run, haveAP, haveRun, true
@@ -287,7 +287,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// the same read the scope rules below need anyway.
 	if reauthAP, rerr := s.cfg.Approvals.Get(r.Context(), id); rerr == nil &&
 		reauthAP.Kind == types.ApprovalCredentialReauth && s.canSeeApproval(r, reauthAP) {
-		writeError(w, http.StatusConflict, credentialReauthNotDecidableBody)
+		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
 		return
 	}
 
@@ -328,7 +328,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
 			// The same answer the member gate gives for the same failed load,
 			// and the same answer Decide() below gives for a row that vanished.
-			writeError(w, http.StatusNotFound, "approval not found")
+			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 			return
 		}
 		haveAP = true
@@ -351,7 +351,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// pair, and this is the server-side half of that: the pair cannot be restored
 	// by a hand-rolled POST.
 	if ap.Kind == types.ApprovalCredentialReauth {
-		writeError(w, http.StatusConflict, credentialReauthNotDecidableBody)
+		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
 		return
 	}
 
@@ -380,7 +380,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	}
 	if !isADO && scope != "" && ap.Kind != types.ApprovalEgressDomain {
 		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
-			writeError(w, http.StatusBadRequest,
+			writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
 				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
 			return
 		}
@@ -462,9 +462,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		switch {
 		// One sentinel: approval.ErrAlreadyDecided IS store.ErrAlreadyDecided.
 		case errors.Is(err, approval.ErrAlreadyDecided):
-			writeError(w, http.StatusConflict, "approval already decided")
+			writeErrorReason(w, http.StatusConflict, reasonApprovalAlreadyDecided, "approval already decided")
 		case errors.Is(err, store.ErrNotFound):
-			writeError(w, http.StatusNotFound, "approval not found")
+			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		default:
 			writeServerError(w, r, "decide approval", err)
 		}
@@ -549,7 +549,7 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 		return body, true
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
 		return body, false
 	}
 	return body, true
@@ -591,13 +591,13 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
 	_, isADO := adoEscalationScope(ap)
 	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO) {
-		writeError(w, http.StatusNotFound, "approval not found")
+		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false
 	}
 	var rerr error
 	run, rerr = s.cfg.Store.GetRun(r.Context(), ap.RunID)
 	if rerr != nil || !s.ownsRunOrAdmin(r, run) {
-		writeError(w, http.StatusNotFound, "approval not found")
+		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		if rerr == nil {
 			// Audited only once the approval is confirmed to genuinely exist
 			// and be decidable in kind — a run lookup failure here would be a
@@ -775,7 +775,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	if !haveAP {
 		var err error
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
-			writeError(w, http.StatusNotFound, "approval not found")
+			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 			return false, false
 		}
 	}
@@ -795,7 +795,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	// so refusing here must not reach a credential or tool_call decision, which
 	// are already admin-only and which this switch never claimed to gate.
 	if s.cfg.LocalMode {
-		writeError(w, http.StatusServiceUnavailable, envEgressSecondHuman+
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonEgressSecondHumanLocalMode, envEgressSecondHuman+
 			" cannot be enforced in local mode: local mode authenticates nobody, so both the decider and"+
 			" the run's creator are client-supplied and no request can prove a second human decided."+
 			" Configure SSO to use this switch, or unset it")
@@ -814,7 +814,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 			run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID)
 		}
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable,
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable,
 				envEgressSecondHuman+" is set, but this approval's run could not be read to verify a second human decided it")
 			return false, false
 		}
@@ -842,7 +842,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 // client that sent one believes the grant is time-boxed, and it would not be.
 func validateDecisionScope(w http.ResponseWriter, scope types.ApprovalScope, expiresAt *time.Time) bool {
 	if !scope.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid decision_scope (once|run|until|always)")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidDecisionScope, "invalid decision_scope (once|run|until|always)")
 		return false
 	}
 	switch {
@@ -850,17 +850,17 @@ func validateDecisionScope(w http.ResponseWriter, scope types.ApprovalScope, exp
 		now := time.Now()
 		switch {
 		case expiresAt == nil:
-			writeError(w, http.StatusBadRequest, "decision_scope until requires decision_expires_at")
+			writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeUntilNeedsExpiry, "decision_scope until requires decision_expires_at")
 			return false
 		case !expiresAt.After(now):
-			writeError(w, http.StatusBadRequest, "decision_expires_at is in the past")
+			writeErrorReason(w, http.StatusBadRequest, reasonDecisionExpiryInPast, "decision_expires_at is in the past")
 			return false
 		case expiresAt.After(now.Add(maxDecisionUntil)):
-			writeError(w, http.StatusBadRequest, "decision_expires_at is more than 30d out — use always for a permanent decision")
+			writeErrorReason(w, http.StatusBadRequest, reasonDecisionExpiryTooFar, "decision_expires_at is more than 30d out — use always for a permanent decision")
 			return false
 		}
 	case expiresAt != nil:
-		writeError(w, http.StatusBadRequest, "decision_expires_at is only valid with decision_scope until")
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionExpiryWithoutUntil, "decision_expires_at is only valid with decision_scope until")
 		return false
 	}
 	return true
@@ -919,7 +919,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// it for the same reason), and a backend that cannot resolve the linkage
 	// cannot serve this scope at all.
 	if s.cfg.Store == nil {
-		writeError(w, http.StatusInternalServerError, "decision_scope always is unavailable on this backend")
+		writeErrorReason(w, http.StatusInternalServerError, reasonDecisionScopeAlwaysUnavailable, "decision_scope always is unavailable on this backend")
 		return uuid.Nil, false
 	}
 	if !haveRun {
@@ -948,7 +948,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 		// "no recorded workspace link", not "references no workspace": a run
 		// created before migration 0041 has a NULL workspace_ids even when it
 		// referenced one — the server only knows what was recorded.
-		writeError(w, http.StatusBadRequest, "always needs a workspace: this run has no recorded workspace link")
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysNoWorkspaceLink, "always needs a workspace: this run has no recorded workspace link")
 		return uuid.Nil, false
 	}
 
@@ -957,14 +957,14 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// still meaningful.
 	host := approvalHost(ap)
 	if !hostrules.ValidApprovedHost(host) {
-		writeError(w, http.StatusBadRequest,
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysInvalidHost,
 			"invalid domain (plain lowercase host, no scheme/port/wildcard): "+host)
 		return uuid.Nil, false
 	}
 	ws, err := s.cfg.Store.GetWorkspace(r.Context(), target)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusBadRequest, "always needs a workspace: this run's workspace no longer exists")
+			writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysWorkspaceGone, "always needs a workspace: this run's workspace no longer exists")
 			return uuid.Nil, false
 		}
 		writeServerError(w, r, "resolve workspace for always", err)
@@ -978,12 +978,12 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 			// recommends ("*.anthropic.com") a CONCRETE model-provider host is not
 			// in this set at all — naming it unconditionally would tell the
 			// operator something that is often false.
-			writeError(w, http.StatusBadRequest, "host "+host+" is already routed or wired in by construction "+
+			writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysHostBuiltin, "host "+host+" is already routed or wired in by construction "+
 				"(git broker, control plane, or this workspace's own contract) — a permanent approved-egress entry for it is never consulted")
 			return uuid.Nil, false
 		}
 	} else if msg := s.denyAlwaysReject(r.Context(), ws, host); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysHostDenied, msg)
 		return uuid.Nil, false
 	}
 	return target, true

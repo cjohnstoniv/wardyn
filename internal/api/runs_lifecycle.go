@@ -648,7 +648,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	//. COMPLETED/FAILED/STOPPED/ARCHIVED still 409 (writing KILLED would
 	// corrupt the recorded outcome).
 	if isTerminalRunState(run.State) && run.State != types.RunKilled {
-		writeError(w, http.StatusConflict,
+		writeErrorReason(w, http.StatusConflict, reasonRunKillAlreadyTerminal,
 			"run is already terminal (state="+string(run.State)+"); not re-killing")
 		return
 	}
@@ -671,7 +671,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		// terminal transition, or a dispatch forward-transition). Report the conflict
 		// WITHOUT revoking — the run legitimately advanced, and a losing kill must not
 		// strip a still-live run's credentials.
-		writeError(w, http.StatusConflict,
+		writeErrorReason(w, http.StatusConflict, reasonRunKillStateChanged,
 			"run state changed concurrently; not overwriting with KILLED")
 		return
 	}
