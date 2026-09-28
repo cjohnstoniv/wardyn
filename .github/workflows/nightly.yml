@@ -829,6 +829,37 @@ jobs:
           name: kek-conformance-reports
           path: test/reports/go/kek-*/**
 
+  # WARDYN_DAEMON_PROXY_SECRET on Kubernetes (T-59, #719): a throwaway kind
+  # cluster, two helm installs of the SAME chart with
+  # daemonProxySecret.existingSecret pointed at an operator Secret — once at
+  # its default defaultMode (0440) and once at 0400 — asserting both boot AND
+  # log wiring the var (installDaemonProxySecret's own unit test,
+  # TestInstallDaemonProxySecret_GroupReadableUnderFsGroupAccepted, pins the
+  # Go-level rule this proves reaches the CHART). The OG walk variant (a
+  # credentialed squid proving OIDC discovery through the proxy) is a
+  # separate owner step against the owner's own live estate, not this job.
+  #
+  # NOT in notify-new-lanes.needs / release.yml's watched= yet (PR #1245
+  # review F2): it has never run, so watching it from day one would block a
+  # release on a job that might fail deterministically. Add it to BOTH lists
+  # together (guard 13) once it has gone green on a real nightly run.
+  daemon-proxy-secret-kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: WARDYN_DAEMON_PROXY_SECRET on kind, defaultMode 0440 + 0400
+        run: make test-daemon-proxy-secret-kind
+
   # Coverage-guided fuzzing of the session-cookie decoder: a cookie whose HMAC
   # does not verify must never decode into a session. Every PR runs the seed
   # corpus as an ordinary test; this lane searches past it.

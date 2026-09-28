@@ -52,12 +52,12 @@ const (
 	// ruleSourceGitEnc marks refusal of a push body this proxy could not INSPECT
 	// (non-identity Content-Encoding) — distinct so audit never reads it as a ref violation.
 	ruleSourceGitEnc = "brokered:git:branch-ns-encoding"
-	// envEnforceBranchNS opts THIS proxy process OUT of push branch-namespace
-	// confinement on the App lane (=false); see BranchNSEnforced (ON by default).
+	// envEnforceBranchNS is the ONE var covering both brokered git lanes'
+	// push branch-namespace confinement (#203: folds the former
+	// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into this name with an
+	// {app,pat} scope — see branchNSScopes). See BranchNSEnforced (App lane,
+	// ON by default) and PATBranchNSEnforced (PAT lane, OFF by default).
 	envEnforceBranchNS = "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"
-	// envEnforcePATBranchNS opts THIS proxy process IN to the same confinement
-	// on the git_pat lane; see PATBranchNSEnforced (OFF by default, opposite the App lane).
-	envEnforcePATBranchNS = "WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS"
 	// ruleSourceGitNSOff marks a push this proxy FORWARDED WITHOUT PARSING while
 	// the lane's confinement was otherwise in force (an opt-out via env or
 	// git_push_any_branch). It is the per-push proof of which posture actually
@@ -526,14 +526,16 @@ func BranchNSPrefix(runID uuid.UUID) string {
 }
 
 // BranchNSEnforced reports whether push branch-namespace confinement is ON for
-// THIS proxy process. Exported so cmd/wardyn-proxy can state the posture ONCE
-// at boot: the per-mint branch_namespace metadata is written identically
-// either way, so without that boot line an opted-out proxy reads exactly like
-// a confined one.
+// THIS proxy process's App lane. Exported so cmd/wardyn-proxy can state the
+// posture ONCE at boot: the per-mint branch_namespace metadata is written
+// identically either way, so without that boot line an opted-out proxy reads
+// exactly like a confined one.
 //
 // ON by default: agent-run already checks every cloned repo out onto
 // `wardyn/$WARDYN_RUN_ID/work`, so a stock run is already inside its
-// namespace. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt back out.
+// namespace. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt back out —
+// a BARE value binds the App lane only (see branchNSScopes), unchanged from
+// before #203 folded the PAT lane's own switch into this same var name.
 //
 // Scope: THIS switch binds the BROKERED GITHUB path only (handleGitBroker),
 // not its git_pat sibling. An SSH push is an opaque tunnel no pkt-line parser
@@ -550,9 +552,10 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // an IP literal, so the brokered route is the only CONVENIENT route, not the
 // only conceivable one.
 //
-// Loud parse: an unrecognized value fails CLOSED (enforce + error log).
+// Loud parse: an unrecognized value fails CLOSED (both lanes enforce + error log).
 func BranchNSEnforced() bool {
-	return branchNSSwitch(envEnforceBranchNS, true, &branchNSWarnOnce)
+	app, _ := branchNSScopes()
+	return app
 }
 
 var branchNSWarnOnce sync.Once
@@ -594,39 +597,99 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 }
 
 // PATBranchNSEnforced reports whether push branch-namespace confinement is ON
-// for the git_pat lane. OFF unless the operator opts in
-// (WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS).
+// for the git_pat lane. OFF unless the operator opts in with the `pat` scope
+// of WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (folded from the standalone
+// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS by #203).
 //
-// A SECOND switch with the OPPOSITE default, not a widening of
+// A SECOND scope with the OPPOSITE default, not a widening of
 // BranchNSEnforced: a GitHub App token is Wardyn's own mint, but a PAT is the
 // operator's, carrying whatever scope they issued against forges whose
 // push-ref conventions aren't GitHub's — Wardyn cannot narrow it, so it isn't
 // confined by default. Once opted IN, the parse is the same loud, fail-closed one.
 func PATBranchNSEnforced() bool {
-	return branchNSSwitch(envEnforcePATBranchNS, false, &patBranchNSWarnOnce)
+	_, pat := branchNSScopes()
+	return pat
 }
 
-var patBranchNSWarnOnce sync.Once
-
-// branchNSSwitch parses one branch-namespace enforcement env var: unset means
-// dflt, recognized words mean off/on, anything else ENFORCES while logging
-// once per process. One body for both switches so they can never drift.
-func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
-	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(name))); v {
-	case "":
-		return dflt
+// branchNSWord parses one recognized enforcement word (the shared word list
+// every enum switch in this package uses). ok=false means "not a recognized
+// word", not a value.
+func branchNSWord(v string) (enforce, ok bool) {
+	switch v {
 	case "0", "false", "no", "off", "disable", "disabled", "none":
-		return false
+		return false, true
 	case "1", "true", "yes", "on", "enable", "enabled", "enforce":
-		return true
+		return true, true
 	default:
-		warnOnce.Do(func() {
-			slog.Error("wardyn-proxy: unrecognized "+name+
-				" value; ENFORCING push branch-namespace confinement (fail closed)",
-				slog.String("value", v))
-		})
-		return true
+		return false, false
 	}
+}
+
+// branchNSScopes parses the single WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS var
+// into both brokered lanes' enforcement booleans. #203 folds the former,
+// standalone WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into this one name with
+// an {app,pat} scope rather than keeping two var names.
+//
+// Unset keeps the pre-merge defaults: App on, PAT off.
+//
+// A BARE recognized word (the shared word list) sets the APP lane ONLY — the
+// exact pre-merge meaning of this var, so an operator who merely restates
+// today's App-lane default (or opts it out) cannot silently flip the PAT
+// lane's posture as a side effect of a value that never named it. The PAT
+// lane keeps its own default unless named explicitly.
+//
+// A SCOPED value, "app:<word>,pat:<word>" (either order, either alone, same
+// word list), sets one or both lanes explicitly; a scope not named keeps its
+// own default.
+//
+// Anything else fails CLOSED — mixing a bare word with a scoped part, an
+// unrecognized word, an unrecognized scope name, or the same scope named
+// twice with disagreeing words — and BOTH lanes enforce, logged once per
+// process: a garbage value can never quietly weaken either lane.
+func branchNSScopes() (app, pat bool) {
+	app, pat = true, false // pre-merge defaults
+	raw := strings.TrimSpace(os.Getenv(envEnforceBranchNS))
+	if raw == "" {
+		return app, pat
+	}
+	if !strings.Contains(raw, ":") {
+		if v, ok := branchNSWord(strings.ToLower(raw)); ok {
+			return v, pat
+		}
+		return branchNSFailClosed(raw)
+	}
+	set := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		scope, word, cut := strings.Cut(strings.TrimSpace(part), ":")
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		v, ok := branchNSWord(strings.ToLower(strings.TrimSpace(word)))
+		if !cut || !ok || (scope != "app" && scope != "pat") {
+			return branchNSFailClosed(raw)
+		}
+		if prev, dup := set[scope]; dup && prev != v {
+			return branchNSFailClosed(raw)
+		}
+		set[scope] = v
+	}
+	if v, ok := set["app"]; ok {
+		app = v
+	}
+	if v, ok := set["pat"]; ok {
+		pat = v
+	}
+	return app, pat
+}
+
+// branchNSFailClosed logs the one-shot garbage-value warning and enforces
+// both lanes, shared by every branchNSScopes exit that could not make sense
+// of the raw value.
+func branchNSFailClosed(raw string) (app, pat bool) {
+	branchNSWarnOnce.Do(func() {
+		slog.Error("wardyn-proxy: unrecognized "+envEnforceBranchNS+
+			" value; ENFORCING push branch-namespace confinement on BOTH lanes (fail closed)",
+			slog.String("value", raw))
+	})
+	return true, true
 }
 
 // readReceivePackCommands consumes the pkt-line COMMAND SECTION of a

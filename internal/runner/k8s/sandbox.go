@@ -333,7 +333,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	// Operator knobs the sidecar reads from ITS OWN environment. A pod inherits
 	// nothing from wardynd, so without this an operator's
-	// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS (or the App-lane switch, or the
+	// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (either scope, or the
 	// content-inspection kill-switch) is not "off" on Kubernetes — it is
 	// unreachable, set on the control plane and read by nobody. Same list as the
 	// docker driver's, by construction (runner.ProxySidecarEnvKnobs).

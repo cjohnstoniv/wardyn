@@ -71,13 +71,13 @@ func TestLogBranchNSPosture_SilentWhenEnabled(t *testing.T) {
 }
 
 // TestLogBranchNSPosture_StatesPATOptIn is the mirror of the two above for the
-// git_pat lane's switch: that one is default OFF, so the state worth a boot line
+// git_pat lane's scope: that one is default OFF, so the state worth a boot line
 // is the state an operator turned ON. Info, not Warn — nothing is weakened — but
 // stated, because a confinement nobody announced looks like a forge bug to
-// whoever gets the 403.
+// whoever gets the 403. #203 folds the git_pat lane's own standalone var into
+// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's `pat:` scope.
 func TestLogBranchNSPosture_StatesPATOptIn(t *testing.T) {
-	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "") // the App lane stays silent
-	t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", "on")
+	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "pat:on") // app scope untouched, keeps its own default
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
@@ -97,7 +97,7 @@ func TestLogBranchNSPosture_StatesPATOptIn(t *testing.T) {
 	if got := rec["level"]; got != "INFO" {
 		t.Errorf("level = %v, want INFO", got)
 	}
-	if got, _ := rec["msg"].(string); !strings.Contains(got, "WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS") {
+	if got, _ := rec["msg"].(string); !strings.Contains(got, "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (pat scope)") {
 		t.Errorf("msg = %q, want it to name the opt-in env var", got)
 	}
 	if got := rec["run_id"]; got != runID.String() {
@@ -108,10 +108,9 @@ func TestLogBranchNSPosture_StatesPATOptIn(t *testing.T) {
 // TestLogBranchNSPosture_SilentWhenPATSwitchUnset: the default deployment gets
 // no new boot noise — the whole point of an opt-in.
 func TestLogBranchNSPosture_SilentWhenPATSwitchUnset(t *testing.T) {
-	for _, v := range []string{"", "false", "off"} {
+	for _, v := range []string{"", "pat:false", "pat:off"} {
 		t.Run("value="+v, func(t *testing.T) {
-			t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "")
-			t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", v)
+			t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", v)
 			var buf bytes.Buffer
 			prev := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))

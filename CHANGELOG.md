@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **`git_pat`/`ssh_key` grants refuse a `wardyn-provider-*` secret name at write time (#1048).**
+  Those two kinds return a stored secret's raw value into the sandbox, so they need the same
+  wider reserved-name guard `env_secret`/`llm_inspection` already used (`nameSinkReservedSecret`)
+  — they were checking the narrower `sinkReservedSecret` instead, which does not cover a
+  per-person model-provider `-key` name (deliberately, for the `api_key` sink's own legitimate use
+  of it). The broker's own mint guard (`reservedBrokerSecret`) already refused it, so nothing
+  leaked; a policy naming one used to fail at clone time inside the run instead of getting a 400
+  up front. `env_secret`'s `secret_name` and `llm_inspection.workspace_secret_names` now also
+  refuse a name that does not match the secret-name format (`secretNameRE`) at write time, instead
+  of silently resolving one fewer value at dispatch.
+
 ### Added
 
 - **`GET /me/capabilities` names which of a person's OWN values are covered by an "Available to:
@@ -38,6 +51,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
   owner, showing a "Renamed" toast and the new title in place, with no reload.
 
+- **Helm: `WARDYN_DAEMON_PROXY_SECRET` from an operator-managed Secret (#719).** New chart value
+  `daemonProxySecret.existingSecret` (+ `existingSecretKey`, `mountPath`, `defaultMode`) mounts a
+  Secret you manage yourself — never one this chart creates — read-only and points
+  `WARDYN_DAEMON_PROXY_SECRET` at the mounted file, the credentialed escape hatch for
+  `WARDYN_DAEMON_PROXY_URL`. Empty `existingSecret` (the default) renders no volume and no env —
+  byte-identical to before this existed. An `env.WARDYN_DAEMON_PROXY_SECRET` entry always overrides
+  (the Vault Agent / CSI path via `extraVolumes` instead). See the chart README, "Daemon egress
+  proxy".
+
 ### Changed
 
 - **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
@@ -67,6 +89,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   hidden auto-submitted form built from `enter_post_url` instead of `window.open`-ing a URL, so the
   single-use ticket never lands in a URL, browser history, or a reverse-proxy access log. `GET`
   stays for compatibility.
+- **`_FILE` boot secrets now refuse a second trailing line ending (#720).** `WARDYN_PG_DSN_FILE`,
+  `WARDYN_AGE_KEY_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`,
+  `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+  and `WARDYN_PG_MIGRATE_DSN_FILE` (introduced in 0.7.12) trimmed exactly one trailing line ending
+  and kept everything else verbatim — including a second one, silently left on the end of the
+  value. A file that now ends in two newlines (or a newline plus a bare `\r`) refuses boot instead,
+  naming the var. **Upgrade note:** if a 0.7.12+ install's `_FILE` source ever picked up a doubled
+  trailing newline (e.g. a Vault Agent template appending one to a value that already ends in one),
+  it booted before and refuses now; trim the file to end in exactly one line ending.
 
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
@@ -3076,6 +3107,39 @@ and does not yet follow semantic versioning (interfaces are not stable).
   chart alias (`WARDYN_OIDC_ROLE_MAP`/`WARDYN_OIDC_DEFAULT_ROLE` still accepting `member`,
   `WARDYN_MEMBER_MODE` and its sibling `WARDYN_MEMBER_*` variables) keeps working and warns at
   boot through 0.8.x; it is removed in 0.9.
+- **Five overlapping/collided env vars renamed, clean break, no alias period (#203).** Wardyn has
+  no users yet (owner ruling, #205/#203/#206), so these land directly: no
+  `cliutil.EnvAlias` compatibility shim and no boot warning naming the old spelling. Setting the
+  old name after upgrading is simply inert — nothing refuses boot over it, it is just not read.
+  `WARDYN_ALLOW_PLAINTEXT` (CLI) → `WARDYN_CLI_ALLOW_PLAINTEXT`; `WARDYN_ALLOW_PLAINTEXT_LISTEN`
+  (daemon) → `WARDYN_LISTEN_ALLOW_PLAINTEXT`; the two were named alike but meant different things.
+  `WARDYN_PROXY_URL_OVERRIDE` → `WARDYN_SANDBOX_PROXY_URL`, naming what it sets rather than what it
+  overrides. `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` folds into
+  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s new `{app,pat}` scope — one push branch-namespace control
+  split by credential kind is now one var: a bare value (the same word list as before) still binds
+  the App lane only, exactly as it did before the merge; `app:<word>,pat:<word>` sets either or both
+  lanes explicitly, and a scope left unnamed keeps its own pre-merge default (App on, PAT off).
+  `WARDYN_SUBSCRIPTION_INJECT` keeps its name, but `scripts/stage-claude-creds.sh`'s parser is
+  realigned to the same on/off word list `wardynd` itself uses (`cliutil.EnvBool`) instead of
+  recognizing only the literal `off` — the two readers of that one var disagreed on 3 of its 4 "off"
+  spellings, which could silently mis-stage a credential; a garbage value now exits 2 there too,
+  matching `wardynd`'s own fail-closed contract instead of guessing. `WARDYN_RUNNER_TARGET` keeps
+  its name, moved to `docs/ENV.md`'s Test / internal-only section (it was never operator
+  configuration). Full old → new table: `docs/ENV.md`'s "Renamed in 0.8" section.
+- **If you set `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` to an enable word, git_pat pushes are
+  UNCONFINED after this upgrade until you set `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=pat:on` (#203).**
+  The old name is no longer read anywhere and no longer forwarded to the proxy sidecar, so an
+  install that relied on it opting the PAT lane in silently falls back to that lane's own default,
+  OFF — nothing refuses boot, and the only signal is that the proxy's boot INFO line
+  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (pat scope) is on`) simply stops appearing. Translate the
+  old pair as `app:<old App value>,pat:<old PAT value>` (for example, if you had left the App lane
+  at its default and set only the PAT lane on, the equivalent single value is `app:on,pat:on`, or
+  just `pat:on` since the App lane's default is unchanged). Confirm the fix took by watching for
+  that same boot INFO line. Upgrade the proxy image together with wardynd: a 0.7.x proxy sidecar
+  behind a 0.8 wardynd (for example a pinned `WARDYN_PROXY_IMAGE`) reads the merged value with its
+  own old, bare-word-only parser — any `app:`/`pat:`-scoped value reads as garbage there, so it
+  enforces the App lane and logs a warning while the PAT lane stays at its own old default, OFF,
+  regardless of what the scoped value asked for.
 
 ### Added
 

@@ -390,7 +390,7 @@ func parseBootFlags() *bootFlags {
 		// the bind is a specific non-loopback interface — see listenBindsSpecificRoutable.
 		// Loopback and the unspecified bind (":8080", the compose topology) are
 		// already warn-only, unaffected by this flag.
-		allowPlaintextListen:    flagBool("allow-plaintext-listen", "WARDYN_ALLOW_PLAINTEXT_LISTEN", false, "allow boot on a specific non-loopback bind serving plain HTTP with no TLS configured, normally refused (default false)"),
+		allowPlaintextListen:    flagBool("allow-plaintext-listen", "WARDYN_LISTEN_ALLOW_PLAINTEXT", false, "allow boot on a specific non-loopback bind serving plain HTTP with no TLS configured, normally refused (default false)"),
 		adminToken:              flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
 		localMode:               flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "bypass public-API auth (no SSO/token) and attribute actions to the local operator; single-developer localhost use only, refused on a publicly-routable bind. Auto-enabled when no auth is configured and the bind is loopback (default false)"),
 		localOperator:           flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default local:<os-user>)"),
@@ -517,7 +517,7 @@ func parseBootFlags() *bootFlags {
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
-		proxyURL: flagEnv("proxy-url", "WARDYN_PROXY_URL_OVERRIDE", "", "sandbox WARDYN_PROXY_URL override (default http://wardyn-proxy:3128)"),
+		proxyURL: flagEnv("proxy-url", "WARDYN_SANDBOX_PROXY_URL", "", "sandbox WARDYN_PROXY_URL override (default http://wardyn-proxy:3128)"),
 
 		// printGroundtruthToken, when set, mints a host-sensor token
 		// (aud="wardyn-groundtruth") for the eBPF/Tetragon ground-truth ingest

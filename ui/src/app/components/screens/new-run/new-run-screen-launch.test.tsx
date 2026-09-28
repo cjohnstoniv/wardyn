@@ -537,7 +537,7 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
   it("names the org from the 422 body, with no preflight verdict having run", async () => {
     // ticket: F1
     createRunMock.mockRejectedValueOnce(
-      new HttpError(422, "git_credential: you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
+      new HttpError(422, "you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
     );
     const launch = await titled();
     await user.click(launch);

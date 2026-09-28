@@ -310,14 +310,17 @@ func TestBranchNSScopeRationaleMatchesThePATLane(t *testing.T) {
 	)
 	mustSay(t, fold(readSrc(t, "internal", "broker", "broker.go")), "internal/broker/broker.go",
 		"A git_pat push DOES traverse a brokered, cleartext smart-HTTP route since 0.7",
-		"since 0.7.2 the same parser binds it when the operator wires it behind WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF",
+		"since 0.7.2 the same parser binds it when the operator wires it behind the pat scope of WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF",
 	)
 	mustNotSay(t, fold(readSrc(t, "internal", "broker", "broker.go")), "internal/broker/broker.go",
 		"SSH is not smart-HTTP; a PAT push is an opaque CONNECT",
 	)
 	mustSay(t, readDoc(t, "docs/ENV.md"), "docs/ENV.md",
-		"and since 0.7.2 it does, behind the separate, **default-off** `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` below",
-		"`WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` | enum | (unset = **off**)",
+		"and since 0.7.2 it does, behind the pat scope of",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
+		"#203 folds the former",
+		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+		"into this one name with an",
 	)
 }
 
@@ -398,7 +401,9 @@ func TestPATPushIsNotDocumentedAsAnImpossibility(t *testing.T) {
 		"receive-pack parser can bind it. A `git_pat` push",
 		"whether it does is a scoping DECISION rather than an\n   impossibility",
 		"wires the SAME parser",
-		"to the git_pat lane behind\n   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, **default off**",
+		"to the git_pat lane behind the pat scope of",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` (folded by #203 from the standalone",
+		"`WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`), **default off**",
 	)
 	mustNotSay(t, tm, "threatmodel/THREAT-MODEL.md",
 		"A `git_pat` push is an opaque CONNECT",
