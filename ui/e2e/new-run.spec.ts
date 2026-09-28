@@ -183,11 +183,18 @@ test.describe("New run — one page", () => {
 // agents.spec.ts and model-access-banner.spec.ts already use.
 test.describe("New run — no barrier can be built (#214)", () => {
   async function spliceNoBarrier(page: Page) {
+    // Cache-and-serve, not route.fetch()+refulfill per match: the Environment
+    // step this test clicks through to re-reads /setup/status, and a real round
+    // trip PER match raced Playwright disposing an in-flight route's response
+    // at teardown ("apiResponse.json: Response has been disposed").
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const json = await (await route.fetch()).json();
+        json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+        cached = json;
+      }
+      await route.fulfill({ json: cached! });
     });
   }
 
