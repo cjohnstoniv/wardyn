@@ -453,24 +453,42 @@ func TestMeUserViewTypes_SecurityAdminInsideTheView(t *testing.T) {
 	}
 }
 
-// TestMeUserViewTypes_HandBuiltMemberModeCookieGetsNil (round-2 review): a
-// cookie claiming MemberMode on a stamped USER — a state SetUserView (the
-// mode's one writer) never produces, since it refuses to turn the mode on
-// for a stamped user — must still never hand back the org's roster. Here
-// that state also names a type that was never legitimately chosen, so
-// userViewGate's own existence check drops the view before /me ever answers
-// (the request never reaches meUserViewTypes with MemberMode still true) —
-// proving the SAME defence-in-depth this file already pins for a genuinely
-// deleted type also closes this hand-built one.
-func TestMeUserViewTypes_HandBuiltMemberModeCookieGetsNil(t *testing.T) {
+// TestMeUserViewTypes_MemberModeCookieOnAnExistingTypeGetsTheRoster (round-3
+// review, F1): meUserViewTypes's own gate does NOT distinguish "a real admin
+// looking through a type" from "a cookie that hand-builds the same shape on
+// a stamped user" — both have MemberMode true and a type that exists, so
+// both get the roster, by design (round 2's own remediation (b): MemberMode
+// implies the stamped operator tier BY CONSTRUCTION, so the gate does not
+// need to re-check it). What actually keeps a real member from ever reaching
+// this state is NOT this function and is NOT tested here — it is:
+//   - SetUserView (the mode's ONE writer) refusing to turn it on for a
+//     stamped user, pinned by oidc's own
+//     TestMemberMode_RealMemberTurningItOnWritesNoCookie and by this
+//     package's TestUserViewSwitchValidatesAndRemembersTheType ("a real user
+//     is already in the user view: nothing is written or remembered");
+//   - the cookie's HMAC signature, which makes this exact shape unforgeable
+//     without the server's key, pinned by
+//     TestMeUserViewTypes_ForgedCookieIs401 above.
+// (A previous version of this test named a type that does not exist, so
+// userViewGate dropped the view before /me ever ran — it passed for a reason
+// that had nothing to do with meUserViewTypes, and its own comment wrongly
+// credited that drop as a "defence in depth" for this field. There is no
+// such defence here; the two tests named above are the real ones.)
+func TestMeUserViewTypes_MemberModeCookieOnAnExistingTypeGetsTheRoster(t *testing.T) {
 	srv, _, _ := uvServer(t)
-	handBuilt := uvSession(t, "sub-uv-handbuilt-member", oidc.RoleUser, types.UserTypeStandard, "not-a-real-type")
+	handBuilt := uvSession(t, "sub-uv-handbuilt-member", oidc.RoleUser, types.UserTypeStandard, utPM)
+	// GET /me answers straight from this cookie and sets no new one — the
+	// named type exists, so userViewGate has nothing to drop, and this
+	// request itself changes no state.
 	me, w := uvGetMe(t, srv, handBuilt)
-	if me.UserViewTypes != nil {
-		t.Fatalf("hand-built MemberMode member: user_view_types = %+v, want nil", me.UserViewTypes)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /me = %d %s", w.Code, w.Body.String())
 	}
-	if _, sess := reSigned(t, w); sess.MemberMode {
-		t.Errorf("hand-built session = %+v, want the gate to have dropped MemberMode (the named type never existed)", sess)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("MemberMode on an existing type: user_view_types = %+v, want the built-in type (the gate reads MemberMode, not who is stamped)", me.UserViewTypes)
+	}
+	if !me.MemberMode {
+		t.Errorf("me.user_view = %v, want true — this state is never dropped", me.MemberMode)
 	}
 }
 
