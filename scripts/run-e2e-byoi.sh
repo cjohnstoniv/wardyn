@@ -109,6 +109,22 @@ wait_run() {
   return 1
 }
 
+# wait_audit ID JQ_PREDICATE — poll a run's audit trail until the predicate
+# holds (30s cap), leaving the read in AUD_JSON. A single read taken right
+# after wait_run first sees a sandbox_ref can land before a row the sandbox
+# itself has not finished writing yet (e.g. run.selftest): the sandbox_ref
+# only means the container started, not that everything it logs has landed.
+AUD_JSON='[]'
+wait_audit() {
+  local id="$1" pred="$2"
+  for _ in $(seq 1 30); do
+    AUD_JSON="$(api GET "/api/v1/audit?run_id=${id}")" || AUD_JSON='[]'
+    jq -e "$pred" <<<"$AUD_JSON" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+
 # ── 1. stock base, interactive ───────────────────────────────────────────────
 log "scenario 1: ubuntu:24.04 interactive"
 R1="$(api POST /api/v1/runs '{"agent":"claude-code","image":"ubuntu:24.04","interactive":true}')" || die "create run 1"
@@ -116,7 +132,8 @@ ID1="$(jq -r .id <<<"$R1")"
 wait_run "$ID1" "$LAUNCHED" || warn "run1 never reported a sandbox_ref within 60s"
 IMG1="$(jq -r '.image // ""' <<<"$RUN_JSON")"
 check "run1 image is a wardyn-byoi tag" '[[ "$IMG1" == wardyn-byoi/* ]]'
-AUD1="$(api GET "/api/v1/audit?run_id=${ID1}")"
+wait_audit "$ID1" '.[] | select(.action=="run.selftest")' || warn "run1 audit never showed a run.selftest row within 30s"
+AUD1="$AUD_JSON"
 check "run1 has a run.build success" 'jq -e ".[] | select(.action==\"run.build\" and .outcome==\"success\")" <<<"$AUD1" >/dev/null'
 check "run1 selftest WARN (no claude) not a hard fail" 'jq -e ".[] | select(.action==\"run.selftest\")" <<<"$AUD1" >/dev/null'
 # containment: the sandbox container has no default route (only the per-run internal net).

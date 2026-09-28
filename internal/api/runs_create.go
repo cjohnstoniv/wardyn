@@ -89,16 +89,21 @@ const composerWorkspaceTarget = "/home/agent/work"
 // that emptiness, so returning the owner unconditionally would turn an
 // ownership-scoped guard into the unconditional variant denyUserSeededImage
 // exists to prevent — a catastrophic regression.
-func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, seededImageOwner string, code int, err error) {
+// #656 M1: five distinct causes used to share one reason (reasonWorkspaceSeedFailed);
+// each return below now names its own, since a caller who gets one back cannot
+// otherwise tell "no store" from "no base image" from "conflicts with the policy".
+func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, seededImageOwner string, code int, reason string, err error) {
 	if req.WorkspaceID == nil {
-		return nil, "", 0, nil
+		return nil, "", 0, "", nil
 	}
 	if s.cfg.Store == nil {
-		return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace_id requires a store, but none is configured")
+		return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedStoreUnavailable,
+			fmt.Errorf("workspace_id requires a store, but none is configured")
 	}
 	ws, gerr := s.cfg.Store.GetWorkspace(ctx, *req.WorkspaceID)
 	if gerr != nil {
-		return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s: %w", *req.WorkspaceID, gerr)
+		return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable,
+			fmt.Errorf("workspace %s: %w", *req.WorkspaceID, gerr)
 	}
 	var newMounts []types.WorkspaceMount
 	var newRepos []types.WorkspaceRepo
@@ -110,7 +115,8 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		target := src.Target
 		if target != "" {
 			if verr := runner.ValidateAuthoredTarget(target); verr != nil {
-				return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
+				return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid,
+					fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
 			}
 		}
 		switch src.Type {
@@ -152,7 +158,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// still having neither is the caller's request, resolved. Never "attach a
 	// workspace" — one already is attached; what it lacks is a base image.
 	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" {
-		return nil, "", http.StatusBadRequest, fmt.Errorf(
+		return nil, "", http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ws.ID)
 	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
@@ -165,9 +171,10 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// since clone-into-mounted-workspace is how the legacy default dest
 	// ~/work/<name> already behaves when ~/work is a mounted dir.
 	if verr := validatePolicyWorkspaces(*spec); verr != nil {
-		return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
+		return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict,
+			fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
 	}
-	return ephemeralDirs, seededImageOwner, 0, nil
+	return ephemeralDirs, seededImageOwner, 0, "", nil
 }
 
 // authorizeSpecWorkspaceSources is the RESOLVED-SPEC half of the onboarding
@@ -193,13 +200,13 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // un-onboarded source), so the index lookups below can only miss for a source
 // that gate deliberately let past — a blessed system mount, whose source is the
 // operator's own staged creds dir and belongs to no workspace.
-func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Request, spec types.RunPolicySpec) (int, error) {
+func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Request, spec types.RunPolicySpec) (int, string, error) {
 	if s.cfg.Store == nil || (len(spec.WorkspaceMounts) == 0 && len(spec.WorkspaceRepos) == 0) {
-		return 0, nil
+		return 0, "", nil
 	}
 	all, err := s.cfg.Store.ListWorkspaces(ctx)
 	if err != nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf("list workspaces: %w", err)
+		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
 	idx := indexWorkspacesBySource(all)
 	for _, wm := range spec.WorkspaceMounts {
@@ -207,17 +214,17 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 			continue // operator-blessed system creds mount — source already vetted against the ceiling
 		}
 		if ws, ok := idx.localDir[wm.Source]; ok && !s.mayLaunchWorkspace(r, ws) {
-			return http.StatusUnprocessableEntity, fmt.Errorf(
+			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
 		}
 	}
 	for _, wr := range spec.WorkspaceRepos {
 		if ws, ok := idx.repo[wr.Repo]; ok && !s.mayLaunchWorkspace(r, ws) {
-			return http.StatusUnprocessableEntity, fmt.Errorf(
+			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"repo %q is not an onboarded repository (onboard it first via the workspaces API)", wr.Repo)
 		}
 	}
-	return 0, nil
+	return 0, "", nil
 }
 
 // enforcedConfinement is the PURE confinement math both the launch path and the
@@ -339,14 +346,14 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		var cerr error
 		caps, cerr = s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
-			writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, "runner capabilities unavailable", cerr))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", cerr))
 			return "", false
 		}
 	}
 
 	enforced, err := enforcedConfinement(spec, reqCC, caps.ConfinementClasses)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return "", false
 	}
 
@@ -365,7 +372,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		// floor unchanged when nothing advertised meets it, so THIS check is what
 		// still 422s that case exactly as it did before the default rule existed.
 		if enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassUnsupported, fmt.Sprintf(
 				"runner %q cannot enforce confinement_class %s (available: %s)",
 				caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
 			return "", false
@@ -377,7 +384,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	// spire provider can later accept them without an API change.
 	if checker, ok := s.cfg.Identity.(grantChecker); ok {
 		if err := checker.CheckGrants(spec.EligibleGrants); err != nil {
-			writeError(w, http.StatusUnprocessableEntity,
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunGrantsRequireSPIRE,
 				"policy requires the spire identity provider: "+err.Error())
 			return "", false
 		}

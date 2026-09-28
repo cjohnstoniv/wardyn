@@ -194,6 +194,51 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	}
 }
 
+// TestPG_KeptRunsStillCountQuota pins CountActiveRunsBy (the governance
+// quota's one read) against a KEPT run: a run whose lease ended stays
+// state=RUNNING — MarkRunEnded stamps lost_at/lost_reason but deliberately
+// never moves state (TestPG_RunLease) — and CountActiveRunsBy's predicate is
+// `state = ANY(NonTerminalRunStates)`, which never looks at lost_at at all.
+// A member's kept run must keep occupying their MaxConcurrentRuns slot: files
+// and credentials it holds are held BY that slot, and a quota that stopped
+// counting it the moment it was kept would let the same member launch a
+// replacement on top of it.
+func TestPG_KeptRunsStillCountQuota(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	me := "kept-quota-" + uuid.NewString() + "@example.com"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	past := now.Add(-time.Minute)
+
+	live := newRun(types.RunRunning)
+	live.CreatedBy = me
+	kept := newRun(types.RunRunning)
+	kept.CreatedBy, kept.EndsAt = me, &past
+	persistRun(t, ctx, pool, live)
+	persistRun(t, ctx, pool, kept)
+
+	if got, err := pg.CountActiveRunsBy(ctx, me); err != nil || got != 2 {
+		t.Fatalf("before the lease ends: count = %d, %v; want 2", got, err)
+	}
+
+	ended, err := pg.MarkRunEnded(ctx, kept.ID, now)
+	if err != nil || !ended {
+		t.Fatalf("MarkRunEnded: %v, %v; want true", ended, err)
+	}
+	row, err := pg.GetRun(ctx, kept.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if row.State != types.RunRunning || row.LostAt == nil || row.LostReason != types.LostEnded {
+		t.Fatalf("kept run = state %s lost %v %q; want still RUNNING, marked ended", row.State, row.LostAt, row.LostReason)
+	}
+
+	if got, err := pg.CountActiveRunsBy(ctx, me); err != nil || got != 2 {
+		t.Errorf("after the lease ended (kept): count = %d, %v; want still 2 — a kept run still holds its quota slot", got, err)
+	}
+}
+
 // endedRun persists a RUNNING run whose end passed an hour ago and which the
 // lease ended a minute ago; it returns the run and when it ended.
 func endedRun(t *testing.T, ctx context.Context, pg store.PG, now time.Time) (types.AgentRun, time.Time) {

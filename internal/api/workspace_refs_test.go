@@ -88,13 +88,20 @@ func TestValidateWorkspaceSources(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, err := srv.validateWorkspaceSources(context.Background(), tc.spec)
+			code, reason, err := srv.validateWorkspaceSources(context.Background(), tc.spec)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected rejection, got ok")
 				}
 				if code != http.StatusUnprocessableEntity {
 					t.Errorf("code = %d, want 422", code)
+				}
+				// #656 H1: every not-onboarded refusal here shares ONE reason with
+				// authorizeSpecWorkspaceSources' own not-onboarded arm — a
+				// distinguishable one would be the cross-member existence oracle
+				// that byte-identical sentence exists to close.
+				if reason != reasonWorkspaceSourceNotOnboarded {
+					t.Errorf("reason = %q, want %q", reason, reasonWorkspaceSourceNotOnboarded)
 				}
 			} else if err != nil {
 				t.Fatalf("expected ok, got %v (code %d)", err, code)
@@ -111,10 +118,12 @@ func TestValidateWorkspaceSources_NilStoreFailsClosed(t *testing.T) {
 	withMount := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
 		{Source: "/home/me/project", Target: "/home/agent/work", ReadOnly: &ro},
 	}}
-	if code, err := srv.validateWorkspaceSources(context.Background(), withMount); err == nil || code != http.StatusUnprocessableEntity {
+	if code, reason, err := srv.validateWorkspaceSources(context.Background(), withMount); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("nil store + user mount must fail closed (422), got code=%d err=%v", code, err)
+	} else if reason != reasonWorkspaceSourcesStoreUnavailable {
+		t.Errorf("reason = %q, want %q", reason, reasonWorkspaceSourcesStoreUnavailable)
 	}
-	if code, err := srv.validateWorkspaceSources(context.Background(), types.RunPolicySpec{}); err != nil {
+	if code, _, err := srv.validateWorkspaceSources(context.Background(), types.RunPolicySpec{}); err != nil {
 		t.Fatalf("no user workspace must pass even with a nil store, got code=%d err=%v", code, err)
 	}
 }

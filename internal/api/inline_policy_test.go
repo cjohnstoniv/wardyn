@@ -1064,7 +1064,11 @@ func TestIntegrations_MemberSelectsOwnKey_NoWarning(t *testing.T) {
 	// Negative control: a member owning nothing (and no operator row) has no
 	// anthropic_api_key row to select at all — the eager integration_id check
 	// refuses the request outright, the same 400 a typo gets.
-	if w := createRun(&memSecrets{}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "does not name an AI provider integration") {
+	w = createRun(&memSecrets{})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "does not name an AI provider integration") {
 		t.Fatalf("a member owning nothing must be refused by the eager integration_id check; got %d: %s", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != reasonIntegrationNotAIProvider {
+		t.Errorf("reason = %q, want %q; body=%s", got, reasonIntegrationNotAIProvider, w.Body.String())
 	}
 }
