@@ -112,6 +112,16 @@ func TestConcurrentSignInsKeepTheirOwnSessions(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	// The same call as the proxy delivers it on the walk, where the stub
+	// shares the portal's terminated host: no SigV4, A's session bearer.
+	req, _ = http.NewRequest(http.MethodPost, s.URL()+"/model/m/converse", strings.NewReader("{}"))
+	req.Header.Set(bearerHeader, refreshed["accessToken"].(string))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
 	var a, b seenSession
 	for _, ss := range seenSessions(t, s) {
 		switch sessionAccessKeyID(ss.Session) {
@@ -124,7 +134,7 @@ func TestConcurrentSignInsKeepTheirOwnSessions(t *testing.T) {
 	if a.RoleCredCallers["127.0.0.1"] != 2 || b.RoleCredCallers["127.0.0.1"] != 2 {
 		t.Errorf("role-credential callers: A %v, B %v; want 2 calls each from 127.0.0.1", a.RoleCredCallers, b.RoleCredCallers)
 	}
-	if len(a.BedrockCallers) != 0 || b.BedrockCallers["127.0.0.1"] != 1 {
-		t.Errorf("bedrock callers: A %v, B %v; want the one call signed with B's key under B only", a.BedrockCallers, b.BedrockCallers)
+	if a.BedrockCallers["127.0.0.1"] != 1 || b.BedrockCallers["127.0.0.1"] != 1 {
+		t.Errorf("bedrock callers: A %v, B %v; want the call signed with B's key under B and the one carrying A's bearer under A", a.BedrockCallers, b.BedrockCallers)
 	}
 }

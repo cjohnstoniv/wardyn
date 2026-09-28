@@ -188,7 +188,7 @@ export async function seen(): Promise<{
   bedrock_model: string;
   bedrock_models: string[];
   /** One per sign-in: which peers (a run's proxy pod) called GetRoleCredentials
-   *  with it, and which signed bedrock calls with its key. */
+   *  with it, and which made bedrock calls with its key or its bearer. */
   sessions: Array<{ session: number; role_cred_callers: Record<string, number>; bedrock_callers: Record<string, number> }>;
 }> {
   const res = await fetch(SEEN_URL);

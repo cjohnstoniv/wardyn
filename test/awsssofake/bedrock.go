@@ -70,7 +70,15 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	if ss := s.sessionForSigV4Locked(r.Header.Get("Authorization")); ss != nil {
+	// A SigV4 signature names the session its role credentials came from. On
+	// the kind walk the stub shares its host with the portal, which the proxy
+	// terminates to set the SSO bearer: it strips the Authorization header and
+	// sets the member's session token, which then names the session instead.
+	ss := s.sessionForSigV4Locked(r.Header.Get("Authorization"))
+	if ss == nil {
+		ss = s.sessionForBearerLocked(r.Header.Get(bearerHeader))
+	}
+	if ss != nil {
 		ss.bedrockCallers[peerIP(r)]++
 	}
 	s.bedrockCalls++

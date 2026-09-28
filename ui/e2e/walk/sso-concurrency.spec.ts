@@ -35,7 +35,10 @@
  * HOW A RUN IS TIED TO A SESSION. The fake (test/awsssofake) gives every
  * sign-in its own session and lists, per session, the peers that called
  * GetRoleCredentials and the peers whose bedrock calls were signed with that
- * session's key (/_seen `sessions`). On this cluster the peer is the run's own
+ * session's key or, on this walk, carried its bearer (/_seen `sessions`): the
+ * stub shares the portal's host, which the proxy terminates to set the SSO
+ * bearer, so a bedrock call arrives with the member's session token instead
+ * of its SigV4 signature. On this cluster the peer is the run's own
  * proxy pod — the sandbox's only way out — so a run is its proxy pod's IP,
  * read with kubectl while the run is alive. Nothing here needs to know which
  * session is whose in advance: the assertion is that each person's runs sit

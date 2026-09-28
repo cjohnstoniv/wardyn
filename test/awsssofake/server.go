@@ -778,15 +778,19 @@ func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) 
 // currently-issued access token — the exact contract Phase B's proxy
 // injection (runs_bedrock.go doc comment) will need to satisfy. Writes a 401
 // modeled UnauthorizedException and returns false on mismatch/absence.
-func (s *Server) checkBearer(w http.ResponseWriter, r *http.Request) (*session, bool) {
-	got := r.Header.Get(bearerHeader)
-	var ss *session
-	s.mu.Lock()
+// sessionForBearerLocked is the session whose current access token is token, or nil.
+func (s *Server) sessionForBearerLocked(token string) *session {
 	for _, c := range s.sessions {
-		if got != "" && c.access == got {
-			ss = c
+		if token != "" && c.access == token {
+			return c
 		}
 	}
+	return nil
+}
+
+func (s *Server) checkBearer(w http.ResponseWriter, r *http.Request) (*session, bool) {
+	s.mu.Lock()
+	ss := s.sessionForBearerLocked(r.Header.Get(bearerHeader))
 	s.mu.Unlock()
 	if ss == nil {
 		w.Header().Set("Content-Type", "application/json")
