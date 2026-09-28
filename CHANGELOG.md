@@ -36,7 +36,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   behavior is otherwise unchanged. Two refusals are deliberately still bare: an unanswered AWS
   Bedrock SSO renewal (an outage, not an actionable class) and a push-content approval's
   foreign-owner 404 (must stay byte-identical to a missing approval's).
-
+- **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
+  rail lists every provider you may use for it, with its kind, your connection state and where
+  the credential lives during the run, and the run is sent with the one you pick. The agent's
+  default, or a workspace's pinned provider, is preselected; with one candidate it is used
+  unprompted. With several and no default, Launch waits for a choice, and an admin default that is
+  disabled is named rather than silently replaced. An install with no provider block keeps
+  today's rail.
+- **Your account ▸ Your model connections (#541).** Every person — admins included, by switching to
+  User view — now connects their own credential for each model provider their admin enabled for
+  them, one row per provider: an AWS or Claude sign-in, or an API key/token, each with its own
+  live/expiring/signed-out state and a "Ready" / "Needs you" / "Not set up by your admin" summary
+  chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
+  additive: an install with no per-provider model records (#551) at all is unaffected, and keeps
+  "Your model key" on Getting Started as its own credential door until #548 converts it.
 - **The person side of "Available to" disables Launch, in the console, before the server ever has to
   refuse (#922).** New Run's own Launch button is now disabled with
   `This workspace isn't available to you.` when the chosen workspace itself carries no allow for
@@ -189,6 +202,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Docker names the cause when the proxy sidecar exits at config load (#1051).** A proxy that
+  refused its rendered config at start used to surface as "proxy has no IP" when the run was
+  created. The Docker driver now watches a new proxy until it has stayed up for a second and fails
+  the run with `docker: proxy exited at config load (exit N)` plus the last lines the proxy logged,
+  as Kubernetes already did. A replacement proxy that dies this way on revive is left in place so
+  its logs stay readable.
+- **Review states where a chosen model provider's credential lives (#983).** A run that chose a
+  model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
+  "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
+  AWS sign-in provider. The chosen provider's kind now sets the facts at both doors: mechanism
+  (the kind), `per_user`, and `sandbox` for `bedrock_sso` or `proxy` for every other kind. A
+  `bedrock_sso` provider run below CC3 now carries the advisory warning and the `run.create` row's
+  `credential_confinement: below_floor`, as the legacy AWS SSO lane already did.
+- **`wardyn_credential_reauth_total` counted Azure DevOps sign-in/consent requests too (#971).**
+  The metric's HELP promises the AWS SSO re-auth population alone, but its `requested`,
+  `resolved`, `expired` and `timeout` outcomes all folded in the per-person Azure DevOps lane's
+  own credential_reauth rows. Each is now scoped to the AWS SSO lane, the same split `cancelled`
+  already used (#968).
+- **Getting Started's model-access chip read "Not set up by your admin" for every legacy install
+  (#541 fix review).** #541's new per-provider connections chip graded only `model_providers`/
+  `provider_access`, which are empty for any install predating provider records — every shared or
+  per_user-roster install still on main, since the admin funnel writes no provider block until
+  #548 lands. `legacySummary` (`lib/model-connections.ts`) restores the old per-principal
+  `model_access`/`llm_ready` reading as Getting Started's own fallback whenever there is no
+  provider block, and the per_user lede is back for a per_user roster row; a real provider block
+  shows Your model connections' own lede. The expiring row's own line
+  (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
+  text, instead of a relative offset.
 - **Launching with an ungranted repo-kind workspace now refuses, instead of launching without it
   (#1259).** A `workspace_repos` entry naming an onboarded workspace the caller does not hold the
   `workspace` capability for used to be silently dropped, launching a smaller run; it now refuses
@@ -2039,7 +2080,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (the same proxy image) now stages the config out of a Secret volume that projects only the
   config key (mode 0440) into a shared in-memory `emptyDir`, as an owner-only (0400) file; the
   main proxy container mounts only that file, read-only, and reads it via `-config` — no env var
-  carries it at all. Docker is unchanged (tracked separately, waiting on #1051/#1059). **Upgrade
+  carries it at all. Docker hands its proxy the config on stdin instead (#1176). **Upgrade
   note:** run this wardynd with the wardyn-proxy image from the same release. An older proxy image
   has no `-stage-config-src`, so its init container exits and every Kubernetes run starts with no
   egress (it fails closed rather than erroring at create).

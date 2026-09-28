@@ -194,6 +194,14 @@ export function buildSpec(
   if (state.runType !== "command" && state.integrationId) {
     run.integration_id = state.integrationId;
   }
+  // #542/#526 — this run's own model-provider pick, whatever the rail's
+  // picker resolved (model-provider-lane.ts). A "command" run calls no model
+  // at all (task_mode=exec above), so it never carries one even if some stale
+  // wizard state set it — the server refuses model_provider on a run that
+  // takes no model (mpRunNoModel).
+  if (state.runType === "agent" && state.modelProviderId) {
+    run.model_provider = state.modelProviderId;
+  }
   // The member's USER DRIVE, requested as a bare FLAG — nothing here names a
   // drive, a path or a directory (CreateRunRequest.Drive): the server resolves
   // what is allocated to the authenticated caller, so this can only ever ask

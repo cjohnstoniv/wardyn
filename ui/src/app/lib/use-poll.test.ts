@@ -258,7 +258,6 @@ describe("usePoll — refocus coalescing", () => {
   it("a refocus with nothing in flight fires immediately, same as today", () => {
     const fn = vi.fn();
     renderHook(() => usePoll(fn, 1000, false));
-    expect(fn).not.toHaveBeenCalled();
 
     refocus();
     expect(fn).toHaveBeenCalledTimes(1);

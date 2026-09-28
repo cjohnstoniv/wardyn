@@ -328,7 +328,7 @@ naming it beside the chart's own source is refused. The non-chart secrets
 (`WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`,
 `WARDYN_AUDIT_SINKS`, `WARDYN_PG_MIGRATE_DSN`) take the same route. Full Vault
 Agent and CSI examples:
-[docs/OPERATIONS.md "Secrets from files"](../../../docs/OPERATIONS.md#secrets-from-files-vault-agent--csi).
+[docs/operations/secrets-and-keys.md](../../../docs/operations/secrets-and-keys.md).
 
 ## Multi-user (admin/member RBAC)
 
@@ -973,8 +973,7 @@ it on. See [docs/SSH.md](../../../docs/SSH.md) for the SSH gateway itself
 
 ## Scraping `/metrics` through the NetworkPolicy
 
-`GET /metrics` needs the admin bearer token ([docs/OPERATIONS.md's
-Monitoring](../../../docs/OPERATIONS.md#monitoring)) — and on Kubernetes it also
+`GET /metrics` needs the admin bearer token ([docs/operations/monitoring.md](../../../docs/operations/monitoring.md)) — and on Kubernetes it also
 needs a route. The chart's default-deny NetworkPolicy admits **this namespace
 only**, so a Prometheus running in a `monitoring` namespace is dropped before it
 reaches wardynd, which is indistinguishable from a target that is down.
