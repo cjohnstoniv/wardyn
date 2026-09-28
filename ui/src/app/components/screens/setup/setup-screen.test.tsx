@@ -288,6 +288,36 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     );
   });
 
+  // #1328 review F2 — the funnel mounts at EITHER /setup or /admin/setup
+  // (App.tsx's RequireSetup sends a gated admin to the latter); the gate's
+  // link is RELATIVE (`?step=environment`, resolved against whichever base
+  // is already current) precisely so it can never itself drop an admin out
+  // of the Admin view. An absolute `/setup?step=environment` link — what
+  // this test would have pinned before the fix — resolves to the WRONG
+  // path here: it would send the admin to a switch-view interstitial or a
+  // refusal instead of back to this same funnel's own Environment step
+  // (console-view.tsx's viewVerdict).
+  it("#1328 F2: the Finish-setup gate's link stays under /admin/setup when the funnel is mounted there", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen(<SetupScreen onDone={() => {}} />, "/admin/setup");
+    await screen.findByRole("heading", { name: /pick your barrier/i });
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await screen.findByRole("heading", { name: /^network$/i });
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^next: review$/i }));
+    await screen.findByRole("heading", { name: /review readiness/i });
+
+    expect(screen.getByRole("button", { name: /finish setup/i })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /set up a barrier/i })).toHaveAttribute(
+      "href",
+      "/admin/setup?step=environment",
+    );
+  });
+
   // The same coverage the old linear walk gave each optional step — reached
   // from the rail now, since Next no longer passes through any of them.
   // M-6 (D5) moved every demo out of this funnel entirely (see

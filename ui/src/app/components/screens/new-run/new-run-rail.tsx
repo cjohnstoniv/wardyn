@@ -104,6 +104,14 @@ interface RunRailProps {
     /** Bumped on every failed launch (see use-launch.ts) so a repeated,
      *  identical failure remounts the alert region and is re-announced (#459). */
     errorSeq: number;
+    /** #214 (#1328 review — reconciled with #459's role="alert"): true only
+     *  when the server sent NO composed message at all. Draws the named-stage
+     *  failure card INSTEAD of the plain server-text line below — never
+     *  both, so there is exactly one alert region for one failure. */
+    genericFailure?: boolean;
+    /** #214: the failure card's own Dismiss. Required whenever `genericFailure`
+     *  can be true — every caller of this type also has one (use-launch.ts). */
+    onDismissError?: () => void;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
@@ -641,7 +649,41 @@ export function RunRail({
         )}
       </div>
 
-      {launch.error && (
+      {/* #214 (#1328 review — reconciled with #459's role="alert"): the ONE
+          shape with no server-composed reason at all draws the named-stage
+          card below INSTEAD of the plain line — mutually exclusive with it,
+          so a failure is never announced by two alert regions at once. Every
+          OTHER failure (a server sentence exists) keeps the plain line,
+          unchanged from #459. */}
+      {launch.error && launch.genericFailure && (
+        // key={launch.errorSeq}: same re-announce reason as the plain line
+        // below — a repeated, identical failure still needs a fresh node for
+        // a screen reader to notice the live region again (#459).
+        <div
+          key={launch.errorSeq}
+          role="alert"
+          className="mt-3 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2.5 text-xs"
+        >
+          <div className="flex items-start gap-1.5 font-medium text-foreground">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-danger" />
+            {RUN.LAUNCH_FAILED_TITLE}
+          </div>
+          <p className="mt-1 text-muted-foreground">{RUN.LAUNCH_FAILED_BODY}</p>
+          <div className="mt-1.5 flex items-center gap-3">
+            <Link to="/runs" className="font-medium text-info hover:underline">
+              {RUN.LAUNCH_FAILED_OPEN_RUN} &rarr;
+            </Link>
+            <button
+              type="button"
+              onClick={launch.onDismissError}
+              className="font-medium text-muted-foreground hover:underline"
+            >
+              {RUN.LAUNCH_FAILED_DISMISS}
+            </button>
+          </div>
+        </div>
+      )}
+      {launch.error && !launch.genericFailure && (
         // key={launch.errorSeq}: a re-announce of the SAME sentence still
         // needs a fresh DOM node — an update in place is silent to a screen
         // reader on a live region (#459).

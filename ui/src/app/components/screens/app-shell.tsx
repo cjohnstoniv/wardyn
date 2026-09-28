@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import {
+  Link,
   NavLink,
   Outlet,
   useLocation,
@@ -12,6 +13,7 @@ import {
 } from "react-router-dom";
 import {
   Activity,
+  AlertOctagon,
   AlertTriangle,
   CircleUser,
   Compass,
@@ -30,7 +32,7 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
-import { SHELL } from "../wardyn/copy";
+import { NO_BARRIER, SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarLowerLinks } from "./sidebar-settings-link";
@@ -577,6 +579,7 @@ export function AppShell({
   onSignOut,
   unreachable,
   lastOkAt,
+  noBarrier,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -586,6 +589,15 @@ export function AppShell({
   // this banner is the ONLY thing that tells a quiet board from a dead one.
   unreachable?: boolean;
   lastOkAt?: Date | null;
+  // #214 — App.tsx's own read of deriveReadiness(setupStatus).barrierReady:
+  // this deployment's LAST-KNOWN answer to "can any run confine itself at
+  // all", the same fact environment-step.tsx's own danger card and the Runs
+  // board's readiness row read. NOT the same signal New Run's own
+  // noBarrierOnHost gates Launch on: that one folds a nil runner and a
+  // member's redacted status to "unknown" and leaves Launch enabled rather
+  // than guess, where this is a deployment-wide fact that is always resolved
+  // once setupStatus has landed. False/undefined renders nothing.
+  noBarrier?: boolean;
 }) {
   const [meta, retryIdentity, adoptIdentity] = useMeta();
   const reauth = useReauth();
@@ -604,6 +616,16 @@ export function AppShell({
   const navigate = useNavigate();
   const { access, view } = useShellView(meta);
   useViewResync(access, meta.memberMode);
+  // #1328 review F2 — a global surface (the shell banner and the top-bar
+  // link, both below) must route into WHICHEVER setup funnel matches the
+  // view it is currently shown in: /admin/setup for an operator already in
+  // the Admin view (confinement-posture.tsx's own #510-F7 precedent — a
+  // security admin there gets refused at that route, so operator is the
+  // narrower, correct gate, not just "is this the Admin view"), the plain
+  // /setup otherwise. New Run's own Launch reason does NOT need this: it is
+  // reached the same way regardless of view (no /admin/runs/new exists).
+  const environmentStepRoute =
+    view === "admin" && meta.operator ? "/admin/setup?step=environment" : NO_BARRIER.ROUTE;
   React.useEffect(() => {
     document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
   }, [view]);
@@ -669,6 +691,12 @@ export function AppShell({
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
+                // The link renders only in the User view, beside New run
+                // itself (below) — never the Admin view, so it needs no
+                // view+operator-aware route of its own (New Run's own Launch
+                // reason link is the same shape: reached the same way
+                // regardless of view).
+                noBarrier={!unreachable && !!noBarrier}
               />
             )}
             {/* The no-credential preview's band, and its way out. FIRST of the
@@ -689,6 +717,29 @@ export function AppShell({
                   Control plane unreachable — showing the last data received.{" "}
                   {lastCheckedLabel(lastOkAt ?? null)}
                 </span>
+              </div>
+            )}
+            {/* #214 — the shell's own route to the fix, on every screen, not
+                only the New Run wizard's own Launch reason. Gated on
+                !unreachable: a dead control plane's last-known reading is
+                "unknown", not "no barrier", and the banner above already
+                says so. */}
+            {!unreachable && noBarrier && (
+              <div
+                role="status"
+                className="relative z-50 flex shrink-0 items-start gap-2 border-b border-border bg-danger-subtle px-4 py-2 text-sm text-danger"
+              >
+                <AlertOctagon className="mt-0.5 size-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium">{NO_BARRIER.BANNER_TITLE}</p>
+                  <p className="text-xs text-danger">{NO_BARRIER.BANNER_BODY}</p>
+                </div>
+                <Link
+                  to={environmentStepRoute}
+                  className="ml-auto shrink-0 font-medium underline underline-offset-2"
+                >
+                  {NO_BARRIER.CTA}
+                </Link>
               </div>
             )}
             {/* B1 — the settled-but-unknown identity, beside the unreachable

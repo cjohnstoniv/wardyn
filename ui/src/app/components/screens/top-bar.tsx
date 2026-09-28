@@ -14,6 +14,7 @@ import { ChevronsUpDown, Fingerprint, LogOut, Moon, Plus, Sun } from "lucide-rea
 import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
+import { NO_BARRIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
@@ -51,12 +52,16 @@ export function TopBar({
   pendingApprovals,
   attentionCount,
   onNewRun,
+  noBarrier,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
   pendingApprovals: number;
   attentionCount: number;
   onNewRun: () => void;
+  /** #214 — see AppShell's own doc. Renders only in the User view, beside
+   *  New run itself (which the Admin view never offers either). */
+  noBarrier?: boolean;
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
@@ -128,9 +133,27 @@ export function TopBar({
 
         {/* The Admin view never launches (§3's fourth cue). */}
         {view === "user" && (
-          <Button onClick={onNewRun} size="sm" aria-label="New run">
-            <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
-          </Button>
+          <>
+            {/* #214 — the top bar's own route to the Environment step, beside
+                New run rather than disabling or relabelling it: New run
+                itself stays reachable, since disabling it would hide this
+                explanation behind the one control that carries it. Plain
+                NO_BARRIER.ROUTE is correct here unconditionally — this link
+                only ever renders in the User view, the same as New run
+                itself, so it never needs the Admin-view-aware route the
+                shell banner computes (app-shell.tsx's own doc). */}
+            {noBarrier && (
+              <Link
+                to={NO_BARRIER.ROUTE}
+                className="hidden text-xs font-medium text-info hover:underline sm:inline"
+              >
+                {NO_BARRIER.CTA}
+              </Link>
+            )}
+            <Button onClick={onNewRun} size="sm" aria-label="New run">
+              <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
+            </Button>
+          </>
         )}
 
         <DropdownMenu>

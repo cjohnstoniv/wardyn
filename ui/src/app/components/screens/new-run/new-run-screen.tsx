@@ -540,8 +540,10 @@ export function NewRunScreen() {
     launchSpinning,
     error,
     errorSeq,
+    genericFailure,
     credentialRefused,
     refusedProvider,
+    dismissError,
     launch,
     preflighting,
     preflightResult,
@@ -918,22 +920,24 @@ export function NewRunScreen() {
           unattended={unattended}
           launch={{
             onLaunch: launch,
-            // #214 — a settled probe reporting zero classes disables Launch
-            // itself, not just every tier: the one control that genuinely
-            // cannot work must not be the one that looks ready.
-            disabled: launchDisabled || noBarrierOnHost,
+            disabled: launchDisabled,
             spinning: launchSpinning,
             inFlight: launching,
             problem,
             // review F5: disables Launch WITHOUT a second rendering of the
             // sentence — workspace-card.tsx's own advisory line is the one
-            // place it's shown. noBarrier follows the identical rule: the
-            // rail states ITS OWN reason beside Launch (below), so problem
-            // never also carries it.
+            // place it's shown. noBarrier follows the identical rule (#1328
+            // review F4 — ONE source of truth: the rail's own disabled check
+            // already folds `noBarrier` in, so this screen never duplicates
+            // it into `disabled` itself, same as workspaceUnavailable right
+            // above): the rail states ITS OWN reason beside Launch (below),
+            // so `problem` never also carries it.
             workspaceUnavailable,
             noBarrier: noBarrierOnHost,
             error,
             errorSeq,
+            genericFailure,
+            onDismissError: dismissError,
             credentialRefused,
             refusedProvider,
           }}

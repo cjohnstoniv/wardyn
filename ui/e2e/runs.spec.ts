@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
-import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { NO_BARRIER, RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import { RUN_WAIT } from "../src/app/components/wardyn/copy/run-wait";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
@@ -1236,5 +1236,63 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
 
     await page.keyboard.press("Escape");
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+  });
+});
+
+// #214 — a host with no confinement barrier. The seeded backend runs with
+// `-runner none` (see new-run.spec.ts's own header), which New Run itself
+// reads as UNKNOWN availability rather than confirmed-absent — but every
+// OTHER surface here (deriveReadiness) already reads an empty
+// confinement_classes list as "no barrier", so the shell banner and the top
+// bar's route are exercised on a real driver splice, the same technique
+// new-run.spec.ts's own #214 block uses.
+test.describe("#214 — no barrier: the shell banner and the top bar's route", () => {
+  test("the shell banner names the blocker and routes to the Environment step; New run stays reachable", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
+    const routes = page.getByRole("link", { name: NO_BARRIER.CTA });
+    await expect(routes).toHaveCount(2); // the shell banner + the top bar
+    for (const link of await routes.all()) {
+      await expect(link).toHaveAttribute("href", NO_BARRIER.ROUTE);
+    }
+
+    // New run stays live — disabling it would hide the explanation behind
+    // the control that carries it.
+    await expect(page.getByRole("button", { name: "New run" })).toBeEnabled();
+
+    // /runs is never under /admin/*, so this session's view stays "user"
+    // across the navigation (console-view.tsx's viewOfPath/GettingStarted) —
+    // landing on the member recap, not the operator wizard, is the CORRECT
+    // destination for this route from here (see setup-screen.test.tsx's
+    // #1328 F2 pins for the one link that does reach the wizard,
+    // /admin/setup). This asserts the navigation itself, not which body
+    // renders at the far end.
+    await routes.first().click();
+    await expect(page).toHaveURL(/\/setup\?step=environment/);
+  });
+
+  // The seeded backend's own default (`-runner none`) already reads
+  // no-barrier for the shell (deriveReadiness counts confinement_classes,
+  // empty either way), so the negative case needs its own splice too — a
+  // real driver reporting at least one class.
+  test("stays silent when a barrier is available", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toHaveCount(0);
+    await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
   });
 });

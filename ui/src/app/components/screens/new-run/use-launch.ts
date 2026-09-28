@@ -41,10 +41,22 @@ export interface UseLaunchResult {
   /** Bumped on every failed launch, including a repeat of the same message —
    *  so the rail's alert region remounts and gets re-announced (#459). */
   errorSeq: number;
+  /** #214 (#1328 review — reconciled with #459's role="alert"): the server
+   *  sent NO message at all (getErrorMessage(e) was falsy — a response with
+   *  no body and an empty statusText). The rail draws the named-stage
+   *  failure card ONLY over this case; every OTHER failure keeps rendering
+   *  its own server-composed `error` text verbatim, exactly as it already
+   *  did. The card never claims a run was or was not created — genericFailure
+   *  means the console genuinely cannot tell either way. */
+  genericFailure: boolean;
   credentialRefused: boolean;
   /** The model provider that credential refusal names (#532), "" when it
    *  names none — the door the rail opens is THAT provider's (#543). */
   refusedProvider: string;
+  /** #214: clears a failed launch's error/genericFailure state — the failure
+   *  card's own "Dismiss", independent of firing another launch (the only
+   *  other place they clear today). */
+  dismissError: () => void;
   /** Resolves to the failure's sentence only when this screen had already
    *  unmounted by the time it came back — the relaunch after a sign-in the
    *  person started here and finished elsewhere (#146). The shell's strip
@@ -81,6 +93,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
   const [errorSeq, setErrorSeq] = React.useState(0);
+  const [genericFailure, setGenericFailure] = React.useState(false);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   const [refusedProvider, setRefusedProvider] = React.useState("");
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
@@ -127,6 +140,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
 
   const launch = async () => {
     setError(null);
+    setGenericFailure(false);
     setCredentialRefused(false);
     setRefusedProvider("");
     setLaunching(true);
@@ -146,14 +160,25 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
       // B9 renders the SERVER's sentence verbatim: with none, the strip says
       // nothing rather than showing this screen's own fallback.
       if (!mounted.current) return server || undefined;
+      // #214: a message the server actually composed keeps rendering
+      // verbatim (genericFailure stays false, and RUN.LAUNCH_FAILED_* never
+      // renders); only the reason-less case swaps in the named-stage card.
       const sentence = server || "Failed to launch run.";
       setError(sentence);
       setErrorSeq((n) => n + 1);
+      setGenericFailure(!server);
       setCredentialRefused(isCredentialRefusal(e));
       setRefusedProvider(isCredentialRefusal(e) && e instanceof HttpError ? e.provider : "");
       onLaunchError?.(e);
       setLaunching(false);
     }
+  };
+
+  // #214: the failure card's own dismissal — independent of firing another
+  // launch, which is the only other place error/genericFailure clear.
+  const dismissError = () => {
+    setError(null);
+    setGenericFailure(false);
   };
 
   // A dry-run of launch's own resolution: same body, same 4xx surface, but
@@ -206,8 +231,10 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     launchSpinning,
     error,
     errorSeq,
+    genericFailure,
     credentialRefused,
     refusedProvider,
+    dismissError,
     launch,
     preflighting,
     preflightResult,
