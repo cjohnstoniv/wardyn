@@ -74,6 +74,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `GET /me/attention?view=user|admin` returns `{needs_you, pending_approvals}` — the shell's two nav
   badges in one small object, replacing two unscoped ~1000-row reads. The console's `isHeld` is now a
   one-line reader of the wire fields; every client-side hold window constant is gone.
+- **The Runs page is rebuilt as one calm page, grouped by need then time (#1197).** A "Start a run"
+  composer (User view), a filter bar that lives in the URL (search / status / ended-within /
+  workspace / include-killed), and sections in a fixed order — Needs you (Admin view: Needs a
+  decision), Running, Ended today, Earlier this week (collapsed), then day buckets once a filter
+  widens past 7 days — replace the old Board/Table density switch, title grouping and the per-row
+  kebab menu. One row anatomy throughout: a glyph, the title (a real link), a muted meta line, the
+  status word, and at most one action button (Review / Sign in), reading the server's own projected
+  `attention` field instead of a client-side approvals join. An ageing note ("Showing the last 7
+  days. N older runs are hidden.") links to widen the window or include killed runs.
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"

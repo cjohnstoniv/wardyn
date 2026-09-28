@@ -62,23 +62,34 @@ export function RunRow({ run }: { run: AgentRun }) {
     <div
       data-testid="run-row"
       data-attention={p.needsYou ? "needs-you" : undefined}
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2.5 gap-y-0.5 border-t border-border px-3 py-2.5 first:border-t-0 hover:bg-surface-2/60"
+      // §5/mock (:176, .frame.phone/max-width:640px): below `sm` (640px) the
+      // side column moves under the title instead of shrinking it to 0 —
+      // mobile-first here (base = narrow, `sm:` = the desktop 3-column grid).
+      className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 border-t border-border px-3 py-2.5 first:border-t-0 hover:bg-surface-2/60 cursor-pointer sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+      onClick={(e) => {
+        // §5: the row itself is not role=button (no nested interactive
+        // widget) — this is a pointer-only convenience the mock's own row
+        // also offers (:573,:866). A real link/button inside handles its
+        // own click and navigation; skip so this doesn't double-fire it.
+        if ((e.target as HTMLElement).closest("a,button")) return;
+        void navigate(href);
+      }}
     >
       <span className="pt-0.5">
         <RowGlyph hue={p.hue} kind={glyph} />
       </span>
       <div className="min-w-0">
-        <Link to={href} className="block truncate text-sm font-medium text-foreground hover:underline">
+        <Link to={href} className="block text-sm font-medium text-foreground hover:underline sm:truncate">
           {title}
         </Link>
-        <div className="truncate text-meta text-muted-foreground" title={meta}>
+        <div className="text-meta text-muted-foreground sm:truncate" title={meta}>
           {meta}
         </div>
       </div>
-      <div className="flex flex-col items-end gap-1 text-right">
+      <div className="col-start-2 flex flex-wrap items-center justify-start gap-2 text-left sm:col-auto sm:flex-col sm:items-end sm:justify-normal sm:gap-1 sm:text-right">
         <span
           className={cn(
-            "whitespace-nowrap text-meta",
+            "text-meta sm:whitespace-nowrap",
             p.hue === "amber" && "text-warning",
             p.hue === "red" && "text-danger",
             p.hue !== "amber" && p.hue !== "red" && "text-muted-foreground",
@@ -88,7 +99,7 @@ export function RunRow({ run }: { run: AgentRun }) {
         </span>
         {/* The held-count subline (design.md §2.2) — its own line under the
             status word, always muted (the word already carries the hue). */}
-        {p.subword && <span className="whitespace-nowrap text-meta text-muted-foreground">{p.subword}</span>}
+        {p.subword && <span className="text-meta text-muted-foreground sm:whitespace-nowrap">{p.subword}</span>}
         {/* M-7 (admin-member-modes-design.md §4.6/§6): the admin's own run,
             seen in the Admin view, carries a switch link to its own User-view
             cockpit — the Admin view has no personal doors of its own. Not

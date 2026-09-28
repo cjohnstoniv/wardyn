@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
 
 const listRunsFilteredMock = vi.fn();
@@ -142,6 +142,19 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByText("All done")).toBeInTheDocument();
     expect(screen.getByText("Completed", { exact: true })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Needs you/ })).toBeInTheDocument();
+
+    // Review F6: the design's fixed section order (H-1/H-6) — Needs you,
+    // then Running, then Ended today — as a DOM-order assertion, not just
+    // "each one exists somewhere". The reviewer's swap mutation
+    // (runs.tsx: Needs/Running lines) survived every existing test because
+    // none checked order.
+    const headings = screen.getAllByRole("heading").map((h) => h.textContent);
+    const needsIdx = headings.findIndex((t) => t?.includes("Needs you"));
+    const runningIdx = headings.findIndex((t) => t === "Running");
+    const endedIdx = headings.findIndex((t) => t?.includes("Ended today"));
+    expect(needsIdx).toBeGreaterThanOrEqual(0);
+    expect(needsIdx).toBeLessThan(runningIdx);
+    expect(runningIdx).toBeLessThan(endedIdx);
   });
 
   it("the ageing note hides a 2-day-old killed run, and Include killed shows it", async () => {
@@ -188,6 +201,95 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("No runs match these filters.");
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     await screen.findByText("Fix flaky auth tests");
+  });
+
+  it("F1: a refetch (search) keeps the filter bar mounted and its input focused — only the rows region shows a skeleton", async () => {
+    listRunsFilteredMock.mockResolvedValueOnce({
+      runs: [run()],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen();
+    await screen.findByText("Fix flaky auth tests");
+
+    const search = screen.getByLabelText("Search runs");
+    search.focus();
+    expect(search).toHaveFocus();
+
+    const gate = pending<{ runs: AgentRun[]; truncated: boolean; hiddenOlder: number; hiddenKilled: number }>();
+    listRunsFilteredMock.mockReturnValueOnce(gate.promise);
+    fireEvent.change(search, { target: { value: "a" } });
+
+    // The refetch is in flight — the SAME input (same node) is still here
+    // and still focused; the reviewer's evidence for this bug was exactly
+    // the opposite (sawSkeleton true, sameNode false, focused false).
+    expect(screen.getByLabelText("Search runs")).toBe(search);
+    expect(search).toHaveFocus();
+    expect(search).toHaveValue("a");
+    // The rows region is a skeleton, not the stale rows and not the whole
+    // page replaced.
+    expect(screen.getByLabelText("Loading runs")).toBeInTheDocument();
+
+    gate.resolve({ runs: [], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+    await waitFor(() => expect(screen.queryByLabelText("Loading runs")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Search runs")).toBe(search);
+  });
+
+  it("F1: a slower, now-stale response cannot overwrite a newer one", async () => {
+    listRunsFilteredMock.mockResolvedValueOnce({
+      runs: [run()],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen();
+    await screen.findByText("Fix flaky auth tests");
+    const search = screen.getByLabelText("Search runs");
+
+    const gateA = pending<{ runs: AgentRun[]; truncated: boolean; hiddenOlder: number; hiddenKilled: number }>();
+    listRunsFilteredMock.mockReturnValueOnce(gateA.promise);
+    fireEvent.change(search, { target: { value: "a" } });
+
+    const gateB = pending<{ runs: AgentRun[]; truncated: boolean; hiddenOlder: number; hiddenKilled: number }>();
+    listRunsFilteredMock.mockReturnValueOnce(gateB.promise);
+    fireEvent.change(search, { target: { value: "ab" } });
+
+    // The NEWER request ("ab") settles first.
+    gateB.resolve({
+      runs: [run({ id: "b", task: "ab result" })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    await screen.findByText("ab result");
+
+    // The OLDER request's response lands late — it must be ignored, not
+    // overwrite what "ab" already rendered.
+    gateA.resolve({
+      runs: [run({ id: "a", task: "a result" })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText("a result")).not.toBeInTheDocument();
+    expect(screen.getByText("ab result")).toBeInTheDocument();
+  });
+
+  it("F2: workspace-detail's 'Start a run' (openNewRun route state) redirects to /runs/new — the REAL RunsScreen, not a stub", async () => {
+    function LocationProbe() {
+      return <div data-testid="location">{useLocation().pathname}</div>;
+    }
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/runs", state: { openNewRun: true } }]}>
+        <Routes>
+          <Route path="/runs" element={<RunsScreen />} />
+          <Route path="/runs/new" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/runs/new"));
   });
 
   it("'Earlier this week' expands on click and is aria-expanded", async () => {

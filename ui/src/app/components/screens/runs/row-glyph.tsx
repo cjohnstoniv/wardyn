@@ -33,7 +33,15 @@ export function RowGlyph({ hue, kind, className }: { hue: RowHue; kind: RowGlyph
       // dot, primitives.tsx, carries none either).
       return (
         <svg {...common} className={cls}>
-          <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" className="animate-ping" />
+          <circle
+            cx="7"
+            cy="7"
+            r="6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className="origin-[7px_7px] animate-ping"
+          />
           <circle cx="7" cy="7" r="4" fill="currentColor" />
         </svg>
       );

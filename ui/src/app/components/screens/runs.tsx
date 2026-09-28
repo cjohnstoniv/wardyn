@@ -23,6 +23,7 @@ import { deriveReadiness } from "../../lib/readiness";
 import { NoBarrierBanner, RunsFirstRun } from "./runs-first-run";
 import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
+import { cn } from "../ui/utils";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
@@ -73,6 +74,11 @@ export function RunsScreen() {
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  // Review F1: whether ANY fetch has ever landed. Only the very first load
+  // shows the full-page skeleton (design.md §2.1's "Loading" state); every
+  // later one (a filter/search change, a view switch) is a REFETCH, and must
+  // not unmount the filter bar under it — see the render below.
+  const [loadedOnce, setLoadedOnce] = React.useState(false);
   const [earlierOpen, setEarlierOpen] = React.useState(false);
   // H-8: built-ins first, then whatever this browser has saved. Loaded once
   // (localStorage is synchronous) and refreshed locally on Save — no fetch,
@@ -82,7 +88,12 @@ export function RunsScreen() {
     ...loadSavedRunsViews(),
   ]);
 
+  // Review F1: a slow response for an earlier keystroke's request must not
+  // land after, and overwrite, a newer one's. Each call gets the next id;
+  // only the fetch whose id is still current when it settles is applied.
+  const requestIdRef = React.useRef(0);
   const fetchRuns = React.useCallback(() => {
+    const id = ++requestIdRef.current;
     return api
       .listRunsFiltered({
         view,
@@ -95,12 +106,20 @@ export function RunsScreen() {
         workspace: filters.workspace === "all" ? undefined : filters.workspace,
         q: filters.q || undefined,
       })
-      .then((res) => {
-        setRunsList(res.runs);
-        setHiddenOlder(res.hiddenOlder);
-        setHiddenKilled(res.hiddenKilled);
-        setStatus("ready");
-      });
+      .then(
+        (res) => {
+          if (requestIdRef.current !== id) return; // superseded — ignore
+          setRunsList(res.runs);
+          setHiddenOlder(res.hiddenOlder);
+          setHiddenKilled(res.hiddenKilled);
+          setStatus("ready");
+          setLoadedOnce(true);
+        },
+        (err) => {
+          if (requestIdRef.current !== id) return; // superseded — ignore too
+          throw err; // let load()'s own catch below turn this into "error"
+        },
+      );
   }, [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q]);
 
   const load = React.useCallback(() => {
@@ -113,16 +132,29 @@ export function RunsScreen() {
   // shell's "New run" navigates back here after a create.
   React.useEffect(load, [load, location.key]);
 
+  // #10/D14: workspace-detail's "Start a run" CTA lands here with route
+  // state instead of a stale pre-seed promise — New run is its own page, so
+  // the intent is a redirect. `replace` keeps Back going where the operator
+  // came from rather than bouncing through this screen again, and clearing
+  // it isn't needed: a fresh navigate() replaces location.state outright.
+  React.useEffect(() => {
+    const s = location.state as { openNewRun?: boolean } | null;
+    if (!s?.openNewRun) return;
+    void navigate("/runs/new", { replace: true });
+  }, [location.state, navigate]);
+
   const refresh = React.useCallback(() => fetchRuns().catch(() => {}), [fetchRuns]);
   // The page polls the filtered window instead of a flat 1000-row read
   // (design.md §4) — no manual-refresh control or "Live" chip; polling alone
   // carries the "alive" fact now.
   usePoll(refresh, POLL_MS, status !== "ready");
 
-  // Setup status backs the first-run decision (has_runs, scoped by the
-  // server to the caller — unlike this screen's own windowed fetch, so it is
-  // the one honest signal for "does this person have ANY run at all", not
-  // "does the current 7-day window have one").
+  // Setup status backs the noBarrier banner and RunsFirstRun's own content
+  // (readiness/confinementClasses/secretNames) — NOT the true-first-run
+  // decision itself. `has_runs` is a bare deployment-wide existence check
+  // (internal/api/setup.go), so it is the wrong signal for a member, or an
+  // admin's own User view, on a deployment that has OTHER people's runs; see
+  // `trueEmpty` below, which reads this caller's own scoped fetch instead.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
   const loadSetupStatus = React.useCallback(
     () => setupApi.getSetupStatus().then(setSetupStatus).catch(() => {}),
@@ -163,7 +195,12 @@ export function RunsScreen() {
   // "no match", never as first-run.
   const trueEmpty =
     status === "ready" && runsList.length === 0 && nothingHidden && runsFiltersAreDefault(effectiveFilters);
-  const stillLoading = status === "loading";
+  // Review F1: the full-page skeleton is for the FIRST load only. A later
+  // "loading" (a filter/search change re-running fetchRuns) is a refetch —
+  // the filter bar (and its focused input) stays mounted; `refetching` below
+  // swaps in a rows-only skeleton under it instead.
+  const firstLoad = status === "loading" && !loadedOnce;
+  const refetching = status === "loading" && loadedOnce;
   const noMatch = status === "ready" && !trueEmpty && runsList.length === 0 && (nothingHidden || activeFilter);
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(effectiveFilters);
@@ -186,7 +223,7 @@ export function RunsScreen() {
         <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
           <ErrorState onRetry={load} />
         </div>
-      ) : stillLoading ? (
+      ) : firstLoad ? (
         <RunsLoadingSkeleton />
       ) : trueEmpty ? (
         adminView ? (
@@ -219,7 +256,9 @@ export function RunsScreen() {
             }}
           />
 
-          {noMatch ? (
+          {refetching ? (
+            <RunsLoadingSkeleton />
+          ) : noMatch ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
               <EmptyState
                 icon={FilterX}
@@ -286,9 +325,11 @@ function RunsSection({ title, runs }: { title: string; runs: AgentRun[] }) {
   return (
     <section aria-labelledby={id}>
       <div className="mb-2 flex items-center gap-2">
-        <h3 id={id} className="label-eyebrow">
+        {/* Review F11 (axe heading-order): PageHeader's title is the page's
+            one h1 — a section heading directly under it must be h2, not h3. */}
+        <h2 id={id} className="label-eyebrow">
           {title}
-        </h3>
+        </h2>
         <span className="rounded-full bg-muted px-1.5 text-meta font-semibold text-muted-foreground">
           {runs.length}
         </span>
@@ -320,6 +361,14 @@ function RunsCollapsibleSection({
         onClick={onToggle}
         className="mb-2 flex items-center gap-2 label-eyebrow"
       >
+        {/* The mock's own caret (home-runs-1197-packet.html:585), rotated
+            open — review F11. */}
+        <span
+          aria-hidden="true"
+          className={cn("text-[10px] transition-transform", open && "rotate-90")}
+        >
+          ▶
+        </span>
         {title}
         <span className="rounded-full bg-muted px-1.5 text-meta font-semibold text-muted-foreground">
           {runs.length}

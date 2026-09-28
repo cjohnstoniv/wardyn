@@ -94,9 +94,9 @@ export function runsViewSaved(name: string): string {
 }
 
 // Row-state words that are NEW for this page (design.md §2.2). Reused words
-// (Completed/Failed/Killed/Stopped/Archived/Starting) come straight off
-// RunStateBadge's own labels via runStateWord below — this table only carries
-// what D2 adds or changes.
+// (Completed/Failed/Killed/Stopped/Archived) are literals directly in
+// runs-model.ts's rowPresentation — this table only carries what D2 adds or
+// changes.
 export const RUNS_ROW_WORD = {
   NEEDS_APPROVAL: "Needs your approval",
   NEEDS_DECISION: "Needs a decision",

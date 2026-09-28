@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
-import { INTERACTIVE_HEADLINE, NO_REPO, repoLabel, rowHeadline, shortId } from "./board-groups";
+import { INTERACTIVE_HEADLINE, NO_REPO, repoLabel, rowHeadline } from "./board-groups";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run-1",
@@ -62,15 +62,5 @@ describe("repoLabel", () => {
 
   it("neither present reads as the honest no-repo phrase, not mono", () => {
     expect(repoLabel(run({ repo: "", workspace_path: "" }))).toEqual({ text: NO_REPO, mono: false });
-  });
-});
-
-describe("shortId", () => {
-  it("strips the run_ prefix and truncates a long id", () => {
-    expect(shortId("run_0123456789abcdef")).toBe("01234567…");
-  });
-
-  it("leaves a short id alone", () => {
-    expect(shortId("run_abc")).toBe("abc");
   });
 });
