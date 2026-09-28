@@ -67,8 +67,13 @@ ok()  { echo "ok: $*"; }
 # job that might fail deterministically. Drop this exemption and add it to
 # notify-new-lanes.needs + release.yml's watched= together, once it has gone
 # green on a real nightly run.
+# test-e2e-concurrent (#697, T-37): new tonight, never run — watching it from
+# day one would block a release on a job that might fail deterministically the
+# first time it actually meets a hosted runner's docker/compose. Add it back to
+# notify-new-lanes' needs: once it has gone green on a real nightly (same
+# posture PR #1245 used for daemon-proxy-secret-kind).
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check daemon-proxy-secret-kind"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check daemon-proxy-secret-kind test-e2e-concurrent"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"

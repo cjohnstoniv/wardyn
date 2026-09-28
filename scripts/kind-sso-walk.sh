@@ -250,11 +250,78 @@ if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
   build_image deploy/images/claude-code/Dockerfile "${AGENT_IMAGE}"   claude-code
   build_image test/awsssofake/cmd/Dockerfile      "${FAKE_IMAGE}"     awsssofake
 
-  step "loading all five into ${CLUSTER} (no registry pull)"
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWS_SSO_IMAGE}" "${AGENT_IMAGE}" "${FAKE_IMAGE}"; do
+  # AWS_SSO_IMAGE is deliberately NOT in this list any more (#891): a
+  # `kind load`ed image is already on the node, so the kubelet never pulls it
+  # and never writes the Pulling Event the sign-in door's download step reads.
+  # Step 1c below serves it from a registry instead, so its every walk is a
+  # real, cold pull.
+  step "loading the other four into ${CLUSTER} (no registry pull)"
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${FAKE_IMAGE}"; do
     kind load docker-image "${img}" --name "${CLUSTER}" || die "kind load ${img} failed"
   done
 fi
+
+# ── 1c. serve the aws-sso image from a registry, so its pull is COLD (#891) ──
+#
+# `scripts/kind-sso-walk.sh` used to `kind load` every image, aws-sso included
+# — but a `kind load`ed image sits in the node's containerd store before the
+# first pod ever asks for it, so the kubelet's pull is always a no-op cache hit
+# and the sign-in door's download step (#628 bullet 4, SIGNIN_PROGRESS.
+# STEP_DOWNLOAD) never has anything to light. This step gives the node a
+# reason to actually pull: a tiny, throwaway registry container on the kind
+# network, and a FRESH tag every walk so the node has never seen this exact
+# manifest — the standard kind local-registry recipe
+# (kind.sigs.k8s.io/docs/user/local-registry), scoped to one image.
+#
+# The other four images are unaffected: still `kind load`ed above, still an
+# instant local-store hit, so the walk's timing everywhere else is unchanged.
+REGISTRY_NAME="${WARDYN_KIND_SSO_REGISTRY:-kind-sso-registry}"
+REGISTRY_PORT="${WARDYN_KIND_SSO_REGISTRY_PORT:-5001}"
+KIND_NETWORK="kind"
+
+step "serving the aws-sso image from a local registry, tagged fresh (cold pull, #891)"
+docker image inspect "${AWS_SSO_IMAGE}" >/dev/null 2>&1 \
+  || die "${AWS_SSO_IMAGE} is not present locally — build it first (WARDYN_KIND_SSO_REBUILD=1, or \`make agent-images\`)"
+docker network inspect "${KIND_NETWORK}" >/dev/null 2>&1 \
+  || die "docker network '${KIND_NETWORK}' not found — is ${CLUSTER} a kind cluster on this daemon?"
+if ! docker inspect "${REGISTRY_NAME}" >/dev/null 2>&1; then
+  # --restart=always so a crash mid-walk leaves it reachable for a retry; the
+  # EXIT trap below (cleanup_walk) still removes it at the end of THIS walk,
+  # so a fresh one is created next time rather than accumulating one more
+  # cold-<epoch> tag per walk forever.
+  docker run -d --restart=always -p 127.0.0.1:"${REGISTRY_PORT}":5000 --name "${REGISTRY_NAME}" registry:2 \
+    >/dev/null || die "could not start the local registry ${REGISTRY_NAME}"
+fi
+# The only non-error outcome `|| true` may swallow is "already connected" (the
+# registry survives a re-run of this step, or was left by a killed walk); any
+# other failure here must not be silently ignored.
+connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)" \
+  || { [[ "${connect_err}" == *"already exists in network"* ]] || die "docker network connect ${REGISTRY_NAME} ${KIND_NETWORK} failed: ${connect_err}"; }
+# Node -> registry, by the registry's CONTAINER name on the shared kind network
+# (never localhost: the node is a different network namespace). Idempotent:
+# the file's content is identical every walk.
+#
+# Requires containerd >= 2.2 on the node: that's the version certs.d's
+# `/etc/containerd/certs.d:/etc/docker/certs.d` default config_path shipped in
+# (containerd's cri/images plugin.go); kind's own v0.33.0 node image ships
+# 2.3.4, but an older kind version or a pre-2.2 node image ignores this file
+# entirely and pulls "localhost:${REGISTRY_PORT}/..." from the node's own
+# loopback instead, which fails closed (ImagePullBackOff), not silently.
+docker exec "${KIND_NODE}" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}" \
+  || die "could not create containerd certs.d on ${KIND_NODE}"
+printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
+  | docker exec -i "${KIND_NODE}" cp /dev/stdin "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" \
+  || die "could not write ${KIND_NODE}'s registry mirror config"
+
+# A fresh tag every walk (not a fixed one): the node's containerd caches by
+# manifest, so re-pushing the SAME tag after a no-op rebuild would leave the
+# node still holding what it pulled last time — warm, silently, with nothing
+# in this script's own output saying so.
+AWS_SSO_COLD_TAG="cold-$(date +%s)"
+AWS_SSO_NODE_IMAGE="localhost:${REGISTRY_PORT}/agent-aws-sso:${AWS_SSO_COLD_TAG}"
+docker tag "${AWS_SSO_IMAGE}" "${AWS_SSO_NODE_IMAGE}" || die "could not tag ${AWS_SSO_IMAGE} for the registry"
+docker push "${AWS_SSO_NODE_IMAGE}" || die "could not push ${AWS_SSO_NODE_IMAGE} to the local registry"
+echo "aws-sso pod image: ${AWS_SSO_NODE_IMAGE} (content: ${AWS_SSO_IMAGE})"
 
 # Recorded EVERY run, rebuilt or not. None of these images carries an
 # org.opencontainers.image.revision label, so the honest provenance is the
@@ -279,7 +346,29 @@ NODE_IMAGES="$(docker exec "${KIND_NODE}" ctr -n k8s.io images ls 2>/dev/null ||
 node_digest() { # <repo:tag> -> the node's manifest digest, or ""
   printf '%s\n' "${NODE_IMAGES}" | awk -v r="docker.io/$1" '$1==r {print $3}' | head -1
 }
+# #891: aws-sso is pulled through the registry (step 1c), so on the node it is
+# named exactly AWS_SSO_NODE_IMAGE — `ctr images ls` records a registry pull
+# verbatim, with no docker.io/ prefix, unlike the four `kind load`ed images
+# above.
+node_digest_registry() { # <exact ref as ctr recorded it> -> the node's digest
+  printf '%s\n' "${NODE_IMAGES}" | awk -v r="$1" '$1==r {print $3}' | head -1
+}
+# `.Id` equals `ctr`'s manifest digest only under the containerd image store
+# (`docker info`'s Driver Type io.containerd.snapshotter.v1). On the classic
+# (graphdriver) image store a pushed manifest digest is never the local image
+# ID, so `agree` below reads "NO" on every walk regardless of whether the node
+# actually holds what this daemon holds. That only degrades this record and
+# the WARNING it can print — nothing in this script GATES on IMAGES_AGREE.
 host_digest() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null; }
+# The one indirection the loops below need: aws-sso's NODE-side lookup key is
+# the registry ref, not the local build tag the "image" column still shows.
+node_ref_for() {
+  if [[ "$1" == "${AWS_SSO_IMAGE}" ]]; then
+    node_digest_registry "${AWS_SSO_NODE_IMAGE}"
+  else
+    node_digest "$1"
+  fi
+}
 IMAGES_AGREE=1
 {
   echo "walk tree:       $(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo '(not a git tree)')"
@@ -292,7 +381,7 @@ IMAGES_AGREE=1
   echo
   printf '%-34s %-72s %-72s %s\n' "image" "host daemon" "node ${KIND_NODE}" "agree"
   for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
-    h="$(host_digest "${img}")"; n="$(node_digest "${img}")"
+    h="$(host_digest "${img}")"; n="$(node_ref_for "${img}")"
     a="NO"; [[ -n "${h}" && "${h}" == "${n}" ]] && a="yes"
     [[ "${a}" == "yes" ]] || IMAGES_AGREE=0
     printf '%-34s %-72s %-72s %s\n' "${img}" "${h:-(absent)}" "${n:-(absent)}" "${a}"
@@ -306,7 +395,7 @@ IMAGES_AGREE=1
 if [[ "${IMAGES_AGREE}" != "1" ]]; then
   echo "" >&2
   echo "WARNING: an image the node runs is NOT the one this daemon holds (see ${EVIDENCE_DIR}/images.txt)." >&2
-  echo "         Re-run with WARDYN_KIND_SSO_REBUILD=1, which builds and kind-loads all five." >&2
+  echo "         Re-run with WARDYN_KIND_SSO_REBUILD=1, which rebuilds all five (aws-sso is then re-pushed to the registry on this same run, step 1c)." >&2
 fi
 
 # A KILLED PLAYWRIGHT LEAVES THE NODE UNSCHEDULABLE. The recovery spec's
@@ -346,20 +435,21 @@ echo "service CIDR: ${SERVICE_CIDR}   ${FAKE_SVC} ClusterIP: ${FAKE_CLUSTER_IP}"
 # in through Dex, and every role assertion below is made against those sessions.
 ADMIN_TOKEN="${WARDYN_KIND_SSO_ADMIN_TOKEN:-walk-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 
-# THE LOGIN SANDBOX'S IMAGE HAS TO BE NAMED, not just loaded. `make kind-sso`
-# loads wardyn/agent-aws-sso:local into the node, but WARDYN_AGENT_IMAGES (set
-# by deploy/kind/quickstart.sh) maps only `base` and `claude-code` — and
-# agentImage() consults that map FIRST, so an unnamed `aws-sso` falls through to
-# the published ghcr ref and the login pod never starts. Read the map off the
-# live deployment and add the one key, rather than restating quickstart's two:
-# the walk then keeps working when that list changes.
+# THE LOGIN SANDBOX'S IMAGE HAS TO BE NAMED, not just loaded/pushed.
+# WARDYN_AGENT_IMAGES (set by deploy/kind/quickstart.sh) maps only `base` and
+# `claude-code` — and agentImage() consults that map FIRST, so an unnamed
+# `aws-sso` falls through to the published ghcr ref and the login pod never
+# starts. Read the map off the live deployment and add the one key, rather
+# than restating quickstart's two: the walk then keeps working when that list
+# changes. #891: the value is AWS_SSO_NODE_IMAGE (step 1c's registry ref, fresh
+# every walk), not a `:local` tag any more — that is what makes the pull cold.
 CUR_AGENT_IMAGES="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" \
   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WARDYN_AGENT_IMAGES")].value}' 2>/dev/null)"
 # An empty read is an empty MAP, not an empty string: --argjson rejects "" and
 # the die below would then blame the map for a deployment that simply sets none.
 [[ -n "${CUR_AGENT_IMAGES}" ]] || CUR_AGENT_IMAGES='{}'
-AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" \
-  '$cur + {"aws-sso": "wardyn/agent-aws-sso:local"}')" \
+AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" --arg img "${AWS_SSO_NODE_IMAGE}" \
+  '$cur + {"aws-sso": $img}')" \
   || die "could not extend WARDYN_AGENT_IMAGES (read: ${CUR_AGENT_IMAGES:-<empty>})"
 
 # ── 2b. the Dex cast the role legs sign in as ───────────────────────────────
@@ -640,7 +730,7 @@ manifest_images() {
   local first=1
   for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
     local h n
-    h="$(host_digest "${img}")"; n="$(node_digest "${img}")"
+    h="$(host_digest "${img}")"; n="$(node_ref_for "${img}")"
     [[ ${first} -eq 1 ]] || printf ','
     first=0
     jq -cn --arg i "${img}" --arg h "${h}" --arg n "${n}" \
@@ -682,12 +772,15 @@ seen_pf_pid=""
 pod_watch_pid=""
 # ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
-# a leftover one causes on the NEXT walk).
+# a leftover one causes on the NEXT walk). ALSO the registry (step 1c): removed
+# here rather than left running, so a fresh, empty one is created next walk
+# instead of one more cold-<epoch> tag piling up in it forever.
 cleanup_walk() {
   [[ -n "${SSO_ONLY_APPLIED:-}" ]] && set_render sso
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
+  docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1
   return 0
 }
 trap cleanup_walk EXIT
