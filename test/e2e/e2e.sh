@@ -406,14 +406,18 @@ log "(g) OIDC login flow against Dex -> session cookie authenticates GET /runs"
 cat > "${WORKDIR}/oidc.sh" <<'SH'
 set -u
 JAR=/tmp/cj.txt; rm -f "$JAR"
-BASE="http://wardynd:8080"; DEX="http://dex:5556"
-# Dex's own discovery advertises authorization_endpoint as
-# http://localhost:5556/auth (dex.yaml's public issuer, read by wardynd's
-# oidc.go) — nothing inside this throwaway curl container listens on ITS OWN
-# localhost:5556, so a follow of that URL would otherwise fail outright.
-# --connect-to routes the TCP connection to the real dex service while
-# leaving the URL (and Host header) exactly as Dex handed it back.
-C="curl -sS --connect-to localhost:5556:dex:5556 -c $JAR -b $JAR"
+BASE="http://localhost:8080"; DEX="http://dex:5556"
+# The flow runs on the browser's own origins: Dex's discovery advertises
+# http://localhost:5556 (dex.yaml's public issuer) and the callback is
+# WARDYN_OIDC_REDIRECT_URL, http://localhost:<port>. Nothing inside this curl
+# container listens on ITS OWN localhost, so --connect-to routes each TCP
+# connection to the real service while the URL and Host header stay what a
+# browser would send. The console is addressed as localhost, never by its bare
+# service name: curl stores a cookie set by a dotless host like `wardynd` but
+# never sends it back, so the callback arrived without its state cookie and
+# answered "invalid state parameter".
+R="--connect-to localhost:5556:dex:5556 --connect-to localhost:8080:wardynd:8080"
+C="curl -sS $R -c $JAR -b $JAR"
 AU=$($C -D - -o /dev/null "$BASE/auth/login" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
 if [ -z "$AU" ]; then
   echo "login_redirect_pkce_s256=0 reason=no-location"
@@ -423,14 +427,14 @@ echo "login_redirect_pkce_s256=$(echo "$AU" | grep -c 'code_challenge_method=S25
 PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')
 LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$DEX$ACT" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
-CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://wardynd:8080#')
+CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://localhost:8080#')
 $C -D /tmp/cb.txt -o /tmp/cb-body.txt "$CB"
 # The callback's own answer names the cause of a failed sign-in: a 302 to
 # the console on success, a 302 carrying ?error=<code> or a 4xx text on refusal.
 echo "callback_status=$(head -1 /tmp/cb.txt | tr -d '\r' | cut -d' ' -f2) callback_location=$(tr -d '\r' </tmp/cb.txt | sed -n 's/^[Ll]ocation: //p') callback_body=$(head -c 200 /tmp/cb-body.txt | tr '\n' ' ')"
 echo "session_cookie_set=$(grep -c wardyn_session $JAR)"
 echo "runs_with_session=$($C -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
-echo "runs_no_auth=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
+echo "runs_no_auth=$(curl -sS $R -o /dev/null -w '%{http_code}' "$BASE/api/v1/runs")"
 SH
 OIDC_OUT="$(ncis "${WORKDIR}/oidc.sh")"
 echo "${OIDC_OUT}"
