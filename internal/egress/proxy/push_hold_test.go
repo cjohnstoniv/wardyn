@@ -340,6 +340,87 @@ func TestPushHoldRefusesOnTimeout(t *testing.T) {
 	}
 }
 
+// wireSilenceWriter wraps a ResponseRecorder, latching under a mutex the first
+// time anything is written to it — so a goroutine other than the one calling
+// ServeHTTP can ask "has a byte gone out yet" without racing the write itself.
+type wireSilenceWriter struct {
+	rec   *httptest.ResponseRecorder
+	mu    sync.Mutex
+	wrote bool
+}
+
+func (w *wireSilenceWriter) Header() http.Header { return w.rec.Header() }
+
+func (w *wireSilenceWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	w.wrote = true
+	w.mu.Unlock()
+	return w.rec.Write(b)
+}
+
+func (w *wireSilenceWriter) WriteHeader(code int) {
+	w.mu.Lock()
+	w.wrote = true
+	w.mu.Unlock()
+	w.rec.WriteHeader(code)
+}
+
+func (w *wireSilenceWriter) hasWritten() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.wrote
+}
+
+// TestPushHoldSendsNoBytesUntilDecided is T-62 (#722): this file's own doc
+// comment says git will not give up on a held push by itself unless
+// http.lowSpeedLimit/http.lowSpeedTime are set — which is only true if the
+// proxy genuinely sends nothing while the push sits parked. A response
+// written early (a header, a keepalive byte) would give a lowSpeedLimit git
+// client nonzero throughput to measure and defeat exactly the escape hatch
+// the comment describes, and would make an ordinary git's read of a partial
+// response undefined. This proves the wire stays silent for a real slice of
+// hold_seconds before the decision lands, then that the held bytes still
+// reach the forge once it does.
+func TestPushHoldSendsNoBytesUntilDecided(t *testing.T) {
+	p, _, up, cp, _ := newAppLaneHold(t, reviewSpec(5, []string{".github/workflows/**"}), types.ApprovalPending)
+	body := recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)
+
+	w := &wireSilenceWriter{rec: httptest.NewRecorder()}
+	done := make(chan struct{})
+	go func() {
+		p.ServeHTTP(w, mustLocalReq(t, http.MethodPost,
+			"/wardyn/gh/octocat/hello-world/git-receive-pack", strings.NewReader(string(body))))
+		close(done)
+	}()
+
+	// Wait for the raise to land (proves the push is actually parked, not
+	// still being read), then confirm the wire is still silent partway
+	// through the 5s hold.
+	for range 400 {
+		if n, _ := cp.counts(); n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if w.hasWritten() {
+		t.Fatal("the proxy wrote to the response before the push was decided")
+	}
+
+	cp.set(types.ApprovalApproved)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held push never resolved after approval")
+	}
+	if w.rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", w.rec.Code, w.rec.Body.String())
+	}
+	if !bytes.Equal(up.gitBody, body) {
+		t.Errorf("the forge received %d bytes, want the %d held bytes verbatim", len(up.gitBody), len(body))
+	}
+}
+
 // TestPushHoldUnattendedRefusesWithoutARow: a run nobody drives cannot be
 // asked, so a review match is refused at once and no approval is raised.
 func TestPushHoldUnattendedRefusesWithoutARow(t *testing.T) {
