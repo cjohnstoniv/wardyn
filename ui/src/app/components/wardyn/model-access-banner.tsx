@@ -460,6 +460,9 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
         // only an admin can sign in under a shared row, the one row with no
         // portal stored.
         perUser={!operator || !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h))}
+        // /setup/status's credential_storage (design F-3) — the key door's
+        // store-mode notice line and remove-confirm retention line key off it.
+        credentialStorage={status?.credential_storage}
         focusSeq={door.focusSeq}
         onCancel={door.closeDoor}
         onDone={(message) => {
@@ -473,9 +476,12 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
           // confirmation.
           toast.success(message);
         }}
-        onRemoved={() => {
+        onRemoved={(message) => {
           door.closeDoor();
           void door.refresh();
+          // Packet F §3: a completed Remove now earns a toast the same way a
+          // completed save does.
+          toast.success(message);
         }}
         onCloseAutoFocus={(event) => {
           // This handler owns the restore, always: Radix's default focuses the

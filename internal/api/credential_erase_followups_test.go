@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,12 +88,12 @@ func eraseRefusalFixture(t *testing.T) *harness {
 // the record: a blank principal (400), one naming nobody or several (422).
 func TestErasePersonCredentials_AuditsInvalidPrincipal(t *testing.T) {
 	for _, c := range []struct {
-		principal, target, reason string
-		status                    int
+		principal, target, reason, wantBody string
+		status                              int
 	}{
-		{"%20", "", "blank_principal", http.StatusBadRequest},
-		{"nobody@corp.example", "nobody@corp.example", "owner_unresolved", http.StatusUnprocessableEntity},
-		{"Bob", "Bob", "owner_ambiguous", http.StatusUnprocessableEntity},
+		{"%20", "", "blank_principal", "", http.StatusBadRequest},
+		{"nobody@corp.example", "nobody@corp.example", "owner_unresolved", eraseUnresolvedMsg, http.StatusUnprocessableEntity},
+		{"Bob", "Bob", "owner_ambiguous", eraseAmbiguousMsg, http.StatusUnprocessableEntity},
 	} {
 		t.Run(c.reason, func(t *testing.T) {
 			h := eraseRefusalFixture(t)
@@ -100,6 +101,17 @@ func TestErasePersonCredentials_AuditsInvalidPrincipal(t *testing.T) {
 			w := doSSO(t, h.srv, http.MethodDelete, "/api/v1/people/"+c.principal+"/credentials", admin, "")
 			if w.Code != c.status {
 				t.Fatalf("erase %q = %d %s, want %d", c.principal, w.Code, w.Body.String(), c.status)
+			}
+			// design F-5 finding: the erase route takes no ?owner=, so its 422
+			// must be its OWN sentence (eraseUnresolvedMsg/eraseAmbiguousMsg),
+			// never resolveSecretOwner's shared "?owner= names…" wording.
+			if c.wantBody != "" {
+				if got := w.Body.String(); !strings.Contains(got, c.wantBody) {
+					t.Fatalf("erase %q body = %s, want it to contain %q", c.principal, got, c.wantBody)
+				}
+				if strings.Contains(w.Body.String(), "?owner=") {
+					t.Fatalf("erase %q body leaked the ?owner= wording: %s", c.principal, w.Body.String())
+				}
 			}
 			rows, data := actionRows(t, h.audit.events, "credential.erase")
 			if len(rows) != 1 || rows[0].Outcome != "denied" || rows[0].Target != c.target ||

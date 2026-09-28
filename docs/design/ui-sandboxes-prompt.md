@@ -40,7 +40,7 @@ the app is recorded**.
 | Enablement probe | `GET /healthz` → `ui_sandbox` block (mirrors the existing `ssh` block, `internal/api/sshgateway.go` `sshGatewayHealthz`) |
 | Declared apps | the run's **effective** policy `ui_apps`, read off the run payload (`GET /runs/{id}`) as a read-only denormalization — same pattern as `workspace_ids`. `AgentRun` carries only `policy_id` today, and an inline or default policy has no id to fetch, so the console must not resolve this through `GET /policies/{id}`. **D1.2 owns exposing it.** |
 | Ticket | existing `POST /runs/{id}/attach-ticket` (owner-or-admin, single-use, 30s TTL) |
-| Open | `window.open('<ui-origin>/__wardyn/enter?run=<run-id>&app=<name>&ticket=<t>', '_blank', 'noopener')` |
+| Open | a hidden, auto-submitted `POST <ui-origin>/__wardyn/enter` form (`target="_blank"`, `rel="noopener"`) with `run`/`app`/`ticket` as fields (#1220 — the ticket never lands in a URL); falls back to `window.open('<ui-origin>/__wardyn/enter?run=<run-id>&app=<name>&ticket=<t>', '_blank', 'noopener')` only against an older daemon that published no POST form |
 | Policies screen row | `ui/src/app/components/screens/policies.tsx` → `PolicyDetail`, read-only |
 
 The UI origin comes from the `ui_sandbox` healthz block, never from
@@ -80,7 +80,9 @@ row, not a UI tweak.
 
 1. Click **Open {app}** → button → `Opening…`, disabled.
 2. `POST /runs/{id}/attach-ticket` → single-use ticket.
-3. `window.open` the enter URL on the UI origin, `_blank`, `noopener`.
+3. Submit a hidden form POSTing run/app/ticket to the enter endpoint on the UI
+   origin, `target="_blank"`, `rel="noopener"` — or, only against an older
+   daemon with no `enter_post_url`, `window.open` the GET enter URL instead.
 4. Button returns to **Open {app}**. No polling, no embedded iframe, no
    progress bar — the new tab is the feedback.
 5. Any failure in 2 or 3 → S5 under that row; the other rows are untouched.
