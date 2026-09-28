@@ -21,6 +21,17 @@
 // way the legacy single-strip branch is suppressed on /account for an
 // operator — so this card and the strip would show two buttons for the same
 // provider.
+//
+// #1200 review R4-M1: the claim only holds while the ROW carrying the button
+// is actually mounted, i.e. while the card is expanded — this is now
+// CollapsibleCard's own body, collapsed by default. Claiming unconditionally
+// (this card's very first shape, before the compact-cards fix) left the
+// button held by a row nobody could see: the strip suppressed its own
+// "Sign in to AWS" for a claim with no visible control behind it, and a
+// member landing on a collapsed Your account saw zero sign-in buttons
+// anywhere. ClaimWhileOpen is a child of the CollapsibleCard body for exactly
+// this reason — mounted only while open, so it claims and releases with the
+// same visibility the button itself has.
 import { Chip } from "../../wardyn/primitives";
 import { Button } from "../../ui/button";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
@@ -34,6 +45,14 @@ import {
 } from "../../../lib/model-connections";
 import { CONNECTIONS } from "../../wardyn/copy/door";
 import type { SetupStatus } from "../../../lib/types";
+
+/** Claims the model-access door only while mounted — a child of
+ *  CollapsibleCard's body, so it lives and dies with the button it stands
+ *  for (review R4-M1). Renders nothing itself. */
+function ClaimWhileOpen({ claims }: { claims: boolean }) {
+  useClaimModelAccessDoor(claims);
+  return null;
+}
 
 function ConnectionRowView({
   row,
@@ -77,7 +96,6 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
   // cheap pure reads — not worth the dependency-array upkeep.
   const rows = connectionRows(status);
   const rowCopies = rows.map((row) => ({ row, copy: connectionRowCopy(status, row) }));
-  useClaimModelAccessDoor(rowCopies.some(({ copy }) => !!copy.button));
   // #541 fix review: `model_providers == null` (not `!status.model_providers`
   // — functionally the same here since an array is always truthy, but the
   // explicit null check matches the SAME providerMode expression
@@ -95,16 +113,19 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
     >
       <p className="text-body leading-snug text-muted-foreground">{CONNECTIONS.LEDE}</p>
       {rowCopies.length > 0 && (
-        <div className="mt-3 divide-y divide-border">
-          {rowCopies.map(({ row, copy }) => (
-            <ConnectionRowView
-              key={row.provider.id}
-              row={row}
-              copy={copy}
-              onOpen={(providerId) => door.openDoor({ for: { provider: providerId }, onClosed: onChanged })}
-            />
-          ))}
-        </div>
+        <>
+          <ClaimWhileOpen claims={rowCopies.some(({ copy }) => !!copy.button)} />
+          <div className="mt-3 divide-y divide-border">
+            {rowCopies.map(({ row, copy }) => (
+              <ConnectionRowView
+                key={row.provider.id}
+                row={row}
+                copy={copy}
+                onOpen={(providerId) => door.openDoor({ for: { provider: providerId }, onClosed: onChanged })}
+              />
+            ))}
+          </div>
+        </>
       )}
     </CollapsibleCard>
   );
