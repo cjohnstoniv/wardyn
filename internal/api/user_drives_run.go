@@ -145,7 +145,9 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 	s.metrics.driveRefused(reason)
 	slog.Warn("wardynd: user drive: a run was refused its drive",
 		append([]any{slog.String("reason", reason)}, attrs...)...)
-	writeError(w, status, driveRefusal(member))
+	// #656: reason was already the metric/log class (driveRefusalReasons); the
+	// wire now gets the same one, not a second vocabulary for the same cause.
+	writeErrorReason(w, status, reason, driveRefusal(member))
 }
 
 // seedRequestDrive resolves the run request's drive flag into the mount the
@@ -374,6 +376,11 @@ func (f *driveBindFailure) body() string {
 // 503 for the runner-unavailable arm.
 func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
 	if f.reason == "" || f.silent {
+		// #656: deliberately still a bare writeError — f.reason=="" is the
+		// runner-unavailable arm (a 503 about the deployment, no class), and
+		// silent's whole point is not counting or naming this refusal the way a
+		// real one is (see driveBindFailure's own doc comment); giving it a wire
+		// class here would undo that.
 		writeError(w, f.status, f.body())
 		return
 	}

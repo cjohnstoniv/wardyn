@@ -173,18 +173,18 @@ func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 		// driveRefusedBackendMsg over driveDisabledMsg), not a paraphrase: an
 		// admin previewing why a member cannot mount a drive reads the sentence
 		// that member reads. 422, never a 403 — nobody was denied by a profile.
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
+		writeErrorReason(w, http.StatusUnprocessableEntity, driveRefusalDrivesDisabled, fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
 	case errors.Is(err, errGroupsSnapshotStale):
-		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 	case errors.Is(err, errUserTypeUnknown):
-		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
+		writeErrorReason(w, http.StatusForbidden, driveUnavailableUserType, userTypeUnknownMsg)
 	case errors.Is(err, errDriveUnmountable):
 		// The sentinel's own name is stripped: what is left is the frozen
 		// MEMBER sentence (docs/design/user-drives-prompt.md's DRIVE_MEMBER
 		// table), and the console renders a server refusal verbatim. The
 		// sentinel exists to be matched with errors.Is by the callers above, not
 		// to be read by the human this refuses.
-		writeError(w, http.StatusUnprocessableEntity,
+		writeErrorReason(w, http.StatusUnprocessableEntity, driveUnavailableUnmountable,
 			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:
 		writeServerError(w, r, "resolve user drive", err)

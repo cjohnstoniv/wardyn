@@ -103,7 +103,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Sub = strings.TrimSpace(body.Sub)
 	if body.All == (body.Sub != "") {
-		writeError(w, http.StatusBadRequest, `body must set exactly one of "sub" or "all"`)
+		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `body must set exactly one of "sub" or "all"`)
 		return
 	}
 	scope, target := "sub", body.Sub
@@ -148,7 +148,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		// (the cutoff already committed, so the responder needs the remedy, not
 		// just the log line).
 		if refusal != "" {
-			writeError(w, http.StatusInternalServerError, refusal)
+			writeErrorReason(w, http.StatusInternalServerError, reasonSSHKeyOwnerUnresolved, refusal)
 			return
 		}
 		writeServerError(w, r, "revoke credentials", err)

@@ -163,7 +163,15 @@ bearer — send a reason on every refusal, and #656 slice 1 has now converted
 `GET/POST /approvals` (list, decide, push-content review) and its
 `/paths` route, `POST/GET /runs` (create validation and the list filters),
 run kill, and the workspace create/update/admission/env-as-code/providers
-routes. Most OTHER routes still send `error` alone, so `apiErr.Reason == ""`
+routes. Slice 2 adds `/site-config` (including its probe and egress-redirect
+routes), `/governance` (profiles, assignments, the preview routes),
+`/secrets`, `/people` (and its per-person token mint), `/access`
+(role-mapping admin), `/permissions` (capability grants and availability),
+`/delegates`, `/setup/integrations`, `/setup/onboarding-complete`,
+`/sessions/revoke`, `/ssh-keys` (self-service and the admin delete-by-principal
+door), and the user-drive doors (`/user-drives`, allocation, reclaim, the
+naming/bind previews, and the launch-time drive resolver). Most OTHER routes
+still send `error` alone, so `apiErr.Reason == ""`
 does not mean "no error", only "this route has not been converted yet". Two
 refusals are DELIBERATELY still bare even on a converted route: an AWS
 Bedrock SSO renewal AWS never answered (an outage, not a class the console's
@@ -210,6 +218,27 @@ means the same thing regardless of which lane sent it:
 | `workspace_providers_invalid` / `workspace_providers_stale` | `PUT` on a workspace's provider block: the submitted block fails validation, or `If-Match` is stale. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
+| `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. Authz's own registered reason (`internal/authz/registry.go`), reused here rather than a second copy of the string. |
+| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, or `If-Match` is stale. |
+| `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
+| `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. |
+| `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}`: the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. |
+| `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` / `person_not_found` | `POST /people` and `POST /people/{principal}/tokens` (operator/security-tier only). |
+| `mint_no_human` / `api_token_from_api_token` | Shared between `POST /people/{principal}/tokens` and `POST /api/v1/tokens` (self-service): minting a token needs a signed-in human, and an API token may not mint another — the SAME two shapes, byte-identical sentences, on both doors. |
+| `token_lookup_unavailable` | The API-token and delegated-token authentication middlewares' shared shape: the revocation store could not be read to authenticate the bearer. |
+| `api_token_no_human` / `api_token_from_delegated_token` / `api_token_member_mode_mint` / `api_token_name_invalid` / `api_token_cap_reached` | `POST /api/v1/tokens` (self-service mint) and `DELETE`. |
+| `sessions_revoke_param_invalid` / `ssh_key_owner_unresolved` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, or one of the per-credential-lane cutoffs (SSH keys) could not resolve the named principal to a unique directory entry — shared with the admin SSH-key delete-by-principal door below, which hits the identical resolver. |
+| `sso_not_configured` / `access_role_map_value_invalid` / `access_mapping_target_invalid` / `access_email_mapping_disabled` / `access_lockout` / `access_unknown_user_type` / `access_preview_no_session_claims` | `GET/POST /access` (role-mapping admin, operator-only). |
+| `capability_grant_invalid` / `capability_kind_unknown` / `capability_enforcement_stale` / `availability_kind_not_restrictable` / `availability_target_invalid` / `availability_restricted_required` / `availability_only_empty` | `POST /permissions/grants` and the capability-availability routes. |
+| `delegation_store_unavailable` / `delegate_name_invalid` / `delegate_client_id_invalid` / `delegate_client_id_is_portal` / `delegate_group_invalid` | `POST /admin/delegates` (operator-only portal delegate registration). |
+| `integration_invalid` / `integration_not_found` / `setup_onboarding_store_unavailable` | `PUT/DELETE /setup/integrations/{id}` and `POST /setup/onboarding-complete` (operator-only). |
+| `ssh_key_invalid` / `ssh_key_requires_human` / `ssh_key_cap_reached` / `ssh_key_revoked_session` / `ssh_key_registration_refused` / `ssh_key_fingerprint_invalid_encoding` | `POST/DELETE /me/ssh-keys` (self-service). `ssh_key_registration_refused` is DELIBERATELY generic (THREAT-MODEL.md): it never confirms whether the key is already registered, or by whom — a distinguishable reason here would be the same key-squatting reconnaissance oracle the shared sentence already refuses to open. |
+| `ssh_key_admin_principal_invalid_encoding` / `ssh_key_admin_principal_required` | `DELETE /people/{principal}/ssh-keys` (security-tier). |
+| `user_drive_request_invalid` / `user_drive_rehome_invalid` / `user_drive_allocated_conflict` / `user_drive_slug_conflict` / `user_drive_home_namespace_conflict` / `user_drive_name_conflict` / `user_drive_still_allocated` / `user_drive_grant_invalid` / `user_drive_size_refused` / `user_drive_grant_conflict` | `POST/PUT/DELETE /user-drives` and its allocation-grant sub-route (operator-only). |
+| `user_drive_reclaim_invalid` / `user_drive_reclaim_subject_ambiguous` / `user_drive_not_reclaimable` / `user_drive_reclaim_failed` / `user_drive_reclaim_unsupported` / `user_drive_reclaim_conflict` | `POST /user-drives/{id}/reclaim` (operator-only). |
+| `user_drive_preview_no_claims` / `user_drive_denied_by_profile` | The user-drive naming and bind-failure preview routes (operator-only, mirrors the launch-time resolver's own verdict so an admin reads the SAME sentence a member would). |
+| `no_allocation` / `paused` / `runner_cannot_mount` / `backend_elsewhere` / `ceiling_moved` / `home_missing` / `home_unreadable` / `share_unreachable` / `read_only` / `drives_disabled` | `POST /runs`' drive-mount resolution (`seedRequestDrive`, `refuseDrive`) — the SAME closed set (`internal/api/user_drives_run.go`) already used for the `wardyn_drive_refusals_total` metric and the WARN log line, now also on the wire. Two arms of `driveBindFailure` stay bare on purpose: the runner-unavailable case (a 503 about the deployment, not a class) and the CALLER-cancelled probe (`silent`), which must not be counted OR named as a real refusal either way. |
+| `user_type_unknown` / `unmountable` / `unavailable` / `governance_unavailable` | The user-drive resolver's own closed enum (`internal/api/user_drives_resolve.go`, also surfaced on `GET /me`'s `unavailable` field for the SAME cause) — carried through unchanged onto `writeDriveError`'s wire body. |
 
 ## Renamed in 0.8
 

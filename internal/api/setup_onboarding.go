@@ -50,7 +50,7 @@ func (s *Server) mountSetupMutationRoutes(humanOrAdmin, operatorOnly chi.Router)
 
 func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "no store configured")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonSetupOnboardingStoreUnavailable, "no store configured")
 		return
 	}
 	// The same mutex PUT /site-config and the integration writers take,

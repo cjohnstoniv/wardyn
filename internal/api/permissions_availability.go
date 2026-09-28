@@ -47,7 +47,7 @@ const availabilityOnlyEmptyMsg = "Add at least one person, group or user type be
 func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value string, ok bool) {
 	kind = chi.URLParam(r, "kind")
 	if !capKinds[kind].restrictable {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("%q can't be restricted to a list; only the resources people are offered can be.", kind))
+		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityKindNotRestrictable, fmt.Sprintf("%q can't be restricted to a list; only the resources people are offered can be.", kind))
 		return "", "", false
 	}
 	// chi hands the wildcard over still escaped, so an encoded ref would be
@@ -55,7 +55,7 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 	// rule; decode it first so both are judged as the ref they spell.
 	raw, err := url.PathUnescape(chi.URLParam(r, "*"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid availability target: value: not a valid path escape")
+		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityTargetInvalid, "Invalid availability target: value: not a valid path escape")
 		return "", "", false
 	}
 	value, err = canonicalGrantValue(kind, raw)
@@ -63,7 +63,7 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 		err = fmt.Errorf("value: name one resource, not every one")
 	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid availability target: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityTargetInvalid, "Invalid availability target: "+err.Error())
 		return "", "", false
 	}
 	return kind, value, true
@@ -116,7 +116,7 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Restricted == nil {
-		writeError(w, http.StatusBadRequest, "Invalid availability: restricted is required.")
+		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityRestrictedRequired, "Invalid availability: restricted is required.")
 		return
 	}
 	v, err := s.availabilityOf(r, kind, value)
@@ -125,7 +125,7 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if *req.Restricted && len(v.AllowedBy) == 0 {
-		writeError(w, http.StatusBadRequest, availabilityOnlyEmptyMsg)
+		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityOnlyEmpty, availabilityOnlyEmptyMsg)
 		return
 	}
 	if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, *req.Restricted, principalFromRequest(r)); err != nil {

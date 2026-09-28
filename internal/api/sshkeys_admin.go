@@ -18,14 +18,14 @@ func (s *Server) handleAdminDeleteSSHKeys(w http.ResponseWriter, r *http.Request
 	if r.URL.RawPath != "" {
 		decoded, err := url.PathUnescape(raw)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid principal encoding")
+			writeErrorReason(w, http.StatusBadRequest, reasonSSHKeyAdminPrincipalInvalidEncoding, "invalid principal encoding")
 			return
 		}
 		raw = decoded
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		writeError(w, http.StatusBadRequest, "name the person whose SSH keys to remove")
+		writeErrorReason(w, http.StatusBadRequest, reasonSSHKeyAdminPrincipalRequired, "name the person whose SSH keys to remove")
 		return
 	}
 	count, _, refusal, err := s.deleteSSHKeysFor(r, raw)
@@ -34,7 +34,7 @@ func (s *Server) handleAdminDeleteSSHKeys(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if refusal != "" {
-		writeError(w, http.StatusUnprocessableEntity, refusal)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyOwnerUnresolved, refusal)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
