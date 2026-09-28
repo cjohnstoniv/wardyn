@@ -45,10 +45,13 @@ func TestConfigKeySet(t *testing.T) {
 	}
 }
 
-// configKeyPaths lists every JSON key Config's decoder accepts, as dotted
-// paths. Slices add no segment; a map whose values are structs adds "*" for
-// its keys. The decoder does not check keys under a map or under a type with
-// its own unmarshaller, so those appear as leaves.
+// configKeyPaths lists every JSON key the sidecar's strict decoder accepts, as
+// dotted paths — walking configWire, the exact type LoadConfigBytes decodes
+// into (Config plus the legacy ado_grants key), not Config alone, so the
+// golden set here matches what DisallowUnknownFields actually refuses. Slices
+// add no segment; a map whose values are structs adds "*" for its keys. The
+// decoder does not check keys under a map or under a type with its own
+// unmarshaller, so those appear as leaves.
 func configKeyPaths() []string {
 	var out []string
 	var walk func(t reflect.Type, prefix string)
@@ -82,7 +85,7 @@ func configKeyPaths() []string {
 			walk(f.Type, prefix+name+".")
 		}
 	}
-	walk(reflect.TypeFor[Config](), "")
+	walk(reflect.TypeFor[configWire](), "")
 	slices.Sort(out)
 	return out
 }

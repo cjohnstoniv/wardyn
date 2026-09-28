@@ -365,8 +365,10 @@ func TestBedrockCredentialIsAuthoredOnlyAsGraded(t *testing.T) {
 				if state != types.RunFailed {
 					t.Errorf("run state = %s, want FAILED", state)
 				}
-				if ev := findAudit(audit.snapshot(), runID, "run.create", "failure"); ev == nil || !strings.Contains(string(ev.Data), "autonomy_grade_drift") {
-					t.Errorf("no run.create failure row naming autonomy_grade_drift")
+				// Waited for: bedrockCredGradeHolds fails the run before it
+				// writes this row (e26c55b1a), so FAILED can be seen first.
+				if ev := waitForRecAudit(t, audit, runID, "run.create", "failure"); !strings.Contains(string(ev.Data), "autonomy_grade_drift") {
+					t.Errorf("run.create failure row does not name autonomy_grade_drift: %s", ev.Data)
 				}
 				return
 			}
