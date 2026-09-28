@@ -162,7 +162,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		// daemon fault — answered the way launchRecordRun's caller answers it
 		// (record.go), with the profile's own sentence and no 500.
 		if errors.Is(err, errRecordCeilingLimit) {
-			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
+			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
 		if errors.Is(err, errSignInBusy) {

@@ -407,7 +407,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// so it reveals nothing a principal who may launch here could not
 		// already see. The sentence is the create path's, verbatim.
 		if errors.Is(lerr, errRecordCeilingLimit) {
-			writeError(w, http.StatusForbidden, strings.TrimPrefix(lerr.Error(), errRecordCeilingLimit.Error()+": "))
+			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(lerr.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
 		// An unresolvable ceiling is a 403 naming its remedy, not a 500 —

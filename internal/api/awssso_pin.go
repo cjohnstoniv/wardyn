@@ -107,31 +107,10 @@ func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin, en
 // on purpose: the alternative is sandbox-chosen text in the audit trail, and an
 // incident review filtering "why were captures refused last Tuesday" needs to
 // GROUP, which free text cannot do.
-const (
-	refuseReasonBlobShape        = "blob_shape"
-	refuseReasonFieldUnsafe      = "field_unsafe"
-	refuseReasonFieldShape       = "field_shape"
-	refuseReasonRegionMismatch   = "region_mismatch"
-	refuseReasonStartURLMismatch = "start_url_mismatch"
-	refuseReasonAccountRolePin   = "account_role_pin_mismatch"
-	refuseReasonModelAccount     = "model_account_mismatch"
-	refuseReasonUnstampedScope   = "unstamped_scope"
-	refuseReasonAlreadyCaptured  = "already_captured"
-	refuseReasonStampUnreadable  = "stamp_unreadable"
-	refuseReasonStoreError       = "store_error"
-	// refuseReasonRunKilled: the login run this upload comes from has been
-	// KILLED — by its own Cancel, or by the person's next sign-in superseding it
-	// (harnesscred_supersede.go). See ssoTokenRunKilledRefusal.
-	refuseReasonRunKilled = "run_killed"
-	// refuseReasonProviderChanged: a sign-in through a model provider's own
-	// door whose provider was removed, re-kinded or re-addressed while the
-	// login sandbox was open (storeProviderSignIn).
-	refuseReasonProviderChanged = "provider_changed"
-	// refuseReasonSignInBusy: the per-person sign-in lock could not be taken in
-	// time (lockLoginSupersede), so the capture was not serialized and is
-	// refused rather than stored.
-	refuseReasonSignInBusy = "signin_busy"
-)
+//
+// Moved to reasons.go (#656 slice 3), not left beside refuseCapture: that
+// guard only reads reasons.go's own string literals, and refuseCapture's
+// reason now also reaches the wire.
 
 // DRAFT (M2 canon pending)
 
@@ -360,10 +339,10 @@ func bindCaptureToPin(blob awsSSOBlob, stamp loginRunStamp, model string) (msg, 
 	pin := awsSSOPin{AccountID: stamp.SSOAccountID, RoleName: stamp.SSORoleName}
 	if pin.set() && (blob.AccountID != pin.AccountID || blob.RoleName != pin.RoleName) {
 		return fmt.Sprintf(ssoTokenAccountPinRefusal,
-			blob.AccountID, blob.RoleName, pin.AccountID, pin.RoleName), refuseReasonAccountRolePin
+			blob.AccountID, blob.RoleName, pin.AccountID, pin.RoleName), reasonCaptureAccountRolePin
 	}
 	if modelAccount := bedrockModelAccount(model); !pin.set() && modelAccount != "" && blob.AccountID != modelAccount {
-		return fmt.Sprintf(ssoTokenModelAccountRefusal, blob.AccountID, modelAccount), refuseReasonModelAccount
+		return fmt.Sprintf(ssoTokenModelAccountRefusal, blob.AccountID, modelAccount), reasonCaptureModelAccount
 	}
 	return "", ""
 }
@@ -395,5 +374,7 @@ func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *i
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"harness.credential.refuse", harnessCredSecretName(awsSSOProvider), "failure",
 		mustJSON(data)))
-	writeError(w, status, msg)
+	// reason reaches the wire now (#656 slice 3): the SAME class already
+	// recorded on the audit row above.
+	writeErrorReason(w, status, reason, msg)
 }

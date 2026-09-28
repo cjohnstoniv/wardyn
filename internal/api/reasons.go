@@ -701,6 +701,73 @@ const (
 	reasonDeviceEnrolmentTokenNameInvalid = "device_enrolment_token_name_invalid"
 )
 
+// The harness.credential.refuse row's own FIXED reason vocabulary
+// (refuseCapture, awssso_pin.go): a closed set on purpose, since the
+// alternative is sandbox-chosen text an incident review cannot group by.
+// Moved here from beside refuseCapture (#656 slice 3) so the docs guard,
+// which only reads this file, can see them now that refuseCapture's reason
+// also reaches the wire.
+const (
+	reasonCaptureBlobShape        = "blob_shape"
+	reasonCaptureFieldUnsafe      = "field_unsafe"
+	reasonCaptureFieldShape       = "field_shape"
+	reasonCaptureRegionMismatch   = "region_mismatch"
+	reasonCaptureStartURLMismatch = "start_url_mismatch"
+	reasonCaptureAccountRolePin   = "account_role_pin_mismatch"
+	reasonCaptureModelAccount     = "model_account_mismatch"
+	reasonCaptureUnstampedScope   = "unstamped_scope"
+	reasonCaptureAlreadyCaptured  = "already_captured"
+	reasonCaptureStampUnreadable  = "stamp_unreadable"
+	// reasonCaptureRunKilled: the login run this upload comes from has been
+	// KILLED — by its own Cancel, or by the person's next sign-in superseding
+	// it (harnesscred_supersede.go). See ssoTokenRunKilledRefusal.
+	reasonCaptureRunKilled = "run_killed"
+	// reasonCaptureProviderChanged: a sign-in through a model provider's own
+	// door whose provider was removed, re-kinded or re-addressed while the
+	// login sandbox was open (storeProviderSignIn).
+	reasonCaptureProviderChanged = "provider_changed"
+	// reasonCaptureSignInBusy: the per-person sign-in lock could not be taken
+	// in time (lockLoginSupersede), so the capture was not serialized and is
+	// refused rather than stored.
+	reasonCaptureSignInBusy = "signin_busy"
+)
+
+// /internal/sso-token (ssotoken.go).
+const (
+	reasonSSOTokenNoSecretStore = "sso_token_no_secret_store" // this deployment configures no secret store
+	reasonSSOTokenWrongRunKind  = "sso_token_wrong_run_kind"  // the run is not an aws-sso container-login run
+)
+
+// /api/v1/model-providers/{id}/sign-in (provider_signin.go), the console's
+// own sign-in door (distinct from run-create's model-provider choice,
+// run_model_provider.go).
+const (
+	reasonProviderSignInNoBlock            = "provider_sign_in_no_block"             // this deployment configures no model providers
+	reasonModelProviderNotFoundEntity      = "model_provider_not_found"              // no such provider, or the caller may not see it
+	reasonProviderSignInUntyped            = "provider_sign_in_untyped"              // no login convention is wired for this provider's kind
+	reasonProviderSignInDisabled           = "provider_sign_in_disabled"             // the provider is turned off
+	reasonProviderSignInConfigUnreadable   = "provider_sign_in_config_unreadable"    // the site config could not be read
+	reasonProviderSignInPreviewBlocked     = "provider_sign_in_preview_blocked"      // a previewing admin cannot capture into the previewed identity
+	reasonProviderSignInNoPortal           = "provider_sign_in_no_portal"            // the Bedrock provider names no SSO portal/region
+	reasonProviderSignInAccountAmbiguous   = "provider_sign_in_account_ambiguous"    // more than one account could serve this caller, unpinned
+	reasonProviderSignInNoImage            = "provider_sign_in_no_image"             // no sign-in image resolves for this agent
+	reasonProviderSignInCaptureBodyInvalid = "provider_sign_in_capture_body_invalid" // the capture body did not decode, or run_id is not a UUID
+	reasonProviderSignInAWSByHelper        = "provider_sign_in_aws_by_helper"        // this Bedrock provider captures via the CLI helper, not this door
+	// reasonHarnessPasteInvalid is harnessPasteRefusal's own bucket (shared with
+	// harnesscred.go's identical door): via-helper/empty/too-long all fail the
+	// same paste-shape validation.
+	reasonHarnessPasteInvalid          = "harness_paste_invalid"
+	reasonProviderSignInNotYourRun     = "provider_sign_in_not_your_run"    // the named run is not this caller's own sign-in for this provider
+	reasonProviderSignInCaptureChanged = "provider_sign_in_capture_changed" // the provider's address changed since this sign-in was launched
+)
+
+// errRecordCeilingLimit's own wire reason (workspace_run_launch.go): a launch
+// refused by the acting principal's governance profile limits (interactive
+// not allowed, or the concurrent-run cap) — shared by every launch door that
+// maps the sentinel to a 403 (provider_signin.go, harnesscred_launch.go,
+// record.go), since it is the identical cause regardless of which door hit it.
+const reasonRecordCeilingLimit = "record_ceiling_limit"
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

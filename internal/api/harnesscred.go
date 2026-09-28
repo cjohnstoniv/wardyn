@@ -891,7 +891,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	// over-long token is refused before it reaches the store or the
 	// process-global mask corpus.
 	if msg := harnessPasteRefusal(hl, token); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonHarnessPasteInvalid, msg)
 		return
 	}
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
