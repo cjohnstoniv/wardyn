@@ -309,15 +309,17 @@ func (p lostWriteSecrets) For(owner string) secretstore.Store {
 // credential. Its refresh token used to be retired at the exchange and swept
 // an hour later, unmasked while still in use.
 func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
+	// #659 Q2: both failures now redirect to the console's error path
+	// (adoSignInErrorPath) rather than a bare 403/500 text page.
 	for _, tc := range []struct {
 		name    string
 		breakIt func(*adoFixture)
-		want    int
+		reason  string
 	}{
-		{"identity refused", func(f *adoFixture) { f.fake.SetSubject("someone-else") }, http.StatusForbidden},
+		{"identity refused", func(f *adoFixture) { f.fake.SetSubject("someone-else") }, "identity_binding"},
 		{"store write lost", func(f *adoFixture) {
 			f.srv.cfg.Secrets = lostWriteSecrets{f.srv.cfg.Secrets.(*memSecrets)}
-		}, http.StatusInternalServerError},
+		}, "store_error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newADOFixture(t)
@@ -327,8 +329,12 @@ func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
 			}
 			held, _ := f.stored(t, subject)
 			tc.breakIt(f)
-			if w := f.capture(t, subject); w.Code != tc.want {
-				t.Fatalf("re-capture: status %d body %q, want %d", w.Code, w.Body.String(), tc.want)
+			w := f.capture(t, subject)
+			if w.Code != http.StatusFound {
+				t.Fatalf("re-capture: status %d body %q, want a 302 back to the console", w.Code, w.Body.String())
+			}
+			if got, want := w.Header().Get("Location"), adoSignInErrorPath+tc.reason; got != want {
+				t.Errorf("Location = %q; want %q", got, want)
 			}
 			f.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(time.Hour))
 			if !slices.ContainsFunc(f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil), func(v []byte) bool { return string(v) == held.RefreshToken }) {

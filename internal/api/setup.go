@@ -642,7 +642,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// Every list holds only what this caller may use (capVisible; model providers
 		// on the roster line, funlen ratchet); llmReady stays the deployment fact.
 		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
-		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
+		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages, modelProviders), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
 		LLMReady:    llmReady,
 		ModelAccess: modelAccess,
 		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value

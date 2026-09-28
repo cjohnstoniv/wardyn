@@ -7,6 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { connectionRowCopy, connectionRows, connectionsSummary, legacySummary } from "./model-connections";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
+import { absoluteTime, relativeTime, shortDate } from "./format";
+import { aheadByHours } from "./test-clock";
 import { AGENTS } from "./workspace-providers-copy";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "./test-fixtures";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
@@ -211,6 +213,47 @@ describe("connectionRowCopy — Claude subscription (C10)", () => {
   });
 });
 
+// #592 (CS-8) — the meta line every row that HOLDS a credential gets, from
+// THIS caller's own provider_access row (added_at/last_used_at). Independent
+// of provider kind: bedrock is enough to exercise all three shapes.
+//
+// Clock-relative fixtures (aheadByHours, #210) rather than literal dates: a
+// literal date this suite compared to "now" would start failing the day the
+// wall clock catches up to it, for reasons with nothing to do with the code
+// under test. The expected strings are composed through the SAME shortDate/
+// relativeTime/absoluteTime helpers the module under test uses — the
+// mutation proof (not a hardcoded string) is what proves the composition
+// itself, not just that a formatter was called.
+describe("connectionRowCopy — the meta line (#592)", () => {
+  const row = (access: Partial<SetupProviderAccess> = {}) => ({
+    provider: MODEL_PROVIDERS.bedrock,
+    access: { provider: MODEL_PROVIDERS.bedrock.id, state: "live", ...access } as SetupProviderAccess,
+  });
+
+  it("nothing stored (no added_at): no meta line at all", () => {
+    const copy = connectionRowCopy(baseStatus(), row());
+    expect(copy.meta).toBe("");
+    expect(copy.metaTitle).toBe("");
+  });
+
+  it("added_at, never used: Added {date} · Not used by a run yet", () => {
+    const addedAt = aheadByHours(-24 * 10);
+    const copy = connectionRowCopy(baseStatus(), row({ added_at: addedAt }));
+    expect(copy.meta).toBe(`${CONNECTIONS.ADDED(shortDate(addedAt))} · ${CONNECTIONS.NOT_USED}`);
+    expect(copy.metaTitle).toBe("");
+  });
+
+  it("added_at and last_used_at: Added {date} · Last used {relative}, hover = the exact instant", () => {
+    const addedAt = aheadByHours(-24 * 10);
+    const lastUsedAt = aheadByHours(-2);
+    const copy = connectionRowCopy(baseStatus(), row({ added_at: addedAt, last_used_at: lastUsedAt }));
+    expect(copy.meta).toBe(
+      `${CONNECTIONS.ADDED(shortDate(addedAt))} · ${CONNECTIONS.LAST_USED(relativeTime(lastUsedAt))}`,
+    );
+    expect(copy.metaTitle).toBe(absoluteTime(lastUsedAt));
+  });
+});
+
 describe("connectionRowCopy — the 'For …' line", () => {
   it("one harness: 'For Claude Code'", () => {
     const s = baseStatus({ harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }] });
@@ -278,6 +321,20 @@ describe("legacySummary", () => {
     expect(legacySummary(baseStatus({ model_access: { state: "shared_expired" }, llm_ready: true }))).toEqual({
       label: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
       tone: "warning",
+    });
+  });
+
+  // #1089 (owner ruling: build it as a chip) — the shared admin-token
+  // principal's own state. Checked ahead of llm_ready for the identical
+  // reason shared_expired is: without this arm, a deployment whose SOME
+  // credential works (llm_ready true) painted this caller's own inapplicable
+  // state as an ordinary "Model access · Ready", indistinguishable from a
+  // real per-person ready session (found by #1042's e2e after #541's rewrite
+  // dropped the old always-visible chip).
+  it("model_access not_applicable: its own chip, even with llm_ready true", () => {
+    expect(legacySummary(baseStatus({ model_access: { state: "not_applicable" }, llm_ready: true }))).toEqual({
+      label: AGENTS.MODEL_ACCESS_NOT_APPLICABLE,
+      tone: "neutral",
     });
   });
 

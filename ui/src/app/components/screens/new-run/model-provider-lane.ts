@@ -110,7 +110,7 @@ export function providersServing(providers: SetupModelProvider[] | undefined, ag
   return (providers ?? []).filter((p) => p.harnesses.includes(agent));
 }
 
-export type ProviderGate = { kind: "default_off"; provider: SetupModelProvider };
+export type ProviderGate = { kind: "default_off"; provider: SetupModelProvider } | { kind: "not_granted" };
 
 /**
  * R5c (#542 rail-gap packet, owner-approved 2026-09-25): the reason nothing
@@ -120,24 +120,24 @@ export type ProviderGate = { kind: "default_off"; provider: SetupModelProvider }
  * remain (mirrors chooseModelProvider's own unconditional disabled-default
  * refusal, internal/api/run_model_provider.go: the disabled default is
  * refused even with exactly one other candidate left, never silently passed
- * over). R9's "nothing serves this agent at all" stays this function's
- * `undefined`, its existing silent shape unchanged.
+ * over).
  *
- * R5b ("granted none") is deliberately NOT drawn here (Opus review round 2):
- * setupModelProviderState (internal/api/provider_access.go's capVisible)
- * already narrows `model_providers` to providers THIS PERSON is granted
- * before it ever reaches the wire, so an UNGRANTED provider never appears at
- * all — there is no "all serving rows disabled" shape left for the console to
- * read as "granted none", and the server's own chooseModelProvider agrees:
- * with no named default and zero enabled candidates it launches on R9's
- * silent advisory (run_model_provider.go's `len(serving) == 0` branch), not a
- * refusal. RAIL_PROVIDER.NOT_GRANTED stays defined (canon-pinned) for the
- * follow-up issue that gives the console a real signal for it; nothing here
- * produces it yet.
+ * R5b ("granted none", #1052): `providers` (model_providers) is already
+ * narrowed to providers THIS PERSON is granted (setupModelProviderState's
+ * capVisible, internal/api/provider_access.go), so an ungranted provider
+ * never appears in `serving` here — this function alone cannot tell R5b apart
+ * from R9 ("nothing serves this agent at all"). `providersUngranted` is the
+ * server's own SetupHarnessTool.providers_ungranted fact for this agent
+ * (serving > 0 && granted == 0, computed beside chooseModelProvider), which
+ * is precisely that missing signal.
  */
-export function providerGate(providers: SetupModelProvider[] | undefined, agent: string): ProviderGate | undefined {
+export function providerGate(
+  providers: SetupModelProvider[] | undefined,
+  agent: string,
+  providersUngranted: boolean,
+): ProviderGate | undefined {
   const serving = providersServing(providers, agent);
-  if (serving.length === 0) return undefined;
+  if (serving.length === 0) return providersUngranted ? { kind: "not_granted" } : undefined;
   const disabledDefault = serving.find((p) => p.disabled && p.default_for?.includes(agent));
   if (disabledDefault) return { kind: "default_off", provider: disabledDefault };
   return undefined;

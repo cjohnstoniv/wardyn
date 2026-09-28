@@ -56,6 +56,14 @@ export const CONNECTIONS = {
   SENT_TO: (host: string) => `Sent to ${host}`,
   REPLACE: "Replace",
   CLAUDE_AGING: "Your Claude sign-in is over 11 months old and may stop working — sign in again.",
+  // #592 (CS-8) — the meta line every row that HOLDS a credential gets, from
+  // this caller's own provider_access row (added_at/last_used_at); a row with
+  // nothing stored gets no line at all (cs8-credentials-packet.html §2).
+  // "Last used" is relative, to the minute, with the exact time on hover —
+  // the same convention every other relative stamp in the console uses.
+  ADDED: (date: string) => `Added ${date}`,
+  LAST_USED: (when: string) => `Last used ${when}`,
+  NOT_USED: "Not used by a run yet",
 } as const;
 
 // The run's model provider in the run header (#543, decision 5). A provider

@@ -10,8 +10,8 @@
 // candidate: today's shape, unchanged) — the acceptance list packet C draws.
 // R5c below is the rail-gap packet's addition (owner-approved 2026-09-25,
 // docs/design/542-rail-gaps-mock/canon.md) — see model-provider-lane.ts's
-// providerGate. R5b is NOT drawn (Opus review round 2 — see that function's
-// own doc comment).
+// providerGate. R5b (#1052) is the sibling gate: the server's own
+// providers_ungranted fact.
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -314,13 +314,57 @@ describe("R9 — no candidate for this agent: today's shape, unchanged", () => {
   });
 });
 
+// #1052 — R5b, distinct from R9's "nothing serves this agent at all": the
+// server's own providers_ungranted fact says something DOES serve this agent
+// org-wide, but this caller is granted none of it. No Select renders (there
+// is nothing in `candidates` to choose among), and the sentence is named
+// instead of falling through to R9's generic deployment warning.
+describe("R5b — granted none: the server's providers_ungranted fact", () => {
+  it("names NOT_GRANTED with no Select, candidates empty", async () => {
+    const status = providerStatus([]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [],
+        access: [],
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "not_granted" },
+        harnessLabel: "Claude Code",
+      },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
+  });
+
+  it("the gate's own sentence, passed as the launch problem, is suppressed on the caption", async () => {
+    const status = providerStatus([]);
+    const sentence = RAIL_PROVIDER.NOT_GRANTED("Claude Code");
+    renderRail({
+      status,
+      launch: { problem: sentence },
+      modelProvider: {
+        candidates: [],
+        access: [],
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "not_granted" },
+        harnessLabel: "Claude Code",
+      },
+    });
+    // Exactly one match — the inline ModelProviderSection line, not a second
+    // caption copy (mirrors F4's default_off case below).
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    expect(screen.getAllByText(sentence)).toHaveLength(1);
+  });
+});
+
 // #542 rail-gap packet (owner-approved 2026-09-25) — R5c, distinct from R9's
 // "nothing serves this agent at all": something does, but the admin's own
 // default among it is disabled, and this rail names WHY instead of falling
-// through to R9's generic deployment warning. R5b ("granted none") is NOT
-// drawn (Opus review round 2 — model-provider-lane.ts's providerGate doc
-// comment): an all-disabled roster with no named default falls through to
-// R9's existing, unchanged shape (see that describe block above).
+// through to R9's generic deployment warning.
 describe("R5c — the default is turned off: never auto-picked, even alone", () => {
   it("with another candidate: a Select with the placeholder, nothing preselected, naming the disabled default", async () => {
     const status = providerStatus([{ provider: claude, state: "live" }]);
