@@ -117,6 +117,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `GET /me/attention?view=user|admin` returns `{needs_you, pending_approvals}` — the shell's two nav
   badges in one small object, replacing two unscoped ~1000-row reads. The console's `isHeld` is now a
   one-line reader of the wire fields; every client-side hold window constant is gone.
+- **The Runs page is rebuilt as one calm page, grouped by need then time (#1197).** A "Start a run"
+  composer (User view), a filter bar that lives in the URL (search / status / ended-within /
+  workspace / include-killed), and sections in a fixed order — Needs you (Admin view: Needs a
+  decision), Running, Ended today, Earlier this week (collapsed), then day buckets once a filter
+  widens past 7 days — replace the old Board/Table density switch, title grouping and the per-row
+  kebab menu. One row anatomy throughout: a glyph, the title (a real link), a muted meta line, the
+  status word, and at most one action button (Review / Sign in), reading the server's own projected
+  `attention` field instead of a client-side approvals join. An ageing note ("Showing the last 7
+  days. N older runs are hidden.") links to widen the window or include killed runs.
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
@@ -1817,6 +1826,36 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **The UI-sandbox enter ticket is bound to the browser that minted it, and a relayed app can no
+  longer register a service worker outside its own path (#1241).** Before, any user could mint an
+  enter ticket for their own run and push another person's browser through the hand-off with a
+  link or an auto-submitted form, landing it in their app; in path mode that app then shared an
+  origin with the victim's own apps. The console's **Open** now makes one credentialed fetch to
+  the new `POST <ui-origin>/__wardyn/bind` first, which sets an `HttpOnly`, `SameSite=Strict`
+  binding cookie on the UI origin, and `GET` and `POST` enter both refuse a ticket that arrives
+  without it (the bad-ticket `403`, plus a `ui.authorize` / `denied` row with reason
+  `ticket not bound to this browser`). The bind answers only a same-site fetch and, with SSO, only
+  the console's own origin (scheme and host); a refused bind is audited with its reason. The one-site
+  rule means the relay can no longer sit on a registrable domain of its own, so a relayed page can
+  plant `Domain=` cookies the console reads (#1258). `/healthz`'s `ui_sandbox` block gains `bind_url`, and the console's CSP
+  `connect-src` names that one URL. **Breaking:** the console and the UI origin must now be the
+  same site (one registrable domain, one scheme; `localhost` and `127.0.0.1` differ), and a script
+  that drives enter must bind first (docs/UI-SANDBOXES.md §3). The relay also removes
+  `Service-Worker-Allowed` from every app response and sets it to the app's own
+  `/r/<run>/<app>/` prefix on a worker-script fetch. docs/OPERATIONS.md now recommends host mode
+  (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) for any install with more than one user, and the threat
+  model's shared-origin residual no longer claims it was confined to one person's browser.
+
+- **Under TLS the console's cookies carry the `__Host-` prefix (#1258).** The session, the sign-in's
+  one-time cookies and the Azure DevOps sign-in's are now `__Host-wardyn_session`,
+  `__Host-wardyn_oidc_state` and so on: `Secure`, `Path=/`, no `Domain`. A browser refuses to store
+  such a cookie from any other host, so a page on a sibling host under the console's registrable
+  domain (a relayed UI-sandbox app among them) can no longer plant a session or sign-in state the
+  console reads. The unprefixed names are never read under TLS. The prefix forces `Path=/`, so under
+  `WARDYN_BASE_PATH` these cookies are no longer scoped to the base. Plain-HTTP installs keep the
+  old names and paths, since a browser refuses `__Host-` there; OPERATIONS.md "Console cookies under
+  TLS" and threat-model residual 18 state what that leaves open. The UI gateway strips and drops the
+  `__Host-` and `__Secure-` spellings of `wardyn_*` cookies as it does the plain ones.
 - **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
   Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
   operator's and a device's, so an identity provider that let a user pick their `sub` could
@@ -1851,9 +1890,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   With the gateway on, boot refuses a malformed value and an `allow:` entry naming a `wardyn_*`
   cookie, which is never forwarded. Both controls act on headers only: the relayed page's own
   JavaScript can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies through
-  `document.cookie`, so a relay host must not share a registrable domain with anything whose
-  non-HttpOnly cookies matter — host mode on a registrable domain of its own is the answer. See
-  docs/UI-SANDBOXES.md, "Header hygiene".
+  `document.cookie`. The relay shares its registrable domain with the console (#1241 requires one
+  site), so keep anything else whose non-HttpOnly cookies matter off that domain; the console's own
+  cookies are the open case (#1258). See docs/UI-SANDBOXES.md, "Header hygiene".
 
 - **A kept run's token is refused at every `/internal` door the moment the run is kept (#1176).**
   A run its lease ended, or one lost to a reboot or an outage, stays `RUNNING` with its identity
@@ -3071,6 +3110,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Upgrading
 
+- **Under TLS every SSO human is signed out once (#1258).** The session cookie is renamed
+  `__Host-wardyn_session` and the old `wardyn_session` is never read, so each human signs in again at
+  their next request. Plain-HTTP installs, admin-token and API-token auth are unaffected.
 - **`wardyn workspace get` now prints the one-line table by default (#200).** A script that parsed
   its default JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a

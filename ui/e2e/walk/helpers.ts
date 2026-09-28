@@ -374,6 +374,36 @@ export async function openLoginPane(page: Page): Promise<void> {
 }
 
 /**
+ * #891: the same door as openLoginPane, but for the ONE sign-in in the walk
+ * that scripts/kind-sso-walk.sh's registry step guarantees is a genuine cold
+ * pull — the aws-sso login image is served from a local registry under a
+ * fresh tag every walk (never `kind load`ed any more), so the kubelet has
+ * never seen this manifest and must actually pull it. On a warm node
+ * (`kind load`, or a tag it already holds) the step goes start -> wait with no
+ * "download" li ever rendered, so this assertion is expected to be
+ * non-vacuous rather than asserted from a guess: dropping the runner Role's
+ * `events: list` (the fail-closed path the k8s runner reads pod Events
+ * through, #881) should reproduce that same skip. Not run by hand — this
+ * walk has not executed against a real kind cluster in this lane — so that
+ * stays unproven until the next `kind-sso-walk` nightly run.
+ *
+ * Reuses openLoginPane for the click through STEP_START, which keeps its
+ * "no tab opened" assertion (#628) on this sign-in too. Then keeps polling
+ * past that point for the download li: it can be gone within seconds on a
+ * small image, so the poll starts right after STEP_START rather than
+ * waiting on anything else (signInThroughPane's own race to capture).
+ */
+export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> {
+  await openLoginPane(page);
+  const progress = page.getByTestId("signin-progress").first();
+  const downloadStep = progress.getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE });
+  await expect(
+    downloadStep,
+    "the download step never lit — either the aws-sso image was not a cold pull (see scripts/kind-sso-walk.sh's registry step), or the runner Role lost events:list (#881's fail-closed path)",
+  ).toHaveAttribute("data-state", "active", { timeout: 90_000 });
+}
+
+/**
  * Wait for the SANDBOX to announce that it is running the sign-in itself.
  *
  * 0.7.5 (lane login-sandbox-selfrun): the aws-sso image creates the `wardyn`

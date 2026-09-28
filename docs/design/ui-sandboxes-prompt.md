@@ -80,12 +80,18 @@ row, not a UI tweak.
 
 1. Click **Open {app}** → button → `Opening…`, disabled.
 2. `POST /runs/{id}/attach-ticket` → single-use ticket.
-3. Submit a hidden form POSTing run/app/ticket to the enter endpoint on the UI
+3. When `/healthz` publishes `ui_sandbox.bind_url`, bind the ticket to this
+   browser (#1241): one `fetch(bind_url, {method: "POST", credentials:
+   "include", body: ticket=<t>})`, never through the API client. A refused bind
+   is S5 with "The UI-sandbox gateway did not accept this browser. The console
+   and the gateway must be served from the same site; an admin finds the exact
+   reason in the audit log (ui.authorize)."
+4. Submit a hidden form POSTing run/app/ticket to the enter endpoint on the UI
    origin, `target="_blank"`, `rel="noopener"` — or, only against an older
    daemon with no `enter_post_url`, `window.open` the GET enter URL instead.
-4. Button returns to **Open {app}**. No polling, no embedded iframe, no
+5. Button returns to **Open {app}**. No polling, no embedded iframe, no
    progress bar — the new tab is the feedback.
-5. Any failure in 2 or 3 → S5 under that row; the other rows are untouched.
+6. Any failure in 2, 3 or 4 → S5 under that row; the other rows are untouched.
 
 Never embed the app in this page — an `<iframe>` on the console origin is the
 exact attack the second listener exists to prevent.

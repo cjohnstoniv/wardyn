@@ -295,22 +295,54 @@ func (h *uiHarness) ticket(runID uuid.UUID, principal, role string) string {
 	return tok
 }
 
-// enter drives GET /__wardyn/enter with the given query and returns the
-// response recorder.
+// bindCookie walks the console's pre-enter fetch (#1241) for ticket, as the
+// console page does, and returns the binding cookie the gateway set: the
+// cookie a browser that minted the ticket holds.
+func (h *uiHarness) bindCookie(ticket string) *http.Cookie {
+	h.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, uiBindPath, strings.NewReader(url.Values{"ticket": {ticket}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	req.Header.Set("Origin", "https://console.example.com")
+	rec := httptest.NewRecorder()
+	h.srv.handleUIBind(rec, req)
+	if rec.Code != http.StatusNoContent {
+		h.t.Fatalf("bind: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if strings.HasPrefix(c.Name, uiBindCookiePrefix) {
+			return c
+		}
+	}
+	h.t.Fatal("bind set no binding cookie")
+	return nil
+}
+
+// bound adds the binding cookie for the ticket in v, when there is one, so the
+// enter helpers below act as the browser that minted it.
+func (h *uiHarness) bound(req *http.Request, v url.Values) *http.Request {
+	if t := v.Get("ticket"); t != "" {
+		req.AddCookie(h.bindCookie(t))
+	}
+	return req
+}
+
+// enter drives GET /__wardyn/enter with the given query, from the browser
+// that bound its ticket, and returns the response recorder.
 func (h *uiHarness) enter(q url.Values) *httptest.ResponseRecorder {
 	h.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
+	req := h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
 	return rec
 }
 
 // enterPOST drives POST /__wardyn/enter with the given values as an
-// application/x-www-form-urlencoded body (the #1220 hand-off) and returns the
-// response recorder.
+// application/x-www-form-urlencoded body (the #1220 hand-off), from the
+// browser that bound its ticket, and returns the response recorder.
 func (h *uiHarness) enterPOST(form url.Values) *httptest.ResponseRecorder {
 	h.t.Helper()
-	req := httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(form.Encode()))
+	req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(form.Encode())), form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
@@ -613,7 +645,7 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 		"run": {h.run.ID.String()}, "app": {"code"},
 		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	}
-	req := httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
+	req := h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
 	req.Host = "run-" + uuid.New().String() + ".ui.example.com"
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
@@ -622,7 +654,7 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 	}
 
 	q.Set("ticket", h.ticket(h.run.ID, h.owner, oidc.RoleUser))
-	req = httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
+	req = h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
 	req.Host = "run-" + h.run.ID.String() + ".ui.example.com"
 	rec = httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
@@ -699,7 +731,7 @@ func TestUIGateway_EnterPOST_WrongHostRefused(t *testing.T) {
 		"run": {h.run.ID.String()}, "app": {"code"},
 		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	}
-	req := httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(form.Encode()))
+	req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath, strings.NewReader(form.Encode())), form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Host = "run-" + uuid.New().String() + ".ui.example.com"
 	rec := httptest.NewRecorder()
@@ -812,8 +844,10 @@ func TestUIGateway_EnterPOST_OversizeBodyRefused(t *testing.T) {
 // TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm pins the OTHER half
 // of "the form is the only source of truth" (review F3, mutations M3/M3b): a
 // query run/app must never override the form's, whether or not a ticket is
-// also present in the query. r.PostForm (not r.Form, which lists the URL
-// query's values before the body's) is what makes this hold.
+// also present in the query, and a run/app ONLY in the query is not read at
+// all. r.PostForm is what makes this hold: r.Form merges the query in, and
+// only lets the body's values win where the body has the key (body values
+// come first in r.Form), so a query-only run/app would be read from it.
 func TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	otherRun := types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-2"}
@@ -823,7 +857,7 @@ func TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm(t *testing.T) {
 		"run": {h.run.ID.String()}, "app": {"code"},
 		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	}
-	req := httptest.NewRequest(http.MethodPost, uiEnterPath+"?run="+otherRun.ID.String()+"&app=evil", strings.NewReader(form.Encode()))
+	req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath+"?run="+otherRun.ID.String()+"&app=evil", strings.NewReader(form.Encode())), form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	h.gateway.ServeHTTP(rec, req)
@@ -833,6 +867,21 @@ func TestUIGateway_EnterPOST_QueryRunAppNeverOverridesTheForm(t *testing.T) {
 	if got, want := rec.Header().Get("Location"), uiRunPrefix+h.run.ID.String()+"/code/ide"; got != want {
 		t.Fatalf("Location %q, want %q — the FORM's run, not the query's", got, want)
 	}
+
+	t.Run("run and app only in the query", func(t *testing.T) {
+		ticketOnly := url.Values{"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}}
+		req := h.bound(httptest.NewRequest(http.MethodPost, uiEnterPath+"?run="+h.run.ID.String()+"&app=code", strings.NewReader(ticketOnly.Encode())), ticketOnly)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.gateway.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query-only run/app: %d %s, want 400", rec.Code, rec.Body.String())
+		}
+		full := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": ticketOnly["ticket"]}
+		if rec := h.enterPOST(full); rec.Code != http.StatusSeeOther {
+			t.Fatalf("ticket unusable after the query-only refusal: %d %s", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // TestUIGateway_EnterPOST_TicketNeverAppearsInLocationOrRelayRequest is the
