@@ -824,10 +824,17 @@ jobs:
       - name: Build the agent images the quickstart cluster needs
         run: make agent-images
       - name: Bring up the kind quickstart cluster
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
         run: make kind-quickstart
       - name: kind survival walk (control-plane pod delete; cordoned-node run-pod eviction)
         env:
           WARDYN_TEST_K8S: "1"
+          # This runner's wardyn-quickstart cluster was just created by the
+          # step above and belongs to nothing else — safe to mutate here. See
+          # scripts/kind-survival-walk.sh's own guard for why a hand run must
+          # set this explicitly.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
         shell: bash
         run: |
           set +e
@@ -880,11 +887,18 @@ jobs:
       - name: Build the agent images the quickstart cluster needs
         run: make agent-images
       - name: Bring up the kind quickstart cluster (the "org")
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
         run: make kind-quickstart
       - name: Hybrid federation walk (laptop compose <-> org kind)
         env:
           WARDYN_TEST_K8S: "1"
           WARDYN_TEST_DOCKER: "1"
+          # This runner's wardyn-quickstart cluster was just created by the
+          # step above and belongs to nothing else — safe to mutate here. See
+          # scripts/hybrid-walk.sh's own guard for why a hand run must set
+          # this explicitly.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
         shell: bash
         run: |
           set +e
@@ -916,7 +930,9 @@ jobs:
           if-no-files-found: error
 
   # T-30 (#690): scripts/kind-upgrade-walk.sh — the PUBLISHED v0.7.11 chart,
-  # upgraded in place to this tree's own tip, then a rollback that must fail.
+  # upgraded in place to this tree's own tip, then a rollback recorded as
+  # evidence (informational — see that script's header on why no published
+  # release yet lets this assert a specific pass/fail outcome).
   # Owns a THROWAWAY kind cluster end to end (create/delete), never
   # `make kind-quickstart`'s shared one — see that script's own header for
   # what is and is not built. Needs read access to this repo's own published

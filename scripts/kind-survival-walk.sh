@@ -65,7 +65,11 @@
 # cluster.
 #
 # GUARD: self-skips unless WARDYN_TEST_K8S=1, same knob every other
-# cluster-dependent lane uses. Never creates or deletes the cluster.
+# cluster-dependent lane uses. Never creates or deletes the cluster — it
+# deletes wardynd's own pod and cordons a node on whatever wardyn-quickstart
+# cluster is already up, so a hand run must also set
+# WARDYN_ACK_SHARED_QUICKSTART=1 to confirm that cluster is disposable;
+# nightly.yml sets it for the hosted run, which always creates its own.
 #
 # NOT RUN OR PROVEN IN THIS AUTHORING PASS: no kind cluster was available to
 # execute it here (this repo's own lane rules forbid creating one in this
@@ -80,6 +84,17 @@ source "${ROOT}/scripts/lib/common.sh"
 
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   skip_lane "kind-survival-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent survival walk (skipping)."
+fi
+
+# This walk mutates whatever wardyn-quickstart cluster is already up — it
+# deletes wardynd's own pod and cordons a node — and never creates or deletes
+# the cluster itself, unlike scripts/kind-upgrade-walk.sh's own throwaway
+# cluster. Fine on a hosted nightly runner, which never has a pre-existing
+# cluster of its own; a hand run on a long-lived dev machine must say
+# explicitly that the cluster it will find is disposable, so an unrelated
+# cluster of the same name is never mutated by accident.
+if [[ "${WARDYN_ACK_SHARED_QUICKSTART:-}" != "1" ]]; then
+  skip_lane "kind-survival-walk: set WARDYN_ACK_SHARED_QUICKSTART=1 to confirm the wardyn-quickstart cluster this walk finds may be mutated (its own pod deleted, a node cordoned) — refusing to run against a cluster it did not create otherwise."
 fi
 
 wardyn_pick_docker_host
@@ -163,6 +178,7 @@ create_running_run() {
 
 RUN_A_ID=""
 RUN_B_ID=""
+CORDONED_NODE=""
 cleanup_runs() {
   local rid
   for rid in "${RUN_A_ID}" "${RUN_B_ID}"; do
@@ -170,7 +186,15 @@ cleanup_runs() {
     curl -sS --max-time "${CURL_MAX_TIME}" -X POST "${BASE}/api/v1/runs/${rid}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   done
 }
-trap 'cleanup_runs; rm -rf "${TMPDIR}"' EXIT
+# An interrupt between the cordon and the inline uncordon below must not leave
+# the node unschedulable forever — this runs on every exit, not just the
+# success path, and is idempotent (uncordoning an already-schedulable node is
+# a no-op).
+cleanup_cordon() {
+  [[ -n "${CORDONED_NODE}" ]] || return 0
+  kubectl --context "${CONTEXT}" uncordon "${CORDONED_NODE}" >/dev/null 2>&1 || true
+}
+trap 'cleanup_runs; cleanup_cordon; rm -rf "${TMPDIR}"' EXIT
 
 # ── A. wardynd's OWN pod, deleted mid-run — the control-plane analogue of
 #      the compose leg's docker-kill/restart ────────────────────────────────
@@ -178,8 +202,13 @@ step "A: launching a run, then deleting wardynd's own pod (the control plane)"
 RUN_A_ID="$(create_running_run)"
 pass "run ${RUN_A_ID} has a sandbox pod"
 
-before_row="$(psql1 "SELECT state FROM agent_runs WHERE id = '${RUN_A_ID}'")"
-[[ "${before_row}" == "RUNNING" ]] || die "expected run ${RUN_A_ID} to be RUNNING in Postgres before the pod delete; got ${before_row}"
+before_row=""
+for _ in $(seq 1 30); do
+  before_row="$(psql1 "SELECT state FROM agent_runs WHERE id = '${RUN_A_ID}'")"
+  [[ "${before_row}" == "RUNNING" ]] && break
+  sleep 2
+done
+[[ "${before_row}" == "RUNNING" ]] || die "expected run ${RUN_A_ID} to reach RUNNING in Postgres before the pod delete; still ${before_row} after 60s"
 
 wardynd_pod="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pods -l app.kubernetes.io/name=wardyn \
   -o jsonpath='{.items[0].metadata.name}')"
@@ -196,9 +225,15 @@ pass "wardynd back up on a fresh pod"
 
 step "confirming Postgres (a separate Deployment, unaffected by the wardynd delete) still holds run ${RUN_A_ID}"
 after_row="$(psql1 "SELECT state FROM agent_runs WHERE id = '${RUN_A_ID}'")"
-[[ -n "${after_row}" ]] \
-  && pass "run ${RUN_A_ID} row survived the control-plane pod's death (state=${after_row})" \
-  || fail "expected run ${RUN_A_ID}'s row to still be readable after the control-plane pod was recreated"
+# psql1 merges stderr (2>&1 in its own definition), so a kubectl/psql error
+# string would otherwise read as a non-empty "row survived" — only a real,
+# known agent_runs.state value counts.
+case "${after_row}" in
+  PENDING|STARTING|RUNNING|WAITING_FOR_CONFIRMATION|STOPPED|ARCHIVED|FAILED|KILLED|COMPLETED)
+    pass "run ${RUN_A_ID} row survived the control-plane pod's death (state=${after_row})" ;;
+  *)
+    fail "expected run ${RUN_A_ID}'s row to still be readable with a known state after the control-plane pod was recreated; got '${after_row}'" ;;
+esac
 
 # ── B. a RUNNING run's OWN agent pod, evicted by a cordon of its node ──────
 step "B: launching a second run, then cordoning its node and deleting its pod directly (single-node drain — see this file's header)"
@@ -210,9 +245,11 @@ node_b="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pod "${pod_b
 pass "run ${RUN_B_ID} scheduled as pod ${pod_b} on node ${node_b}"
 
 kubectl --context "${CONTEXT}" cordon "${node_b}" || die "cordoning ${node_b} failed"
+CORDONED_NODE="${node_b}"
 kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" delete pod "${pod_b}" --grace-period=0 --force \
-  || { kubectl --context "${CONTEXT}" uncordon "${node_b}" || true; die "deleting ${pod_b} failed"; }
+  || die "deleting ${pod_b} failed"
 kubectl --context "${CONTEXT}" uncordon "${node_b}" || die "uncordoning ${node_b} failed (the control plane may now be stuck unschedulable — fix this by hand)"
+CORDONED_NODE=""
 pass "pod ${pod_b} deleted; node ${node_b} re-uncordoned immediately"
 
 step "confirming the run ends up TERMINAL (torn down, never a fictitious kept/lost(node) state)"
@@ -221,7 +258,7 @@ final_state=""
 for _ in $(seq 1 60); do
   final_state="$(psql1 "SELECT state FROM agent_runs WHERE id = '${RUN_B_ID}'")"
   case "${final_state}" in
-    FAILED|COMPLETED|KILLED) terminal=1; break ;;
+    FAILED|COMPLETED|KILLED|STOPPED|ARCHIVED) terminal=1; break ;;
   esac
   sleep 2
 done

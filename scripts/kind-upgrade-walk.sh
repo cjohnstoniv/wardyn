@@ -18,8 +18,9 @@
 #   strategy) -> assert the boot-time secret conversion log, the secret still
 #   reads back, the run reaches a real outcome rather than getting stuck, a
 #   fresh run succeeds over the tip image, /healthz.proxy_hop_tls=true -> helm
-#   rollback back to v0.7.11 fails, naming the migration the older binary
-#   cannot run under.
+#   rollback back to v0.7.11 recorded as evidence (informational — no
+#   published release yet carries the downgrade refusal that would let this
+#   assert a specific pass/fail outcome; see "THE ROLLBACK ASSERTION" below).
 #
 #   NOT BUILT, NAMED RATHER THAN FAKED:
 #     - a Dex member, a fake AWS-SSO capture, an ADO/Entra blob and a PENDING
@@ -46,22 +47,35 @@
 #       tree implements the retired-var behaviour yet for this script to
 #       exercise.
 #
-# THE ROLLBACK ASSERTION, GROUNDED IN SHIPPED CODE: v0.7.11 predates envelope
-# v1 (migration 0069_secret_envelope_v1.sql, formerly 0065 before a later
-# renumbering, shipped in v0.7.12) — so a secret this script writes through
-# the v0.7.11 install is a legacy (enc_version 0) row, exactly what
-# cmd/wardynd/secret_store.go's boot-time ConvertV0 call re-seals as envelope
-# v1 on the upgrade to tip, logging "wardynd: converted stored secrets to
-# envelope v1; an older wardynd can no longer read them" (grepped for below).
-# Rolling back to v0.7.11 after that lands the v0.7.11 binary against a
-# database schema_migrations has already recorded rows it does not ship —
-# db.Migrate's own downgrade refusal (#675 / PR #834, `db.applyMigration`)
-# refuses the boot, naming the newest unknown migration file BY NAME. Since
-# that name is literally 0069_secret_envelope_v1.sql (or its pre-rename
-# 0065_secret_envelope_v1.sql — TestRetiredMigrationsCoverEveryReleasedName
-# pins both across the rename), the refusal names "envelope" in the exact,
-# literal sense #690's plan text asks for — not a metaphor this script has to
-# manufacture.
+# THE ROLLBACK ASSERTION, CORRECTED AGAINST RELEASE DATES: an earlier version
+# of this script asserted that rolling back to v${FROM_VERSION} would refuse
+# to boot, naming db.Migrate's downgrade guard (#675 / PR #834,
+# `db.applyMigration`'s "this wardynd does not ship ... cannot run under"
+# error). That guard was merged 2026-09-25 — AFTER v0.7.11 (tagged
+# 2026-09-22) AND v0.7.12 (tagged 2026-09-23). `git show v0.7.11:internal/
+# db/db.go` and the v0.7.12 equivalent both have zero matches for "cannot run
+# under" — neither published release this walk could use as FROM_VERSION
+# contains the guard, so no published baseline can exercise this refusal
+# today, and asserting specific refusal text no shipped binary can produce
+# would be exactly the kind of unmeasured claim this handoff's own rules
+# forbid. (Confirmed 0069_secret_envelope_v1.sql — the migration the
+# original assertion expected the refusal to name — is also absent from
+# v0.7.11's tree, matching this same gap.)
+#
+# What the rollback step below asserts instead, and why it is INFORMATIONAL
+# rather than pass/fail: v${FROM_VERSION} has NO downgrade guard of any kind
+# (confirmed by the git-show above), so it will attempt to boot against
+# whatever the tip upgrade above left in the schema — real, unrelated schema
+# changes shipped since v0.7.11 (e.g. 0074_user_tier_rename.sql's role-value
+# rewrite) mean this is not guaranteed to be clean, but nothing in this binary
+# checks for that either way, so this script cannot predict Ready vs.
+# crash-loop from reading the code alone, and did not run it to find out (the
+# lane rules this pass operates under forbid creating a kind cluster to
+# check). The step records what actually happened — Ready, or not, with logs
+# saved as evidence — without asserting a specific outcome it cannot prove.
+# Follow-up: once a release ships PR #834's guard, FROM_VERSION should move to
+# it and this step should go back to a hard pass/fail assertion on the
+# refusal text.
 #
 # Usage: scripts/kind-upgrade-walk.sh   (needs docker, kind, kubectl, helm, jq, curl)
 # CLUSTER overrides the cluster name (default kind-upgrade-walk); refuses to
@@ -291,9 +305,9 @@ for _ in $(seq 1 30); do
   [[ "${carried_state}" != "RUNNING" ]] && break
   sleep 2
 done
-[[ -n "${carried_state}" ]] \
-  && pass "run ${CARRIED_RUN_ID} reads back as ${carried_state} after the upgrade (never silently vanished)" \
-  || fail "could not read back run ${CARRIED_RUN_ID}'s state after the upgrade"
+[[ -n "${carried_state}" && "${carried_state}" != "RUNNING" ]] \
+  && pass "run ${CARRIED_RUN_ID} reads back as ${carried_state} after the upgrade (never silently vanished, never stuck RUNNING)" \
+  || fail "run ${CARRIED_RUN_ID} did not reach a non-RUNNING state within 60s after the upgrade (last read: ${carried_state:-<unreadable>})"
 
 step "confirming /healthz.proxy_hop_tls=true and a FRESH run succeeds on tip"
 h="$(curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz")"
@@ -310,31 +324,26 @@ else
   fail "expected a fresh run to succeed on tip; POST /runs answered ${code}: $(cat "${WORK}/resp.json")"
 fi
 
-# ── rollback: fails, naming the envelope migration ─────────────────────────
-step "helm rollback to v${FROM_VERSION} — expected to FAIL, naming the migration this binary cannot run under"
+# ── rollback: recorded as evidence, not asserted on ────────────────────────
+# See "THE ROLLBACK ASSERTION" in this file's header: no published release
+# (v0.7.11 or v0.7.12) carries PR #834's downgrade guard, so this binary
+# cannot be expected to refuse, and this walk did not execute the rollback
+# to observe what it actually does instead (no kind cluster was available to
+# this pass). This step is INFORMATIONAL — it records the outcome and saves
+# logs as evidence, and does not call pass/fail on either Ready or not-Ready,
+# since neither outcome is provable from reading the code alone and claiming
+# one would be exactly the kind of unmeasured assertion the lane rules forbid.
+step "helm rollback to v${FROM_VERSION} — outcome recorded as evidence, not asserted (see this file's header)"
 helm rollback "${RELEASE}" 1 --namespace "${NS}" --wait --timeout 120s >"${WORK}/rollback.log" 2>&1
 rollback_helm_rc=$?
-# A "succeeding" helm rollback here (rc=0, or a pod that reports Ready) is the
-# FAILURE this step is checking for — db.Migrate's downgrade refusal must
-# have kept the v0.7.11 binary crash-looping, never Ready.
 rollback_ready="false"
 for _ in $(seq 1 30); do
   kubectl -n "${NS}" rollout status "deployment/${RELEASE}" --timeout=5s >/dev/null 2>&1 && { rollback_ready="true"; break; }
   sleep 2
 done
-if [[ "${rollback_ready}" == "true" ]]; then
-  fail "the v${FROM_VERSION} rollback became Ready — the downgrade refusal (#675/PR #834) did not fire"
-else
-  rb_pod="$(kubectl -n "${NS}" get pods -l app.kubernetes.io/name=wardyn -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  rb_logs=""
-  [[ -n "${rb_pod}" ]] && rb_logs="$(kubectl -n "${NS}" logs "${rb_pod}" --tail=-1 2>/dev/null || true)"
-  if grep -qi "envelope" <<<"${rb_logs}" && grep -q "cannot run under" <<<"${rb_logs}"; then
-    pass "rollback correctly refused, naming the envelope migration this v${FROM_VERSION} binary cannot run under"
-  else
-    fail "rollback did not become Ready (expected), but its log did not name the envelope migration the way #675/PR #834 does — see ${WORK}/rollback.log and the pod log above"
-  fi
-fi
-echo "(helm rollback command exit was ${rollback_helm_rc}; see ${WORK}/rollback.log — a non-zero/timeout exit here is itself part of what this step expects)"
+rb_pod="$(kubectl -n "${NS}" get pods -l app.kubernetes.io/name=wardyn -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+[[ -n "${rb_pod}" ]] && kubectl -n "${NS}" logs "${rb_pod}" --tail=-1 >"${WORK}/rollback-pod.log" 2>&1
+echo "rollback: helm exit=${rollback_helm_rc}, rollout Ready=${rollback_ready} (evidence: ${WORK}/rollback.log, ${WORK}/rollback-pod.log — UNVERIFIED without a released downgrade guard to check against)"
 
 if [[ "${FAILED}" -ne 0 ]]; then
   echo "kind-upgrade-walk: FAILED" >&2

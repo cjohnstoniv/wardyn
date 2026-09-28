@@ -25,7 +25,7 @@
 #      with it and WARDYN_USER_DESKTOP=true, and /healthz.org_federation on
 #      the laptop reads enrolled=true;
 #   2. rows accrue then drain across a partition: the laptop's route to the
-#      org is severed (a host-side relay this script owns is killed, not the
+#      org is severed (a relay sidecar this script owns is stopped, not the
 #      cluster or the daemon), local audit rows keep landing while
 #      wardyn_org_federation_lag grows, then the relay comes back and lag
 #      drains to 0 — matching docs/OPERATIONS.md's own description of what an
@@ -61,13 +61,18 @@
 #
 # ORG REACHABILITY IS LOOPBACK, DELIBERATELY, NOT A REAL TLS HOP.
 # validateHybridPosture (cmd/wardynd/boot_posture.go) requires WARDYN_ORG_URL
-# to be https:// UNLESS its host is loopback — and quickstart-kind-config.yaml
-# publishes the org's NodePort as 127.0.0.1-only, so a plain http://
-# WARDYN_ORG_URL pointed at this script's own relay (below) satisfies that
-# exception honestly, the same escape hatch the product itself ships, not a
-# workaround of it. A real cross-network HTTPS proof against a certificate an
-# operator's own CA issued is the live-estate half of this ask and stays
-# OWNER, like every other real-TLS/real-DNS proof in this handoff.
+# to be https:// UNLESS its host is loopback (listenIsLoopback,
+# cmd/wardynd/listen_addr.go — a literal 127.0.0.1 is recognised without a
+# lookup). WARDYN_ORG_URL here is http://127.0.0.1:${RELAY_PORT}: genuinely
+# loopback FROM WARDYND'S OWN NETWORK NAMESPACE, because the relay it names
+# shares that namespace (see "THE PARTITION MECHANISM" below) rather than
+# sitting on the host and being reached through host.docker.internal — a
+# host-gateway address is NOT loopback and validateHybridPosture correctly
+# refuses it (an earlier version of this walk got that refusal at boot and
+# is why this file now says what it says here). A real cross-network HTTPS
+# proof against a certificate an operator's own CA issued is the live-estate
+# half of this ask and stays OWNER, like every other real-TLS/real-DNS proof
+# in this handoff.
 #
 # THE LAPTOP'S OWN OIDC POSTURE (WARDYN_USER_DESKTOP=true requires a working
 # issuer — validateMemberModePosture refuses boot otherwise) is satisfied with
@@ -79,21 +84,31 @@
 # (devices_auth.go's own header: device routes never publish a human
 # identity) — so Dex only has to answer discovery, never issue a token here.
 #
-# THE PARTITION MECHANISM: a `socat` TCP relay this script starts ON THE HOST,
-# bound wide (0.0.0.0) and forwarding to the org's loopback-only NodePort. The
-# laptop's wardynd reaches it at host.docker.internal (test/hybrid-walk/
-# compose-override.yaml's `extra_hosts: host-gateway`, the SAME mechanism
+# THE PARTITION MECHANISM: a `socat` relay running as a SIDECAR CONTAINER that
+# joins wardynd's own network namespace (`docker run --network
+# container:${PROJECT}-api`, started once wardynd's container exists — see
+# start_relay below), listening on 127.0.0.1 THERE, which is wardynd's own
+# loopback and reachable from nothing else on the host or the laptop's compose
+# network — never bound wide (0.0.0.0 would republish the org's NodePort on
+# every interface, which an earlier version of this walk did and a review
+# caught). The relay reaches the org's loopback-only NodePort on the HOST via
+# its own `--add-host host.docker.internal:host-gateway` (the SAME mechanism
 # scripts/run-host.sh and the proxy sidecar's own ExtraHosts already rely on —
-# see that override file's header for why this is not the WSL2 NAT hang
-# scripts/survival-walk.sh separately found unreliable for a DIFFERENT hop).
-# Partition = kill the relay (ECONNREFUSED, the "organisation unreachable"
-# shape); drain = start a fresh one on the same port. Neither ever touches the
-# kind cluster, the NodePort or the daemon socket.
+# NOT the host.docker.internal hop scripts/survival-walk.sh separately found
+# unreliable, which was wardynd itself making the outbound call; here it is
+# the relay container, a different hop). Partition = stop the relay container
+# (ECONNREFUSED from inside wardynd's own namespace, the "organisation
+# unreachable" shape); drain = start a fresh one on the same port. Neither
+# ever touches the kind cluster, the NodePort or the daemon socket.
 #
 # GUARD: needs BOTH a kind cluster (WARDYN_TEST_K8S=1) and Docker
 # (WARDYN_TEST_DOCKER=1) — this walk is the one script in this repo that
 # spans both substrates at once, so it self-skips unless both are
-# acknowledged. Never creates or deletes the kind cluster itself.
+# acknowledged. Never creates or deletes the kind cluster itself — it mints
+# enrolment tokens/devices on whatever wardyn-quickstart cluster is already
+# up, so a hand run must also set WARDYN_ACK_SHARED_QUICKSTART=1 to confirm
+# that cluster is disposable (see the guard below); nightly.yml sets it for
+# the hosted run, which always creates its own.
 #
 # NOT RUN OR PROVEN IN THIS AUTHORING PASS: no kind cluster and no Docker
 # execution were available to write it (see this repo's own lane rules for
@@ -111,6 +126,17 @@ if [[ "${WARDYN_TEST_K8S:-}" != "1" || "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
   skip_lane "hybrid-walk: set WARDYN_TEST_K8S=1 AND WARDYN_TEST_DOCKER=1 to run the laptop<->org hybrid federation walk (skipping)."
 fi
 
+# This walk mutates whatever wardyn-quickstart cluster is already up (mints
+# enrolment tokens and devices on it) — never creates or deletes it itself,
+# unlike scripts/kind-upgrade-walk.sh's own throwaway cluster. Fine on a
+# hosted nightly runner, which never has a pre-existing cluster of its own;
+# a hand run on a long-lived dev machine must say explicitly that the cluster
+# it will find is disposable, so an unrelated cluster of the same name is
+# never mutated by accident.
+if [[ "${WARDYN_ACK_SHARED_QUICKSTART:-}" != "1" ]]; then
+  skip_lane "hybrid-walk: set WARDYN_ACK_SHARED_QUICKSTART=1 to confirm the wardyn-quickstart cluster this walk finds may be mutated (it mints and revokes enrolment tokens/devices on it) — refusing to run against a cluster it did not create otherwise."
+fi
+
 # One daemon everywhere, same reasoning as kind-sso-walk.sh: the kind node and
 # the laptop's own containers must be reachable from the same docker context.
 wardyn_pick_docker_host
@@ -122,7 +148,7 @@ fail() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$*"; FAILED=1; }
 FAILED=0
 CURL_MAX_TIME="${WARDYN_HYBRID_CURL_MAX_TIME:-10}"
 
-for bin in docker curl jq kubectl socat; do
+for bin in docker curl jq kubectl; do
   command -v "${bin}" >/dev/null 2>&1 || die "${bin} not found on PATH"
 done
 
@@ -173,6 +199,9 @@ BASE="http://127.0.0.1:${API_PORT}"
 ADMIN_TOKEN="demo-admin-token"
 WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
 PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
+RELAY_IMAGE="wardyn/hybrid-relay:${PROJECT}"
+WARDYND_CONTAINER="${PROJECT}-api"
+RELAY_CONTAINER="${PROJECT}-relay"
 
 EVIDENCE_DIR="${WARDYN_HYBRID_EVIDENCE:-${ROOT}/local/evidence/hybrid-walk}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -184,7 +213,7 @@ compose() {
     WARDYN_DEX_PORT="${DEX_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_SANDBOX_PORT}" \
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_USER_DESKTOP="true" WARDYN_LOCAL_MODE="false" \
-    WARDYN_ORG_URL="http://host.docker.internal:${RELAY_PORT}" \
+    WARDYN_ORG_URL="http://127.0.0.1:${RELAY_PORT}" \
     WARDYN_ORG_ENROLMENT_TOKEN="${ENROL_TOKEN:-}" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" --profile sso "$@"
 }
@@ -202,29 +231,37 @@ api() {
 
 psql1() { docker exec "${PROJECT}-postgres" psql -U wardyn -d wardyn -tAc "$1" 2>&1; }
 
-RELAY_PID=""
 DEVICE_ID=""
 
+# start_relay -> a socat sidecar sharing wardynd's OWN network namespace
+# (`--network container:${WARDYND_CONTAINER}`), so it can only be started once
+# that container exists, and 127.0.0.1 inside it is wardynd's own loopback —
+# reachable from nothing else (never 0.0.0.0). The relay reaches the org's
+# NodePort on the host via its own host-gateway route, not wardynd's.
 start_relay() {
-  socat "TCP-LISTEN:${RELAY_PORT},bind=0.0.0.0,fork,reuseaddr" "TCP:127.0.0.1:${ORG_NODE_HTTP_PORT}" \
-    >"${EVIDENCE_DIR}/relay.log" 2>&1 &
-  RELAY_PID=$!
+  docker run --rm -d --name "${RELAY_CONTAINER}" \
+    --network "container:${WARDYND_CONTAINER}" \
+    --add-host "host.docker.internal:host-gateway" \
+    "${RELAY_IMAGE}" \
+    "TCP-LISTEN:${RELAY_PORT},bind=127.0.0.1,fork,reuseaddr" "TCP:host.docker.internal:${ORG_NODE_HTTP_PORT}" \
+    >"${EVIDENCE_DIR}/relay-start.log" 2>&1 \
+    || { cat "${EVIDENCE_DIR}/relay-start.log" >&2; die "starting the relay sidecar (${RELAY_CONTAINER}) failed"; }
   sleep 1
-  kill -0 "${RELAY_PID}" 2>/dev/null || { cat "${EVIDENCE_DIR}/relay.log" >&2; die "the host relay on :${RELAY_PORT} did not start"; }
+  [[ "$(docker inspect -f '{{.State.Running}}' "${RELAY_CONTAINER}" 2>/dev/null)" == "true" ]] \
+    || { docker logs "${RELAY_CONTAINER}" >"${EVIDENCE_DIR}/relay.log" 2>&1 || true; cat "${EVIDENCE_DIR}/relay.log" >&2; die "the relay sidecar (${RELAY_CONTAINER}) on :${RELAY_PORT} did not stay up"; }
 }
 
 stop_relay() {
-  [[ -n "${RELAY_PID}" ]] || return 0
-  kill "${RELAY_PID}" 2>/dev/null || true
-  wait "${RELAY_PID}" 2>/dev/null || true
-  RELAY_PID=""
+  docker stop "${RELAY_CONTAINER}" >/dev/null 2>&1 || true
 }
 
 teardown() {
   compose logs wardynd >"${EVIDENCE_DIR}/wardynd.log" 2>&1 || true
+  docker logs "${RELAY_CONTAINER}" >"${EVIDENCE_DIR}/relay.log" 2>&1 || true
   stop_relay
   echo "tearing down ${PROJECT} (compose down --volumes; this project only)"
   compose down --volumes >/dev/null 2>&1 || true
+  docker rm -f "${RELAY_CONTAINER}" >/dev/null 2>&1 || true
   # Best-effort hygiene on the shared org cluster: revoke (never delete — this
   # script only ever has security-admin-shaped calls through the admin
   # token) the device this run enrolled, so a re-run of this walk against the
@@ -238,6 +275,7 @@ trap teardown EXIT
 
 # Clean stragglers from a prior aborted run of THIS script only.
 compose down --volumes >/dev/null 2>&1 || true
+docker rm -f "${RELAY_CONTAINER}" >/dev/null 2>&1 || true
 
 # ── 1. mint an enrolment token, boot the laptop, confirm enrolment ─────────
 step "minting an enrolment token for a new device (org admin)"
@@ -248,13 +286,11 @@ ENROL_TOKEN="$(jq -r '.token' "${TMPDIR}/org-resp.json")"
 [[ -n "${ENROL_TOKEN}" && "${ENROL_TOKEN}" != "null" ]] || die "mint response carried no token"
 pass "token minted for device \"${DEVICE_NAME}\""
 
-step "starting the host relay (:${RELAY_PORT} -> the org's NodePort :${ORG_NODE_HTTP_PORT})"
-start_relay
-pass "relay up (pid ${RELAY_PID})"
-
 step "minting a persistent age key for the laptop (a restart must still read what it captured)"
 compose build wardynd >"${EVIDENCE_DIR}/build-wardynd.log" 2>&1 || { tail -40 "${EVIDENCE_DIR}/build-wardynd.log" >&2; die "build ${WARDYND_IMAGE} failed"; }
 compose --profile build-only build proxy-image >"${EVIDENCE_DIR}/build-proxy.log" 2>&1 || { tail -40 "${EVIDENCE_DIR}/build-proxy.log" >&2; die "build ${PROXY_IMAGE} failed"; }
+docker build -q -f "${ROOT}/test/hybrid-walk/Dockerfile.relay" -t "${RELAY_IMAGE}" "${ROOT}/test/hybrid-walk" \
+  >"${EVIDENCE_DIR}/build-relay.log" 2>&1 || { tail -40 "${EVIDENCE_DIR}/build-relay.log" >&2; die "build ${RELAY_IMAGE} failed"; }
 export WARDYN_AGE_KEY="$(docker run --rm "${WARDYND_IMAGE}" -gen-age-key 2>"${EVIDENCE_DIR}/gen-age-key.log")"
 [[ "${WARDYN_AGE_KEY}" == AGE-SECRET-KEY-* ]] || { cat "${EVIDENCE_DIR}/gen-age-key.log" >&2; die "-gen-age-key failed"; }
 pass "age key minted"
@@ -262,6 +298,12 @@ pass "age key minted"
 step "bringing up the laptop (postgres, dex, wardynd) with WARDYN_ORG_URL + WARDYN_ORG_ENROLMENT_TOKEN set"
 compose up -d postgres dex || die "compose up (postgres, dex) failed for ${PROJECT}"
 compose up -d wardynd || die "compose up (wardynd) failed for ${PROJECT}"
+pass "laptop wardynd container up (${WARDYND_CONTAINER})"
+
+step "starting the relay sidecar (wardynd's own loopback:${RELAY_PORT} -> the org's NodePort :${ORG_NODE_HTTP_PORT})"
+start_relay
+pass "relay up (${RELAY_CONTAINER}, sharing ${WARDYND_CONTAINER}'s network namespace)"
+
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "the laptop's wardynd did not become healthy"; }
 pass "laptop up and healthy (${BASE})"
 
@@ -314,8 +356,11 @@ awk -v b="${before_lag}" -v a="${after_lag}" 'BEGIN{exit !(a>b)}' \
 # organisation produces NO device.audit.ingest rows at all (it never saw the
 # batch) — a refusal would. Corroborates that the growing lag above is really
 # "unreachable", not a refusal this walk is misreading.
-ingest_events="$(org_api GET "/api/v1/audit?action=device.audit.ingest&limit=50" >/dev/null; jq -r 'length // 0' "${TMPDIR}/org-resp.json" 2>/dev/null || echo 0)"
-[[ "${ingest_events:-0}" == "0" ]] \
+audit_code="$(org_api GET "/api/v1/audit?action=device.audit.ingest&limit=50")"
+[[ "${audit_code}" == "200" ]] || { cat "${TMPDIR}/org-resp.json" >&2; die "GET /api/v1/audit answered ${audit_code}"; }
+ingest_events="$(jq -r 'length' "${TMPDIR}/org-resp.json")"
+[[ "${ingest_events}" =~ ^[0-9]+$ ]] || die "GET /api/v1/audit did not answer a JSON array: $(cat "${TMPDIR}/org-resp.json")"
+[[ "${ingest_events}" == "0" ]] \
   && pass "no device.audit.ingest rows on the org while partitioned (unreachable, not refused)" \
   || fail "expected zero device.audit.ingest rows while partitioned; got ${ingest_events}"
 
@@ -333,15 +378,28 @@ pass "drained — lag back to 0"
 step "accruing more rows, then killing wardynd mid-forward (before the next tick acks them)"
 accrue_local_rows 5
 seq_before_restart="$(psql1 "SELECT last_forwarded_seq FROM org_federation WHERE singleton")"
+# The relay sidecar shares wardynd's network namespace at the moment it was
+# started — killing and recreating wardynd's own container does not carry
+# that sidecar over to the fresh namespace, so it is stopped here and
+# restarted once wardynd is back, exactly like the partition/drain pair above.
+stop_relay
 docker kill "${PROJECT}-api" >/dev/null || die "docker kill ${PROJECT}-api failed"
 sleep 3
 [[ "$(docker inspect -f '{{.State.Running}}' "${PROJECT}-api" 2>/dev/null)" == "false" ]] || die "${PROJECT}-api is still running after docker kill"
 compose up -d wardynd || die "compose up -d wardynd (restart) failed"
+start_relay
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not come back healthy after restart"; }
 seq_after_restart="$(psql1 "SELECT last_forwarded_seq FROM org_federation WHERE singleton")"
-awk -v b="${seq_before_restart}" -v a="${seq_after_restart}" 'BEGIN{exit !(a>=b)}' \
-  && pass "org_federation.last_forwarded_seq did not reset on restart (${seq_before_restart} -> ${seq_after_restart})" \
-  || fail "expected last_forwarded_seq to never go backwards across a restart; before=${seq_before_restart} after=${seq_after_restart}"
+# psql1 merges stderr (:203), so a psql/docker-exec error string would
+# otherwise read as a number to awk (both sides equal, a>=b true) — require
+# both reads to actually be integers before comparing them.
+if [[ "${seq_before_restart}" =~ ^[0-9]+$ && "${seq_after_restart}" =~ ^[0-9]+$ ]]; then
+  awk -v b="${seq_before_restart}" -v a="${seq_after_restart}" 'BEGIN{exit !(a>=b)}' \
+    && pass "org_federation.last_forwarded_seq did not reset on restart (${seq_before_restart} -> ${seq_after_restart})" \
+    || fail "expected last_forwarded_seq to never go backwards across a restart; before=${seq_before_restart} after=${seq_after_restart}"
+else
+  fail "could not read last_forwarded_seq as a number around the restart; before='${seq_before_restart}' after='${seq_after_restart}'"
+fi
 resumed=""
 for _ in $(seq 1 60); do
   [[ "$(lag)" == "0" ]] && { resumed=1; break; }
@@ -374,9 +432,11 @@ code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:hybrid","inte
   || fail "expected POST /runs to answer 503 after revocation; got ${code}: $(cat "${TMPDIR}/resp.json")"
 
 step "confirming the revoked mark survives a laptop restart (durable, not re-derived from reachability)"
+stop_relay
 docker kill "${PROJECT}-api" >/dev/null || die "docker kill ${PROJECT}-api failed"
 sleep 3
 compose up -d wardynd || die "compose up -d wardynd (restart) failed"
+start_relay
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not come back healthy after the post-revocation restart"; }
 code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:hybrid","interactive":true,
   "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","auto_stop_after_sec":-1}}')
