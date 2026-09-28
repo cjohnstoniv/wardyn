@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
@@ -234,6 +236,93 @@ func TestPublishHopCA_BesideTheGroundtruthToken(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(filepath.Dir(tc.gt), hopCAFileName)); !os.IsNotExist(err) {
 				t.Errorf("%s: published a CA file", name)
 			}
+		}
+	}
+}
+
+// hopListeners serves one api.Server the way serveAndShutdown does: the
+// console handler in plaintext, and, when the hop is TLS, the internal
+// listener pinned to the CA the server's config carries. It returns the console
+// base URL, and the internal URL with its pinned client ("" and nil when the
+// control-plane URL is loopback http).
+func hopListeners(t *testing.T, controlURL, basePath string) (string, string, *http.Client) {
+	t.Helper()
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), controlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := api.New(api.Config{ControlPlaneURL: controlURL, ControlPlaneCAPEM: hop.caCertPEM(), BasePath: basePath})
+	console := httptest.NewServer(srv.Handler())
+	t.Cleanup(console.Close)
+	if hop == nil {
+		return console.URL + basePath, "", nil
+	}
+	internal := httptest.NewUnstartedServer(internalRoutesOnly(srv.InternalHandler()))
+	internal.TLS = hop.server
+	internal.StartTLS()
+	t.Cleanup(internal.Close)
+	pinned, _ := hoptls.ClientConfig(hop.caPEM)
+	return console.URL + basePath, internal.URL, &http.Client{Transport: &http.Transport{TLSClientConfig: pinned}, Timeout: 5 * time.Second}
+}
+
+// postStatus POSTs an empty body with no credential and returns status and body.
+func postStatus(t *testing.T, c *http.Client, url string) (int, string) {
+	t.Helper()
+	resp, err := c.Post(url, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("%s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// internalProbePaths are one route of each internal auth group: the run-token
+// surface and the ground-truth sensor's.
+var internalProbePaths = []string{api.InternalPathPrefix + "decisions", api.InternalPathPrefix + "groundtruth"}
+
+// Once the hop is TLS the pinned listener is the only way into the internal
+// surface (#1263): the console answers it with the very 404 the internal
+// listener gives a console route, under a base path too, while the internal
+// listener still reaches each route's own auth (401 without a credential).
+func TestInternalRoutesRefusedOnConsoleListenerWhenHopTLS(t *testing.T) {
+	for _, base := range []string{"", "/wardyn"} {
+		console, internal, pinned := hopListeners(t, "https://127.0.0.1:8443", base)
+		resp, err := pinned.Get(internal + "/api/v1/runs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		notHere, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("internal listener served a console route: %d", resp.StatusCode)
+		}
+		for _, p := range internalProbePaths {
+			if code, body := postStatus(t, http.DefaultClient, console+p); code != http.StatusNotFound || body != string(notHere) {
+				t.Errorf("base %q: console %s = %d %q, want the internal listener's own 404 %q", base, p, code, body, notHere)
+			}
+			if code, _ := postStatus(t, pinned, internal+p); code != http.StatusUnauthorized {
+				t.Errorf("base %q: internal listener %s = %d, want 401 from the route's auth", base, p, code)
+			}
+		}
+		if resp, err := http.Get(console + "/healthz"); err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("base %q: the console must keep serving its own routes: %v %v", base, resp, err)
+		} else {
+			_ = resp.Body.Close()
+		}
+	}
+}
+
+// A local install (loopback http control plane) has no internal listener, so
+// its proxies call the console listener, which keeps serving the surface.
+func TestInternalRoutesServedOnConsoleListenerWithoutHopTLS(t *testing.T) {
+	console, internal, _ := hopListeners(t, "http://127.0.0.1:8080", "")
+	if internal != "" {
+		t.Fatal("loopback http must start no internal listener")
+	}
+	for _, p := range internalProbePaths {
+		if code, _ := postStatus(t, http.DefaultClient, console+p); code != http.StatusUnauthorized {
+			t.Errorf("console %s = %d, want 401 from the route's auth", p, code)
 		}
 	}
 }

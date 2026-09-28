@@ -20,6 +20,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   up front. `env_secret`'s `secret_name` and `llm_inspection.workspace_secret_names` now also
   refuse a name that does not match the secret-name format (`secretNameRE`) at write time, instead
   of silently resolving one fewer value at dispatch.
+- **Once the control-plane hop is TLS, the console listener refuses `/api/v1/internal/*` (#1263).**
+  The proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), pinned to wardynd's internal CA, is now
+  the only way in: the console listener (`WARDYN_LISTEN`) answers every internal route with the same
+  `404` the internal listener gives a console route, under `WARDYN_BASE_PATH` too, so a run token or
+  the ground-truth bearer is never accepted in plaintext and an Ingress in front of the console
+  exposes none of that surface. A local install (loopback `http://` control plane) has no internal
+  listener and is unchanged. Every shipped caller already dials the internal listener (compose,
+  Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
+  still dials the console and now gets `404` on every call: restart such runs
+  (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
 
 ### Added
 
